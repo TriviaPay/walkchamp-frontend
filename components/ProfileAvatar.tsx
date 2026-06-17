@@ -1,0 +1,93 @@
+import React from "react";
+import { StyleSheet, Text, TouchableOpacity, View, ViewStyle } from "react-native";
+import { Image } from "expo-image";
+import { getApiBase } from "@/utils/apiUrl";
+import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
+
+interface ProfileAvatarProps {
+  userId?: string | null;
+  profileImageUrl?: string | null;
+  avatarVersion?: number | null;
+  avatarColor?: string;
+  displayName?: string;
+  size?: number;
+  borderWidth?: number;
+  onPress?: () => void;
+  style?: ViewStyle;
+}
+
+/**
+ * Shared avatar component — single source of truth for profile picture display.
+ *
+ * - Shows the proxy-served avatar with a cache-busting ?v= param.
+ * - Falls back to an initials placeholder when there is no image — never shows
+ *   a stale fallback or random image.
+ * - Cache-busts automatically whenever avatarVersion changes (upload or remove).
+ */
+export function ProfileAvatar({
+  userId,
+  profileImageUrl,
+  avatarVersion,
+  avatarColor = "#00E676",
+  displayName = "",
+  size = 48,
+  borderWidth = 2,
+  onPress,
+  style,
+}: ProfileAvatarProps) {
+  const { getAvatarVersion } = useAvatarVersionContext();
+  const initials = displayName.trim() ? displayName.trim().charAt(0).toUpperCase() : "?";
+  const hasAvatar = !!(profileImageUrl && userId);
+
+  const effectiveVersion = userId ? getAvatarVersion(userId, avatarVersion ?? 0) : (avatarVersion ?? 0);
+  const imageUri = hasAvatar
+    ? `${getApiBase()}/api/profile/avatar/${userId}?v=${effectiveVersion}`
+    : null;
+
+  const containerStyle: ViewStyle[] = [
+    styles.container,
+    {
+      width: size,
+      height: size,
+      borderRadius: size / 2,
+      backgroundColor: avatarColor + "30",
+      borderColor: avatarColor,
+      borderWidth,
+    },
+    ...(style ? [style] : []),
+  ];
+
+  const inner = imageUri ? (
+    <Image
+      source={{ uri: imageUri }}
+      style={{ width: size, height: size, borderRadius: size / 2 }}
+      contentFit="cover"
+      cachePolicy="memory-disk"
+    />
+  ) : (
+    <Text style={[styles.initials, { color: avatarColor, fontSize: size * 0.38 }]}>
+      {initials}
+    </Text>
+  );
+
+  if (onPress) {
+    return (
+      <TouchableOpacity style={containerStyle} onPress={onPress} activeOpacity={0.8}>
+        {inner}
+      </TouchableOpacity>
+    );
+  }
+
+  return <View style={containerStyle}>{inner}</View>;
+}
+
+const styles = StyleSheet.create({
+  container: {
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  initials: {
+    fontWeight: "800",
+  },
+});

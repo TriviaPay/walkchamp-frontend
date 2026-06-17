@@ -1,0 +1,42 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+export async function storageGet<T>(key: string): Promise<T | null> {
+  try {
+    const value = await AsyncStorage.getItem(key);
+    if (value === null) return null;
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+export async function storageSet<T>(key: string, value: T): Promise<void> {
+  try {
+    await AsyncStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+}
+
+export async function storageRemove(key: string): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(key);
+  } catch {}
+}
+
+export const STORAGE_KEYS = {
+  USER: "walkchamp_user",
+  DAILY_STEPS: "walkchamp_daily_steps",
+  WALLET: "walkchamp_wallet",
+  TRANSACTIONS: "walkchamp_transactions",
+  STREAK: "walkchamp_streak",
+  TOTAL_STEPS: "walkchamp_total_steps",
+  RACE_TRACK_LAYOUTS: "walkchamp_race_track_layouts",
+  /** ISO date string of the last date we synced steps to the backend (for delta tracking). */
+  LAST_SYNCED_STEPS_DATE: "walkchamp_last_synced_steps_date",
+  /** Steps already synced to the backend for today (so we only send deltas). */
+  LAST_SYNCED_STEPS_COUNT: "walkchamp_last_synced_steps_count",
+  /**
+   * Pending race state persisted across app close/kill.
+   * Shape: { raceId: string, raceStartTimeUTC: string, raceEndTimeUTC?: string, status: 'in_progress'|'completed' }
+   */
+  PENDING_RACE: "walkchamp_pending_race",
+};

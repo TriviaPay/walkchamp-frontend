@@ -1,0 +1,32 @@
+node_modules/
+tmp/
+out-tsc/
+
+# TypeScript incremental artifacts
+**/*.tsbuildinfo
+
+# Expo / React Native
+.expo/
+.expo-shared/
+android/
+ios/
+__tests__/
+
+# Build outputs
+dist/
+static-build/
+web-build/
+
+# Secrets / local-only
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+.git/
+.local/
+attached_assets/
+
+# Monorepo siblings (not needed in mobile builds)
+../backend/
