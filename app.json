@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Walk Champ",
-    "slug": "globalwalkerleague",
+    "slug": "walkchamp",
     "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -17,7 +17,9 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.globalwalkerleague.app",
       "entitlements": {
-        "com.apple.developer.applesignin": ["Default"]
+        "com.apple.developer.applesignin": [
+          "Default"
+        ]
       },
       "infoPlist": {
         "NSMotionUsageDescription": "We count your steps only to rank you in walking challenges and leaderboards.",
@@ -145,9 +147,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "c8486f59-374d-4bc8-846e-d18c8c199a63"
+        "projectId": "72daccb5-0040-4ad3-b7e8-63861983b048"
       }
     },
-    "owner": "trivia1"
+    "owner": "miragaming1s-organization"
   }
 }
