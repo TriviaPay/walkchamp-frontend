@@ -276,7 +276,7 @@ export default function ProfileScreen() {
   const colors = useColors();
   const { insets, safeTop, safeBottom } = useSafeLayout();
   const { user, logout, refreshUserProfile, updateUser } = useAuth();
-  const { allTimeSteps, currentStreak, weeklySteps } = useWalk();
+  const { allTimeSteps, currentStreak, weeklySteps, requestStepPermission } = useWalk();
   const { userRank } = useApp();
 
   // Profile view state
@@ -1016,7 +1016,7 @@ export default function ProfileScreen() {
               <Text style={[styles.settingLabel, { color: colors.foreground }]}>Dynamic App Icon</Text>
               <Text style={[styles.settingSubtitle, { color: colors.mutedForeground }]}>Icon updates when you hit your daily step goal</Text>
             </View>
-            <Switch value={dynIconEnabled} onValueChange={(v) => { setDynIconEnabled(v); dynamicIconService.setEnabled(v).catch(() => {}); }}
+            <Switch value={dynIconEnabled} onValueChange={(v) => { setDynIconEnabled(v); dynamicIconService.setEnabled(v, user?.id).catch(() => {}); }}
               trackColor={{ false: colors.border, true: colors.primary + "80" }}
               thumbColor={dynIconEnabled ? colors.primary : colors.mutedForeground}
               ios_backgroundColor={colors.border}
@@ -1121,6 +1121,9 @@ export default function ProfileScreen() {
         last7Days={last7Days}
         onComplete={(platform: string, permissionStatus: string) => {
           setStepSourceInfo({ platform, permissionStatus, setupCompleted: true });
+          if (permissionStatus === "connected") {
+            void requestStepPermission();
+          }
         }}
       />
 

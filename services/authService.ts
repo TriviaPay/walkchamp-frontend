@@ -38,12 +38,34 @@ export const SESSION_KEY = "wc_session";
 export const REFRESH_KEY = "wc_refresh";
 
 export async function saveSession(sessionToken: string, refreshToken: string) {
+  if (!refreshToken?.trim()) {
+    if (__DEV__) {
+      console.warn(
+        "[Auth] saveSession called without refresh JWT — session will expire when access token ends. Check Descope refresh token settings.",
+      );
+    }
+  }
   await Promise.all([
     secureSet(SESSION_KEY, sessionToken),
-    secureSet(REFRESH_KEY, refreshToken),
+    refreshToken?.trim() ? secureSet(REFRESH_KEY, refreshToken) : secureDelete(REFRESH_KEY),
   ]);
+  if (__DEV__) {
+    const mins = Math.round(getJwtSecsUntilExpiry(sessionToken) / 60);
+    console.log(`[Auth] session saved — access token ~${mins} min remaining`);
+    if (refreshToken?.trim()) {
+      const refreshDays = getJwtSecsUntilExpiry(refreshToken) / 86400;
+      console.log(
+        `[Auth] refresh token stored — valid ~${refreshDays >= 1 ? refreshDays.toFixed(1) + " days" : (refreshDays * 24).toFixed(1) + " hours"}`,
+      );
+    }
+  }
+  void import("./tokenRefreshScheduler").then((m) =>
+    void m.scheduleProactiveTokenRefresh(),
+  );
 }
 export async function clearSession() {
+  const { cancelProactiveTokenRefresh } = await import("./tokenRefreshScheduler");
+  cancelProactiveTokenRefresh();
   await Promise.all([secureDelete(SESSION_KEY), secureDelete(REFRESH_KEY)]);
 }
 export async function getStoredSession() {
@@ -91,11 +113,35 @@ export async function verifySignupOtp(
 // session JWT. Use completeSignup() below instead.
 
 // ── Email / Password (login) ──────────────────────────────────────────────────
+// Proxied through our backend so refreshJwt is always in the JSON body.
+// Direct Descope REST from React Native can miss refreshJwt when Descope only
+// sets it as an HttpOnly cookie — leaving users logged out after ~10 minutes.
 export async function signInWithEmail(
   email: string,
   password: string,
 ): Promise<JwtResponse> {
-  const data = await descope.password.signIn(email, password);
+  const res = await fetch(`${API_BASE}/api/auth/password/signin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ loginId: email.trim().toLowerCase(), password }),
+  });
+  const body = (await res.json().catch(() => ({}))) as JwtResponse & {
+    message?: string;
+    error?: string;
+  };
+  if (!res.ok) {
+    throw new DescopeRestError(
+      body.message ?? body.error ?? "Invalid email or password",
+      body.error ?? String(res.status),
+      res.status,
+    );
+  }
+  const data = normalizeJwtResponse(body);
+  if (!data.refreshJwt?.trim() && __DEV__) {
+    console.warn(
+      "[Auth] sign-in succeeded but no refresh JWT returned — user will be logged out when the 10-minute session token expires. Check Descope Session Management settings.",
+    );
+  }
   await saveSession(data.sessionJwt, data.refreshJwt ?? "");
   return data;
 }
@@ -110,17 +156,38 @@ function getWebOrigin(): string {
   return "";
 }
 
+const APP_DEEP_LINK_SCHEME = "globalwalkerleague";
+
 function getResetRedirectUrl(): string {
-  if (process.env.EXPO_PUBLIC_PASSWORD_RESET_REDIRECT_URL) {
-    return process.env.EXPO_PUBLIC_PASSWORD_RESET_REDIRECT_URL;
+  if (process.env.EXPO_PUBLIC_PASSWORD_RESET_REDIRECT_URL?.trim()) {
+    return process.env.EXPO_PUBLIC_PASSWORD_RESET_REDIRECT_URL.trim();
+  }
+
+  // Native: use the live API host as an HTTPS bridge (email → browser → app deep link).
+  // Do NOT use EXPO_PUBLIC_WEB_URL here — walkchamp.app may not have DNS yet.
+  if (Platform.OS !== "web") {
+    const apiBase = (process.env.EXPO_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+    if (apiBase) return `${apiBase}/api/auth/reset-password/open`;
+    return `${APP_DEEP_LINK_SCHEME}://reset-password`;
+  }
+
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return `${window.location.origin.replace(/\/$/, "")}/reset-password`;
   }
   const origin = getWebOrigin();
   if (origin) return `${origin}/reset-password`;
-  return "";
+
+  const apiBase = (process.env.EXPO_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+  if (apiBase) return `${apiBase}/api/auth/reset-password/open`;
+  return `${APP_DEEP_LINK_SCHEME}://reset-password`;
 }
 
 export async function sendPasswordResetEmail(email: string): Promise<void> {
   const redirectUrl = getResetRedirectUrl();
+  if (!redirectUrl) {
+    throw new Error("Password reset redirect URL is not configured.");
+  }
+  if (__DEV__) console.log("[Auth] password reset redirectUrl:", redirectUrl);
   await descope.password.sendReset(email, redirectUrl);
 }
 
@@ -153,14 +220,30 @@ export async function verifyEmailOTP(
   email: string,
   code: string,
 ): Promise<JwtResponse> {
-  const data = await descope.otp.verify.email(email, code);
+  const data = normalizeJwtResponse(await descope.otp.verify.email(email, code));
   await saveSession(data.sessionJwt, data.refreshJwt ?? "");
   return data;
 }
 
 // ── Session ───────────────────────────────────────────────────────────────────
 export async function refreshSession(refreshToken: string): Promise<string> {
-  const data = await descope.refresh(refreshToken);
+  const res = await fetch(`${API_BASE}/api/auth/session/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refreshJwt: refreshToken }),
+  });
+  const body = (await res.json().catch(() => ({}))) as JwtResponse & {
+    message?: string;
+    error?: string;
+  };
+  if (!res.ok) {
+    throw new DescopeRestError(
+      body.message ?? body.error ?? "Session refresh failed",
+      body.error ?? String(res.status),
+      res.status,
+    );
+  }
+  const data = normalizeJwtResponse(body);
   const newSession = data.sessionJwt;
   // Use the new rotating refresh token returned by Descope; fall back to the
   // existing one only if Descope didn't return a new one (non-rotating config).
@@ -168,6 +251,29 @@ export async function refreshSession(refreshToken: string): Promise<string> {
   await saveSession(newSession, newRefresh);
   if (__DEV__) console.log("[Auth] token storage updated");
   return newSession;
+}
+
+/** Normalize Descope auth responses — field names vary by endpoint/version. */
+function normalizeJwtResponse(data: JwtResponse): JwtResponse {
+  const pickJwt = (value: unknown): string | undefined => {
+    if (typeof value === "string" && value.trim()) return value;
+    if (value && typeof value === "object" && "jwt" in value) {
+      const jwt = (value as { jwt?: unknown }).jwt;
+      if (typeof jwt === "string" && jwt.trim()) return jwt;
+    }
+    return undefined;
+  };
+
+  const sessionJwt =
+    pickJwt(data.sessionJwt) ??
+    pickJwt((data as Record<string, unknown>).sessionToken) ??
+    "";
+  const refreshJwt =
+    pickJwt(data.refreshJwt) ??
+    pickJwt((data as Record<string, unknown>).refreshSessionJwt) ??
+    pickJwt((data as Record<string, unknown>).refreshToken);
+
+  return { ...data, sessionJwt, refreshJwt };
 }
 
 /**
@@ -237,7 +343,7 @@ export async function refreshSessionSafely(): Promise<RefreshOutcome> {
 async function _executeRefresh(): Promise<RefreshOutcome> {
   try {
     const { refresh } = await getStoredSession();
-    if (!refresh) {
+    if (!refresh?.trim()) {
       if (__DEV__) console.log("[Auth] refresh failed — no refresh token stored");
       await clearSession();
       authEvents.emitSessionExpired();
@@ -318,13 +424,21 @@ export async function getValidSession(): Promise<string | null> {
   const { session, refresh } = await getStoredSession();
   if (!session) return null;
   if (validateToken(session)) return session;
-  if (!refresh) {
+  if (!refresh?.trim()) {
+    if (__DEV__) console.log("[Auth] access token expired and no refresh JWT stored");
     await clearSession();
     authEvents.emitSessionExpired();
     return null;
   }
   const outcome = await refreshSessionSafely();
-  return outcome.ok ? outcome.token : null;
+  if (outcome.ok) return outcome.token;
+  // Transient failure (offline / timeout) — keep user logged in with stale token.
+  // authFetch will retry refresh on the next API call.
+  if (!outcome.definitive) {
+    if (__DEV__) console.log("[Auth] refresh transiently failed — keeping stale session");
+    return session;
+  }
+  return null;
 }
 
 export async function logout(refreshToken: string): Promise<void> {

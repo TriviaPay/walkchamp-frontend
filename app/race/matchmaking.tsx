@@ -15,7 +15,7 @@
  */
 
 import { LinearGradient } from "expo-linear-gradient";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
 import React, {
   useCallback,
   useEffect,
@@ -46,6 +46,11 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useRace, RACE_DEFAULTS } from "@/context/RaceContext";
 import { authFetch } from "@/utils/authFetch";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import {
+  liveRaceFetchAllowed,
+  markLiveRaceFetched,
+} from "@/utils/liveRaceFetchGate";
 import {
   connectPusher,
   subscribeToChannel,
@@ -474,65 +479,74 @@ export default function MatchmakingScreen() {
     };
   }, []);
 
-  // ── Poll room + participants every 3 s ────────────────────────────────────
-  // ONLY updates room/player counts — does NOT trigger navigation or race start.
-  useEffect(() => {
-    if (!backendRaceId) return;
-    let cancelled = false;
+  // ── Poll room + participants while this screen is focused ─────────────────
+  useFocusEffect(
+    useCallback(() => {
+      if (!backendRaceId) return;
+      let cancelled = false;
 
-    const pollRoom = async () => {
-      if (cancelled) return;
-      try {
-        const res = await authFetch(`/api/races/${backendRaceId}`);
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
-        setLiveRoom({
-          currentPlayers: data.race.currentPlayers ?? 1,
-          maxPlayers: data.race.maxPlayers ?? raceMaxPlayers,
-          status: data.race.status,
-          targetSteps: data.race.targetSteps,
-          entryType: data.race.entryType,
-          entryAmountCents: data.race.entryAmountCents,
-          coinEntryAmount: data.race.coinEntryAmount,
-          coinPrizePool: data.race.coinPrizePool,
-          isPrivate: data.race.isPrivate,
-          inviteCode: data.race.inviteCode ?? null,
-        });
-        // Capture expiry once from first successful poll (createdAt + 10 min)
-        if (!roomExpiresAtRef.current && data.race.createdAt) {
-          roomExpiresAtRef.current = new Date(
-            new Date(data.race.createdAt).getTime() + 10 * 60_000,
-          );
-        }
-        if (data.race.targetSteps) {
-          setRaceTargetSteps(data.race.targetSteps);
-        }
-        // Capture server-authoritative race start time for step reconciliation
-        if (data.race.startedAt && !raceStartedAtRef.current) {
-          raceStartedAtRef.current = new Date(data.race.startedAt);
-        }
-        if (Array.isArray(data.participants) && data.participants.length > 0) {
-          setParticipants(data.participants as RoomParticipant[]);
-        }
-        // If polling sees in_progress AND we haven't started the countdown yet,
-        // the client may have missed the Pusher events (e.g. poor connectivity).
-        // Treat this as the safety-net: start a fast countdown so we catch up.
+      const pollRoom = async () => {
+        if (cancelled) return;
+        const gateKey = `${backendRaceId}:matchmaking`;
         if (
-          data.race.status === "in_progress" &&
-          startPhaseRef.current === "idle"
+          !liveRaceFetchAllowed(
+            gateKey,
+            STEP_SYNC_CONFIG.MATCHMAKING_ROOM_POLL_MS,
+          )
         ) {
-          beginCountdown(1, data.race.currentPlayers ?? 2);
+          return;
         }
-      } catch { /* silent */ }
-    };
+        try {
+          const res = await authFetch(`/api/races/${backendRaceId}`);
+          if (!res.ok || cancelled) return;
+          markLiveRaceFetched(gateKey);
+          const data = await res.json();
+          setLiveRoom({
+            currentPlayers: data.race.currentPlayers ?? 1,
+            maxPlayers: data.race.maxPlayers ?? raceMaxPlayers,
+            status: data.race.status,
+            targetSteps: data.race.targetSteps,
+            entryType: data.race.entryType,
+            entryAmountCents: data.race.entryAmountCents,
+            coinEntryAmount: data.race.coinEntryAmount,
+            coinPrizePool: data.race.coinPrizePool,
+            isPrivate: data.race.isPrivate,
+            inviteCode: data.race.inviteCode ?? null,
+          });
+          if (!roomExpiresAtRef.current && data.race.createdAt) {
+            roomExpiresAtRef.current = new Date(
+              new Date(data.race.createdAt).getTime() + 10 * 60_000,
+            );
+          }
+          if (data.race.targetSteps) {
+            setRaceTargetSteps(data.race.targetSteps);
+          }
+          if (data.race.startedAt && !raceStartedAtRef.current) {
+            raceStartedAtRef.current = new Date(data.race.startedAt);
+          }
+          if (Array.isArray(data.participants) && data.participants.length > 0) {
+            setParticipants(data.participants as RoomParticipant[]);
+          }
+          if (
+            data.race.status === "in_progress" &&
+            startPhaseRef.current === "idle"
+          ) {
+            beginCountdown(1, data.race.currentPlayers ?? 2);
+          }
+        } catch { /* silent */ }
+      };
 
-    pollRoom();
-    const interval = setInterval(pollRoom, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [backendRaceId, raceMaxPlayers, beginCountdown]);
+      pollRoom();
+      const interval = setInterval(
+        pollRoom,
+        STEP_SYNC_CONFIG.MATCHMAKING_ROOM_POLL_MS,
+      );
+      return () => {
+        cancelled = true;
+        clearInterval(interval);
+      };
+    }, [backendRaceId, raceMaxPlayers, beginCountdown, setRaceTargetSteps]),
+  );
 
   // ── Store race ID in context ──────────────────────────────────────────────
   useEffect(() => {

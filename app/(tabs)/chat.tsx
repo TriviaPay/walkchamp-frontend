@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { screenCache } from "@/utils/screenCache";
@@ -1877,6 +1877,7 @@ export default function ChatScreen() {
   const colors = useColors();
   const { insets, safeTop } = useSafeLayout();
   const { user } = useAuth();
+  const { tab: tabParam } = useLocalSearchParams<{ tab?: string }>();
   const tabBarHeight = useTabBarHeight();
   const { getAvatarVersion } = useAvatarVersionContext();
   const { markRequestsSeen, clearPrivateUnread } = useUnread();
@@ -1888,6 +1889,14 @@ export default function ChatScreen() {
   const [globalUnread, setGlobalUnread] = useState(0);
   const [privateUnread, setPrivateUnread] = useState(0);
   const activeTabRef = useRef<ChatTab>("global");
+
+  // Deep link tab selection (walkchamp://chat/requests | walkchamp://chat/friends)
+  useEffect(() => {
+    if (!tabParam) return;
+    if (tabParam === "requests") setActiveTab("friends");
+    else if (tabParam === "friends" || tabParam === "private") setActiveTab("private");
+    else if (tabParam === "global") setActiveTab("global");
+  }, [tabParam]);
 
   // Seed badge counts from DB on screen mount
   useEffect(() => {

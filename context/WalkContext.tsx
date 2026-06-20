@@ -19,14 +19,27 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { AppState, AppStateStatus, Platform } from "react-native";
+import { AppState, AppStateStatus, Alert, Platform } from "react-native";
+import { useAuth } from "@/context/AuthContext";
 import { STORAGE_KEYS, storageGet, storageSet } from "@/utils/storage";
 import { stepsToCalories, stepsToDistance, getTodayKey } from "@/utils/format";
 import { getValidSession } from "@/services/authService";
 import { timeoutSignal, STEP_SYNC_TIMEOUT, API_TIMEOUT_MS } from "@/utils/authFetch";
 import { stepTracker, PermissionStatus } from "@/services/StepTrackingService";
-import { androidHCService, isExpoGo, type HCAvailability } from "@/services/steps/androidHealthConnectService";
+import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import type { StepProviderId } from "@/services/steps/stepProviderTypes";
+import { isExpoGo, type HCAvailability } from "@/services/steps/androidHealthConnectService";
+import {
+  getAndroidStepTrackingStatus,
+  toHcAvailability,
+} from "@/services/steps/androidStepTrackingStatus";
+import {
+  sourceToVerificationLevel,
+  type VerificationLevel,
+  type AndroidStepSourceId,
+} from "@/services/steps/androidSourceDetection";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { dynamicIconService } from "@/services/dynamicIconService";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
@@ -62,6 +75,12 @@ interface WalkContextType {
   stepPermissionStatus: PermissionStatus;
   /** Android Health Connect availability (null on iOS or before initialization). */
   hcAvailability: HCAvailability | null;
+  /** Active step source identifier. ios_healthkit on iOS; android_* or null on Android. */
+  activeStepSource: AndroidStepSourceId | "ios_healthkit" | null;
+  /** Whether the active step source counts as verified (can join reward races). */
+  verificationLevel: VerificationLevel;
+  /** True when user can join cash/coins/sponsored reward races. Derived from verificationLevel. */
+  canJoinRewardRaces: boolean;
   /** Backend-confirmed active minutes for today. */
   todayActiveMinutes: number;
   /** Today's rank among all users by step count. Null if no steps yet. */
@@ -73,6 +92,8 @@ interface WalkContextType {
   clearMilestone: () => void;
   /** Request pedometer / Health Connect permission from the user. */
   requestStepPermission: () => Promise<void>;
+  /** Enable limited device sensor tracking (TYPE_STEP_COUNTER). Sets verificationLevel = limited. */
+  enableLimitedSensorTracking: () => Promise<void>;
   /** Re-fetch today's rank + active minutes from the backend. Safe to call at any time. */
   refreshTodayRank: () => Promise<void>;
   /**
@@ -89,7 +110,27 @@ const MILESTONES = [1000, 2000, 5000, 10000, 15000, 20000];
 /** How often (ms) iOS re-queries HealthKit for today's real steps. */
 const REAL_STEP_POLL_MS = 15_000;
 /** How often (ms) we push step deltas to the backend. */
-const BACKEND_SYNC_INTERVAL_MS = 30_000;
+const BACKEND_SYNC_INTERVAL_MS = STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MS;
+
+function providerToActiveSource(
+  id: StepProviderId | null,
+): AndroidStepSourceId | "ios_healthkit" | null {
+  if (!id) return null;
+  if (id === "ios_healthkit") return "ios_healthkit";
+  if (id === "android_health_connect") return "android_health_connect";
+  if (id === "android_legacy_sensor") return "android_device_step_counter";
+  return null;
+}
+
+function providerToVerification(id: StepProviderId | null): VerificationLevel {
+  return sourceToVerificationLevel(providerToActiveSource(id));
+}
+
+async function startProviderWatching(): Promise<void> {
+  await stepProviderManager.startWatchingSteps((result) => {
+    // Walk tab updates via polling; watch keeps legacy sensor cache warm.
+  });
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -148,6 +189,7 @@ async function submitStepsToBackend(
 }
 
 export function WalkProvider({ children }: { children: React.ReactNode }) {
+  const { user, loading: authLoading } = useAuth();
   const [trackingStatus, setTrackingStatusState] =
     useState<TrackingStatus>("idle");
   const [session, setSession] = useState<WalkSession>({
@@ -167,6 +209,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   const [stepPermissionStatus, setStepPermissionStatus] =
     useState<PermissionStatus>("unknown");
   const [hcAvailability, setHcAvailability] = useState<HCAvailability | null>(null);
+  const [activeStepSource, setActiveStepSource] = useState<AndroidStepSourceId | "ios_healthkit" | null>(null);
+  const [verificationLevel, setVerificationLevel] = useState<VerificationLevel>("unsupported");
   const [todayActiveMinutes, setTodayActiveMinutes] = useState(0);
   const [todayDailyRank, setTodayDailyRank] = useState<number | null>(null);
   const [todayDailyGoal, setTodayDailyGoal] = useState(10000);
@@ -186,10 +230,14 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     durationSeconds: 0,
   });
   const todayStepsRef = useRef<number>(0);
+  const todayDailyGoalRef = useRef<number>(10000);
   const allTimeStepsRef = useRef<number>(0);
   const lastSyncedStepsRef = useRef<number>(0);
   const usingRealRef = useRef(false);
   const sessionStartTimeRef = useRef<Date | null>(null);
+  const activeStepSourceRef = useRef<AndroidStepSourceId | "ios_healthkit" | null>(
+    null,
+  );
 
   useEffect(() => {
     sessionRef.current = session;
@@ -197,12 +245,19 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     todayStepsRef.current = todaySteps;
   }, [todaySteps]);
+
+  useEffect(() => {
+    todayDailyGoalRef.current = todayDailyGoal;
+  }, [todayDailyGoal]);
   useEffect(() => {
     allTimeStepsRef.current = allTimeSteps;
   }, [allTimeSteps]);
   useEffect(() => {
     usingRealRef.current = usingRealTracking;
   }, [usingRealTracking]);
+  useEffect(() => {
+    activeStepSourceRef.current = activeStepSource;
+  }, [activeStepSource]);
 
   // ── Day-change detection ─────────────────────────────────────────────────────
 
@@ -319,38 +374,23 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
    * Android: reads the latest live subscription snapshot (monotonic max guard).
    */
   const refreshRealSteps = useCallback(async () => {
-    if (Platform.OS === "ios") {
-      const midnight = todayLocalMidnight();
-      const now = new Date();
-      const data = await stepTracker.getStepsForTimeRange(midnight, now);
-      if (data === null) return;
-      const real = data.steps;
+    const data = await stepProviderManager.getTodaySteps();
+    if (!data) return;
+    const real = data.steps;
+    const displaySteps = Math.max(todayStepsRef.current, real);
 
-      setTodaySteps(real);
-      todayStepsRef.current = real;
-      savedDailyStepsRef.current = real;
-      await persistDailySteps(real);
-      checkMilestone(real);
-    } else if (Platform.OS === "android") {
-      // Android HC path: cumulative range query midnight → now (same as iOS HealthKit).
-      // Monotonic max guard ensures a zero result (HC temporarily unavailable) never
-      // replaces a higher confirmed value shown in the UI.
-      const data = await androidHCService.readTodaySteps();
-      if (data.steps > 0) {
-        const displaySteps = Math.max(todayStepsRef.current, data.steps);
-        if (__DEV__) {
-          if (__DEV__) console.log(
-            `[AndroidHC] refreshRealSteps — HC: ${data.steps}, previousDisplayed: ${todayStepsRef.current}, final: ${displaySteps}`,
-          );
-        }
-        if (displaySteps !== todayStepsRef.current) {
-          setTodaySteps(displaySteps);
-          todayStepsRef.current = displaySteps;
-          savedDailyStepsRef.current = displaySteps;
-          await persistDailySteps(displaySteps);
-          checkMilestone(displaySteps);
-        }
-      }
+    if (__DEV__) {
+      console.log(
+        `[WalkContext] refreshRealSteps provider=${data.providerId} steps=${real} displayed=${displaySteps}`,
+      );
+    }
+
+    if (displaySteps !== todayStepsRef.current) {
+      setTodaySteps(displaySteps);
+      todayStepsRef.current = displaySteps;
+      savedDailyStepsRef.current = displaySteps;
+      await persistDailySteps(displaySteps);
+      checkMilestone(displaySteps);
     }
   }, [checkMilestone, persistDailySteps]);
 
@@ -378,17 +418,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     const calories = Math.round(stepsToCalories(delta));
     const activeMinutes = Math.ceil(current / 120);
 
-    // Determine step source for this platform (only send recognised sources)
-    const VALID_SOURCES = [
-      "ios_healthkit",
-      "android_health_connect",
-      "android_step_counter",
-    ] as const;
-    const rawSource: string =
-      Platform.OS === "ios" ? "ios_healthkit" : "android_health_connect";
-    const source = (VALID_SOURCES as readonly string[]).includes(rawSource)
-      ? rawSource
-      : undefined;
+    const rawSource = stepProviderManager.toWalkSyncSource();
+    const source = rawSource;
 
     // Pass `current` as the absolute daily total so backend never double-counts
     const result = await submitStepsToBackend(
@@ -412,8 +443,10 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     await storageSet(STORAGE_KEYS.LAST_SYNCED_STEPS_COUNT, current);
 
     // Update dynamic app icon if the daily goal milestone changed after this sync.
-    // Fire-and-forget — must never block or throw in the walk flow.
-    dynamicIconService.checkAndUpdate().catch(() => {});
+    dynamicIconService.checkAndUpdate({
+      steps: current,
+      goal: todayDailyGoalRef.current,
+    }).catch(() => {});
   }, []);
 
   // ── Real tracking init ────────────────────────────────────────────────────────
@@ -421,6 +454,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (__DEV__) console.log(`[WalkContext] mounted — platform: ${Platform.OS}`);
     if (!FEATURE_FLAGS.REAL_STEP_TRACKING_ENABLED) return;
+    if (authLoading || !user?.id) return;
 
     let mounted = true;
     const init = async () => {
@@ -435,6 +469,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         setStepPermissionStatus(status);
         if (status !== "granted") return;
 
+        setActiveStepSource("ios_healthkit");
+        setVerificationLevel("verified");
         setUsingRealTracking(true);
         usingRealRef.current = true;
         setTrackingStatusState("walking");
@@ -448,50 +484,33 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           BACKEND_SYNC_INTERVAL_MS,
         );
       } else if (Platform.OS === "android") {
-        // ── Android path — Health Connect ─────────────────────────────────────
+        const tracking = await getAndroidStepTrackingStatus();
+        if (!mounted) return;
+        setHcAvailability(toHcAvailability(tracking.status));
 
-        if (isExpoGo()) {
-          if (__DEV__)
-            console.log(`[WalkContext] Android init — Expo Go detected, HC unavailable`);
-          setStepPermissionStatus("unavailable");
-          return;
-        }
-
-        const initResult = await androidHCService.initialize();
+        const providerStatus = await stepProviderManager.initialize();
         if (!mounted) return;
 
-        if (__DEV__)
-          console.log(
-            `[WalkContext] Android HC init — availability: ${initResult.availability}, permission: ${initResult.permission}`,
-          );
+        setStepPermissionStatus(providerStatus.permission as PermissionStatus);
+        setActiveStepSource(providerToActiveSource(providerStatus.providerId));
+        setVerificationLevel(providerToVerification(providerStatus.providerId));
 
-        setHcAvailability(initResult.availability);
-
-        if (initResult.availability !== "available") {
-          // HC not installed, needs update, or device not supported
-          setStepPermissionStatus("unavailable");
-          return;
-        }
-
-        if (initResult.permission !== "granted") {
-          // "unknown" → show Enable Step Tracking button
-          // "denied"  → show Open Health Connect Settings button
-          setStepPermissionStatus(initResult.permission as PermissionStatus);
-          return;
-        }
+        if (providerStatus.permission !== "granted") return;
 
         setUsingRealTracking(true);
         usingRealRef.current = true;
         setTrackingStatusState("walking");
 
-        // HC is range-based like iOS — safe to read immediately (no subscription
-        // lag that could return 0 before the first event fires).
+        await startProviderWatching();
         fetchTodayFromBackend().catch(() => {});
         if (!mounted) return;
 
         await refreshRealSteps();
         startRealPollInterval();
-        backendSyncRef.current = setInterval(syncDeltaToBackend, BACKEND_SYNC_INTERVAL_MS);
+        backendSyncRef.current = setInterval(
+          syncDeltaToBackend,
+          BACKEND_SYNC_INTERVAL_MS,
+        );
       }
     };
 
@@ -509,7 +528,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authLoading, refreshRealSteps, startRealPollInterval, syncDeltaToBackend, user?.id]);
 
   // ── AppState handler — refresh on foreground ──────────────────────────────────
 
@@ -526,37 +545,32 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       if (usingRealRef.current) {
         refreshRealSteps();
         checkDayChange();
-        if (Platform.OS === "android") {
-          syncDeltaToBackend().catch(() => {});
-        }
+        syncDeltaToBackend().catch(() => {});
       } else if (
         Platform.OS === "android" &&
         FEATURE_FLAGS.REAL_STEP_TRACKING_ENABLED &&
-        !isExpoGo()
+        !!user?.id
       ) {
-        // Not yet tracking on Android — user may have just granted HC permission
-        // from the Health Connect app. Re-check and auto-start if now granted.
-        androidHCService.getPermissionStatus().then((newStatus) => {
-          if (__DEV__)
-            console.log(`[WalkContext] AppState — Android HC permission re-check: ${newStatus}`);
-          setStepPermissionStatus(newStatus as PermissionStatus);
-          if (newStatus === "granted" && !usingRealRef.current) {
-            androidHCService.initialize().then((initResult) => {
-              if (!initResult.initialized) return;
-              setHcAvailability(initResult.availability);
-              setUsingRealTracking(true);
-              usingRealRef.current = true;
-              setTrackingStatusState("walking");
-              refreshRealSteps().catch(() => {});
-              startRealPollInterval();
-              if (!backendSyncRef.current) {
-                backendSyncRef.current = setInterval(syncDeltaToBackend, BACKEND_SYNC_INTERVAL_MS);
-              }
-              if (__DEV__)
-                console.log(`[WalkContext] HC tracking auto-started after returning from Settings`);
-            }).catch(() => {});
+        void stepProviderManager.initialize(true).then(async (status) => {
+          setStepPermissionStatus(status.permission as PermissionStatus);
+          setActiveStepSource(providerToActiveSource(status.providerId));
+          setVerificationLevel(providerToVerification(status.providerId));
+          if (status.permission === "granted" && !usingRealRef.current) {
+            setUsingRealTracking(true);
+            usingRealRef.current = true;
+            setTrackingStatusState("walking");
+            await startProviderWatching();
+            await refreshRealSteps();
+            fetchTodayFromBackend().catch(() => {});
+            startRealPollInterval();
+            if (!backendSyncRef.current) {
+              backendSyncRef.current = setInterval(
+                syncDeltaToBackend,
+                BACKEND_SYNC_INTERVAL_MS,
+              );
+            }
           }
-        }).catch(() => {});
+        });
       }
     };
     const sub = AppState.addEventListener("change", handleAppState);
@@ -566,33 +580,54 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     checkDayChange,
     syncDeltaToBackend,
     startRealPollInterval,
+    user?.id,
   ]);
+
+  // ── Limited sensor tracking enable ───────────────────────────────────────────
+
+  const enableLimitedSensorTracking = useCallback(async () => {
+    if (Platform.OS !== "android") return;
+    if (verificationLevel === "verified") return;
+    const ok = await stepProviderManager.switchToLegacyFallback("user_enabled");
+    if (!ok) return;
+
+    setActiveStepSource("android_device_step_counter");
+    setVerificationLevel("limited");
+    setStepPermissionStatus("granted");
+    setUsingRealTracking(true);
+    usingRealRef.current = true;
+    setTrackingStatusState("walking");
+    await startProviderWatching();
+    await refreshRealSteps();
+    startRealPollInterval();
+    if (!backendSyncRef.current) {
+      backendSyncRef.current = setInterval(
+        syncDeltaToBackend,
+        BACKEND_SYNC_INTERVAL_MS,
+      );
+    }
+  }, [verificationLevel, refreshRealSteps, startRealPollInterval, syncDeltaToBackend]);
 
   // ── Permission request helper ─────────────────────────────────────────────────
 
   const requestStepPermission = useCallback(async () => {
     if (__DEV__) console.log(`[WalkContext] requestStepPermission — platform: ${Platform.OS}`);
-    
-    let status: PermissionStatus;
-    if (Platform.OS === "android") {
-      // Initialize HC first (safe to call multiple times), then request permission.
-      await androidHCService.initialize();
-      const hcStatus = await androidHCService.requestPermission();
-      status = hcStatus as PermissionStatus;
-    } else {
-      status = await stepTracker.requestPermission();
-    }
-    
-    if (__DEV__) console.log(`[WalkContext] Permission result: ${status}`);
+
+    const result = await stepProviderManager.requestStepPermission();
+    const status = result.status as PermissionStatus;
+
+    if (__DEV__) console.log(`[WalkContext] Permission result: ${status} provider=${result.providerId ?? "none"}`);
     setStepPermissionStatus(status);
+    setActiveStepSource(providerToActiveSource(result.providerId));
+    setVerificationLevel(providerToVerification(result.providerId));
 
     if (status === "granted") {
       setUsingRealTracking(true);
       usingRealRef.current = true;
       setTrackingStatusState("walking");
+      await startProviderWatching();
       await refreshRealSteps();
       fetchTodayFromBackend().catch(() => {});
-      // Both iOS and Android use polling after permission is granted
       startRealPollInterval();
       if (!backendSyncRef.current) {
         backendSyncRef.current = setInterval(
@@ -600,11 +635,14 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           BACKEND_SYNC_INTERVAL_MS,
         );
       }
+    } else if (Platform.OS === "android" && status !== "unavailable") {
+      await enableLimitedSensorTracking();
     }
   }, [
     refreshRealSteps,
     startRealPollInterval,
     syncDeltaToBackend,
+    enableLimitedSensorTracking,
   ]);
 
   // ── Real session tracking ─────────────────────────────────────────────────────
@@ -829,6 +867,9 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         usingRealTracking,
         stepPermissionStatus,
         hcAvailability,
+        activeStepSource,
+        verificationLevel,
+        canJoinRewardRaces: verificationLevel === "verified",
         todayActiveMinutes,
         todayDailyRank,
         todayDailyGoal,
@@ -836,6 +877,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         togglePause,
         clearMilestone,
         requestStepPermission,
+        enableLimitedSensorTracking,
         refreshTodayRank: fetchTodayFromBackend,
         triggerSync: syncDeltaToBackend,
       }}

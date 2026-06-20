@@ -20,6 +20,7 @@ import { authFetch } from "@/utils/authFetch";
 import { useAuth } from "@/context/AuthContext";
 import { connectPusher, subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
+import { useMicPass } from "@/hooks/useMicPass";
 
 
 export const REACTION_EMOJIS = ["🔥", "👏", "👑", "🏃", "🏆", "😮"] as const;
@@ -245,6 +246,26 @@ export default function SpectatorScreen() {
   const autoCompletedRef = useRef(false);
   const sheetAnim = useRef(new Animated.Value(SHEET_H)).current;
   const sheetScrollRef = useRef<ScrollView>(null);
+
+  const isLive = race?.status === "in_progress";
+  const {
+    notifyRaceStarted,
+    disconnectVoice,
+    locallyMutedUserIds,
+    activeSpeakerIds,
+    mutedParticipantIds,
+  } = useMicPass(id);
+  const visibleSpeakerIds = activeSpeakerIds.filter(
+    (uid) => !mutedParticipantIds.includes(uid) && !locallyMutedUserIds.includes(uid),
+  );
+
+  useEffect(() => {
+    if (isLive) notifyRaceStarted();
+  }, [isLive, notifyRaceStarted]);
+
+  useEffect(() => {
+    if (!isLive) disconnectVoice();
+  }, [isLive, disconnectVoice]);
 
   // Determine if the current user is the host — computed early so effects can use it
   const amHost = race?.players.some((p) => p.isHost && p.username === user?.username) ?? false;
@@ -540,6 +561,9 @@ export default function SpectatorScreen() {
                       <View style={[styles.playerTag, { backgroundColor: colors.primary + "20", borderColor: colors.primary + "50" }]}>
                         <Text style={[styles.playerTagText, { color: colors.primary }]}>You</Text>
                       </View>
+                    )}
+                    {visibleSpeakerIds.includes(p.userId) && (
+                      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#A3E635" }} />
                     )}
                   </View>
                   <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>

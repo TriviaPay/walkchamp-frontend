@@ -36,6 +36,12 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useRace } from "@/context/RaceContext";
 import { authFetch } from "@/utils/authFetch";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import {
+  liveRaceFetchAllowed,
+  markLiveRaceFetched,
+  resetLiveRaceFetchGate,
+} from "@/utils/liveRaceFetchGate";
 import {
   connectPusher,
   subscribeToChannel,
@@ -484,13 +490,50 @@ const RunnerMarker = React.memo(function RunnerMarker({ player, index, width, he
   );
 });
 
+// ── Track Position per-participant mute (Race Track panel only) ───────────────
+
+function TrackPositionMuteBtn({
+  userId,
+  participantName,
+  isMuted,
+  onMute,
+  onUnmute,
+}: {
+  userId: string;
+  participantName: string;
+  isMuted: boolean;
+  onMute: (id: string) => void;
+  onUnmute: (id: string) => void;
+}) {
+  return (
+    <TouchableOpacity
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      onPress={() => (isMuted ? onUnmute(userId) : onMute(userId))}
+      style={[st.panelMicBtn, isMuted && st.panelMicBtnMuted]}
+      accessibilityLabel={isMuted ? `Unmute ${participantName}` : `Mute ${participantName}`}
+      accessibilityRole="button"
+    >
+      <Feather
+        name={isMuted ? "mic-off" : "mic"}
+        size={17}
+        color={isMuted ? "#9CA3AF" : "#FFFFFF"}
+      />
+    </TouchableOpacity>
+  );
+}
+
 // ── LeaderboardOverlay ────────────────────────────────────────────────────────
 
-function LeaderboardOverlay({ visible, players, width, height, animatedStyle, positionText, statusText, rsFactor = 1, meAvatarUrl, activeSpeakerIds = [] }: {
+function LeaderboardOverlay({ visible, players, width, height, animatedStyle, positionText, statusText, rsFactor = 1, meAvatarUrl, onLocalMute, onLocalUnmute, locallyMutedUserIds = [], showMuteControls = false, isActiveRace = false }: {
   visible: boolean; players: Player[]; width: number; height: number;
   animatedStyle: object; positionText: string; statusText: string; rsFactor?: number;
   meAvatarUrl?: string | null;
-  activeSpeakerIds?: string[]; }) {
+  locallyMutedUserIds?: string[];
+  onLocalMute: (userId: string) => void;
+  onLocalUnmute: (userId: string) => void;
+  showMuteControls?: boolean;
+  isActiveRace?: boolean;
+}) {
   const rs = (n: number) => Math.round(n * rsFactor);
   const avatarSize = rs(32), badgeSize = rs(20);
   return (
@@ -524,25 +567,26 @@ function LeaderboardOverlay({ visible, players, width, height, animatedStyle, po
               )}
             </View>
             <View style={st.lbInfo}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                <Text style={[st.lbName, { color: p.isMe ? "#00E676" : p.isForfeited ? "#FF4444" : "#fff", fontSize: rs(11) }]} numberOfLines={1}>
-                  {p.isMe ? "You" : p.name}
-                </Text>
-                {activeSpeakerIds.includes(p.userId) && (
-                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#A3E635" }} />
-                )}
-                {p.isForfeited && (
-                  <View style={{ backgroundColor: "#FF444422", borderRadius: 3, paddingHorizontal: 3, paddingVertical: 1 }}>
-                    <Text style={{ color: "#FF4444", fontSize: rs(8), fontWeight: "700" }}>FORFEITED</Text>
-                  </View>
-                )}
-              </View>
+              <Text style={[st.lbName, { color: p.isMe ? "#00E676" : p.isForfeited ? "#FF4444" : "#fff", fontSize: rs(11) }]} numberOfLines={1}>
+                {p.isMe ? "You" : p.name}
+              </Text>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
                 <BlueShoe size={rs(11)} />
                 <Text style={[st.lbSteps, { fontSize: rs(13), color: p.isForfeited ? "#FF4444" : "#FFFFFF" }]}>{formatSteps(p.steps)}</Text>
               </View>
               <Text style={[st.lbUnit, { fontSize: Math.max(7, rs(9)) }]}>steps</Text>
             </View>
+            {showMuteControls && !p.isMe && !p.isForfeited ? (
+              <TrackPositionMuteBtn
+                userId={p.userId || p.id}
+                participantName={p.name}
+                isMuted={locallyMutedUserIds.includes(p.userId || p.id)}
+                onMute={onLocalMute}
+                onUnmute={onLocalUnmute}
+              />
+            ) : showMuteControls ? (
+              <View style={st.lbMuteColSpacer} />
+            ) : null}
           </View>
         ))}
       </ScrollView>
@@ -647,15 +691,11 @@ const cpStyles = StyleSheet.create({
 
 // ── LiveBoardPanel ────────────────────────────────────────────────────────────
 
-function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAvatarPress, colors, activeSpeakerIds = [], locallyMutedUserIds = [], onLocalMute, onLocalUnmute, stepDeltas = {} }: {
+function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAvatarPress, colors, stepDeltas = {} }: {
   race: RaceData; participants: RaceParticipant[];
   currentUserId: string | null; userAvatarUrl?: string | null;
   onAvatarPress?: (p: RaceParticipant) => void;
   colors: ReturnType<typeof useColors>;
-  activeSpeakerIds?: string[];
-  locallyMutedUserIds?: string[];
-  onLocalMute?: (userId: string) => void;
-  onLocalUnmute?: (userId: string) => void;
   /** userId → step count gained since last Pusher update; shown as "+N" badge (clears after 2 s) */
   stepDeltas?: Record<string, number>; }) {
   const { getAvatarVersion } = useAvatarVersionContext();
@@ -709,9 +749,6 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
                 {!!p.countryFlag && <Text style={{ fontSize: 13 }}>{p.countryFlag}</Text>}
                 {!isForfeited && p.isHost && <View style={[lbpStyles.tag, { backgroundColor: colors.gold + "22", borderColor: colors.gold + "55" }]}><Text style={[lbpStyles.tagTxt, { color: colors.gold }]}>Host</Text></View>}
                 {!isForfeited && isUser && <View style={[lbpStyles.tag, { backgroundColor: colors.primary + "22", borderColor: colors.primary + "55" }]}><Text style={[lbpStyles.tagTxt, { color: colors.primary }]}>You</Text></View>}
-                {!isForfeited && activeSpeakerIds.includes(p.userId ?? "") && (
-                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#A3E635" }} />
-                )}
                 {isForfeited && <View style={[lbpStyles.tag, { backgroundColor: "#FF444422", borderColor: "#FF444455" }]}><Text style={[lbpStyles.tagTxt, { color: "#FF4444" }]}>FORFEITED</Text></View>}
                 {!isForfeited && p.isTied && <View style={[lbpStyles.tag, { backgroundColor: colors.warning + "22", borderColor: colors.warning + "55" }]}><Text style={[lbpStyles.tagTxt, { color: colors.warning }]}>Tied</Text></View>}
               </View>
@@ -731,25 +768,6 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
               {prize && p.isTied && (p.tieGroupSize ?? 1) > 1 && (
                 <Text style={[lbpStyles.tagTxt, { color: colors.mutedForeground }]}>shared ÷{p.tieGroupSize}</Text>
               )}
-              {/* Per-participant local mute — only for other participants */}
-              {!isUser && !isForfeited && p.userId && (onLocalMute || onLocalUnmute) && (() => {
-                const isLocMuted = locallyMutedUserIds.includes(p.userId ?? "");
-                return (
-                  <TouchableOpacity
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                    onPress={() => isLocMuted
-                      ? onLocalUnmute?.(p.userId ?? "")
-                      : onLocalMute?.(p.userId ?? "")
-                    }
-                  >
-                    <Feather
-                      name={isLocMuted ? "volume-x" : "volume-2"}
-                      size={13}
-                      color={isLocMuted ? "#EF4444" : "#6E7284"}
-                    />
-                  </TouchableOpacity>
-                );
-              })()}
             </View>
           </TouchableOpacity>
         ); })}
@@ -1174,8 +1192,13 @@ export default function LiveRaceDetailScreen() {
     (id) => !mutedParticipantIds.includes(id) && !locallyMutedUserIds.includes(id),
   );
 
-  const { user }                     = useAuth();
+  const { user, sessionToken }                     = useAuth();
   const { userRaceSteps: localSteps, setRaceTargetSteps } = useRace();
+  const sessionTokenRef = useRef(sessionToken);
+  const setRaceTargetStepsRef = useRef(setRaceTargetSteps);
+  sessionTokenRef.current = sessionToken;
+  setRaceTargetStepsRef.current = setRaceTargetSteps;
+  const loadedRaceIdRef = useRef<string | null>(null);
   const colors             = useColors();
   const { safeTop, safeBottom } = useSafeLayout();
   const { width: screenW } = useWindowDimensions();
@@ -1231,6 +1254,7 @@ export default function LiveRaceDetailScreen() {
   const scrollRef     = useRef<ScrollView>(null);
   const cheerScrollRef = useRef<ScrollView>(null);
   const reactionCooldownRef = useRef<Record<string, number>>({});
+  const fetchInFlightRef = useRef(false);
   const currentUserId = user?.id ?? null;
 
   // ── Countdown state ────────────────────────────────────────────────────────
@@ -1264,8 +1288,8 @@ export default function LiveRaceDetailScreen() {
   const micPulseScale     = useSharedValue(1);
   const micConnRot        = useSharedValue(0);
   const leaderboardW      = isTablet
-    ? Math.min(280, Math.max(200, screenW * 0.30))
-    : Math.min(170, Math.max(138, screenW * 0.38));
+    ? Math.min(300, Math.max(220, screenW * 0.32))
+    : Math.min(240, Math.max(200, screenW * 0.52));
   const leaderboardWShared = useSharedValue(leaderboardW);
 
   // Pre-cache all track background images so they render instantly on first show
@@ -1517,56 +1541,88 @@ export default function LiveRaceDetailScreen() {
   }, [raceId, race?.id, race?.targetSteps, trackLayoutId, heroHeight]);
 
   // ── Data fetch (race + participants only — does NOT reset comments) ──────────
-  const fetchRaceDetails = useCallback(async () => {
-    if (!raceId) return;
-    const res = await authFetch(`/api/races/${raceId}`);
-    if (res.ok) {
-      const data = await res.json() as { race?: RaceData; participants?: RaceParticipant[] };
-      setRace(data.race ?? null);
-      setParticipants(Array.isArray(data.participants) ? data.participants : []);
-      if (data.race?.trackLayout && data.race.trackLayout in TRACK_BACKGROUNDS) {
-        setTrackLayoutId(data.race.trackLayout as TrackLayoutId); } } }, [raceId]);
+  const fetchRaceDetails = useCallback(async (force = false) => {
+    if (!raceId || !sessionTokenRef.current || fetchInFlightRef.current) return;
+    const gateKey = `${raceId}:detail`;
+    if (
+      !liveRaceFetchAllowed(
+        gateKey,
+        STEP_SYNC_CONFIG.LIVE_RACE_DETAIL_REFRESH_MS,
+        force,
+      )
+    ) {
+      return;
+    }
+    fetchInFlightRef.current = true;
+    try {
+      const res = await authFetch(`/api/races/${raceId}`);
+      if (res.ok) {
+        markLiveRaceFetched(gateKey);
+        const data = await res.json() as { race?: RaceData; participants?: RaceParticipant[] };
+        setRace(data.race ?? null);
+        setParticipants(Array.isArray(data.participants) ? data.participants : []);
+        if (data.race?.trackLayout && data.race.trackLayout in TRACK_BACKGROUNDS) {
+          setTrackLayoutId(data.race.trackLayout as TrackLayoutId);
+        }
+      }
+    } finally {
+      fetchInFlightRef.current = false;
+    }
+  }, [raceId]);
 
   // ── Full fetch (initial load — fetches race, comments, and reactions) ────────
   const fetchRace = useCallback(async () => {
-    if (!raceId) return;
-    // ── Critical path: fetch race details first so the loading spinner clears
-    // as soon as we have race + participant data. Comments and reactions are
-    // secondary and load in the background without blocking the render.
-    const detailRes = await authFetch(`/api/races/${raceId}`);
-    if (detailRes.ok) {
-      const data = await detailRes.json() as { race?: RaceData; participants?: RaceParticipant[] };
-      setRace(data.race ?? null);
-      setParticipants(Array.isArray(data.participants) ? data.participants : []);
-      if (typeof data.race?.targetSteps === "number" && data.race.targetSteps > 0) {
-        setRaceTargetSteps(data.race.targetSteps);
+    if (!raceId || !sessionTokenRef.current || fetchInFlightRef.current) return;
+    fetchInFlightRef.current = true;
+    try {
+      const detailRes = await authFetch(`/api/races/${raceId}`);
+      if (detailRes.ok) {
+        markLiveRaceFetched(`${raceId}:detail`);
+        const data = await detailRes.json() as { race?: RaceData; participants?: RaceParticipant[] };
+        setRace(data.race ?? null);
+        setParticipants(Array.isArray(data.participants) ? data.participants : []);
+        if (typeof data.race?.targetSteps === "number" && data.race.targetSteps > 0) {
+          setRaceTargetStepsRef.current(data.race.targetSteps);
+        }
+        if (data.race?.trackLayout && data.race.trackLayout in TRACK_BACKGROUNDS) {
+          setTrackLayoutId(data.race.trackLayout as TrackLayoutId);
+        }
       }
-      if (data.race?.trackLayout && data.race.trackLayout in TRACK_BACKGROUNDS) {
-        setTrackLayoutId(data.race.trackLayout as TrackLayoutId);
-      }
+      void Promise.all([
+        authFetch(`/api/races/${raceId}/comments`),
+        authFetch(`/api/races/${raceId}/reactions`),
+      ]).then(async ([commentsRes, reactionsRes]) => {
+        if (commentsRes.ok) {
+          const body = await commentsRes.json() as { comments?: RaceCommentPayload[] };
+          const normalized = Array.isArray(body.comments)
+            ? body.comments.map(normalizeIncomingComment).filter((c): c is RaceComment => c !== null)
+            : [];
+          setComments(normalized);
+        }
+        if (reactionsRes.ok) {
+          const body = await reactionsRes.json() as { reactions?: ReactionCount[] };
+          setReactionCounts(Array.isArray(body.reactions) ? body.reactions : []);
+        }
+      }).catch(() => {});
+    } finally {
+      fetchInFlightRef.current = false;
     }
-    // ── Non-blocking: load comments + reactions after race is visible
-    void Promise.all([
-      authFetch(`/api/races/${raceId}/comments`),
-      authFetch(`/api/races/${raceId}/reactions`),
-    ]).then(async ([commentsRes, reactionsRes]) => {
-      if (commentsRes.ok) {
-        const body = await commentsRes.json() as { comments?: RaceCommentPayload[] };
-        const normalized = Array.isArray(body.comments)
-          ? body.comments.map(normalizeIncomingComment).filter((c): c is RaceComment => c !== null)
-          : [];
-        setComments(normalized);
-      }
-      if (reactionsRes.ok) {
-        const body = await reactionsRes.json() as { reactions?: ReactionCount[] };
-        setReactionCounts(Array.isArray(body.reactions) ? body.reactions : []);
-      }
-    }).catch(() => {});
   }, [raceId]);
 
   useEffect(() => {
+    if (!raceId || !sessionToken) return;
+    if (loadedRaceIdRef.current === raceId) return;
+    loadedRaceIdRef.current = raceId;
+    resetLiveRaceFetchGate(raceId);
     setLoading(true);
-    fetchRace().finally(() => setLoading(false)); }, [fetchRace]);
+    fetchRace().finally(() => setLoading(false));
+  }, [raceId, sessionToken, fetchRace]);
+
+  useEffect(() => {
+    return () => {
+      if (raceId) resetLiveRaceFetchGate(raceId);
+    };
+  }, [raceId]);
 
   // ── Completion-poll fallback ────────────────────────────────────────────────
   // If elapsed >= 60s and race is still "in_progress", the Pusher completion
@@ -1575,24 +1631,31 @@ export default function LiveRaceDetailScreen() {
   // not every second — otherwise the interval is cleared before it can fire.
   const shouldPoll = isActive && elapsed >= 60;
   useEffect(() => {
-    if (!shouldPoll) return;
+    if (!shouldPoll || !sessionToken) return;
     const id = setInterval(() => {
-      fetchRace().catch(() => {}); }, 3000);
-    return () => clearInterval(id); }, [shouldPoll, fetchRace]);
+      fetchRaceDetails().catch(() => {});
+    }, STEP_SYNC_CONFIG.LIVE_RACE_COMPLETION_POLL_MS);
+    return () => clearInterval(id);
+  }, [shouldPoll, fetchRaceDetails]);
 
   // ── Spectator heartbeat ───────────────────────────────────────────────────
   // All viewers (participants + spectators) register every 60s for watch count.
   useEffect(() => {
     if (!raceId || !isActive) return;
     const postSpectate = async () => {
+      if (!sessionTokenRef.current) return;
       try {
         const res = await authFetch(`/api/races/${raceId}/spectate`, { method: "POST" });
         if (res.ok) {
           const body = await res.json() as { count?: number };
-          if (typeof body.count === "number") setSpectatorCount(body.count); } } catch {} };
+          if (typeof body.count === "number") setSpectatorCount(body.count);
+        }
+      } catch {}
+    };
     void postSpectate();
-    const id = setInterval(postSpectate, 60_000);
-    return () => clearInterval(id); }, [raceId, isActive, currentParticipant]);
+    const id = setInterval(postSpectate, STEP_SYNC_CONFIG.LIVE_RACE_SPECTATE_HEARTBEAT_MS);
+    return () => clearInterval(id);
+  }, [raceId, isActive]);
 
   // ── Cheer toast helper ────────────────────────────────────────────────────
   const showCheerToast = useCallback((text: string) => {
@@ -1610,6 +1673,9 @@ export default function LiveRaceDetailScreen() {
     };
   }, []);
 
+  const fetchRaceDetailsRef = useRef(fetchRaceDetails);
+  fetchRaceDetailsRef.current = fetchRaceDetails;
+
   // ── Pusher subscription ───────────────────────────────────────────────────
   useEffect(() => {
     if (!raceId) return;
@@ -1618,8 +1684,11 @@ export default function LiveRaceDetailScreen() {
     const channel = subscribeToChannel(channelName);
     if (!channel) return;
 
-    // Pusher refresh only updates race/participants — never resets comments
-    const refresh = () => { setTimeout(() => fetchRaceDetails().catch(() => {}), 250); };
+    const refresh = (force = false) => {
+      setTimeout(() => {
+        void fetchRaceDetailsRef.current(force);
+      }, 250);
+    };
 
     const onCompleted = (data?: {
       endedReason?: string;
@@ -1641,7 +1710,7 @@ export default function LiveRaceDetailScreen() {
           if (myResult && (myResult.prizeCoins ?? 0) > 0) setCoinWinAmount(myResult.prizeCoins!);
         }
       }
-      refresh(); };
+      refresh(true); };
     const onProgress = (data: { participantId?: string; userId?: string; steps?: number; rank?: number }) => {
       if (countdownActiveRef.current) return;
       if (typeof data.steps !== "number") return;
@@ -1691,7 +1760,10 @@ export default function LiveRaceDetailScreen() {
 
     const onStarted = () => {
       triggerCountdown();
-      setTimeout(() => fetchRaceDetails().catch(() => {}), 250); };
+      setTimeout(() => {
+        void fetchRaceDetailsRef.current(true);
+      }, 250);
+    };
 
     const onFinishedGoal = (data: {
       raceId?: string; userId?: string; username?: string;
@@ -1775,7 +1847,7 @@ export default function LiveRaceDetailScreen() {
       channel.unbind("race:winners",          refresh);
       channel.unbind("race:spectator_count",  onSpectatorCount);
       channel.unbind("participant_finished_goal", onFinishedGoal);
-      unsubscribeFromChannel(channelName); }; }, [raceId, fetchRace, fetchRaceDetails, showCheerToast]);
+      unsubscribeFromChannel(channelName); }; }, [raceId, showCheerToast]);
 
   // ── Cheer send ────────────────────────────────────────────────────────────
   const sendMessage = useCallback((text: string, isQuickReaction = false) => {
@@ -2082,12 +2154,13 @@ export default function LiveRaceDetailScreen() {
       />
 
       {/* ══ Content area: race track always in normal flex flow ══ */}
-      <View style={{ flex: 1, overflow: "hidden" }}>
+      <View style={{ flex: 1, position: "relative" }}>
 
         {/* ── RACE TRACK — always rendered, never unmounted ── */}
         <View style={{ flex: 1 }}>
           {FinishedBanner}
 
+          <View style={{ flex: 1, position: "relative" }}>
           <View
             style={[st.hero, { width: screenW, flex: 1, minHeight: rs(240) }]}
             onLayout={(e) => setHeroHeight(Math.max(rs(240), e.nativeEvent.layout.height))}
@@ -2153,6 +2226,7 @@ export default function LiveRaceDetailScreen() {
               </Animated.View>
             </Animated.View>
 
+            {selectedView === "race_track" && (
             <LeaderboardOverlay
               visible={isLeaderboardVisible}
               players={sortedPlayers}
@@ -2163,18 +2237,14 @@ export default function LiveRaceDetailScreen() {
               statusText={trackStatusText}
               meAvatarUrl={user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` : null}
               rsFactor={rsFactor}
-              activeSpeakerIds={visibleSpeakerIds}
+              locallyMutedUserIds={locallyMutedUserIds}
+              onLocalMute={localMuteParticipant}
+              onLocalUnmute={localUnmuteParticipant}
+              showMuteControls={sortedPlayers.length > 1}
+              isActiveRace={isActive}
             />
+            )}
 
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() => setIsLeaderboardVisible((v) => !v)}
-              style={st.toggleHandle}
-            >
-              <Feather name={isLeaderboardVisible ? "chevron-right" : "chevron-left"} size={22} color="#FFFFFF" />
-            </TouchableOpacity>
-
-            {/* ── Fullscreen zoom toggle (Race Track tab only) ── */}
             {selectedView === "race_track" && (
               <TouchableOpacity
                 activeOpacity={0.8}
@@ -2191,12 +2261,26 @@ export default function LiveRaceDetailScreen() {
 
           </View>
 
+          {selectedView === "race_track" && (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => setIsLeaderboardVisible((v) => !v)}
+              style={st.toggleHandle}
+              accessibilityRole="button"
+              accessibilityLabel={isLeaderboardVisible ? "Hide track position panel" : "Show track position panel"}
+            >
+              <Feather name={isLeaderboardVisible ? "chevron-right" : "chevron-left"} size={22} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
+
+          </View>
+
         </View>
 
-        {/* ── LIVE BOARD — absolute overlay, instantly toggled via opacity ── */}
+        {/* ── LIVE BOARD — only mounted when selected (avoids covering track toggle) ── */}
+        {selectedView === "live_board" && (
         <View
-          style={[StyleSheet.absoluteFill, { backgroundColor: "#050711", opacity: selectedView === "live_board" ? 1 : 0 }]}
-          pointerEvents={selectedView === "live_board" ? "auto" : "none"}
+          style={[StyleSheet.absoluteFill, { backgroundColor: "#050711" }]}
         >
           <ScrollView
             ref={scrollRef}
@@ -2214,10 +2298,6 @@ export default function LiveRaceDetailScreen() {
                   )
                 : participants}
               currentUserId={currentUserId}
-              activeSpeakerIds={visibleSpeakerIds}
-              locallyMutedUserIds={locallyMutedUserIds}
-              onLocalMute={localMuteParticipant}
-              onLocalUnmute={localUnmuteParticipant}
               stepDeltas={stepDeltaFlash}
               userAvatarUrl={user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` : null}
               onAvatarPress={(p) => {
@@ -2241,6 +2321,7 @@ export default function LiveRaceDetailScreen() {
             <PrizePanel race={race} participants={participants} colors={colors} />
           </ScrollView>
         </View>
+        )}
       </View>
 
       {/* ── Progress tracker — hidden in fullscreen so track fills more space ── */}
@@ -2694,7 +2775,7 @@ const st = StyleSheet.create({
   runnerName:   { fontWeight: "900" },
   runnerSteps:  { color: "#B2B8CA", fontWeight: "700", marginTop: 1 },
 
-  lbOverlay:    { position: "absolute", right: 0, top: 0, backgroundColor: "#0B0D1AF2", borderLeftWidth: 1, borderLeftColor: "#1A1D2E", paddingHorizontal: 7, paddingTop: 8, paddingBottom: 4, zIndex: 15 },
+  lbOverlay:    { position: "absolute", right: 0, top: 0, backgroundColor: "#0B0D1AF2", borderLeftWidth: 1, borderLeftColor: "#1A1D2E", paddingLeft: 8, paddingRight: 38, paddingTop: 8, paddingBottom: 4, zIndex: 15, overflow: "visible" as const },
   lbHead:       { flexDirection: "row", alignItems: "flex-start", marginBottom: 8, gap: 6 },
   lbHeadText:   { flex: 1, minWidth: 0 },
   lbTitle:      { color: "#CCCCCC", fontWeight: "700", letterSpacing: 0.5 },
@@ -2711,10 +2792,14 @@ const st = StyleSheet.create({
   lbAvatar:     { borderWidth: 2, backgroundColor: "#1A1D2E", alignItems: "center", justifyContent: "center", marginRight: 5, overflow: "hidden" },
   lbAvatarI:    { fontWeight: "800" },
   lbInfo:       { flex: 1, minWidth: 0 },
+  lbNameRow:    { flexDirection: "row", alignItems: "center", gap: 4, minWidth: 0 },
   lbName:       { fontWeight: "700" },
+  lbMuteColSpacer: { width: 28, height: 28, flexShrink: 0, marginLeft: 4 },
+  panelMicBtn:        { flexShrink: 0, width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: "#3A3F52", borderWidth: 1, borderColor: "#5B6078", marginLeft: 4 },
+  panelMicBtnMuted:   { backgroundColor: "#1A1D2E", borderColor: "#9CA3AF", opacity: 0.9 },
   lbSteps:      { fontWeight: "800", color: "#FFFFFF", lineHeight: 14 },
   lbUnit:       { color: "#8899BB" },
-  toggleHandle: { position: "absolute", right: -2, top: "47%", width: 34, height: 74, borderTopLeftRadius: 14, borderBottomLeftRadius: 14, borderWidth: 1, borderColor: "#3A3F52", backgroundColor: "#202431F2", alignItems: "center", justifyContent: "center", zIndex: 20 },
+  toggleHandle: { position: "absolute", right: 0, top: "47%", marginTop: -37, width: 34, height: 74, borderTopLeftRadius: 14, borderBottomLeftRadius: 14, borderWidth: 1, borderColor: "#3A3F52", backgroundColor: "#202431", alignItems: "center", justifyContent: "center", zIndex: 100, elevation: 100 },
   zoomBtn:           { position: "absolute", top: 10, left: 10, width: 32, height: 32, borderRadius: 8, backgroundColor: "#202431CC", borderWidth: 1, borderColor: "#3A3F5280", alignItems: "center", justifyContent: "center", zIndex: 25 },
   prizeChipsOverlay: { position: "absolute", top: 50, left: 10, zIndex: 24 },
 

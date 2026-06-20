@@ -23,10 +23,12 @@ import {
   purchaseUpdatedListener,
   purchaseErrorListener,
   finishTransaction,
+  flushFailedPurchasesCachedAsPendingAndroid,
   type Product,
   type ProductPurchase,
   type PurchaseError,
 } from "react-native-iap";
+import Constants from "expo-constants";
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getValidSession } from "@/services/authService";
@@ -49,6 +51,19 @@ const ALL_PRODUCT_IDS = [
   ...COIN_IAP_PRODUCTS.map((p) => p.productId),
   MIC_PASS_PRODUCT_ID,
 ];
+
+/** IAP requires a native dev/production build — not Expo Go. */
+export function isIAPAvailable(): boolean {
+  return Constants.executionEnvironment !== "storeClient";
+}
+
+function iapLog(message: string, extra?: unknown): void {
+  if (extra !== undefined) {
+    console.log(`[IAP] ${message}`, extra);
+  } else {
+    console.log(`[IAP] ${message}`);
+  }
+}
 
 // ── Pending purchase queue ───────────────────────────────────────────────────
 // When backend verification fails (network/server error), the purchase is
@@ -137,6 +152,12 @@ async function verifyWithBackend(purchase: ProductPurchase): Promise<IAPVerifyRe
   });
 
   const data = (await res.json()) as IAPVerifyResult;
+  iapLog("receipt validation response", {
+    productId: purchase.productId,
+    success: data.success === true,
+    duplicate: data.duplicate === true,
+    code: data.code ?? null,
+  });
   return data;
 }
 
@@ -146,16 +167,87 @@ export type CoinProduct = Product & { coins: number };
 
 // ── Service functions ────────────────────────────────────────────────────────
 
-/** Connect to the platform store. Must be called before any other IAP call. */
-export async function initializeIAP(): Promise<void> {
-  await initConnection();
+const IAP_INIT_TIMEOUT_MS = 20_000;
+const IAP_PRODUCT_RETRY_DELAYS_MS = [800, 1600, 2400];
+
+let iapConnected = false;
+let iapInitPromise: Promise<void> | null = null;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label}_TIMEOUT`)), ms);
+    promise
+      .then((v) => {
+        clearTimeout(timer);
+        resolve(v);
+      })
+      .catch((e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
+  });
 }
 
-/** Disconnect from the platform store. Call on screen unmount. */
+/** Connect to the platform store. Must be called before any other IAP call. */
+export async function initializeIAP(): Promise<void> {
+  if (!isIAPAvailable()) {
+    throw Object.assign(new Error("IAP not available in Expo Go"), { code: "E_IAP_NOT_AVAILABLE" });
+  }
+  if (iapConnected) return;
+  if (iapInitPromise) {
+    await iapInitPromise;
+    return;
+  }
+
+  iapInitPromise = (async () => {
+    const connected = await withTimeout(
+      initConnection(),
+      IAP_INIT_TIMEOUT_MS,
+      "IAP_INIT",
+    );
+    iapConnected = connected === true;
+    iapLog("billing connection status", {
+      platform: Platform.OS,
+      connected: iapConnected,
+    });
+    if (!iapConnected) {
+      throw new Error("IAP_INIT_FAILED");
+    }
+    if (Platform.OS === "android") {
+      try {
+        await flushFailedPurchasesCachedAsPendingAndroid();
+        iapLog("flushed cached pending Android purchases");
+      } catch {
+        iapLog("flush cached pending Android purchases failed");
+      }
+    }
+  })();
+
+  try {
+    await iapInitPromise;
+  } finally {
+    iapInitPromise = null;
+  }
+}
+
+/** Disconnect from the platform store. Call on app unmount only. */
 export async function cleanupIAP(): Promise<void> {
+  if (!iapConnected) return;
   try {
     await endConnection();
   } catch {}
+  iapConnected = false;
+}
+
+/** Human-readable hint when the store returns zero products. */
+export function getIAPUnavailableMessage(): string {
+  if (!isIAPAvailable()) {
+    return "In-app purchases require an installed APK or IPA build. Reinstall from Google Play internal testing or TestFlight.";
+  }
+  if (Platform.OS === "android") {
+    return "Google Play prices are unavailable. Install the app from your Play Console internal testing link using a licensed tester account — sideloaded or debug APKs cannot load IAP.";
+  }
+  return "App Store prices are unavailable. Complete IAP metadata in App Store Connect, then install via TestFlight with a Sandbox tester account.";
 }
 
 /**
@@ -166,10 +258,33 @@ export async function cleanupIAP(): Promise<void> {
 export async function loadIAPProducts(): Promise<{
   coinProducts: CoinProduct[];
   premiumProduct: Product | null;
+  missingProductIds: string[];
 }> {
-  const products = await getProducts({ skus: ALL_PRODUCT_IDS });
+  const requestIds = ALL_PRODUCT_IDS.map((id) => id.trim());
+  iapLog("product IDs requested", requestIds);
+
+  let products: Product[] = [];
+  const attempts = Platform.OS === "android" ? IAP_PRODUCT_RETRY_DELAYS_MS.length + 1 : 1;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, IAP_PRODUCT_RETRY_DELAYS_MS[attempt - 1]));
+      iapLog(`product query retry ${attempt}/${attempts - 1}`);
+    }
+    products = await withTimeout(
+      getProducts({ skus: requestIds }),
+      IAP_INIT_TIMEOUT_MS,
+      attempt === 0 ? "IAP_PRODUCTS" : "IAP_PRODUCTS_RETRY",
+    );
+    iapLog(
+      attempt === 0 ? "products returned" : "products returned after retry",
+      products.map((p) => p.productId),
+    );
+    if (products.length > 0) break;
+  }
 
   const coinMap = new Map(COIN_IAP_PRODUCTS.map((p) => [p.productId, p.coins]));
+  const returnedIds = new Set(products.map((p) => p.productId));
 
   const coinProducts: CoinProduct[] = products
     .filter((p) => coinMap.has(p.productId))
@@ -177,8 +292,13 @@ export async function loadIAPProducts(): Promise<{
     .sort((a, b) => a.coins - b.coins);
 
   const premiumProduct = products.find((p) => p.productId === MIC_PASS_PRODUCT_ID) ?? null;
+  const missingProductIds = requestIds.filter((id) => !returnedIds.has(id));
 
-  return { coinProducts, premiumProduct };
+  if (missingProductIds.length > 0) {
+    iapLog("missing product IDs from store", missingProductIds);
+  }
+
+  return { coinProducts, premiumProduct, missingProductIds };
 }
 
 /**
@@ -187,7 +307,12 @@ export async function loadIAPProducts(): Promise<{
  * Cancellation is silently swallowed — only real errors call onError.
  */
 export async function purchaseProduct(productId: string): Promise<void> {
-  await requestPurchase({ sku: productId });
+  iapLog("purchase requested", { productId, platform: Platform.OS });
+  if (Platform.OS === "android") {
+    await requestPurchase({ skus: [productId] });
+  } else {
+    await requestPurchase({ sku: productId });
+  }
 }
 
 /**
@@ -217,6 +342,13 @@ export function setupPurchaseListeners(callbacks: {
 
   try {
     updateSub = purchaseUpdatedListener(async (purchase: ProductPurchase) => {
+      iapLog("purchase update received", {
+        productId: purchase.productId,
+        transactionId:
+          purchase.transactionId ??
+          purchase.purchaseToken ??
+          String(purchase.transactionDate),
+      });
       const isConsumable = isConsumableId(purchase.productId);
       const transactionId =
         purchase.transactionId ??
@@ -227,6 +359,10 @@ export function setupPurchaseListeners(callbacks: {
         const result = await verifyWithBackend(purchase);
 
         if (result.success || result.duplicate) {
+          iapLog("purchase verification success", {
+            productId: purchase.productId,
+            duplicate: result.duplicate === true,
+          });
           // Finish / consume only after backend confirms
           try { await finishTransaction({ purchase, isConsumable }); } catch {}
           await removePending(transactionId);
@@ -241,6 +377,10 @@ export function setupPurchaseListeners(callbacks: {
             }
           }
         } else {
+          iapLog("purchase verification pending", {
+            productId: purchase.productId,
+            code: result.code ?? null,
+          });
           await savePending({
             platform: Platform.OS,
             productId: purchase.productId,
@@ -252,6 +392,9 @@ export function setupPurchaseListeners(callbacks: {
           onPending("Purchase received. Verification is pending. Please try again shortly.");
         }
       } catch {
+        iapLog("purchase verification failed temporarily, queued", {
+          productId: purchase.productId,
+        });
         // Network / server error — queue for retry
         await savePending({
           platform: Platform.OS,
@@ -269,6 +412,7 @@ export function setupPurchaseListeners(callbacks: {
   try {
     errorSub = purchaseErrorListener((error: PurchaseError) => {
       // E_USER_CANCELLED is expected — do not surface to the user
+      iapLog("purchase error", { code: error.code, message: error.message });
       if (error.code !== "E_USER_CANCELLED") {
         onError("Purchase failed. Please try again.");
       }
@@ -290,6 +434,7 @@ export async function retryPendingPurchases(callbacks: {
   onMicPassGrant: () => void;
 }): Promise<void> {
   const pending = await loadPending();
+  iapLog("pending purchases loaded", { count: pending.length });
   if (pending.length === 0) return;
 
   for (const p of pending) {

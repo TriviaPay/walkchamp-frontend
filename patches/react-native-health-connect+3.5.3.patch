@@ -1,0 +1,227 @@
+diff --git a/node_modules/react-native-health-connect/android/src/main/java/dev/matinzd/healthconnect/HealthConnectManager.kt b/node_modules/react-native-health-connect/android/src/main/java/dev/matinzd/healthconnect/HealthConnectManager.kt
+index 40539fe..1cda3eb 100644
+--- a/node_modules/react-native-health-connect/android/src/main/java/dev/matinzd/healthconnect/HealthConnectManager.kt
++++ b/node_modules/react-native-health-connect/android/src/main/java/dev/matinzd/healthconnect/HealthConnectManager.kt
+@@ -1,6 +1,8 @@
+ package dev.matinzd.healthconnect
+ 
+ import android.content.Intent
++import android.util.Log
++import androidx.activity.ComponentActivity
+ import androidx.health.connect.client.HealthConnectClient
+ import androidx.health.connect.client.changes.DeletionChange
+ import androidx.health.connect.client.changes.UpsertionChange
+@@ -68,9 +70,31 @@ class HealthConnectManager(private val applicationContext: ReactApplicationConte
+     promise: Promise
+   ) {
+     throwUnlessClientIsAvailable(promise) {
+-      coroutineScope.launch {
+-        val granted = HealthConnectPermissionDelegate.launchPermissionsDialog(PermissionUtils.parsePermissions(reactPermissions))
+-        promise.resolve(PermissionUtils.mapPermissionResult(granted))
++      coroutineScope.launch(Dispatchers.Main) {
++        try {
++          val activity = applicationContext.currentActivity as? ComponentActivity
++          if (activity != null) {
++            HealthConnectPermissionDelegate.setPermissionDelegate(activity)
++          } else {
++            Log.w("HealthConnectManager", "No current Activity for permission request")
++          }
++          val parsed = PermissionUtils.parsePermissions(reactPermissions)
++          Log.d(
++            "HealthConnectManager",
++            "requestPermission jsSize=${reactPermissions.size()} parsed=${parsed.size} -> $parsed",
++          )
++          if (parsed.isEmpty()) {
++            promise.reject(
++              "E_PARSE_PERMISSIONS",
++              "No valid Health Connect permissions parsed from JS payload",
++            )
++            return@launch
++          }
++          val granted = HealthConnectPermissionDelegate.launchPermissionsDialog(parsed)
++          promise.resolve(PermissionUtils.mapPermissionResult(granted))
++        } catch (e: Exception) {
++          promise.rejectWithException(e)
++        }
+       }
+     }
+   }
+diff --git a/node_modules/react-native-health-connect/android/src/main/java/dev/matinzd/healthconnect/permissions/HealthConnectPermissionDelegate.kt b/node_modules/react-native-health-connect/android/src/main/java/dev/matinzd/healthconnect/permissions/HealthConnectPermissionDelegate.kt
+index 5ec3641..c663d27 100644
+--- a/node_modules/react-native-health-connect/android/src/main/java/dev/matinzd/healthconnect/permissions/HealthConnectPermissionDelegate.kt
++++ b/node_modules/react-native-health-connect/android/src/main/java/dev/matinzd/healthconnect/permissions/HealthConnectPermissionDelegate.kt
+@@ -1,53 +1,82 @@
+ package dev.matinzd.healthconnect.permissions
+ 
++import android.util.Log
+ import androidx.activity.ComponentActivity
+ import androidx.activity.result.ActivityResultLauncher
+ import androidx.health.connect.client.PermissionController
+ import androidx.health.connect.client.contracts.ExerciseRouteRequestContract
+ import androidx.health.connect.client.records.ExerciseRoute
+-import kotlinx.coroutines.CoroutineScope
++import androidx.lifecycle.Lifecycle
++import kotlinx.coroutines.CompletableDeferred
+ import kotlinx.coroutines.Dispatchers
+-import kotlinx.coroutines.cancel
+-import kotlinx.coroutines.channels.Channel
+-import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
+ 
+ object HealthConnectPermissionDelegate {
+-  private val coroutineScope = CoroutineScope(Dispatchers.IO)
+-  private val permissionsChannel = Channel<Set<String>>()
+-  private val exerciseRouteChannel = Channel<ExerciseRoute?>()
++  private const val TAG = "HealthConnectPermissionDelegate"
+ 
+   private lateinit var requestPermission: ActivityResultLauncher<Set<String>>
+   private lateinit var requestRoutePermission: ActivityResultLauncher<String>
++  private var registeredActivity: ComponentActivity? = null
++  private var pendingPermissions: CompletableDeferred<Set<String>>? = null
++  private var pendingRoute: CompletableDeferred<ExerciseRoute?>? = null
+ 
+   fun setPermissionDelegate(
+     activity: ComponentActivity,
+     providerPackageName: String = "com.google.android.apps.healthdata"
+   ) {
++    if (::requestPermission.isInitialized && registeredActivity === activity) {
++      Log.d(TAG, "already registered on ${activity.javaClass.simpleName}")
++      return
++    }
++    registeredActivity = activity
+     val contract = PermissionController.createRequestPermissionResultContract(providerPackageName)
+     val exerciseRouteRequestContract = ExerciseRouteRequestContract()
+ 
+-    requestPermission = activity.registerForActivityResult(contract) {
+-      coroutineScope.launch {
+-        permissionsChannel.send(it)
+-        coroutineContext.cancel()
+-      }
++    requestPermission = activity.registerForActivityResult(contract) { result ->
++      Log.d(TAG, "permission callback: ${result.size} permissions -> $result")
++      pendingPermissions?.complete(result)
++      pendingPermissions = null
+     }
+ 
+-    requestRoutePermission = activity.registerForActivityResult(exerciseRouteRequestContract) {
+-      coroutineScope.launch {
+-        exerciseRouteChannel.send(it)
+-        coroutineContext.cancel()
+-      }
++    requestRoutePermission = activity.registerForActivityResult(exerciseRouteRequestContract) { result ->
++      pendingRoute?.complete(result)
++      pendingRoute = null
+     }
++    Log.d(TAG, "registered on ${activity.javaClass.simpleName}")
+   }
+ 
+   suspend fun launchPermissionsDialog(permissions: Set<String>): Set<String> {
+-    requestPermission.launch(permissions)
+-    return permissionsChannel.receive()
++    if (!::requestPermission.isInitialized) {
++      throw IllegalStateException(
++        "Health Connect permission launcher not registered. " +
++          "Call setPermissionDelegate(activity) after super.onCreate()."
++      )
++    }
++    val activity = registeredActivity
++      ?: throw IllegalStateException("Health Connect delegate activity is null")
++
++    val deferred = CompletableDeferred<Set<String>>()
++    pendingPermissions?.cancel()
++    pendingPermissions = deferred
++
++    withContext(Dispatchers.Main.immediate) {
++      val state = activity.lifecycle.currentState
++      Log.d(TAG, "launching permission dialog (lifecycle=$state): $permissions")
++      if (!state.isAtLeast(Lifecycle.State.RESUMED)) {
++        Log.w(TAG, "activity not RESUMED — permission UI may not appear")
++      }
++      requestPermission.launch(permissions)
++    }
++    return deferred.await()
+   }
+ 
+   suspend fun launchExerciseRouteAccessRequestDialog(recordId: String): ExerciseRoute? {
+-    requestRoutePermission.launch(recordId)
+-    return exerciseRouteChannel.receive()
++    val deferred = CompletableDeferred<ExerciseRoute?>()
++    pendingRoute?.cancel()
++    pendingRoute = deferred
++    withContext(Dispatchers.Main.immediate) {
++      requestRoutePermission.launch(recordId)
++    }
++    return deferred.await()
+   }
+ }
+diff --git a/node_modules/react-native-health-connect/android/src/main/java/dev/matinzd/healthconnect/permissions/PermissionUtils.kt b/node_modules/react-native-health-connect/android/src/main/java/dev/matinzd/healthconnect/permissions/PermissionUtils.kt
+index 0d9d342..d41a957 100644
+--- a/node_modules/react-native-health-connect/android/src/main/java/dev/matinzd/healthconnect/permissions/PermissionUtils.kt
++++ b/node_modules/react-native-health-connect/android/src/main/java/dev/matinzd/healthconnect/permissions/PermissionUtils.kt
+@@ -3,6 +3,7 @@ package dev.matinzd.healthconnect.permissions
+ import androidx.health.connect.client.PermissionController
+ import androidx.health.connect.client.permission.HealthPermission
+ import com.facebook.react.bridge.ReadableArray
++import com.facebook.react.bridge.ReadableMap
+ import com.facebook.react.bridge.WritableNativeArray
+ import dev.matinzd.healthconnect.utils.InvalidRecordType
+ import dev.matinzd.healthconnect.utils.reactRecordTypeToClassMap
+@@ -10,31 +11,35 @@ import dev.matinzd.healthconnect.utils.reactRecordTypeToClassMap
+ class PermissionUtils {
+   companion object {
+     fun parsePermissions(reactPermissions: ReadableArray): Set<String> {
+-      return reactPermissions.toArrayList().mapNotNull {
+-        it as HashMap<*, *>
+-        val recordType = it["recordType"]
+-        val accessType = it["accessType"]
++      // Use getMap() — New Architecture TurboModules may not serialize nested
++      // objects as HashMap when using toArrayList(), which yields an empty set
++      // and an immediate empty permission callback.
++      val permissions = mutableSetOf<String>()
++      for (i in 0 until reactPermissions.size()) {
++        val map: ReadableMap = reactPermissions.getMap(i) ?: continue
++        val recordType = map.getString("recordType") ?: continue
++        val accessType = map.getString("accessType") ?: continue
+ 
+-        if (accessType == "write" && recordType == "ExerciseRoute") {
+-          return@mapNotNull HealthPermission.PERMISSION_WRITE_EXERCISE_ROUTE
+-        }
+-
+-        if (accessType == "read" && recordType == "ReadHealthDataHistory") {
+-          return@mapNotNull HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY
+-        }
+-
+-        if (accessType == "read" && recordType == "BackgroundAccessPermission") {
+-          return@mapNotNull HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND
+-        }
+-
+-        val recordClass = reactRecordTypeToClassMap[recordType] ?: throw InvalidRecordType()
+-
+-        when (accessType) {
+-          "write" -> HealthPermission.getWritePermission(recordClass)
+-          "read" -> HealthPermission.getReadPermission(recordClass)
+-          else -> null
++        when {
++          accessType == "write" && recordType == "ExerciseRoute" -> {
++            permissions.add(HealthPermission.PERMISSION_WRITE_EXERCISE_ROUTE)
++          }
++          accessType == "read" && recordType == "ReadHealthDataHistory" -> {
++            permissions.add(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
++          }
++          accessType == "read" && recordType == "BackgroundAccessPermission" -> {
++            permissions.add(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)
++          }
++          else -> {
++            val recordClass = reactRecordTypeToClassMap[recordType] ?: throw InvalidRecordType()
++            when (accessType) {
++              "write" -> permissions.add(HealthPermission.getWritePermission(recordClass))
++              "read" -> permissions.add(HealthPermission.getReadPermission(recordClass))
++            }
++          }
+         }
+-      }.toSet()
++      }
++      return permissions
+     }
+ 
+     suspend fun getGrantedPermissions(permissionController: PermissionController): WritableNativeArray {

@@ -68,7 +68,7 @@ export const restoreSession = createAsyncThunk(
     if (__DEV__) console.log("[Auth] bootstrap started");
 
     const { session, refresh } = await getStoredSession();
-    if (!session || !refresh) {
+    if (!session || !refresh?.trim()) {
       if (__DEV__) console.log("[Auth] no stored session");
       return rejectWithValue("no_session");
     }
@@ -196,6 +196,9 @@ const authSlice = createSlice({
     // Keeps the Redux sessionToken in sync with what's stored in SecureStore.
     sessionTokenUpdated(state, action: PayloadAction<string>) {
       state.sessionToken = action.payload;
+    },
+    refreshTokenUpdated(state, action: PayloadAction<string>) {
+      state.refreshToken = action.payload;
     },
     // Synchronous local logout (no API call)
     localLogout(state) {

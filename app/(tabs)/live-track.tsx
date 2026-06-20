@@ -24,6 +24,11 @@ import Animated, {
   cancelAnimation, } from "react-native-reanimated";
 import { useAuth } from "@/context/AuthContext";
 import { authFetch } from "@/utils/authFetch";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import {
+  liveRaceFetchAllowed,
+  markLiveRaceFetched,
+} from "@/utils/liveRaceFetchGate";
 import {
   CHANNELS,
   EVENTS,
@@ -428,7 +433,17 @@ export default function LiveTrackTab() {
   const leaderboardProgress = useSharedValue(1);
   const pulseOpacity = useSharedValue(0);
 
-  const loadRaceSnapshot = useCallback(async (raceId: string) => {
+  const loadRaceSnapshot = useCallback(async (raceId: string, force = false) => {
+    const gateKey = `${raceId}:snapshot`;
+    if (
+      !liveRaceFetchAllowed(
+        gateKey,
+        STEP_SYNC_CONFIG.LIVE_RACE_DETAIL_REFRESH_MS,
+        force,
+      )
+    ) {
+      return;
+    }
     const [detailRes, commentsRes, reactionsRes] = await Promise.all([
       authFetch(`/api/races/${raceId}`),
       authFetch(`/api/races/${raceId}/comments`),
@@ -436,6 +451,7 @@ export default function LiveTrackTab() {
     ]);
 
     if (detailRes.ok) {
+      markLiveRaceFetched(gateKey);
       const detail = (await detailRes.json()) as {
         race?: RaceData;
         participants?: RaceParticipant[]; };
@@ -648,7 +664,7 @@ export default function LiveTrackTab() {
     if (!shouldPollCompletion || !activeRaceId) return;
     const id = setInterval(() => {
       loadRaceSnapshot(activeRaceId).catch(() => {});
-    }, 3000);
+    }, STEP_SYNC_CONFIG.LIVE_RACE_COMPLETION_POLL_MS);
     return () => clearInterval(id);
   }, [shouldPollCompletion, activeRaceId, loadRaceSnapshot]);
   const raceTitle = race?.title || "LIVE WALK RACE";

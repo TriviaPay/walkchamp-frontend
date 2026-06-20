@@ -1,5 +1,8 @@
 import { Platform, StatusBar } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  initialWindowMetrics,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 
 /**
  * Returns a safe top inset that never clips status bar / notch / Dynamic Island.
@@ -14,9 +17,22 @@ export function getSafeTop(insetsTop: number): number {
   );
 }
 
-/** Floor for bottom safe-area: 16 on Android gesture nav, 20 on iOS/web. */
+/**
+ * Bottom inset for home indicator / Android 3-button navigation bar.
+ * Some Samsung devices report 0 until edge-to-edge metrics are ready — fall back
+ * to initialWindowMetrics, then a conservative Android minimum (48 px).
+ */
 export function getSafeBottom(insetsBottom: number): number {
-  return Math.max(insetsBottom, Platform.OS === "android" ? 16 : 20);
+  const androidMin = 48;
+  const iosMin = 20;
+  if (insetsBottom > 0) {
+    return Math.max(insetsBottom, Platform.OS === "android" ? androidMin : iosMin);
+  }
+  const initialBottom = initialWindowMetrics?.insets.bottom ?? 0;
+  if (initialBottom > 0) {
+    return Math.max(initialBottom, Platform.OS === "android" ? androidMin : iosMin);
+  }
+  return Platform.OS === "android" ? androidMin : iosMin;
 }
 
 /**

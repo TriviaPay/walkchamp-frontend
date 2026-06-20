@@ -11,7 +11,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, LogBox, Platform, View } from "react-native";
+import { ActivityIndicator, InteractionManager, LogBox, Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -39,18 +39,23 @@ import TitleUnlockModal from "@/components/TitleUnlockModal";
 import { useAuth } from "@/context/AuthContext";
 import { connectPusher, subscribeToChannel, unsubscribeFromChannel, CHANNELS } from "@/services/realtimeService";
 import {
+  ensureOneSignalInitialized,
   initOneSignal,
   logoutOneSignal,
   getNotificationPreferences,
   registerDeviceWithBackend,
   setupNotificationClickHandler,
   setupForegroundHandler,
+  setupPushSubscriptionListener,
+  ensurePushPermissionIfNeeded,
+  getPendingDeepLink,
+  clearPendingDeepLink,
 } from "@/services/notificationService";
 
 // ── App startup diagnostics ────────────────────────────────────────────────
 if (__DEV__) {
   console.log(`[AppStart] platform: ${Platform.OS}`);
-  console.log(`[AppStart] env loaded: API_URL=${process.env.EXPO_PUBLIC_API_URL ?? "(unset)"} DESCOPE=${process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID ? "set" : "(unset)"} PUSHER_KEY=${process.env.EXPO_PUBLIC_PUSHER_KEY ? "set" : "(unset)"}`);
+  console.log(`[AppStart] env loaded: API_URL=${process.env.EXPO_PUBLIC_API_URL ?? "(unset)"} DESCOPE=${process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID ? "set" : "(unset)"} PUSHER_KEY=${process.env.EXPO_PUBLIC_PUSHER_KEY ? "set" : "(unset)"} ONESIGNAL=${process.env.EXPO_PUBLIC_ONESIGNAL_APP_ID ? "set" : "(unset)"}`);
 }
 
 // ── Suppress fontfaceobserver timeout crash on web ─────────────────────────
@@ -89,8 +94,20 @@ if (Platform.OS === "web" && typeof window !== "undefined") {
   );
 
   window.addEventListener("unhandledrejection", (e) => {
-    if (String(e.reason?.message ?? "").includes("timeout exceeded")) {
+    const msg = String(e.reason?.message ?? "");
+    if (msg.includes("timeout exceeded") || msg.includes("Unable to activate keep awake")) {
       e.preventDefault();
+    }
+  });
+}
+
+// Suppress harmless promise rejections (keep-awake on some Android devices)
+if (typeof globalThis !== "undefined" && "addEventListener" in globalThis) {
+  globalThis.addEventListener("unhandledrejection", (e: Event) => {
+    const reason = (e as PromiseRejectionEvent).reason;
+    const msg = String(reason?.message ?? reason ?? "");
+    if (msg.includes("Unable to activate keep awake")) {
+      e.preventDefault?.();
     }
   });
 }
@@ -105,6 +122,7 @@ LogBox.ignoreLogs([
   "TurboModuleRegistry.getEnforcing",
   "'OneSignal' could not be found",
   "'RNGoogleMobileAdsModule' could not be found",
+  "Unable to activate keep awake",
 ]);
 
 const queryClient = new QueryClient();
@@ -156,6 +174,32 @@ function RootLayoutNav() {
 function PushNotificationSetup() {
   const { user } = useAuth();
   const prevUserIdRef = useRef<string | null>(null);
+  const foregroundCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    void (async () => {
+      await ensureOneSignalInitialized();
+      cleanup = await setupNotificationClickHandler(
+        (route) => {
+          try {
+            const { router } = require("expo-router") as { router: { push: (r: string) => void } };
+            InteractionManager.runAfterInteractions(() => {
+              try {
+                router.push(route as never);
+              } catch {
+                // Ignore routing errors
+              }
+            });
+          } catch {
+            // Ignore routing errors
+          }
+        },
+        () => !!user?.id,
+      );
+    })();
+    return () => { cleanup?.(); };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id || user.id === prevUserIdRef.current) return;
@@ -163,41 +207,53 @@ function PushNotificationSetup() {
 
     void (async () => {
       try {
-        await initOneSignal(user.id);
+        await initOneSignal({
+          id: user.id,
+          username: user.username,
+          country: user.country,
+        });
         const enabled = await getNotificationPreferences();
         if (enabled) {
+          await ensurePushPermissionIfNeeded(user.id, true);
           await registerDeviceWithBackend();
+          await setupPushSubscriptionListener();
         }
-        // Set up foreground display handler (fire-and-forget cleanup not needed
-        // since the app lifecycle owns this component)
-        await setupForegroundHandler();
+        foregroundCleanupRef.current?.();
+        foregroundCleanupRef.current = await setupForegroundHandler();
       } catch {
         // Never crash on notification setup
       }
     })();
+  }, [user?.id, user?.username, user?.country]);
+
+  // Navigate to pending deep link after session restore
+  useEffect(() => {
+    if (!user?.id) return;
+    const pending = getPendingDeepLink();
+    if (!pending) return;
+    clearPendingDeepLink();
+    try {
+      const { router } = require("expo-router") as { router: { push: (r: string) => void } };
+      InteractionManager.runAfterInteractions(() => {
+        try {
+          router.push(pending as never);
+        } catch {
+          // Ignore routing errors
+        }
+      });
+    } catch {
+      // Ignore routing errors
+    }
   }, [user?.id]);
 
   useEffect(() => {
-    if (!user) {
-      prevUserIdRef.current = null;
-      void logoutOneSignal().catch(() => {});
-    }
+    if (user?.id) return;
+    if (!prevUserIdRef.current) return;
+    prevUserIdRef.current = null;
+    foregroundCleanupRef.current?.();
+    foregroundCleanupRef.current = null;
+    void logoutOneSignal().catch(() => {});
   }, [user]);
-
-  // Set up click routing — router is stable for the app lifetime
-  useEffect(() => {
-    let cleanup: (() => void) | undefined;
-    void setupNotificationClickHandler((route) => {
-      try {
-        // expo-router global navigate
-        const { router } = require("expo-router") as { router: { push: (r: string) => void } };
-        router.push(route as never);
-      } catch {
-        // Ignore routing errors
-      }
-    }).then((fn) => { cleanup = fn; });
-    return () => { cleanup?.(); };
-  }, []);
 
   return null;
 }
@@ -275,7 +331,7 @@ export default function RootLayout() {
 
   // Initialize AdMob SDK once after fonts settle
   useEffect(() => {
-    void initializeAds();
+    void initializeAds().catch(() => {});
   }, []);
 
   if (!fontsLoaded && !fontError && !fontTimedOut) {

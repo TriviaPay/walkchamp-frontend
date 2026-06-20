@@ -21,70 +21,21 @@ import { Platform, AppState } from "react-native";
 import { useAuth } from "@/context/AuthContext";
 import { getValidSession } from "@/services/authService";
 import { stepTracker } from "@/services/StepTrackingService";
-import { androidHCService } from "@/services/steps/androidHealthConnectService";
-import { stepPollingService } from "@/services/StepPollingService";
+import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import { stepPollingService, type RacePollingConfig } from "@/services/StepPollingService";
+import { raceStepSyncService } from "@/services/RaceStepSyncService";
+import {
+  postRaceProgress,
+  postRaceReconcile,
+} from "@/services/raceProgressApi";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { STORAGE_KEYS, storageGet, storageSet, storageRemove } from "@/utils/storage";
-import { timeoutSignal, STEP_SYNC_TIMEOUT, API_TIMEOUT_MS } from "@/utils/authFetch";
+import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
 import { subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
 // ── API helpers ────────────────────────────────────────────────────────────────
-
-async function postRaceProgress(
-  raceId: string,
-  steps: number,
-  sequenceId?: number,
-  deviceTotalSteps?: number,
-  stepSource?: string,
-): Promise<boolean> {
-  try {
-    const session = await getValidSession();
-    if (!session) return false; // session unavailable — caller will retry
-    const body: Record<string, unknown> = {
-      steps,
-      deviceTime: new Date().toISOString(),
-    };
-    if (sequenceId !== undefined) body.sequenceId = sequenceId;
-    if (deviceTotalSteps !== undefined) body.deviceTotalSteps = deviceTotalSteps;
-    if (stepSource !== undefined) body.stepSource = stepSource;
-    if (__DEV__) {
-      console.log(
-        `[RaceSteps] sending sync: raceId=${raceId} steps=${steps} source=${stepSource ?? "unknown"} seq=${sequenceId ?? "n/a"} deviceTotal=${deviceTotalSteps ?? "n/a"}`,
-      );
-    }
-    const res = await fetch(`${API_BASE}/api/races/${raceId}/progress`, {
-      method: "POST",
-      signal: timeoutSignal(STEP_SYNC_TIMEOUT),
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session}` },
-      body: JSON.stringify(body),
-    });
-    if (__DEV__) {
-      const json = await res.json().catch(() => ({})) as Record<string, unknown>;
-      console.log(
-        `[RaceSteps] sync response progress: ${json.steps ?? "?"} skipped=${json.skipped ?? false}`,
-      );
-    }
-    return true; // request was sent to the server
-  } catch (err) {
-    if (__DEV__) console.log(`[RaceSteps] sync failed: ${String(err)}`);
-    return false; // network/abort error — caller will retry
-  }
-}
-
-async function postRaceReconcile(raceId: string, steps: number, source: string): Promise<void> {
-  try {
-    const session = await getValidSession();
-    if (!session) return;
-    await fetch(`${API_BASE}/api/races/${raceId}/reconcile-steps`, {
-      method: "POST",
-      signal: timeoutSignal(API_TIMEOUT_MS),
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session}` },
-      body: JSON.stringify({ steps, source }),
-    });
-  } catch {}
-}
 
 async function fetchRaceStatus(raceId: string): Promise<{ status: string; startedAt?: string; completedAt?: string } | null> {
   try {
@@ -227,6 +178,12 @@ interface RaceContextType {
   cancelRace: () => void;
   resetRace: () => void;
   setActiveRace: (id: string | null, host: boolean) => void;
+  /** Stop HC/pedometer polling and simulation ticks (e.g. when race completes on live-detail). */
+  stopRaceStepTracking: (reason?: string) => void;
+  /** Pause step reads when leaving live-detail — flushes backend, no fake steps. */
+  pauseRaceStepTracking: () => void;
+  /** Re-start race step polling after returning to live-detail (active race only). */
+  resumeRaceStepTracking: () => void;
 }
 
 const RaceContext = createContext<RaceContextType | null>(null);
@@ -297,17 +254,10 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
   const playersJoinedRef = useRef(0);
   const hostModeRef = useRef(false);
   const usingRealStepsRef = useRef(false);
+  const racePollingConfigRef = useRef<RacePollingConfig | null>(null);
+  const raceStepApplyRef = useRef<((steps: number) => void) | null>(null);
   // Mirrors raceTargetSteps state so callbacks always see the current target.
   const raceTargetStepsRef = useRef(RACE_DEFAULTS.RACE_TARGET);
-  // ── Step-sync throttle / dedup refs ────────────────────────────────────────
-  // lastSyncTimeRef: timestamp of the last backend sync (ms epoch).
-  const lastSyncTimeRef = useRef(0);
-  // lastSyncedStepsRef: race steps value at the last accepted backend sync.
-  // Used to compute delta so we only sync when ≥ 5 new steps have accumulated.
-  const lastSyncedStepsRef = useRef(0);
-  // syncSeqRef: monotonic counter incremented on every sync request.
-  // Backend uses this to silently drop duplicate/stale payloads.
-  const syncSeqRef = useRef(0);
 
   // Sync userProfileRef whenever the auth user changes.
   useEffect(() => {
@@ -363,9 +313,71 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     subscriptionGenRef.current++;
     // Stop iOS live step subscription (Android HC is polling-based, no subscription to stop)
     stepTracker.stopLiveTracking();
+    stepProviderManager.stopWatchingSteps();
     // Stop the centralized polling safety-net
     stepPollingService.stopPolling("race_ended");
+    raceStepSyncService.cancelPending();
+    racePollingConfigRef.current = null;
   };
+
+  const stopRaceStepTracking = useCallback((reason = "race_tracking_stopped") => {
+    raceEndedRef.current = true;
+    raceStepApplyRef.current = null;
+    if (raceStepRef.current) {
+      clearInterval(raceStepRef.current);
+      raceStepRef.current = null;
+    }
+    stepTracker.stopLiveTracking();
+    stepProviderManager.stopWatchingSteps();
+    stepPollingService.stopPolling(reason);
+    if (raceIdRef.current && userStepsRef.current > 0) {
+      void raceStepSyncService.flush(
+        raceIdRef.current,
+        userStepsRef.current,
+        stepProviderManager.toRaceProgressSource(),
+      );
+    } else {
+      raceStepSyncService.cancelPending();
+    }
+    subscriptionGenRef.current++;
+    racePollingConfigRef.current = null;
+  }, []);
+
+  const pauseRaceStepTracking = useCallback(() => {
+    if (raceEndedRef.current) return;
+    stepPollingService.stopPolling("race_paused");
+    stepProviderManager.stopWatchingSteps();
+    if (raceIdRef.current && userStepsRef.current > 0) {
+      void raceStepSyncService.flush(
+        raceIdRef.current,
+        userStepsRef.current,
+        stepProviderManager.toRaceProgressSource(),
+      );
+    }
+  }, []);
+
+  const resumeRaceStepTracking = useCallback(() => {
+    if (raceEndedRef.current || racePhase !== "in_race") return;
+    const cfg = racePollingConfigRef.current;
+    if (!cfg || !usingRealStepsRef.current) return;
+
+    const providerId = stepProviderManager.getActiveProviderId();
+    if (
+      (providerId === "ios_healthkit" || providerId === "android_legacy_sensor") &&
+      raceStepApplyRef.current
+    ) {
+      const apply = raceStepApplyRef.current;
+      void stepProviderManager.startWatchingSteps((result) => {
+        void stepProviderManager
+          .getRaceSteps(cfg.raceId, cfg.raceStartTime, cfg.userId)
+          .then((raceResult) => {
+            if (raceResult) apply(raceResult.steps);
+          });
+      });
+    }
+
+    stepPollingService.startPolling("race", cfg);
+  }, [racePhase]);
 
   const setActiveRace = useCallback((id: string | null, host: boolean) => {
     raceIdRef.current = id;
@@ -402,11 +414,21 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
             await postRaceProgress(pendingRaceId, data.steps, undefined, undefined, "healthkit");
           }
         } else {
-          // Android HC: range query from race start to now (same as iOS recovery).
-          const hcData = await androidHCService.readStepsForRange(raceStart, new Date());
-          if (__DEV__) console.log(`[RaceSteps] Android HC recovery: steps=${hcData.steps} raceStart=${raceStart.toISOString()}`);
-          if (hcData.steps > 0) {
-            await postRaceProgress(pendingRaceId, hcData.steps, undefined, undefined, "health_connect");
+          const uid = userProfileRef.current.userId;
+          const raceData2 = await stepProviderManager.getRaceSteps(
+            pendingRaceId,
+            raceStart,
+            uid,
+          );
+          if (__DEV__) console.log(`[RaceSteps] Android recovery: steps=${raceData2?.steps ?? 0}`);
+          if (raceData2 && raceData2.steps > 0) {
+            await postRaceProgress(
+              pendingRaceId,
+              raceData2.steps,
+              undefined,
+              undefined,
+              stepProviderManager.toRaceProgressSource(),
+            );
           }
         }
         // Leave pending race in storage so we can reconcile when it completes
@@ -445,7 +467,11 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     // Flush final steps to backend — use real steps if available, else simulated
     const userParticipant = finalParticipants.find((p) => p.isUser);
     if (raceIdRef.current && userParticipant) {
-      void postRaceProgress(raceIdRef.current, userParticipant.raceSteps);
+      void raceStepSyncService.flush(
+        raceIdRef.current,
+        userParticipant.raceSteps,
+        stepProviderManager.toRaceProgressSource(),
+      );
     }
 
     // Mark pending race as completed so recovery knows the end time
@@ -574,10 +600,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     BOT_PLAYERS.forEach((b) => { botStepsRef.current[b.id] = 0; });
     participantsRef.current = allParticipants;
     usingRealStepsRef.current = false;
-    // Reset step-sync dedup state for the new race (raceSteps start fresh from 0)
-    lastSyncTimeRef.current = 0;
-    lastSyncedStepsRef.current = 0;  // raceSteps at last backend sync — isolated per race
-    syncSeqRef.current = 0;
+    raceStepSyncService.reset();
 
     // Capture the generation at race-start time.  All step callbacks created in THIS
     // startRace() call will check this value before touching raceSteps state.
@@ -639,86 +662,107 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           return updated;
         });
 
-        // Throttled backend sync:
-        //   • immediately when user hits target (completion)
-        //   • when delta since last sync ≥ 5 steps
-        //   • when ≥ 1 second has elapsed since last sync
-        // Whichever fires first wins, so the backend sees updates ≤ 1s behind.
+        // Batch backend sync — local UI already updated above.
         if (raceIdRef.current) {
-          const now = Date.now();
-          const isAtTarget = antiReg >= target;
-          const stepDelta = antiReg - lastSyncedStepsRef.current;
-          const elapsed = now - lastSyncTimeRef.current;
-          const shouldSync = isAtTarget || stepDelta >= 5 || elapsed >= 1000;
-          if (__DEV__) {
-            if (__DEV__) console.log(`[StepSync] shouldSync:${shouldSync} syncReason:${isAtTarget ? "completion" : stepDelta >= 5 ? "delta≥5" : elapsed >= 1000 ? "1s" : "none"} steps:${antiReg} delta:${stepDelta}`);
-          }
-          if (shouldSync) {
-            lastSyncTimeRef.current = now; // always rate-limit retries
-            const seq = ++syncSeqRef.current;
-            const rId = raceIdRef.current;
-            const src = usingRealStepsRef.current
-              ? (Platform.OS === "ios" ? "healthkit" : "health_connect")
-              : "simulation";
-            const stepSnapshot = antiReg;
-            postRaceProgress(rId, stepSnapshot, seq, undefined, src).then((attempted) => {
-              // Only mark as synced when the request actually reached the server.
-              // If attempted=false (null session / network failure), leave
-              // lastSyncedStepsRef untouched so the next tick retries immediately.
-              if (attempted) lastSyncedStepsRef.current = stepSnapshot;
-            }).catch(() => {});
-          }
+          raceStepSyncService.notifyStepsUpdated(
+            raceIdRef.current,
+            antiReg,
+            stepProviderManager.toRaceProgressSource(),
+            { atTarget: antiReg >= target },
+          );
         }
       };
+      raceStepApplyRef.current = applyRealSteps;
 
-      if (Platform.OS === "ios") {
-        // iOS: watchStepCount fires on every real step (CMPedometer live updates).
-        // result.steps = cumulative since subscription start = exact race steps.
-        stepTracker.startLiveTracking((data) => {
-          applyRealSteps(data.steps);
-        });
-        usingRealStepsRef.current = true;
-        if (__DEV__)
-          if (__DEV__) console.log(`[RaceStepsRealtime] iOS watchStepCount subscription started`);
-
-        // 500ms safety-net poll: reads stepTracker.readLatestLiveSteps() (zero-cost,
-        // no HealthKit I/O) to catch any steps the subscription may have batched.
-        stepPollingService.startPolling("race", {
+      const restartRacePolling = async (
+        userId: string,
+        baseline: number,
+      ) => {
+        const config: RacePollingConfig = {
           raceId: raceIdRef.current ?? "",
           raceStartTime: raceStart ?? new Date(),
-          baseline: 0, // watchStepCount is cumulative from subscription start
+          userId,
+          baseline,
           target: raceTargetStepsRef.current,
           onUpdate: (raceSteps) => applyRealSteps(raceSteps),
-        });
-      } else {
-        // Android: Health Connect range query (same model as iOS HealthKit).
-        // Capture today's total from HC in-memory cache (updated by WalkContext's 15 s poll).
-        // Race steps = cachedTodaySteps - raceBaseline (computed per tick by StepPollingService).
-        (() => {
-          const raceBaseline = androidHCService.getCachedTodaySteps();
-          if (__DEV__) {
-            if (__DEV__) console.log(`[RaceStepsRealtime] Android HC race_start_baseline: ${raceBaseline}`);
-          }
+          onReadBlocked: () => {
+            void (async () => {
+              const ok = await stepProviderManager.switchToLegacyFallback(
+                "read_blocked",
+              );
+              if (
+                !ok ||
+                subscriptionGenRef.current !== myGen ||
+                raceEndedRef.current
+              ) {
+                usingRealStepsRef.current = false;
+                return;
+              }
+              const newBaseline = raceIdRef.current
+                ? await stepProviderManager.createRaceBaseline(
+                    raceIdRef.current,
+                    userId,
+                  )
+                : 0;
+              await restartRacePolling(userId, newBaseline);
+            })();
+          },
+        };
+        racePollingConfigRef.current = config;
+        stepPollingService.startPolling("race", config);
+      };
 
-          usingRealStepsRef.current = true;
+      void (async () => {
+        await stepProviderManager.initialize();
+        const userId = userProfileRef.current.userId;
 
-          // Register baseline with backend so it can derive progress on recovery.
-          if (__DEV__) console.log(`[RaceSteps] Android HC race started at=${raceStart?.toISOString()} baseline=${raceBaseline}`);
-          if (raceIdRef.current && raceBaseline > 0) {
-            void postRaceProgress(raceIdRef.current, 0, undefined, raceBaseline, "health_connect");
-          }
+        if (!(await stepProviderManager.isTrackingReady())) {
+          await stepProviderManager.requestStepPermission();
+        }
+        if (subscriptionGenRef.current !== myGen || raceEndedRef.current) return;
 
-          // 500ms safety-net poll: reads androidHCService.getCachedTodaySteps() (zero-cost
-          // in-memory, no HC I/O). Cache is refreshed by WalkContext's 15 s HC poll.
-          stepPollingService.startPolling("race", {
-            raceId: raceIdRef.current ?? "",
-            raceStartTime: raceStart ?? new Date(),
-            baseline: raceBaseline,
-            target: raceTargetStepsRef.current,
-            onUpdate: (raceSteps) => applyRealSteps(raceSteps),
+        if (!(await stepProviderManager.isTrackingReady())) {
+          await stepProviderManager.switchToLegacyFallback("not_ready_at_race_start");
+        }
+        if (subscriptionGenRef.current !== myGen || raceEndedRef.current) return;
+        if (!(await stepProviderManager.isTrackingReady())) {
+          if (__DEV__) console.log("[RaceSteps] no step provider ready for race");
+          return;
+        }
+
+        usingRealStepsRef.current = true;
+        const providerId = stepProviderManager.getActiveProviderId();
+        if (__DEV__) {
+          console.log(
+            `[RaceStepsRealtime] race provider: ${providerId} start=${raceStart?.toISOString() ?? "unknown"}`,
+          );
+        }
+
+        const baseline =
+          raceIdRef.current && userId
+            ? await stepProviderManager.createRaceBaseline(
+                raceIdRef.current,
+                userId,
+              )
+            : 0;
+
+        if (providerId === "ios_healthkit") {
+          await stepProviderManager.startWatchingSteps((result) => {
+            applyRealSteps(result.steps);
           });
-        })();
-      }
+        }
+
+        if (raceIdRef.current && baseline > 0 && providerId === "android_health_connect") {
+          raceStepSyncService.notifyStepsUpdated(
+            raceIdRef.current,
+            0,
+            stepProviderManager.toRaceProgressSource(),
+            { force: true, deviceTotalSteps: baseline },
+          );
+        }
+
+        await restartRacePolling(userId, baseline);
+      })();
     }
 
     // ── Fire an immediate 0-step "hello" sync so the server registers this
@@ -728,75 +772,41 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     // quickly rather than waiting 3 min with total silence.
     const immediateRaceId = raceIdRef.current;
     if (immediateRaceId) {
-      postRaceProgress(immediateRaceId, 0, ++syncSeqRef.current, undefined, "race_start").catch(() => {});
+      raceStepSyncService.notifyStepsUpdated(
+        immediateRaceId,
+        0,
+        "race_start",
+        { force: true },
+      );
     }
 
-    // ── Bot simulation + (simulation-mode) user steps ─────────────────────────
+    // ── Bot simulation tick (bots only — no fake user steps) ─────────────────
+    const BOT_TICK_MS = 900;
     stepTickRef.current = 0;
     raceStepRef.current = setInterval(() => {
-      // User steps: use simulation ONLY when real tracking is not active
-      if (!usingRealStepsRef.current) {
-        const userAdd = Math.floor(Math.random() * 5) + 8;
-        userStepsRef.current += userAdd;
-        setUserRaceSteps(userStepsRef.current);
-      }
-
-      // Simulation mode: sync when delta ≥ 5 steps, OR ≥ 1 second elapsed,
-      // OR user reached target — whichever fires first (≤ 1 s in practice).
-      // Previously synced every 10 ticks (~9 s) — this reduces that to ≤ 1 s.
-      if (!usingRealStepsRef.current && raceIdRef.current) {
-        const simNow = Date.now();
-        const simSteps = userStepsRef.current;
-        const simTarget = raceTargetStepsRef.current;
-        const simDelta = simSteps - lastSyncedStepsRef.current;
-        const simElapsed = simNow - lastSyncTimeRef.current;
-        const simAtTarget = simSteps >= simTarget;
-        const simShouldSync = simDelta >= 5 || simElapsed >= 1000 || simAtTarget;
-        if (__DEV__) {
-          if (__DEV__) console.log(`[StepSync] shouldSync:${simShouldSync} syncReason:${simAtTarget ? "completion" : simDelta >= 5 ? "delta≥5" : simElapsed >= 1000 ? "1s" : "none"} steps:${simSteps} delta:${simDelta}`);
-        }
-        if (simShouldSync) {
-          lastSyncTimeRef.current = simNow; // always rate-limit retries
-          const seq = ++syncSeqRef.current;
-          const simStepSnapshot = simSteps;
-          const simRaceId = raceIdRef.current;
-          postRaceProgress(simRaceId, simStepSnapshot, seq, undefined, "simulation").then((attempted) => {
-            if (attempted) lastSyncedStepsRef.current = simStepSnapshot;
-          }).catch(() => {});
-        }
-      }
-
-      // Bot simulation (always runs for all bots)
       setParticipants((prev) => {
         const target = raceTargetStepsRef.current;
         const updated = prev.map((p) => {
           if (p.isUser) {
-            if (usingRealStepsRef.current) return p; // handled by real tracking above
-            const newSteps = userStepsRef.current;
-            if (newSteps >= target && !p.isFinished) {
-              finishedCountRef.current += 1;
-              const rank = finishedCountRef.current;
-              return { ...p, raceSteps: newSteps, isFinished: true, finishRank: rank };
-            }
-            return { ...p, raceSteps: newSteps };
-          } else {
-            const [lo, hi] = BOT_STEP_RANGES[p.id] ?? [10, 14];
-            const add = Math.floor(Math.random() * (hi - lo + 1)) + lo;
-            botStepsRef.current[p.id] = (botStepsRef.current[p.id] ?? 0) + add;
-            const newSteps = botStepsRef.current[p.id];
-            if (newSteps >= target && !p.isFinished) {
-              finishedCountRef.current += 1;
-              const rank = finishedCountRef.current;
-              return { ...p, raceSteps: target, isFinished: true, finishRank: rank };
-            }
-            return { ...p, raceSteps: Math.min(newSteps, target) };
+            if (usingRealStepsRef.current) return p;
+            return { ...p, raceSteps: userStepsRef.current };
           }
+          const [lo, hi] = BOT_STEP_RANGES[p.id] ?? [10, 14];
+          const add = Math.floor(Math.random() * (hi - lo + 1)) + lo;
+          botStepsRef.current[p.id] = (botStepsRef.current[p.id] ?? 0) + add;
+          const newSteps = botStepsRef.current[p.id];
+          if (newSteps >= target && !p.isFinished) {
+            finishedCountRef.current += 1;
+            const rank = finishedCountRef.current;
+            return { ...p, raceSteps: target, isFinished: true, finishRank: rank };
+          }
+          return { ...p, raceSteps: Math.min(newSteps, target) };
         });
 
         participantsRef.current = updated;
         return updated;
       });
-    }, 900);
+    }, BOT_TICK_MS);
 
     // No client-side hard-end timer. Race ends only when the backend broadcasts
     // race:completed (goal reached / all forfeited / scheduled end time).
@@ -880,7 +890,6 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     // Reset step state before participants are set — same reason as notifyRaceStarted.
     setUserRaceSteps(0);
     userStepsRef.current = 0;
-    lastSyncedStepsRef.current = 0;
 
     const all = [userParticipant, ...bots];
     setParticipants(all);
@@ -901,7 +910,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     // forward-only guard permanently pins the avatar to the top.
     setUserRaceSteps(0);
     userStepsRef.current = 0;
-    lastSyncedStepsRef.current = 0;
+    raceStepSyncService.reset();
 
     // Store server-authoritative race start time
     const startTime = startedAt ?? new Date();
@@ -1009,6 +1018,13 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     setRaceStartTimeUTC(null);
     // Clear pending race from storage after reset (user saw results)
     clearPendingRace();
+    if (raceIdRef.current) {
+      void stepProviderManager.clearRaceBaseline(
+        raceIdRef.current,
+        userProfileRef.current.userId,
+      );
+    }
+    stepProviderManager.stopWatchingSteps();
   }, []);
 
   // ── AppState listener: sync steps immediately when app comes to foreground ────
@@ -1020,10 +1036,11 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       if (nextState === "active" && raceIdRef.current && !raceEndedRef.current) {
         const steps = userStepsRef.current;
         if (steps > 0) {
-          const src = usingRealStepsRef.current
-            ? (Platform.OS === "ios" ? "healthkit" : "health_connect")
-            : "simulation";
-          postRaceProgress(raceIdRef.current, steps, undefined, undefined, src).catch(() => {});
+          void raceStepSyncService.flush(
+            raceIdRef.current,
+            steps,
+            stepProviderManager.toRaceProgressSource(),
+          );
         }
       }
     });
@@ -1048,6 +1065,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         raceId, isHost, raceStartTimeUTC,
         raceTargetSteps, setRaceTargetSteps,
         joinRace, startRaceManually, notifyRaceStarted, cancelRace, resetRace, setActiveRace,
+        stopRaceStepTracking, pauseRaceStepTracking, resumeRaceStepTracking,
       }}
     >
       {children}

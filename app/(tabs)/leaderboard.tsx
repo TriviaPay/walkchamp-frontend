@@ -960,9 +960,6 @@ export default function LeaderboardScreen() {
         />
       )}
 
-      {/* ── Banner Ad — shown above the sticky position bar ── */}
-      {isUserTab && <BannerAdView style={{ paddingVertical: 4, backgroundColor: colors.background }} />}
-
       {/* ── My Position Bar — hidden for groups tab ── */}
       {isUserTab && <View style={[st.myBar, { backgroundColor: colors.background, borderTopColor: colors.border }]}>
         <LinearGradient
@@ -1036,6 +1033,10 @@ export default function LeaderboardScreen() {
           )}
         </LinearGradient>
       </View>}
+
+      {/* ── Banner Ad — below rank bar on all tabs ── */}
+      <BannerAdView style={{ paddingVertical: rs(4), backgroundColor: colors.background }} />
+
       <PublicProfileModal
         visible={!!profileUserId}
         userId={profileUserId}

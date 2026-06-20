@@ -16,7 +16,8 @@ import {
 import { router } from "expo-router";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { authFetch } from "@/utils/authFetch";
 import { getApiBase } from "@/utils/apiUrl";
 import { ChannelAdapter, subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
@@ -1316,7 +1317,7 @@ const ds = StyleSheet.create({
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function AvailableRoomsScreen() {
-  const insets = useSafeAreaInsets();
+  const { safeBottom } = useSafeLayout();
   const { setActiveRace, joinRace } = useRace();
   const { user } = useAuth();
 
@@ -1746,7 +1747,7 @@ export default function AvailableRoomsScreen() {
   const keyExtractor = useCallback((item: Room) => item.room_id, []);
 
   return (
-    <View style={[s.container, { paddingTop: insets.top }]}>
+    <SafeAreaView style={[s.container, { flex: 1 }]} edges={["top", "left", "right", "bottom"]}>
       {/* Header */}
       <View style={s.header}>
         <TouchableOpacity onPress={() => router.back()} style={s.headerBtn} activeOpacity={0.7}>
@@ -1850,7 +1851,7 @@ export default function AvailableRoomsScreen() {
               contentContainerStyle={[
                 s.list,
                 rooms.length === 0 && s.listGrow,
-                { paddingBottom: insets.bottom + 32 },
+                { paddingBottom: rs(20) },
               ]}
               refreshControl={
                 <RefreshControl
@@ -1883,7 +1884,7 @@ export default function AvailableRoomsScreen() {
             <Text style={[s.emptySub, { marginTop: 12 }]}>Loading upcoming rooms…</Text>
           </View>
         ) : upcomingError ? (
-          <View style={[s.center, { flex: 1, paddingBottom: insets.bottom + 32 }]}>
+          <View style={[s.center, { flex: 1, paddingBottom: rs(20) }]}>
             <Feather name="alert-circle" size={28} color="#FF6B6B" />
             <Text style={[s.emptyTitle, { color: "#FF6B6B", marginTop: 12 }]}>Failed to load</Text>
             <Text style={s.emptySub}>{upcomingError}</Text>
@@ -1895,7 +1896,7 @@ export default function AvailableRoomsScreen() {
             </TouchableOpacity>
           </View>
         ) : upcomingRooms.length === 0 ? (
-          <View style={[s.center, { flex: 1, paddingBottom: insets.bottom + 32 }]}>
+          <View style={[s.center, { flex: 1, paddingBottom: rs(20) }]}>
             <View style={[s.emptyIconWrap, { backgroundColor: "#00B4FF10", borderColor: "#00B4FF30" }]}>
               <Feather name="calendar" size={28} color="#00B4FF" />
             </View>
@@ -1907,7 +1908,7 @@ export default function AvailableRoomsScreen() {
         ) : (
           <ScrollView
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingTop: 12, paddingBottom: insets.bottom + 80 }}
+            contentContainerStyle={{ paddingTop: 12, paddingBottom: rs(20), flexGrow: 1 }}
             refreshControl={
               <RefreshControl
                 refreshing={upcomingRefreshing}
@@ -2055,7 +2056,7 @@ export default function AvailableRoomsScreen() {
           </Modal>
         );
       })()}
-    </View>
+    </SafeAreaView>
   );
 }
 

@@ -8,6 +8,7 @@ import React from "react";
 import { Platform, StyleSheet, View } from "react-native";
 
 import { useColors } from "@/hooks/useColors";
+import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useTheme } from "@/context/ThemeContext";
 import { useAppSelector } from "@/store/hooks";
 import { useSound } from "@/context/SoundContext";
@@ -48,8 +49,10 @@ function ClassicTabLayout() {
   const { isDark } = useTheme();
   const { soundEnabled } = useSound();
   const { totalUnread } = useUnread();
+  const { safeBottom } = useSafeLayout();
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
+  const tabBarBase = isWeb ? 84 : isIOS ? 49 : 56;
 
   const tabBarStyle = {
     position: "absolute" as const,
@@ -57,7 +60,8 @@ function ClassicTabLayout() {
     borderTopWidth: 1,
     borderTopColor: colors.border,
     elevation: 0,
-    ...(isWeb ? { height: 84 } : {}),
+    height: tabBarBase + safeBottom,
+    paddingBottom: safeBottom,
   };
 
   const screenOpts = {

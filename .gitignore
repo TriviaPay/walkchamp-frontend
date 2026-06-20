@@ -40,3 +40,9 @@ nohup.out
 .vercel
 
 .env
+
+# build outputs
+*.apk
+dist-export-*/
+.verify-export-android/
+package-lock.json

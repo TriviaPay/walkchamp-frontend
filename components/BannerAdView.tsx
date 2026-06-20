@@ -5,8 +5,8 @@
  * • In Expo Go or on web: renders a clearly-labelled placeholder so the
  *   layout is visible and the developer knows where the ad will appear.
  */
-import React from "react";
-import { Platform, Text, View } from "react-native";
+import React, { memo, useCallback, useState } from "react";
+import { LayoutChangeEvent, Platform, Text, View } from "react-native";
 import Constants from "expo-constants";
 
 type AdModule = typeof import("react-native-google-mobile-ads");
@@ -17,15 +17,15 @@ const BANNER_AD_UNIT_ID =
     android: "ca-app-pub-3940256099942544/6300978111",
   }) ?? "ca-app-pub-3940256099942544/6300978111";
 
-// Detect Expo Go (storeClient) FIRST — must be before loadAdModule runs.
-// TurboModuleRegistry.getEnforcing throws immediately in Expo Go even inside try/catch.
+/** Default slot height before adaptive ad reports its size (~50dp on phones). */
+export const BANNER_SLOT_HEIGHT = 50;
+const SLOT_BG = "#0B0D1A";
+
 const isExpoGo: boolean =
   (Constants as unknown as { executionEnvironment?: string }).executionEnvironment === "storeClient";
 
 function loadAdModule(): AdModule | null {
   if (Platform.OS === "web") return null;
-  // Guard before require() — TurboModuleRegistry.getEnforcing('RNGoogleMobileAdsModule')
-  // throws synchronously in Expo Go, before the try/catch can intercept it.
   if (isExpoGo) return null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -39,43 +39,69 @@ function loadAdModule(): AdModule | null {
 
 const adMod = loadAdModule();
 
-export default function BannerAdView({ style }: { style?: object }) {
+function BannerAdView({ style }: { style?: object }) {
+  const [containerWidth, setContainerWidth] = useState(0);
+  const [slotHeight, setSlotHeight] = useState(BANNER_SLOT_HEIGHT);
+
+  const onContainerLayout = useCallback((e: LayoutChangeEvent) => {
+    const w = Math.floor(e.nativeEvent.layout.width);
+    setContainerWidth((prev) => (w > 0 && w !== prev ? w : prev));
+  }, []);
+
+  const onAdSizeChange = useCallback(({ height }: { width: number; height: number }) => {
+    if (height > 0) setSlotHeight(Math.ceil(height));
+  }, []);
+
+  const slotStyle = {
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    width: "100%" as const,
+    minHeight: slotHeight,
+    backgroundColor: SLOT_BG,
+  };
+
   if (adMod && !isExpoGo) {
     const { BannerAd, BannerAdSize } = adMod;
     return (
-      <View style={[{ alignItems: "center", width: "100%" }, style]}>
-        <BannerAd
-          unitId={BANNER_AD_UNIT_ID}
-          size={BannerAdSize.BANNER}
-          requestOptions={{ requestNonPersonalizedAdsOnly: true }}
-        />
+      <View
+        style={[slotStyle, style]}
+        onLayout={onContainerLayout}
+        collapsable={false}
+      >
+        {containerWidth > 0 && (
+          <BannerAd
+            unitId={BANNER_AD_UNIT_ID}
+            size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
+            width={containerWidth}
+            requestOptions={{ requestNonPersonalizedAdsOnly: true }}
+            onAdLoaded={onAdSizeChange}
+            onSizeChange={onAdSizeChange}
+          />
+        )}
       </View>
     );
   }
 
   if (Platform.OS === "web") return null;
 
-  // Expo Go or native module missing — show a dev-mode placeholder
-  // so the layout is visible. This never appears in production builds.
   return (
     <View
       style={[
+        slotStyle,
         {
-          alignItems: "center",
-          justifyContent: "center",
-          width: "100%",
-          height: 52,
-          backgroundColor: "#1A1D2E",
           borderWidth: 1,
           borderColor: "#2A2D3E",
           borderStyle: "dashed",
         },
         style,
       ]}
+      onLayout={onContainerLayout}
     >
       <Text style={{ color: "#4B5563", fontSize: 11, fontWeight: "600", letterSpacing: 0.3 }}>
-        📢 Ad banner · available in app build
+        Ad banner · available in app build
       </Text>
     </View>
   );
 }
+
+export default memo(BannerAdView);

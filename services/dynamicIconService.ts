@@ -30,10 +30,14 @@ const ICON_FOR_MILESTONE: Record<number, string> = {
   100: "WalkChampProgress100",
 };
 
-const KEY_MILESTONE = "@dyn_icon_milestone";
-const KEY_USER_ID   = "@dyn_icon_user_id";
-const KEY_DATE      = "@dyn_icon_date";
-const KEY_ENABLED   = "@dyn_icon_enabled";
+/** In-app progress logo assets (same milestones as the dynamic launcher icon). */
+export const PROGRESS_ICON_SOURCES = {
+  0:   require("@/assets/icons/WalkChampProgress0.png"),
+  25:  require("@/assets/icons/WalkChampProgress25.png"),
+  50:  require("@/assets/icons/WalkChampProgress50.png"),
+  75:  require("@/assets/icons/WalkChampProgress75.png"),
+  100: require("@/assets/icons/WalkChampProgress100.png"),
+} as const;
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -44,6 +48,21 @@ function toMilestone(pct: number): number {
   if (pct >= 25)  return 25;
   return 0;
 }
+
+export function milestoneForProgress(steps: number, goal: number): number {
+  if (goal <= 0) return 0;
+  const pct = Math.min(100, Math.floor((steps / goal) * 100));
+  return toMilestone(pct);
+}
+
+export function progressIconSourceForSteps(steps: number, goal: number) {
+  return PROGRESS_ICON_SOURCES[milestoneForProgress(steps, goal) as keyof typeof PROGRESS_ICON_SOURCES];
+}
+
+const KEY_MILESTONE = "@dyn_icon_milestone";
+const KEY_USER_ID   = "@dyn_icon_user_id";
+const KEY_DATE      = "@dyn_icon_date";
+const KEY_ENABLED   = "@dyn_icon_enabled";
 
 async function setNativeIcon(iconName: string | null): Promise<boolean> {
   if (Platform.OS === "web") {

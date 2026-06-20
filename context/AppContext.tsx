@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { AppState, type AppStateStatus } from "react-native";
 import { type LeaderboardUser, type WalletTransaction } from "@/utils/mockData";
 import { STORAGE_KEYS, storageGet, storageSet } from "@/utils/storage";
 import { getValidSession } from "@/services/authService";
@@ -263,6 +264,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
     load();
   }, [refreshWallet, refreshLeaderboard]);
+
+  useEffect(() => {
+    const onChange = (state: AppStateStatus) => {
+      if (state === "active") {
+        dynamicIconService.checkAndUpdate().catch(() => {});
+      }
+    };
+    const sub = AppState.addEventListener("change", onChange);
+    return () => sub.remove();
+  }, []);
 
   const requestWithdrawal = useCallback(async (
     amount: number,

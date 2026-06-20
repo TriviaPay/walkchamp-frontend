@@ -14,11 +14,18 @@ import {
   fetchMe,
   logout as authLogout,
 } from "@/services/authService";
+import {
+  cancelProactiveTokenRefresh,
+  scheduleProactiveTokenRefresh,
+} from "@/services/tokenRefreshScheduler";
 import { dbProfileToUserProfile } from "@/utils/profileMapper";
 import type { UserProfile } from "@/store/types";
 import { authEvents } from "@/utils/authEvents";
 import { screenCache } from "@/utils/screenCache";
 import { storageSet, storageRemove, STORAGE_KEYS } from "@/utils/storage";
+import { dynamicIconService } from "@/services/dynamicIconService";
+import { stepPollingService } from "@/services/StepPollingService";
+import { raceStepSyncService } from "@/services/RaceStepSyncService";
 
 export type { UserProfile };
 
@@ -78,17 +85,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Give the caller's router.replace() time to be queued before
       // releasing the gate — prevents index.tsx from racing ahead.
       authTimerRef.current = setTimeout(() => setIsAuthenticating(false), 500);
+      dynamicIconService.checkAndUpdate({ userId: profile.id }).catch(() => {});
     },
     [dispatch],
   );
 
   const logout = useCallback(async () => {
     if (__DEV__) console.log("[Auth] logout started");
+    cancelProactiveTokenRefresh();
+    stepPollingService.stopPolling("logout");
+    raceStepSyncService.cancelPending();
     // Clear in-memory screen cache so the next user never sees stale data.
     screenCache.clearAll();
     // Remove cached profile so a transient-offline restore does not display
     // a previous user's data after a deliberate logout.
     void storageRemove(STORAGE_KEYS.USER);
+    dynamicIconService.onLogout().catch(() => {});
     // Optimistic logout: wipe Redux immediately so the TabLayout Redirect fires
     // right away — the user sees the login screen without any intermediate flash.
     // Session cleanup (Descope API + SecureStore) continues in the background.
@@ -126,20 +138,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!isRestoringSession) {
       if (!didPostRestoreRef.current) {
         didPostRestoreRef.current = true;
+        if (sessionToken) {
+          scheduleProactiveTokenRefresh();
+        }
         refreshUserProfile().catch(() => {});
       }
     } else {
       // Reset so the next restore cycle also gets a fresh fetch
       didPostRestoreRef.current = false;
     }
-  }, [isRestoringSession, refreshUserProfile]);
+  }, [isRestoringSession, refreshUserProfile, sessionToken]);
 
   // When the app comes back to foreground, sync the current user's profile so
   // stale avatarVersion / profileImageUrl values are never displayed.
   useEffect(() => {
     const handleAppStateChange = (nextState: AppStateStatus) => {
       if (nextState === "active") {
-        refreshUserProfile().catch(() => {});
+        // Proactively refresh before profile fetch so foreground never hits expired JWT.
+        void getValidSession()
+          .then(() => refreshUserProfile())
+          .catch(() => {});
       }
     };
     const sub = AppState.addEventListener("change", handleAppStateChange);
@@ -158,6 +176,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const offExpired = authEvents.onSessionExpired(() => {
       if (__DEV__) console.log("[Auth] session expired event received — forcing logout");
+      cancelProactiveTokenRefresh();
+      stepPollingService.stopPolling("session_expired");
+      raceStepSyncService.cancelPending();
       logout();
       // Show a user-friendly alert so the user knows why they were signed out,
       // rather than being silently dropped on the login screen.
@@ -167,9 +188,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         [{ text: "OK" }],
       );
     });
-    const offRefreshed = authEvents.onTokenRefreshed((newToken) => {
+    const offRefreshed = authEvents.onTokenRefreshed(async (newToken) => {
       if (__DEV__) console.log("[Auth] token refreshed event received — updating Redux");
       dispatch(authActions.sessionTokenUpdated(newToken));
+      const { refresh } = await getStoredSession();
+      if (refresh) {
+        dispatch(authActions.refreshTokenUpdated(refresh));
+      }
+      scheduleProactiveTokenRefresh();
     });
     return () => {
       offExpired();

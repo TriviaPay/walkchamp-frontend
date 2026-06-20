@@ -23,6 +23,8 @@
  *   unavailable — Expo Go or HC not available
  */
 
+import type { Permission } from "react-native-health-connect";
+
 export type HCAvailability =
   | "available"
   | "not_installed"
@@ -78,22 +80,33 @@ interface HCPerm {
   recordType: string;
 }
 
+/** Library format: [{ accessType: 'read', recordType: 'Steps' }] — not "read:Steps" strings. */
+const READ_STEPS_PERMISSION: Permission = {
+  accessType: "read",
+  recordType: "Steps",
+};
+
 interface HCModule {
-  initialize: () => Promise<boolean>;
-  getSdkStatus: () => Promise<number>;
-  requestPermission: (perms: HCPerm[]) => Promise<HCPerm[]>;
-  getGrantedPermissions: () => Promise<HCPerm[]>;
+  initialize: (providerPackageName?: string) => Promise<boolean>;
+  getSdkStatus: (providerPackageName?: string) => Promise<number>;
+  requestPermission: (perms: Permission[]) => Promise<Permission[]>;
+  getGrantedPermissions: () => Promise<Permission[]>;
   readRecords: (
     recordType: string,
     options: unknown,
   ) => Promise<{ records: HCStepRecord[] }>;
   openHealthConnectSettings: () => Promise<void>;
+  openHealthConnectDataManagement?: (providerPackageName?: string) => Promise<void>;
 }
 
-// SDK availability codes from Health Connect SDK
-const SDK_AVAILABLE = 1;
-const SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED = 2;
-// SDK_UNAVAILABLE = 3
+const HC_PROVIDER_PACKAGE = "com.google.android.apps.healthdata";
+
+// SdkAvailabilityStatus from react-native-health-connect (do not guess values)
+const HC_SDK = {
+  SDK_UNAVAILABLE: 1,
+  SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED: 2,
+  SDK_AVAILABLE: 3,
+} as const;
 
 let _hcModule: HCModule | null | undefined = undefined;
 
@@ -111,8 +124,12 @@ function loadHCModule(): HCModule | null {
 
 // ── Module state ──────────────────────────────────────────────────────────────
 
+let _readPermissionBlocked = false;
 let _initialized = false;
 let _availability: HCAvailability = "not_supported";
+/** True after requestPermission() was shown at least once this session. */
+let _permissionRequested = false;
+let _permissionRequestInFlight = false;
 /** In-memory cache — last confirmed today total. Updated on every successful HC read. */
 let _cachedTodaySteps = 0;
 
@@ -132,6 +149,65 @@ function getUserTimezone(): string {
   }
 }
 
+function getPackageName(): string {
+  try {
+    const C = require("expo-constants") as {
+      default?: { expoConfig?: { android?: { package?: string } } };
+    };
+    return C?.default?.expoConfig?.android?.package ?? "com.globalwalkerleague.app";
+  } catch {
+    return "com.globalwalkerleague.app";
+  }
+}
+
+function getAndroidApiLevel(): number {
+  try {
+    const { Platform } =
+      require("react-native") as typeof import("react-native");
+    return typeof Platform.Version === "number" ? Platform.Version : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function formatPerms(perms: Array<Pick<Permission, "accessType" | "recordType">>): string {
+  return JSON.stringify(
+    perms.map((p) => ({ accessType: p.accessType, recordType: p.recordType })),
+  );
+}
+
+async function waitForAppActive(timeoutMs = 5000): Promise<void> {
+  const { AppState } = require("react-native") as typeof import("react-native");
+  if (AppState.currentState === "active") return;
+  await new Promise<void>((resolve) => {
+    const deadline = setTimeout(() => {
+      sub.remove();
+      resolve();
+    }, timeoutMs);
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        clearTimeout(deadline);
+        sub.remove();
+        resolve();
+      }
+    });
+  });
+}
+
+function hasStepsRead(perms: HCPerm[]): boolean {
+  return perms.some(
+    (p) => p.recordType === "Steps" && p.accessType === "read",
+  );
+}
+
+function hcLog(message: string, detail?: unknown): void {
+  if (detail !== undefined) {
+    console.log(`[AndroidHC] ${message}`, detail);
+  } else {
+    console.log(`[AndroidHC] ${message}`);
+  }
+}
+
 function emptyResult(start: Date, end: Date): StepReadResult {
   return {
     steps: 0,
@@ -145,6 +221,30 @@ function emptyResult(start: Date, end: Date): StepReadResult {
 // ── Public service ────────────────────────────────────────────────────────────
 
 export const androidHCService = {
+  isPermissionRequestInFlight(): boolean {
+    return _permissionRequestInFlight;
+  },
+
+  /** True when HC range reads fail due to missing manifest/runtime permission. */
+  isRangeReadBlocked(): boolean {
+    return _readPermissionBlocked;
+  },
+
+  /**
+   * True when Health Connect is initialized, Steps read is granted, and range
+   * reads are not blocked (manifest / SecurityException).
+   */
+  async isReadyForRaceReads(): Promise<boolean> {
+    if (isExpoGo()) return false;
+    if (_readPermissionBlocked) return false;
+
+    const init = await this.initialize();
+    if (!init.initialized || init.availability !== "available") return false;
+
+    const perm = await this.getPermissionStatus();
+    return perm === "granted" && !_readPermissionBlocked;
+  },
+
   // ── Cache accessors ─────────────────────────────────────────────────────────
 
   /**
@@ -153,6 +253,24 @@ export const androidHCService = {
    */
   getCachedTodaySteps(): number {
     return _cachedTodaySteps;
+  },
+
+  /**
+   * Raw SDK status from Health Connect (1=unavailable, 2=update required, 3=available).
+   */
+  async getSdkStatusRaw(): Promise<number> {
+    if (isExpoGo()) return HC_SDK.SDK_UNAVAILABLE;
+    const hc = loadHCModule();
+    if (!hc) return HC_SDK.SDK_UNAVAILABLE;
+    try {
+      return await hc.getSdkStatus(HC_PROVIDER_PACKAGE);
+    } catch {
+      return HC_SDK.SDK_UNAVAILABLE;
+    }
+  },
+
+  get availability(): HCAvailability {
+    return _availability;
   },
 
   // ── Initialization ──────────────────────────────────────────────────────────
@@ -180,18 +298,19 @@ export const androidHCService = {
     }
 
     try {
-      const sdkStatus = await hc.getSdkStatus();
-      if (__DEV__)
-        console.log(`[AndroidHC] getSdkStatus: ${sdkStatus}`);
+      hcLog(`app package: ${getPackageName()}, hc provider: ${HC_PROVIDER_PACKAGE}`);
+      const sdkStatus = await hc.getSdkStatus(HC_PROVIDER_PACKAGE);
+      hcLog(`SDK status: ${sdkStatus}`);
 
       let availability: HCAvailability;
-      if (sdkStatus === SDK_AVAILABLE) {
+      if (sdkStatus === HC_SDK.SDK_AVAILABLE) {
         availability = "available";
-      } else if (sdkStatus === SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED) {
+      } else if (sdkStatus === HC_SDK.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED) {
         availability = "needs_update";
+      } else if (sdkStatus === HC_SDK.SDK_UNAVAILABLE) {
+        availability = getAndroidApiLevel() >= 28 ? "not_installed" : "not_supported";
       } else {
-        // HC app not installed
-        availability = "not_installed";
+        availability = "not_supported";
       }
       _availability = availability;
 
@@ -199,8 +318,8 @@ export const androidHCService = {
         return { availability, permission: "unavailable", initialized: false };
       }
 
-      const ok = await hc.initialize();
-      if (__DEV__) console.log(`[AndroidHC] initialize: ${ok}`);
+      const ok = await hc.initialize(HC_PROVIDER_PACKAGE);
+      hcLog(`initialize(${HC_PROVIDER_PACKAGE}): ${ok}`);
       _initialized = ok;
 
       if (!ok) {
@@ -210,7 +329,7 @@ export const androidHCService = {
       const permission = await this.getPermissionStatus();
       return { availability, permission, initialized: true };
     } catch (e) {
-      if (__DEV__) console.log(`[AndroidHC] initialize error:`, e);
+      hcLog("initialize error", e);
       return {
         availability: "not_supported",
         permission: "unavailable",
@@ -223,6 +342,7 @@ export const androidHCService = {
 
   /**
    * Silent check — no UI. Returns current READ_STEPS permission state.
+   * Empty grants before any request → "unknown" (not "denied").
    */
   async getPermissionStatus(): Promise<HCPermStatus> {
     if (isExpoGo()) return "unavailable";
@@ -231,48 +351,128 @@ export const androidHCService = {
     if (!hc) return "unavailable";
     try {
       const granted = await hc.getGrantedPermissions();
-      const hasSteps = granted.some(
-        (p) => p.recordType === "Steps" && p.accessType === "read",
-      );
-      if (__DEV__)
-        console.log(
-          `[AndroidHC] getGrantedPermissions — Steps read: ${hasSteps}`,
-        );
-      return hasSteps ? "granted" : "denied";
-    } catch {
+      const hasSteps = hasStepsRead(granted);
+      hcLog(`granted permissions: ${formatPerms(granted)} — Steps read: ${hasSteps}`);
+      if (hasSteps) return "granted";
+      // Only treat as denied after HC returned a non-empty dialog result without Steps.
+      if (_permissionRequested) return "denied";
+      return "unknown";
+    } catch (e) {
+      hcLog("getPermissionStatus error", e);
       return "unknown";
     }
   },
 
   /**
-   * Request READ_STEPS permission — shows the HC permission sheet.
+   * Re-run SDK init + permission check (e.g. after installing HC or returning from settings).
+   */
+  async refresh(): Promise<HCInitResult> {
+    _initialized = false;
+    return this.initialize();
+  },
+
+  /**
+   * Request READ_STEPS permission — shows the HC permission sheet in-app.
    * Initializes HC first if not already done.
    */
   async requestPermission(): Promise<HCPermStatus> {
     if (isExpoGo()) return "unavailable";
+    if (_permissionRequestInFlight) {
+      hcLog("requestPermission skipped — already in flight");
+      return this.getPermissionStatus();
+    }
+
+    hcLog(`requestPermission start — package: ${getPackageName()}`);
+
+    // Physical activity permission is required before step reads on Android 10+.
+    try {
+      const sensors =
+        require("expo-sensors") as typeof import("expo-sensors");
+      const { status: actBefore } = await sensors.Pedometer.getPermissionsAsync();
+      if (actBefore !== "granted") {
+        const { status: actAfter } =
+          await sensors.Pedometer.requestPermissionsAsync();
+        hcLog(`ACTIVITY_RECOGNITION: ${actBefore} → ${actAfter}`);
+      }
+    } catch (e) {
+      hcLog("ACTIVITY_RECOGNITION request error", e);
+    }
 
     if (!_initialized) {
       const initResult = await this.initialize();
-      if (!initResult.initialized) return "unavailable";
+      if (!initResult.initialized) {
+        // Do not open Play Store / Health Connect — caller uses Android Steps fallback.
+        hcLog(
+          `HC not initialized (${initResult.availability}) — skipping external navigation`,
+        );
+        return "unavailable";
+      }
     }
 
     const hc = loadHCModule();
     if (!hc) return "unavailable";
+    _permissionRequestInFlight = true;
     try {
-      const result = await hc.requestPermission([
-        { accessType: "read", recordType: "Steps" },
-      ]);
-      if (__DEV__)
-        console.log(`[AndroidHC] requestPermission result count: ${result.length}`);
-      const granted = result.some(
-        (p) => p.recordType === "Steps" && p.accessType === "read",
+      const before = await hc.getGrantedPermissions();
+      hcLog(`granted before request: ${formatPerms(before)}`);
+
+      if (hasStepsRead(before)) {
+        hcLog("Steps read already granted — skipping request sheet");
+        return "granted";
+      }
+
+      hcLog(
+        `calling requestPermission payload: ${formatPerms([READ_STEPS_PERMISSION])}`,
       );
-      if (__DEV__)
-        console.log(`[AndroidHC] READ_STEPS granted: ${granted}`);
-      return granted ? "granted" : "denied";
-    } catch (e) {
-      if (__DEV__) console.log(`[AndroidHC] requestPermission error:`, e);
+
+      // Wait for UI/modal animations to finish so MainActivity is RESUMED.
+      const { InteractionManager } =
+        require("react-native") as typeof import("react-native");
+      await new Promise<void>((resolve) => {
+        InteractionManager.runAfterInteractions(() => resolve());
+      });
+      await waitForAppActive();
+      await new Promise((r) => setTimeout(r, 350));
+
+      const result = await hc.requestPermission([READ_STEPS_PERMISSION]);
+      hcLog(`requestPermission result: ${formatPerms(result)}`);
+
+      // Re-check granted permissions immediately after dialog closes.
+      _initialized = true;
+      const after = await hc.getGrantedPermissions();
+      hcLog(`granted after request: ${formatPerms(after)}`);
+
+      const granted = hasStepsRead(after) || hasStepsRead(result);
+      hcLog(`READ_STEPS granted: ${granted}`);
+
+      if (granted) {
+        _permissionRequested = true;
+        try {
+          const read = await this.readTodaySteps();
+          hcLog(
+            `readRecords today (midnight→now): ${read.steps} steps, records ok`,
+          );
+        } catch (readErr) {
+          hcLog("readRecords after grant error", readErr);
+        }
+        return "granted";
+      }
+
+      if (!hasStepsRead(result) && (result?.length ?? 0) === 0) {
+        hcLog(
+          "empty permission result — dialog may not have shown; caller should use Android Steps fallback",
+        );
+        return "unknown";
+      }
+
+      _permissionRequested = true;
+      hcLog("READ_STEPS not granted — user can retry Enable Step Tracking");
       return "denied";
+    } catch (e) {
+      hcLog("requestPermission error", e);
+      return "denied";
+    } finally {
+      _permissionRequestInFlight = false;
     }
   },
 
@@ -306,10 +506,9 @@ export const androidHCService = {
       );
       const steps = Math.max(0, total);
 
-      if (__DEV__)
-        console.log(
-          `[AndroidHC] readStepsForRange ${start.toISOString()} → ${end.toISOString()} = ${steps} (${res.records?.length ?? 0} records)`,
-        );
+      hcLog(
+        `readStepsForRange ${start.toISOString()} → ${end.toISOString()} = ${steps} (${res.records?.length ?? 0} records)`,
+      );
 
       // Monotonic cache update — never decrease the cached value
       if (steps > _cachedTodaySteps) {
@@ -327,7 +526,14 @@ export const androidHCService = {
         timezone: getUserTimezone(),
       };
     } catch (e) {
-      if (__DEV__) console.log(`[AndroidHC] readStepsForRange error:`, e);
+      const msg = String(e);
+      if (
+        msg.includes("READ_STEPS") ||
+        msg.includes("SecurityException")
+      ) {
+        _readPermissionBlocked = true;
+      }
+      hcLog("readStepsForRange error", e);
       return fallback;
     }
   },
@@ -352,8 +558,54 @@ export const androidHCService = {
     try {
       await hc.openHealthConnectSettings();
     } catch (e) {
-      if (__DEV__) console.log(`[AndroidHC] openSettings error:`, e);
+      hcLog("openSettings error", e);
     }
+  },
+
+  /**
+   * Opens Health Connect data management — shows this app in HC permissions.
+   */
+  async openDataManagement(): Promise<void> {
+    const hc = loadHCModule();
+    if (!hc) return;
+    try {
+      if (typeof hc.openHealthConnectDataManagement === "function") {
+        await hc.openHealthConnectDataManagement(HC_PROVIDER_PACKAGE);
+        return;
+      }
+    } catch (e) {
+      hcLog("openDataManagement error", e);
+    }
+    await this.openSettings();
+  },
+
+  /**
+   * Best-effort open to this app's Health Connect permission screen.
+   * Falls back to generic Health Connect settings when OEM routing differs.
+   */
+  async openAppPermissions(): Promise<void> {
+    try {
+      const { Linking } =
+        require("react-native") as typeof import("react-native");
+      const pkg = encodeURIComponent(getPackageName());
+      const deepLinks = [
+        `intent://permissions/apps?package=${pkg}#Intent;scheme=healthconnect;package=com.google.android.apps.healthdata;end`,
+        `intent://permissions#Intent;scheme=healthconnect;package=com.google.android.apps.healthdata;end`,
+        `intent://onboarding?package_name=${pkg}#Intent;scheme=healthconnect;package=com.google.android.apps.healthdata;end`,
+        "healthconnect://settings/permissions",
+      ];
+      for (const link of deepLinks) {
+        try {
+          await Linking.openURL(link);
+          return;
+        } catch {
+          hcLog(`openAppPermissions link failed: ${link}`);
+        }
+      }
+    } catch (e) {
+      hcLog("openAppPermissions deep-link error", e);
+    }
+    await this.openSettings();
   },
 
   /**
@@ -371,7 +623,7 @@ export const androidHCService = {
       const canUseMarket = await Linking.canOpenURL(market).catch(() => false);
       await Linking.openURL(canUseMarket ? market : web);
     } catch (e) {
-      if (__DEV__) console.log(`[AndroidHC] openInstallPage error:`, e);
+      hcLog("openInstallPage error", e);
     }
   },
 
@@ -379,6 +631,7 @@ export const androidHCService = {
 
   reset(): void {
     _initialized = false;
+    _permissionRequested = false;
     _cachedTodaySteps = 0;
     _availability = "not_supported";
   },

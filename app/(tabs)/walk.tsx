@@ -2,7 +2,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { BlueShoe } from "@/components/BlueShoe";
 import { RaceJoinBadge, JoinProgressOverlay } from "@/components/RaceJoinBadge";
 import { router, useFocusEffect } from "expo-router";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import {
   ActivityIndicator,
@@ -22,6 +22,7 @@ import {
   Share,
   useWindowDimensions,
   View} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { AppAlert } from "@/components/AppAlert";
 import { AvatarPickerSheet } from "@/components/AvatarPickerSheet";
 import * as Clipboard from "expo-clipboard";
@@ -34,6 +35,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { useSound } from "@/context/SoundContext";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
 import { useWalkContext, TrackingStatus } from "@/context/WalkContext";
+import { useStepSourceGuard } from "@/hooks/useStepSourceGuard";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import { useRace } from "@/context/RaceContext";
@@ -45,6 +47,7 @@ import WearableSetupModal from "@/components/WearableSetupModal";
 import { usePresence } from "@/context/PresenceContext";
 import { useUnread } from "@/context/UnreadContext";
 import { getStoredSession } from "@/services/authService";
+import { progressIconSourceForSteps } from "@/services/dynamicIconService";
 import { authFetch } from "@/utils/authFetch";
 import { STORAGE_KEYS, storageGet, storageSet } from "@/utils/storage";
 import {
@@ -825,6 +828,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
   colors: ReturnType<typeof useColors>; }) {
   const { safeBottom } = useSafeLayout();
   const { refreshUserProfile, updateUser } = useAuth();
+  const { requestStepPermission } = useWalkContext();
   const ac = user?.avatarColor ?? colors.primary;
 
   // Avatar + server stats
@@ -1142,7 +1146,10 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet"
       onRequestClose={() => { if (profilePage !== "main") { setProfilePage("main"); } else { onClose(); } }}>
-      <View style={[pmStyles.container, { backgroundColor: colors.background }]}>
+      <SafeAreaView
+        edges={["top", "left", "right", "bottom"]}
+        style={[pmStyles.container, { backgroundColor: colors.background }]}
+      >
         <View style={[pmStyles.handle, { backgroundColor: colors.border }]} />
 
         {profilePage !== "main" ? (
@@ -1167,7 +1174,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
         </View>
 
         <ScrollView
-          contentContainerStyle={[pmStyles.body, { paddingBottom: safeBottom + 40 }]}
+          contentContainerStyle={[pmStyles.body, { paddingBottom: safeBottom + rs(48) }]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
@@ -1554,7 +1561,6 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
           </Animated.View>
         )}
         </>)}
-      </View>
 
       <WearableSetupModal
         visible={showWearableSetup}
@@ -1562,6 +1568,9 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
         last7Days={last7Days}
         onComplete={(platform, permissionStatus) => {
           setStepSourceInfo({ platform, permissionStatus, setupCompleted: permissionStatus === "connected" });
+          if (permissionStatus === "connected") {
+            void requestStepPermission();
+          }
         }}
       />
       <MyTitlesModal
@@ -1578,6 +1587,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
           ...(avatarUrl ? [{ label: "Remove Photo", icon: "trash-2", destructive: true, onPress: handleRemovePhoto }] : []),
         ]}
       />
+      </SafeAreaView>
     </Modal>
   ); }
 
@@ -1662,9 +1672,11 @@ export default function WalkScreen() {
   const { isDark } = useTheme();
   const { insets, safeTop, safeBottom } = useSafeLayout();
   const { trackingStatus, session, todaySteps, allTimeSteps, currentStreak, togglePause, milestoneReached, clearMilestone, usingRealTracking, stepPermissionStatus, hcAvailability, requestStepPermission, todayActiveMinutes, todayDailyRank, todayDailyGoal, refreshTodayRank } = useWalkContext();
+  const { guardRewardAction, canJoinRewardRaces, verificationLevel } = useStepSourceGuard();
   const { userRank, walletBalance } = useApp();
   const { user, logout } = useAuth();
   const tabBarHeight = useTabBarHeight();
+  const modalScrollPad = { paddingBottom: safeBottom + rs(40) };
   const { joinRace, setActiveRace, setRaceTargetSteps, racePhase } = useRace();
   const { counts, formatCount } = usePresence();
   const { pendingGroupInvites } = useUnread();
@@ -1676,7 +1688,25 @@ export default function WalkScreen() {
   const [purchaseConfirmModal, setPurchaseConfirmModal] = useState<{ code: string; name: string; price: number } | null>(null);
   const [showCoinsInfo, setShowCoinsInfo] = useState(false);
   const [showCoinStore, setShowCoinStore] = useState(false);
+  const showCoinStoreRef = useRef(showCoinStore);
+  showCoinStoreRef.current = showCoinStore;
+  const [showStepSetup, setShowStepSetup] = useState(false);
   const [walkFocused, setWalkFocused] = useState(true);
+
+  const handleCloseCoinStore = useCallback(() => {
+    setShowCoinStore(false);
+    dispatch(fetchCoinBalance());
+  }, [dispatch]);
+
+  const handleCoinStorePurchase = useCallback(() => {
+    dispatch(fetchCoinBalance());
+    dispatch(fetchTrackThemes());
+  }, [dispatch]);
+
+  const progressLogoSource = useMemo(
+    () => progressIconSourceForSteps(todaySteps, todayDailyGoal),
+    [todaySteps, todayDailyGoal],
+  );
 
   const statusConf = STATUS_CONFIG[trackingStatus];
   const dotAnim = useRef(new Animated.Value(1)).current;
@@ -1822,8 +1852,10 @@ export default function WalkScreen() {
   // network traffic when the user is on a different tab.
   useFocusEffect(useCallback(() => {
     refreshTodayRank().catch(() => {});
-    dispatch(fetchTrackThemes());
-    dispatch(fetchCoinBalance());
+    if (!showCoinStoreRef.current) {
+      dispatch(fetchTrackThemes());
+      dispatch(fetchCoinBalance());
+    }
     loadChallengeStatuses();
     const pollInterval = setInterval(loadChallengeStatuses, 5_000);
     return () => clearInterval(pollInterval);
@@ -2216,6 +2248,11 @@ export default function WalkScreen() {
 
   // Gate paid direct-joins through the consent modal; free joins go straight through
   const handleDirectJoin = useCallback(async (raceId: string, fee: number, maxPlayers: number, entryKey: string): Promise<void> => {
+    // Reward races (fee > 0) require verified tracking
+    if (fee > 0 && !canJoinRewardRaces) {
+      guardRewardAction(() => { /* guarded */ });
+      return;
+    }
     if (fee > 0) {
       const opt = RACE_OPTIONS.find((o) => o.fee === fee);
       confirmEntryJoinCallbackRef.current = () => void doDirectJoin(raceId, fee, maxPlayers, entryKey);
@@ -2228,9 +2265,14 @@ export default function WalkScreen() {
       return;
     }
     await doDirectJoin(raceId, fee, maxPlayers, entryKey);
-  }, [doDirectJoin]);
+  }, [doDirectJoin, canJoinRewardRaces, guardRewardAction]);
 
   const handleCoinsBattleJoin = useCallback(async (raceId: string) => {
+    // Coins battles require verified tracking
+    if (!canJoinRewardRaces) {
+      guardRewardAction(() => { /* guarded */ });
+      return;
+    }
     setJoiningEntryKey("coins_battle");
     try {
       const res = await authFetch(`/api/coins-battle/${raceId}/join`, { method: "POST" });
@@ -2254,7 +2296,7 @@ export default function WalkScreen() {
     } finally {
       setJoiningEntryKey(null);
     }
-  }, [dispatch]);
+  }, [dispatch, canJoinRewardRaces, guardRewardAction]);
 
   const handleStayInActiveRace = () => {
     const ar = activeRaceModal;
@@ -2463,7 +2505,10 @@ export default function WalkScreen() {
       >
         {/* Header */}
         <View style={styles.pageHeader}>
-          <Text style={[styles.pageTitle, { color: colors.foreground }]}>Walk Champ</Text>
+          <View style={styles.pageTitleRow}>
+            <Image source={progressLogoSource} style={styles.progressLogo} resizeMode="contain" />
+            <Text style={[styles.pageTitle, { color: colors.foreground }]}>Walk Champ</Text>
+          </View>
           <View style={styles.headerRight}>
             {/* Coin pill — tappable to open Coins Info */}
             <TouchableOpacity
@@ -2518,8 +2563,17 @@ export default function WalkScreen() {
                     </View>
                     <Text style={[styles.autoTrackingLabel, { color: colors.foreground }]}>
                       Auto Tracking <Text style={{ color: colors.primary, fontWeight: "700" }}>ON</Text>
+                      {verificationLevel === "limited" && (
+                        <Text style={{ color: "#F59E0B", fontWeight: "600", fontSize: 11 }}> · Limited</Text>
+                      )}
                     </Text>
-                    <Text style={[styles.trackingSub, { color: colors.mutedForeground }]}>Steps count automatically when you walk</Text>
+                    <Text style={[styles.trackingSub, { color: colors.mutedForeground }]}>
+                      {verificationLevel === "verified"
+                        ? "Verified Tracking — eligible for rewards and races"
+                        : verificationLevel === "limited"
+                          ? "Limited Tracking — display only, not eligible for rewards"
+                          : "Steps count automatically when you walk"}
+                    </Text>
                   </>
                 ) : (
                   <>
@@ -2531,15 +2585,17 @@ export default function WalkScreen() {
                       Auto Tracking <Text style={{ color: "#7B7E97", fontWeight: "700" }}>OFF</Text>
                     </Text>
                     <Text style={[styles.trackingSub, { color: colors.mutedForeground }]}>
-                      {Platform.OS === "android" && stepPermissionStatus === "unavailable" && hcAvailability === "not_installed"
-                        ? "Install Health Connect to enable step tracking"
+                      {Platform.OS === "android" && stepPermissionStatus === "unavailable" && hcAvailability === "not_supported"
+                        ? "Limited phone sensor tracking may be available — tap Connect to try"
+                        : Platform.OS === "android" && stepPermissionStatus === "unavailable" && hcAvailability === "not_installed"
+                          ? "Install Health Connect from Google Play, then return to grant Steps permission"
                         : Platform.OS === "android" && stepPermissionStatus === "unavailable" && hcAvailability === "needs_update"
-                          ? "Update Health Connect to enable step tracking"
+                          ? "Update Health Connect from Google Play, then return to grant Steps permission"
                           : Platform.OS === "android" && stepPermissionStatus === "unavailable"
-                            ? "Step tracking requires a standalone WalkChamp build — not available in Expo Go"
+                            ? "Tap Connect to set up step tracking"
                             : stepPermissionStatus === "denied"
-                              ? "Open Health Connect settings to allow Walk Champ to read your steps"
-                              : "Walk Champ reads your steps from Health Connect for challenges and leaderboards"}
+                              ? "Tap Connect to request Steps permission again in Walk Champ"
+                              : "Tap Connect to allow Walk Champ to read your steps from Health Connect"}
                     </Text>
                   </>
                 )}
@@ -2551,43 +2607,25 @@ export default function WalkScreen() {
                 >
                   <Feather name="settings" size={18} color={trackingStatus === "walking" ? colors.warning : colors.primary} />
                 </TouchableOpacity>
-              ) : Platform.OS === "android" && stepPermissionStatus === "unavailable" &&
-                  (hcAvailability === null || hcAvailability === "not_supported") ? (
-                // Expo Go or unsupported device — info only, no action possible
-                <View style={[styles.pauseBtn, { backgroundColor: "#7B7E9720", borderColor: "#7B7E9740" }]}>
-                  <Feather name="info" size={18} color="#7B7E97" />
-                </View>
               ) : (
                 <TouchableOpacity
                   style={[styles.pauseBtn, { backgroundColor: colors.primary + "20", borderColor: colors.primary + "40" }]}
                   onPress={(e) => {
                     e.stopPropagation();
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                    if (
-                      Platform.OS === "android" &&
-                      stepPermissionStatus === "unavailable" &&
-                      (hcAvailability === "not_installed" || hcAvailability === "needs_update")
-                    ) {
-                      // Open Play Store to install or update Health Connect
-                      void androidHCService.openInstallPage();
-                    } else if (stepPermissionStatus === "denied") {
-                      if (Platform.OS === "android") {
-                        void androidHCService.openSettings();
-                      } else {
-                        Linking.openSettings();
-                      }
-                    } else {
-                      requestStepPermission();
+                    if (Platform.OS === "android" && stepPermissionStatus !== "granted") {
+                      setShowStepSetup(true);
+                      return;
                     }
+                    requestStepPermission();
                   }}
                 >
                   <Feather
                     name={
-                      Platform.OS === "android" && stepPermissionStatus === "unavailable"
+                      Platform.OS === "android" && stepPermissionStatus === "unavailable" &&
+                      (hcAvailability === "needs_update" || hcAvailability === "not_installed")
                         ? "download"
-                        : stepPermissionStatus === "denied"
-                          ? "settings"
-                          : "unlock"
+                        : "unlock"
                     }
                     size={18}
                     color={colors.primary}
@@ -2934,7 +2972,6 @@ export default function WalkScreen() {
 
           {/* Cash Prize Challenge ($3 card) */}
           {ENABLE_THREE_DOLLAR_CHALLENGE && (() => {
-            if (__DEV__) console.log("[PremiumChallenge] section rendered");
             const premOpt = RACE_OPTIONS.find((o) => o.fee === 3)!;
             const premKey = "paid_3";
             const premCs = challengeStatuses[premKey];
@@ -3197,7 +3234,7 @@ export default function WalkScreen() {
 
       {/* ── Race Setup Modal ── */}
       <Modal visible={!!setupModal} animationType={setupModalAnimated ? "slide" : "none"} presentationStyle="pageSheet" transparent={false} onDismiss={() => setSetupModalAnimated(true)}>
-        <View style={[styles.modalWrap, { backgroundColor: colors.background }]}>
+        <SafeAreaView edges={["top", "left", "right", "bottom"]} style={[styles.modalWrap, { backgroundColor: colors.background }]}>
           <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
             <Text style={[styles.modalTitle, { color: colors.foreground }]}>
               {(setupModal?.fee ?? 0) === 0
@@ -3209,7 +3246,7 @@ export default function WalkScreen() {
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={styles.modalBody} showsVerticalScrollIndicator={false}>
+          <ScrollView contentContainerStyle={[styles.modalBody, modalScrollPad]} showsVerticalScrollIndicator={false}>
             {/* Player count selector */}
             <Text style={[styles.modalSectionLabel, { color: colors.mutedForeground }]}>Number of Players</Text>
             <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
@@ -3497,12 +3534,12 @@ export default function WalkScreen() {
               </View>
             </View>
           )}
-        </View>
+        </SafeAreaView>
       </Modal>
 
       {/* ── Confirm Challenge Entry Modal ── */}
       <Modal visible={!!confirmEntry} animationType={confirmEntryAnimated ? "slide" : "none"} presentationStyle="pageSheet" transparent={false} onDismiss={() => setConfirmEntryAnimated(true)}>
-        <View style={[styles.modalWrap, { backgroundColor: colors.background }]}>
+        <SafeAreaView edges={["top", "left", "right", "bottom"]} style={[styles.modalWrap, { backgroundColor: colors.background }]}>
           <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
             <Text style={[styles.modalTitle, { color: colors.foreground }]}>Confirm Challenge Entry</Text>
             <TouchableOpacity onPress={() => { confirmEntryJoinCallbackRef.current = null; setConfirmEntry(null); }}>
@@ -3510,7 +3547,7 @@ export default function WalkScreen() {
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={styles.modalBody} showsVerticalScrollIndicator={false}>
+          <ScrollView contentContainerStyle={[styles.modalBody, modalScrollPad]} showsVerticalScrollIndicator={false}>
             {/* Entry summary */}
             <View style={[styles.detailCard, { backgroundColor: colors.card, borderColor: colors.border, marginBottom: 20 }]}>
               <View style={styles.detailRow}>
@@ -3597,12 +3634,12 @@ export default function WalkScreen() {
               Walk Champ is a skill-based race platform. Results are determined by your activity performance — not by chance.
             </Text>
           </ScrollView>
-        </View>
+        </SafeAreaView>
       </Modal>
 
       {/* ── Create Challenge Modal ── */}
       <Modal visible={challengeModal} animationType={challengeModalAnimated ? "slide" : "none"} presentationStyle="pageSheet" transparent={false} onDismiss={() => { setChallengeModalAnimated(true); setActivePicker(null); setShowCreateConfirm(false); setCreateConfirmChecks([false, false, false]); setChallengeStartDate(new Date()); setChallengeEndDate(null); setChallengeStartTimeIdx(0); setShowStartDatePicker(false); setShowEndDatePicker(false); setChallengeEntryMode("free"); setChallengeGoalType("daily"); setChallengeTargetIdx(0); }}>
-        <View style={[styles.modalWrap, { backgroundColor: colors.background }]}>
+        <SafeAreaView edges={["top", "left", "right", "bottom"]} style={[styles.modalWrap, { backgroundColor: colors.background }]}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
               <LinearGradient
@@ -3625,7 +3662,7 @@ export default function WalkScreen() {
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={styles.modalBody} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <ScrollView contentContainerStyle={[styles.modalBody, modalScrollPad]} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             {showCreateConfirm ? (() => {
               const entryLabel = challengeEntryMode === "free" ? "Free" : challengeEntryMode === "coins" ? `${coinEntryAmount.toLocaleString()} coins` : `$${challengeUsdAmount}`;
               const label = `${entryLabel} ${roomType === "public" ? "Public" : "Private"} Challenge`;
@@ -4394,7 +4431,7 @@ export default function WalkScreen() {
             );
           })()}
 
-        </View>
+        </SafeAreaView>
       </Modal>
 
       {/* Profile Modal */}
@@ -4430,8 +4467,19 @@ export default function WalkScreen() {
       {/* Coins Store Modal */}
       <CoinsStoreModal
         visible={showCoinStore}
-        onClose={() => { setShowCoinStore(false); dispatch(fetchCoinBalance()); }}
-        onCoinsAdded={() => { dispatch(fetchCoinBalance()); dispatch(fetchTrackThemes()); }}
+        onClose={handleCloseCoinStore}
+        onCoinsAdded={handleCoinStorePurchase}
+      />
+
+      <WearableSetupModal
+        visible={showStepSetup}
+        onClose={() => setShowStepSetup(false)}
+        onComplete={(_platform, permissionStatus) => {
+          setShowStepSetup(false);
+          if (permissionStatus === "connected") {
+            void requestStepPermission();
+          }
+        }}
       />
 
       {/* Active Race Conflict Modal */}
@@ -4575,6 +4623,8 @@ const styles = StyleSheet.create({
   milestoneText: { fontSize: rf(15), fontWeight: "700" },
   scroll: { paddingHorizontal: rs(20) },
   pageHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
+  pageTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  progressLogo: { width: 34, height: 34, borderRadius: 8 },
   pageTitle: { fontSize: rf(26), fontWeight: "800", letterSpacing: -0.5 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
   coinPill: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: rs(10), paddingVertical: rs(5), borderRadius: 20, borderWidth: 1 },

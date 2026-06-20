@@ -194,10 +194,26 @@ let activeRoom: any = null;
 let currentRoute: "phone" | "speaker" | "bluetooth" = "speaker";
 /** @deprecated – kept for logAudioRoute compat */
 let currentSpeakerMode = true;
+/** Whether the current session token allows publishing audio (Mic Pass + participant). */
+let lastCanPublish = false;
 let onSpeakingCb:        ((speaking: boolean)                    => void) | null = null;
 let onStateCb:           ((state: string)                        => void) | null = null;
 let onActiveSpeakersCb:  ((userIds: string[])                    => void) | null = null;
 let onMuteChangedCb:     ((userId: string, muted: boolean)       => void) | null = null;
+/** Client-side per-user mute — only affects this device's playback. */
+const locallyMutedIds = new Set<string>();
+
+function applyLocalVolumeToTrack(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  track: any,
+  userId: string,
+): void {
+  if (track?.kind !== "audio") return;
+  const volume = locallyMutedIds.has(userId) ? 0 : 1;
+  if (typeof track.setVolume === "function") {
+    (track as { setVolume: (v: number) => void }).setVolume(volume);
+  }
+}
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -327,6 +343,8 @@ export const voiceService = {
     const tokenData = await voiceService.getVoiceToken(raceId);
     if (!tokenData) return false;
 
+    lastCanPublish = tokenData.canPublish;
+
     // Disconnect any existing session first — prevents duplicate audio streams
     // and stale sessions blocking a fresh join.
     await voiceService.disconnectVoice("reconnect");
@@ -410,11 +428,13 @@ export const voiceService = {
         sdk.RoomEvent.TrackSubscribed,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (track: any, _publication: any, participant: any) => {
+          const identity = participant.identity as string;
+          applyLocalVolumeToTrack(track, identity);
           if (__DEV__) {
-            if (__DEV__) console.log("[Voice] track subscribed — kind:", track.kind, "participant:", participant.identity);
+            if (__DEV__) console.log("[Voice] track subscribed — kind:", track.kind, "participant:", identity);
             if (track.kind === "audio") {
-              if (__DEV__) console.log("[Voice] remote audio track subscribed:", participant.identity);
-              if (__DEV__) console.log("[Voice] remote audio playing:", participant.identity);
+              if (__DEV__) console.log("[Voice] remote audio track subscribed:", identity);
+              if (__DEV__) console.log("[Voice] remote audio playing:", identity);
             }
           }
         },
@@ -510,7 +530,7 @@ export const voiceService = {
    * That path bypasses native session setup and produces silent audio tracks.
    */
   async publishMicrophone(): Promise<boolean> {
-    if (!activeRoom) return false;
+    if (!activeRoom || !lastCanPublish) return false;
     try {
       if (__DEV__) console.log("[Voice] local audio track created: pending");
 
@@ -584,6 +604,9 @@ export const voiceService = {
    * Does not affect what other participants hear — purely client-side.
    */
   async setParticipantLocalVolume(userId: string, volume: number): Promise<void> {
+    if (volume <= 0) locallyMutedIds.add(userId);
+    else locallyMutedIds.delete(userId);
+
     if (!activeRoom) return;
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -591,9 +614,7 @@ export const voiceService = {
       if (!participant) return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       for (const pub of ((participant.audioTrackPublications as Map<string, any> | undefined)?.values() ?? [])) {
-        if (pub.track && typeof pub.track.setVolume === "function") {
-          (pub.track as { setVolume: (v: number) => void }).setVolume(volume);
-        }
+        if (pub.track) applyLocalVolumeToTrack(pub.track, userId);
       }
       if (__DEV__) console.log("[VoiceMute] local volume:", userId, volume);
     } catch (e) {
@@ -664,6 +685,8 @@ export const voiceService = {
     activeRoom          = null;
     currentRoute        = "speaker";
     currentSpeakerMode  = true;
+    locallyMutedIds.clear();
+    lastCanPublish      = false;
     onStateCb           = null;
     onSpeakingCb        = null;
     onActiveSpeakersCb  = null;
@@ -678,6 +701,8 @@ export const voiceService = {
     activeRoom          = null;
     currentRoute        = "speaker";
     currentSpeakerMode  = true;
+    locallyMutedIds.clear();
+    lastCanPublish      = false;
     onStateCb           = null;
     onSpeakingCb        = null;
     onActiveSpeakersCb  = null;

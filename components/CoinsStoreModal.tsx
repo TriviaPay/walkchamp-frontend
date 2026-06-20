@@ -1,9 +1,10 @@
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef, memo } from "react";
 import {
   ActivityIndicator,
   ImageBackground,
   Modal,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -43,13 +44,15 @@ import {
   setupPurchaseListeners,
   restoreMicPass,
   retryPendingPurchases,
+  getIAPUnavailableMessage,
+  isIAPAvailable,
   COIN_IAP_PRODUCTS,
   MIC_PASS_PRODUCT_ID,
   type CoinProduct,
 } from "@/services/iapService";
 import type { Product } from "react-native-iap";
 import { authFetch } from "@/utils/authFetch";
-import BannerAdView from "@/components/BannerAdView";
+import BannerAdView, { BANNER_SLOT_HEIGHT } from "@/components/BannerAdView";
 import {
   preloadRewardedAd,
   showRewardedAdForCoins,
@@ -58,6 +61,7 @@ import {
 } from "@/services/ads/adMobService";
 import { useColors } from "@/hooks/useColors";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
+import { rf, rs } from "@/utils/responsive";
 
 const shopImage = require("@/assets/images/shop-icon.png");
 
@@ -111,6 +115,53 @@ const COIN_PACK_FALLBACKS = COIN_IAP_PRODUCTS.map((p) => ({
   coins: p.coins,
   name: p.name,
 }));
+
+function iapLogMissingProducts(missing: string[]): void {
+  if (__DEV__) console.log("[IAP] store missing product IDs:", missing.join(", "));
+}
+
+/** Fixed footer — zero props so parent Redux/state updates never remount the ad. */
+const StoreBannerFooter = memo(function StoreBannerFooter() {
+  return (
+    <View
+      style={{
+        width: "100%",
+        minHeight: BANNER_SLOT_HEIGHT,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: "#1E2640",
+        backgroundColor: "#0B0D1A",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+      collapsable={false}
+    >
+      <BannerAdView />
+    </View>
+  );
+});
+
+/** Stable scroll wrapper — keeps scroll position when parent re-renders. */
+const StoreTabScroll = memo(function StoreTabScroll({
+  children,
+  contentContainerStyle,
+  refreshControl,
+}: {
+  children: React.ReactNode;
+  contentContainerStyle: object;
+  refreshControl?: React.ComponentProps<typeof ScrollView>["refreshControl"];
+}) {
+  return (
+    <ScrollView
+      style={{ flex: 1 }}
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={contentContainerStyle}
+      refreshControl={refreshControl}
+      keyboardShouldPersistTaps="handled"
+    >
+      {children}
+    </ScrollView>
+  );
+});
 
 type ShopTab = "coins" | "themes" | "premium";
 
@@ -265,12 +316,21 @@ function ThemeCard({ theme, onUnlock, onEquip }: {
 
 
 // ── Main modal ────────────────────────────────────────────────────────────────
-export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, standalone = false }: Props) {
+function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, standalone = false }: Props) {
   const dispatch = useAppDispatch();
   const colors = useColors();
   const tabBarHeight = useTabBarHeight();
-  const s = makeStoreStyles(colors);
-  const scrollBottomPad = 24;
+  const s = useMemo(() => makeStoreStyles(colors), [colors]);
+  const tabScrollPaddingBottom = rs(16);
+  const tabScrollContentStyle = useMemo(
+    () => ({
+      paddingHorizontal: rs(20),
+      paddingTop: rs(16),
+      flexGrow: 1 as const,
+      paddingBottom: tabScrollPaddingBottom,
+    }),
+    [tabScrollPaddingBottom],
+  );
   const { themes, coinBalance, loading: themesLoading, error: themesError, purchaseError } = useAppSelector((st) => st.trackThemes);
   const { purchaseSummary, summaryLoading } = useAppSelector((st) => st.coins);
 
@@ -285,10 +345,20 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
   const [coinProducts, setCoinProducts]       = useState<CoinProduct[]>([]);
   const [premiumProduct, setPremiumProduct]   = useState<Product | null>(null);
   const [iapLoading, setIapLoading]           = useState(false);
+  const [iapReady, setIapReady]               = useState(false);
   const [iapError, setIapError]               = useState<string | null>(null);
   const [buyingProductId, setBuyingProductId] = useState<string | null>(null);
   const [restoringMic, setRestoringMic]       = useState(false);
   const cleanupListenersRef                   = useRef<(() => void) | null>(null);
+  const loadInProgressRef                     = useRef(false);
+  const storeBootstrappedRef                  = useRef(false);
+  const onCoinsAddedRef = useRef(onCoinsAdded);
+  const onMicPassGrantedRef = useRef(onMicPassGranted);
+
+  useEffect(() => {
+    onCoinsAddedRef.current = onCoinsAdded;
+    onMicPassGrantedRef.current = onMicPassGranted;
+  }, [onCoinsAdded, onMicPassGranted]);
 
   const { hasMicPass, setHasMicPass, loadingMic, fetchMicEntitlement } = useMicPassEntitlement(visible);
 
@@ -311,7 +381,7 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
     onCoinPurchase: (productId: string, coins: number, newBalance: number) => {
       setBuyingProductId(null);
       setBalance(newBalance);
-      onCoinsAdded?.();
+      onCoinsAddedRef.current?.();
       AppAlert.alert(
         "Purchase Successful 🎉",
         `${coins.toLocaleString()} coins added to your balance.`,
@@ -320,7 +390,7 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
     onMicPassGrant: () => {
       setBuyingProductId(null);
       setHasMicPass(true);
-      onMicPassGranted?.();
+      onMicPassGrantedRef.current?.();
       void fetchMicEntitlement();
       AppAlert.alert(
         "Mic Pass Activated 🎤",
@@ -335,51 +405,90 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
       setBuyingProductId(null);
       AppAlert.alert("Purchase Failed", msg);
     },
-  }), [onCoinsAdded, onMicPassGranted, setHasMicPass, fetchMicEntitlement]);
+  }), [setHasMicPass, fetchMicEntitlement]);
 
   // Load IAP products from App Store / Google Play.
   // Listeners are attached here — AFTER initConnection() completes — to avoid
   // the E_IAP_NOT_AVAILABLE race that occurs when purchaseUpdatedListener is
   // called before the connection is initialized.
   const loadProducts = useCallback(async () => {
+    if (loadInProgressRef.current) return;
+    loadInProgressRef.current = true;
     setIapLoading(true);
     setIapError(null);
     try {
+      if (!isIAPAvailable()) {
+        setIapError(getIAPUnavailableMessage());
+        setCoinProducts([]);
+        setPremiumProduct(null);
+        return;
+      }
+
       await initializeIAP();
 
-      // Attach listeners immediately after connection is established
-      cleanupListenersRef.current?.();
-      cleanupListenersRef.current = setupPurchaseListeners(listenersCallbacks());
+      if (!cleanupListenersRef.current) {
+        cleanupListenersRef.current = setupPurchaseListeners(listenersCallbacks());
+      }
 
-      const { coinProducts: cp, premiumProduct: pp } = await loadIAPProducts();
+      const { coinProducts: cp, premiumProduct: pp, missingProductIds } = await loadIAPProducts();
       setCoinProducts(cp);
       setPremiumProduct(pp);
 
-      // Retry any pending verifications from previous sessions
+      if (cp.length === 0) {
+        setIapError(getIAPUnavailableMessage());
+      } else if (missingProductIds.length > 0) {
+        iapLogMissingProducts(missingProductIds);
+      }
+
       await retryPendingPurchases({
         onCoinPurchase: (_productId, _coins, newBalance) => {
           setBalance(newBalance);
-          onCoinsAdded?.();
+          onCoinsAddedRef.current?.();
         },
         onMicPassGrant: () => {
           setHasMicPass(true);
-          onMicPassGranted?.();
+          onMicPassGrantedRef.current?.();
         },
       });
     } catch (err: unknown) {
       const code = (err as { code?: string })?.code ?? "";
+      const msg = err instanceof Error ? err.message : "";
       if (code === "E_IAP_NOT_AVAILABLE") {
-        // Expo Go or simulator — not an error, just not supported
-        setIapError("In-app purchases require the installed app.\nCoin prices will show once you install the build.");
+        setIapError(getIAPUnavailableMessage());
+      } else if (msg.includes("TIMEOUT")) {
+        setIapError("Store connection timed out. Check your network and tap Try Again.");
       } else {
-        setIapError("Unable to load products. Please try again.");
+        setIapError(getIAPUnavailableMessage());
       }
+      setCoinProducts([]);
+      setPremiumProduct(null);
     } finally {
       setIapLoading(false);
+      setIapReady(true);
+      loadInProgressRef.current = false;
     }
-  }, [onCoinsAdded, onMicPassGranted, setHasMicPass, listenersCallbacks]);
+  }, [setHasMicPass, listenersCallbacks]);
 
-  // Pull-to-refresh on the Coins tab: re-fetches balance + purchase summary from DB
+  // Sync Redux balance into local display state (no refetch loop).
+  useEffect(() => {
+    if (!visible || coinBalance == null) return;
+    setBalance((prev) => (prev === coinBalance ? prev : coinBalance));
+  }, [visible, coinBalance]);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    if (!storeBootstrappedRef.current) {
+      storeBootstrappedRef.current = true;
+      void fetchBalance();
+      void dispatch(fetchTrackThemes());
+      void dispatch(fetchPurchaseSummary());
+      void loadProducts();
+      preloadRewardedAd();
+    }
+  // Bootstrap exactly once per modal/screen mount — never on ad or balance updates.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
   const handleRefreshCoins = useCallback(async () => {
     setRefreshingCoins(true);
     await Promise.all([
@@ -390,35 +499,15 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
     setRefreshingCoins(false);
   }, [fetchBalance, dispatch]);
 
-  useEffect(() => {
-    if (visible) {
-      // Pre-populate balance from Redux so the row shows instantly
-      if (coinBalance != null) setBalance(coinBalance);
-      void fetchBalance();
-      void dispatch(fetchTrackThemes());
-      void dispatch(fetchPurchaseSummary());
-      void loadProducts();
-      // Preload the rewarded ad so it's ready when the user taps "Earn Free Coins"
-      preloadRewardedAd();
-      // Note: purchase listeners are attached inside loadProducts() after
-      // initConnection() resolves — do NOT attach them here synchronously.
-    } else {
-      // Remove listeners when modal closes; connection stays alive
-      cleanupListenersRef.current?.();
-      cleanupListenersRef.current = null;
-    }
-  }, [visible, fetchBalance, dispatch, coinBalance, loadProducts]);
-
   // ── Earn Free Coins via rewarded ad ────────────────────────────────────────
   const handleEarnFreeCoins = useCallback(async () => {
     if (watchingAd) return;
 
     if (!isRewardedAdReady()) {
       if (!isNativeAdsAvailable()) {
-        // Running in Expo Go — AdMob native SDK is not bundled
         AppAlert.alert(
           "Ads Not Available",
-          "Rewarded ads require the installed app build. They are not supported in Expo Go.\n\nBuild the app with EAS to enable this feature.",
+          "Rewarded ads require an installed APK/IPA build with native ads enabled.",
         );
       } else {
         // Module loaded but ad hasn't finished loading yet
@@ -495,16 +584,17 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
     }
   }, [purchaseError, dispatch]);
 
-  // Debug — log only when themes data or balance actually changes, not on every render.
+  // Debug — log only when themes count changes (not on every balance tick).
+  const themesCountRef = useRef(0);
   useEffect(() => {
     if (!__DEV__ || themes.length === 0) return;
+    if (themes.length === themesCountRef.current) return;
+    themesCountRef.current = themes.length;
     const owned   = themes.filter((t) => t.owned).length;
     const locked  = themes.filter((t) => t.locked).length;
     const equipped = themes.find((t) => t.isEquipped);
     console.log("[ShopThemes] response count:", themes.length, "owned:", owned, "locked:", locked, "selected:", equipped?.code ?? "none");
-    if (balance !== null) console.log("[ShopThemes] coin balance updated:", balance);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [themes, balance]);
+  }, [themes]);
 
   // ── Coin pack purchase ─────────────────────────────────────────────────────
   const handleBuy = async (productId: string) => {
@@ -611,8 +701,15 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
   const micPassPrice = premiumProduct?.localizedPrice ?? null;
   const buyingMic = buyingProductId === MIC_PASS_PRODUCT_ID;
 
-  const storeContent = (
-    <View style={s.root}>
+  const renderStorePrice = (price: string | null, isBuying: boolean, accent = "#6B7280") => {
+    if (isBuying) return <ActivityIndicator size="small" color="#000" />;
+    if (price) return <Text style={s.priceBtnText}>{price}</Text>;
+    if (iapLoading && !iapReady) return <ActivityIndicator size="small" color={accent} />;
+    return <Text style={[s.priceBtnText, { fontSize: rf(11), color: "#9CA3AF" }]}>—</Text>;
+  };
+
+  const storeBody = (
+    <View style={[s.root, { flex: 1 }]}>
 
       {/* ── Header ── */}
       <View style={s.header}>
@@ -665,18 +762,11 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
           })}
         </View>
 
-        {/* ── Balance banner ── */}
-        <View style={s.balanceRow}>
-          <CoinIcon size="medium" />
-          <Text style={s.balanceLabel}>Your Balance</Text>
-          <Text style={s.balanceValue}>{(balance ?? coinBalance)?.toLocaleString() ?? "--"}</Text>
-        </View>
-
+        <View style={{ flex: 1 }}>
         {/* ══ COINS TAB ══════════════════════════════════════════════════════ */}
         {activeTab === "coins" && (
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={[s.scroll, { paddingBottom: scrollBottomPad }]}
+          <StoreTabScroll
+            contentContainerStyle={tabScrollContentStyle}
             refreshControl={
               <RefreshControl
                 refreshing={refreshingCoins}
@@ -685,6 +775,13 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
               />
             }
           >
+            {/* ── Balance banner ── */}
+            <View style={[s.balanceRow, { marginHorizontal: 0, marginTop: 0 }]}>
+              <CoinIcon size="medium" />
+              <Text style={s.balanceLabel}>Your Balance</Text>
+              <Text style={s.balanceValue}>{(balance ?? coinBalance)?.toLocaleString() ?? "--"}</Text>
+            </View>
+
             <Text style={s.sectionLabel}>COIN PACKS</Text>
 
             {/* IAP loading state */}
@@ -696,7 +793,7 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
             )}
 
             {/* IAP error with retry */}
-            {iapError && coinProducts.length === 0 && (
+            {iapReady && iapError && (
               <View style={s.iapErrorCard}>
                 <Feather name="alert-circle" size={20} color="#F87171" />
                 <Text style={s.iapErrorTxt}>{iapError}</Text>
@@ -706,12 +803,12 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
               </View>
             )}
 
-            {/* Coin pack rows — live store products when available, skeleton-style fallback while loading */}
-            {(coinProducts.length > 0 ? coinProducts : iapLoading ? [] : COIN_PACK_FALLBACKS).map((pack) => {
+            {/* Coin pack rows — live store prices when available */}
+            {(coinProducts.length > 0 ? coinProducts : (iapError ? [] : COIN_PACK_FALLBACKS)).map((pack) => {
               const liveProduct = coinProducts.find((p) => p.productId === pack.productId);
               const priceLabel = liveProduct?.localizedPrice ?? null;
               const isBuying = buyingProductId === pack.productId;
-              const isDisabled = !!buyingProductId || iapLoading;
+              const isDisabled = !!buyingProductId || (iapLoading && !iapReady) || !priceLabel;
 
               return (
                 <View key={pack.productId} style={s.packCard}>
@@ -721,18 +818,12 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
                     <Text style={s.packSub}>One-time purchase</Text>
                   </View>
                   <TouchableOpacity
-                    style={[s.priceBtn, (!priceLabel || isDisabled) && s.priceBtnDim]}
+                    style={[s.priceBtn, isDisabled && s.priceBtnDim]}
                     onPress={() => { if (priceLabel) void handleBuy(pack.productId); }}
-                    disabled={!priceLabel || isDisabled}
+                    disabled={isDisabled}
                     activeOpacity={0.82}
                   >
-                    {isBuying ? (
-                      <ActivityIndicator size="small" color="#000" />
-                    ) : priceLabel ? (
-                      <Text style={s.priceBtnText}>{priceLabel}</Text>
-                    ) : (
-                      <ActivityIndicator size="small" color="#6B7280" />
-                    )}
+                    {renderStorePrice(priceLabel, isBuying)}
                   </TouchableOpacity>
                 </View>
               );
@@ -829,20 +920,17 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
               </View>
             )}
 
-            <View style={{ height: 40 }} />
-          </ScrollView>
+          </StoreTabScroll>
         )}
 
         {/* ══ THEMES TAB ═════════════════════════════════════════════════════ */}
         {activeTab === "themes" && (
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={[s.scroll, { paddingBottom: scrollBottomPad }]}
+          <StoreTabScroll
+            contentContainerStyle={tabScrollContentStyle}
             refreshControl={
               <RefreshControl refreshing={themesLoading} onRefresh={handleRefreshThemes} tintColor="#22C55E" />
             }
           >
-            <BannerAdView style={{ marginBottom: 14 }} />
             {themesLoading && sortedThemes.length === 0 ? (
               <View style={s.themesGrid}>
                 {Array.from({ length: 6 }).map((_, i) => (
@@ -887,13 +975,12 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
                 </View>
               </>
             )}
-            <View style={{ height: 40 }} />
-          </ScrollView>
+          </StoreTabScroll>
         )}
 
         {/* ══ PREMIUM TAB ════════════════════════════════════════════════════ */}
         {activeTab === "premium" && (
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[s.scroll, { paddingBottom: scrollBottomPad }]}>
+          <StoreTabScroll contentContainerStyle={tabScrollContentStyle}>
             {ENABLE_MIC_PASS && (
               <View style={s.micCard}>
                 {!hasMicPass && (
@@ -917,17 +1004,19 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
                     ) : (
                       <View style={s.micPriceCol}>
                         <TouchableOpacity
-                          style={[s.micBuyBtn, (buyingMic || !micPassPrice) && s.micBuyBtnDim]}
+                          style={[s.micBuyBtn, (buyingMic || (!micPassPrice && iapReady)) && s.micBuyBtnDim]}
                           onPress={handleBuyMicPass}
-                          disabled={buyingMic || !micPassPrice || !!buyingProductId}
+                          disabled={buyingMic || (!micPassPrice && iapReady) || !!buyingProductId}
                           activeOpacity={0.8}
                         >
                           {buyingMic ? (
                             <ActivityIndicator size="small" color="#fff" />
                           ) : micPassPrice ? (
                             <Text style={s.micBuyText}>{micPassPrice}</Text>
-                          ) : (
+                          ) : iapLoading && !iapReady ? (
                             <ActivityIndicator size="small" color="#A855F7" />
+                          ) : (
+                            <Text style={[s.micBuyText, { fontSize: rf(11) }]}>—</Text>
                           )}
                         </TouchableOpacity>
                       </View>
@@ -964,39 +1053,56 @@ export default function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicP
                 <Text style={s.loadingTxt}>More premium items coming soon!</Text>
               </View>
             )}
-            <View style={{ height: 40 }} />
-          </ScrollView>
+          </StoreTabScroll>
         )}
+        </View>
       </View>
+  );
+
+  const bannerSlot = (
+    <SafeAreaView edges={["bottom"]} style={{ backgroundColor: "#0B0D1A" }}>
+      <StoreBannerFooter />
+    </SafeAreaView>
   );
 
   if (standalone) {
     return (
       <SafeAreaView
         edges={["top", "left", "right"]}
-        style={{ flex: 1, backgroundColor: colors.background, paddingBottom: tabBarHeight }}
+        style={{ flex: 1, backgroundColor: colors.background }}
       >
-        {storeContent}
+        {storeBody}
+        <View style={{ marginBottom: tabBarHeight }} collapsable={false}>
+          {bannerSlot}
+        </View>
       </SafeAreaView>
     );
   }
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      {storeContent}
+      <SafeAreaView
+        edges={["top", "left", "right"]}
+        style={{ flex: 1, backgroundColor: colors.background }}
+      >
+        {storeBody}
+        {bannerSlot}
+      </SafeAreaView>
     </Modal>
   );
 }
 
+export default memo(CoinsStoreModal);
+
 function makeStoreStyles(c: ReturnType<typeof useColors>) {
   return {
     root:           { flex: 1, backgroundColor: c.background },
-    header:         { flexDirection: "row" as const, alignItems: "center" as const, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
-    headerIcon:     { width: 48, height: 48 },
-    headerTextWrap: { flex: 1 },
-    headerTitle:    { fontSize: 22, fontWeight: "800" as const, color: c.foreground },
-    headerSub:      { fontSize: 12, color: c.mutedForeground, marginTop: 3, lineHeight: 17 },
-    closeBtn:       { width: 32, height: 32, borderRadius: 16, backgroundColor: c.muted, alignItems: "center" as const, justifyContent: "center" as const },
-    tabBar:         { flexDirection: "row" as const, marginHorizontal: 20, marginTop: 14, marginBottom: 4, backgroundColor: c.muted, borderRadius: 12, padding: 3 },
+    header:         { flexDirection: "row" as const, alignItems: "center" as const, paddingHorizontal: rs(20), paddingTop: rs(12), paddingBottom: rs(14), gap: rs(12), borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
+    headerIcon:     { width: rs(44), height: rs(44) },
+    headerTextWrap: { flex: 1, minWidth: 0 },
+    headerTitle:    { fontSize: rf(22), fontWeight: "800" as const, color: c.foreground },
+    headerSub:      { fontSize: rf(12), color: c.mutedForeground, marginTop: 3, lineHeight: rf(17) },
+    closeBtn:       { width: rs(32), height: rs(32), borderRadius: rs(16), backgroundColor: c.muted, alignItems: "center" as const, justifyContent: "center" as const },
+    tabBar:         { flexDirection: "row" as const, marginHorizontal: rs(20), marginTop: rs(12), marginBottom: rs(4), backgroundColor: c.muted, borderRadius: rs(12), padding: 3 },
     tabBtn:         { flex: 1, paddingVertical: 9, alignItems: "center" as const, borderRadius: 10 },
     tabBtnActive:   { backgroundColor: c.secondary },
     tabTxt:         { fontSize: 13, fontWeight: "600" as const, color: c.mutedForeground },
@@ -1004,7 +1110,8 @@ function makeStoreStyles(c: ReturnType<typeof useColors>) {
     balanceRow:     { flexDirection: "row" as const, alignItems: "center" as const, gap: 10, marginHorizontal: 20, marginTop: 10, marginBottom: 4, backgroundColor: c.muted, borderRadius: 14, borderWidth: 1, borderColor: c.border, paddingHorizontal: 16, paddingVertical: 12 },
     balanceLabel:   { flex: 1, fontSize: 13, color: c.mutedForeground },
     balanceValue:   { fontSize: 20, fontWeight: "900" as const, color: "#FFD700" },
-    scroll:         { paddingHorizontal: 20, paddingTop: 16 },
+    scroll:         { paddingHorizontal: rs(20), paddingTop: rs(16), flexGrow: 1 },
+    fixedBanner:    { width: "100%", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border, backgroundColor: c.background, paddingTop: rs(4) },
     sectionLabel:   { fontSize: 11, fontWeight: "700" as const, letterSpacing: 1.1, color: c.mutedForeground, marginBottom: 12 },
     iapLoadingRow:  { flexDirection: "row" as const, alignItems: "center" as const, gap: 10, paddingVertical: 12 },
     iapLoadingTxt:  { fontSize: 13, color: c.mutedForeground },
