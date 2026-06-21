@@ -9,6 +9,9 @@ export interface CoinBalance {
   lifetimeEarned: number;
   lifetimeSpent: number;
   earnedToday: number;
+  adsToday?: number;
+  adsRemaining?: number;
+  maxDailyAdRewards?: number;
 }
 
 export interface CoinTransaction {

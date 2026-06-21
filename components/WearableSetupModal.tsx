@@ -13,6 +13,7 @@ import {
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
+import { SkeletonWearableCheck } from "@/components/SkeletonRows";
 import { authFetch } from "@/utils/authFetch";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf } from "@/utils/responsive";
@@ -75,7 +76,6 @@ export default function WearableSetupModal({
       const legacyOk = await androidLegacySensorProvider.isAvailable();
       const result = await androidHCService.initialize();
       setHcAvailability(result.availability);
-      await androidHCService.readTodaySteps();
 
       const hcBlocked = androidHCService.isRangeReadBlocked();
       if (
@@ -169,15 +169,20 @@ export default function WearableSetupModal({
   }, []);
 
   const grantAndroidSteps = async (): Promise<boolean> => {
-    await requestStepPermission();
-    const s = await stepProviderManager.refreshStatus();
-    const granted = s.permission === "granted";
-    if (granted) {
-      setPermStatus("granted");
-      setAndroidPhase("setup");
-      setStep(TOTAL_ANDROID - 1);
+    try {
+      await requestStepPermission();
+      const s = await stepProviderManager.refreshStatus();
+      const granted = s.permission === "granted";
+      if (granted) {
+        setPermStatus("granted");
+        setAndroidPhase("setup");
+        setStep(TOTAL_ANDROID - 1);
+      }
+      return granted;
+    } catch (e) {
+      if (__DEV__) console.log("[WearableSetup] grantAndroidSteps error", e);
+      return false;
     }
-    return granted;
   };
 
   const requestPerm = async () => {
@@ -229,14 +234,7 @@ export default function WearableSetupModal({
   const goBack = () => setStep(s => Math.max(s - 1, 0));
   const isLast = step === (isIOS ? TOTAL_IOS : TOTAL_ANDROID) - 1;
 
-  const HCCheckingScreen = () => (
-    <View style={[ws.content, { alignItems: "center", justifyContent: "center", paddingTop: 60 }]}>
-      <ActivityIndicator size="large" color={colors.primary} />
-      <Text style={[ws.desc, { color: colors.mutedForeground, marginTop: 16, textAlign: "center" }]}>
-        Checking Health Connect…
-      </Text>
-    </View>
-  );
+  const HCCheckingScreen = () => <SkeletonWearableCheck />;
 
   const HCExpoGoScreen = () => (
     <View style={ws.content}>

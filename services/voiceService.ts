@@ -194,24 +194,39 @@ let activeRoom: any = null;
 let currentRoute: "phone" | "speaker" | "bluetooth" = "speaker";
 /** @deprecated – kept for logAudioRoute compat */
 let currentSpeakerMode = true;
-/** Whether the current session token allows publishing audio (Mic Pass + participant). */
-let lastCanPublish = false;
 let onSpeakingCb:        ((speaking: boolean)                    => void) | null = null;
 let onStateCb:           ((state: string)                        => void) | null = null;
 let onActiveSpeakersCb:  ((userIds: string[])                    => void) | null = null;
 let onMuteChangedCb:     ((userId: string, muted: boolean)       => void) | null = null;
-/** Client-side per-user mute — only affects this device's playback. */
-const locallyMutedIds = new Set<string>();
+/** Client-side remote volume overrides (0 = locally muted). */
+const localVolumeOverrides = new Map<string, number>();
 
-function applyLocalVolumeToTrack(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  track: any,
-  userId: string,
-): void {
-  if (track?.kind !== "audio") return;
-  const volume = locallyMutedIds.has(userId) ? 0 : 1;
-  if (typeof track.setVolume === "function") {
-    (track as { setVolume: (v: number) => void }).setVolume(volume);
+function findRemoteParticipant(userId: string): any | null {
+  if (!activeRoom?.remoteParticipants) return null;
+  const map = activeRoom.remoteParticipants as Map<string, any>;
+  const direct = map.get(userId);
+  if (direct) return direct;
+  for (const [, participant] of map) {
+    if (participant?.identity === userId) return participant;
+  }
+  return null;
+}
+
+function applyVolumeToParticipant(userId: string, volume: number): void {
+  const participant = findRemoteParticipant(userId);
+  if (!participant) return;
+  try {
+    for (const pub of participant.audioTrackPublications?.values?.() ?? []) {
+      if (pub?.track && typeof pub.track.setVolume === "function") {
+        pub.track.setVolume(volume);
+      }
+      if (typeof pub?.setEnabled === "function") {
+        pub.setEnabled(volume > 0);
+      }
+    }
+    if (__DEV__) console.log("[VoiceMute] local volume:", userId, volume);
+  } catch (e) {
+    if (__DEV__) console.log("[VoiceError] applyVolumeToParticipant:", e);
   }
 }
 
@@ -343,8 +358,6 @@ export const voiceService = {
     const tokenData = await voiceService.getVoiceToken(raceId);
     if (!tokenData) return false;
 
-    lastCanPublish = tokenData.canPublish;
-
     // Disconnect any existing session first — prevents duplicate audio streams
     // and stale sessions blocking a fresh join.
     await voiceService.disconnectVoice("reconnect");
@@ -428,14 +441,16 @@ export const voiceService = {
         sdk.RoomEvent.TrackSubscribed,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (track: any, _publication: any, participant: any) => {
-          const identity = participant.identity as string;
-          applyLocalVolumeToTrack(track, identity);
           if (__DEV__) {
-            if (__DEV__) console.log("[Voice] track subscribed — kind:", track.kind, "participant:", identity);
+            if (__DEV__) console.log("[Voice] track subscribed — kind:", track.kind, "participant:", participant.identity);
             if (track.kind === "audio") {
-              if (__DEV__) console.log("[Voice] remote audio track subscribed:", identity);
-              if (__DEV__) console.log("[Voice] remote audio playing:", identity);
+              if (__DEV__) console.log("[Voice] remote audio track subscribed:", participant.identity);
+              if (__DEV__) console.log("[Voice] remote audio playing:", participant.identity);
             }
+          }
+          if (track.kind === "audio" && participant?.identity) {
+            const vol = localVolumeOverrides.get(participant.identity as string) ?? 1;
+            if (typeof track.setVolume === "function") track.setVolume(vol);
           }
         },
       );
@@ -530,7 +545,7 @@ export const voiceService = {
    * That path bypasses native session setup and produces silent audio tracks.
    */
   async publishMicrophone(): Promise<boolean> {
-    if (!activeRoom || !lastCanPublish) return false;
+    if (!activeRoom) return false;
     try {
       if (__DEV__) console.log("[Voice] local audio track created: pending");
 
@@ -604,22 +619,10 @@ export const voiceService = {
    * Does not affect what other participants hear — purely client-side.
    */
   async setParticipantLocalVolume(userId: string, volume: number): Promise<void> {
-    if (volume <= 0) locallyMutedIds.add(userId);
-    else locallyMutedIds.delete(userId);
-
     if (!activeRoom) return;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const participant = (activeRoom.remoteParticipants as Map<string, any> | undefined)?.get(userId);
-      if (!participant) return;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      for (const pub of ((participant.audioTrackPublications as Map<string, any> | undefined)?.values() ?? [])) {
-        if (pub.track) applyLocalVolumeToTrack(pub.track, userId);
-      }
-      if (__DEV__) console.log("[VoiceMute] local volume:", userId, volume);
-    } catch (e) {
-      if (__DEV__) console.log("[VoiceError] setParticipantLocalVolume:", e);
-    }
+    const clamped = Math.max(0, Math.min(1, volume));
+    localVolumeOverrides.set(userId, clamped);
+    applyVolumeToParticipant(userId, clamped);
   },
 
   /**
@@ -678,6 +681,7 @@ export const voiceService = {
    */
   async disconnectVoice(reason = "user"): Promise<void> {
     if (!activeRoom) return;
+    localVolumeOverrides.clear();
     try {
       await activeRoom.disconnect();
     } catch {}
@@ -685,8 +689,6 @@ export const voiceService = {
     activeRoom          = null;
     currentRoute        = "speaker";
     currentSpeakerMode  = true;
-    locallyMutedIds.clear();
-    lastCanPublish      = false;
     onStateCb           = null;
     onSpeakingCb        = null;
     onActiveSpeakersCb  = null;
@@ -701,8 +703,6 @@ export const voiceService = {
     activeRoom          = null;
     currentRoute        = "speaker";
     currentSpeakerMode  = true;
-    locallyMutedIds.clear();
-    lastCanPublish      = false;
     onStateCb           = null;
     onSpeakingCb        = null;
     onActiveSpeakersCb  = null;

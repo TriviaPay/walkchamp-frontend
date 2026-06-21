@@ -613,30 +613,34 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   const requestStepPermission = useCallback(async () => {
     if (__DEV__) console.log(`[WalkContext] requestStepPermission — platform: ${Platform.OS}`);
 
-    const result = await stepProviderManager.requestStepPermission();
-    const status = result.status as PermissionStatus;
+    try {
+      const result = await stepProviderManager.requestStepPermission();
+      const status = result.status as PermissionStatus;
 
-    if (__DEV__) console.log(`[WalkContext] Permission result: ${status} provider=${result.providerId ?? "none"}`);
-    setStepPermissionStatus(status);
-    setActiveStepSource(providerToActiveSource(result.providerId));
-    setVerificationLevel(providerToVerification(result.providerId));
+      if (__DEV__) console.log(`[WalkContext] Permission result: ${status} provider=${result.providerId ?? "none"}`);
+      setStepPermissionStatus(status);
+      setActiveStepSource(providerToActiveSource(result.providerId));
+      setVerificationLevel(providerToVerification(result.providerId));
 
-    if (status === "granted") {
-      setUsingRealTracking(true);
-      usingRealRef.current = true;
-      setTrackingStatusState("walking");
-      await startProviderWatching();
-      await refreshRealSteps();
-      fetchTodayFromBackend().catch(() => {});
-      startRealPollInterval();
-      if (!backendSyncRef.current) {
-        backendSyncRef.current = setInterval(
-          syncDeltaToBackend,
-          BACKEND_SYNC_INTERVAL_MS,
-        );
+      if (status === "granted") {
+        setUsingRealTracking(true);
+        usingRealRef.current = true;
+        setTrackingStatusState("walking");
+        await startProviderWatching();
+        await refreshRealSteps();
+        fetchTodayFromBackend().catch(() => {});
+        startRealPollInterval();
+        if (!backendSyncRef.current) {
+          backendSyncRef.current = setInterval(
+            syncDeltaToBackend,
+            BACKEND_SYNC_INTERVAL_MS,
+          );
+        }
+      } else if (Platform.OS === "android" && status !== "unavailable") {
+        await enableLimitedSensorTracking();
       }
-    } else if (Platform.OS === "android" && status !== "unavailable") {
-      await enableLimitedSensorTracking();
+    } catch (e) {
+      if (__DEV__) console.log("[WalkContext] requestStepPermission error", e);
     }
   }, [
     refreshRealSteps,

@@ -19,6 +19,7 @@ import {
 import { Feather } from "@expo/vector-icons";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { useColors } from "@/hooks/useColors";
+import { SkeletonWearableCheck } from "@/components/SkeletonRows";
 import { rf } from "@/utils/responsive";
 import { androidHCService } from "@/services/steps/androidHealthConnectService";
 import {
@@ -195,14 +196,7 @@ export default function AndroidStepTrackingSetup({
     ) : null;
 
   if (uiState === "checking") {
-    return (
-      <View style={[s.content, s.centered]}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={[s.desc, { color: colors.mutedForeground, marginTop: 16 }]}>
-          Detecting compatible step sources…
-        </Text>
-      </View>
-    );
+    return <SkeletonWearableCheck />;
   }
 
   if (uiState === "granted") {

@@ -41,6 +41,7 @@ import * as Clipboard from "expo-clipboard";
 import { AppAlert } from "@/components/AppAlert";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { PublicProfileModal } from "@/components/PublicProfileModal";
+import { SkeletonList } from "@/components/SkeletonRows";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
@@ -585,6 +586,7 @@ export default function MatchmakingScreen() {
     // race:cancelled
     const onCancelled = (data: { raceId?: string }) => {
       if (data.raceId && data.raceId !== backendRaceId) return;
+      if (!screenFocusedRef.current) return;
       AppAlert.alert(
         "Room Cancelled",
         "The host cancelled this race room.",
@@ -642,6 +644,17 @@ export default function MatchmakingScreen() {
   const liveRoomRef = useRef(liveRoom);
   useEffect(() => { liveRoomRef.current = liveRoom; }, [liveRoom]);
 
+  /** Only show room-cancelled alerts while this screen is focused. */
+  const screenFocusedRef = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      screenFocusedRef.current = true;
+      return () => {
+        screenFocusedRef.current = false;
+      };
+    }, []),
+  );
+
   // ── Populate myUserIdRef from participants ────────────────────────────────
   // Gives the Pusher onRemoved closure a stable ref to compare against.
   useEffect(() => {
@@ -686,6 +699,10 @@ export default function MatchmakingScreen() {
         clearInterval(id);
         const endpoint = isHostModeRef.current ? "cancel" : "leave";
         authFetch(`/api/races/${backendRaceId}/${endpoint}`, { method: "POST" }).catch(() => {});
+        if (!screenFocusedRef.current) {
+          cancelRace();
+          return;
+        }
         const expiredTitle = "Room Expired";
         const expiredMsg = isHostModeRef.current
           ? "The 10-minute waiting window has passed. The room has been closed."
@@ -1206,7 +1223,9 @@ export default function MatchmakingScreen() {
                   showsVerticalScrollIndicator={false}
                 >
                   {inviteListLoading ? (
-                    <ActivityIndicator color="#00E676" style={{ marginTop: 32 }} />
+                    <View style={{ paddingTop: 12 }}>
+                      <SkeletonList count={5} variant="user" />
+                    </View>
                   ) : inviteList.length === 0 ? (
                     <Text style={styles.sheetEmpty}>
                       {isOnlineTab ? "No online players available." : "No friends to invite."}

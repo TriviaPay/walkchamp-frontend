@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef } from "react";
 import { Animated, Image, StyleSheet, Text, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useAuth } from "@/context/AuthContext";
 import { CHANNELS, EVENTS, subscribeToChannel } from "@/services/realtimeService";
 import CoinIcon from "@/components/CoinIcon";
@@ -110,7 +110,7 @@ function CoinRewardListener() {
 // ── Global display — renders stacked banners below the safe area ──────────────
 
 export default function CoinRewardToast() {
-  const insets = useSafeAreaInsets();
+  const { safeTop } = useSafeLayout();
   const { visible } = useTopBanner();
 
   return (
@@ -119,7 +119,7 @@ export default function CoinRewardToast() {
       {visible.length > 0 && (
         <View
           pointerEvents="none"
-          style={[wrap.container, { top: insets.top + 8 }]}
+          style={[wrap.container, { top: safeTop + 8 }]}
         >
           {visible.map((item) => (
             <BannerCard key={item.id} item={item} />

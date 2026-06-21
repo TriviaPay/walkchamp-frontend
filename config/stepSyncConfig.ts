@@ -12,7 +12,7 @@ export const STEP_SYNC_CONFIG = {
   RACE_LOCAL_POLL_MS: 1_000,
 
   /** Race — minimum time between /api/races/:id/progress calls */
-  RACE_BACKEND_SYNC_MS: 7_000,
+  RACE_BACKEND_SYNC_MS: 5_000,
 
   /** Race — sync when this many new steps accumulated AND interval elapsed */
   RACE_BACKEND_SYNC_MIN_DELTA: 1,

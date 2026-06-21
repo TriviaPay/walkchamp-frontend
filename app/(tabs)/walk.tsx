@@ -80,7 +80,7 @@ import {
 import JoinWithCodeModal, { type JoinWithCodeResult } from "@/components/JoinWithCodeModal";
 import CoinsBattleModal from "@/components/CoinsBattleModal";
 import { screenCache } from "@/utils/screenCache";
-import { SkeletonList } from "@/components/SkeletonRows";
+import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows";
 import { subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
 
 /** Set to true to re-enable the floating draggable shop icon on the Walk tab. */
@@ -1209,7 +1209,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
           {isEditing && (
             <View style={[pmStyles.editPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
               {editLoading ? (
-                <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: 16 }} />
+                <SkeletonInlineEditForm />
               ) : (
                 <>
                   {/* Full Name */}
@@ -1677,7 +1677,8 @@ export default function WalkScreen() {
   const { user, logout } = useAuth();
   const tabBarHeight = useTabBarHeight();
   const modalScrollPad = { paddingBottom: safeBottom + rs(40) };
-  const { joinRace, setActiveRace, setRaceTargetSteps, racePhase } = useRace();
+  const { joinRace, setActiveRace, setRaceTargetSteps, racePhase, userRaceSteps, raceId: activeRaceId } = useRace();
+  const isInLiveRace = racePhase === "in_race" && !!activeRaceId;
   const { counts, formatCount } = usePresence();
   const { pendingGroupInvites } = useUnread();
   const dispatch = useDispatch<AppDispatch>();
@@ -1720,6 +1721,11 @@ export default function WalkScreen() {
   const [setupModalAnimated, setSetupModalAnimated] = useState(true);
   const [playerCount, setPlayerCount] = useState<number>(10);
   const [challengeModal, setChallengeModal] = useState(false);
+  const openCreateChallengeModal = useCallback(() => {
+    setChallengeCreating(false);
+    setChallengeModalAnimated(true);
+    setChallengeModal(true);
+  }, []);
   const [challengeModalAnimated, setChallengeModalAnimated] = useState(true);
   const [roomType, setRoomType] = useState<"public" | "private">("private");
   const [challengeEntryIdx, setChallengeEntryIdx] = useState(0);
@@ -2444,6 +2450,7 @@ export default function WalkScreen() {
         setChallengeStartDate(new Date());
         setChallengeEndDate(null);
         setChallengeStartTimeIdx(0);
+        setChallengeCreating(false);
         return;
       }
 
@@ -2638,6 +2645,16 @@ export default function WalkScreen() {
               <Text style={[styles.stepsHeroValue, { color: colors.foreground }]}>{todaySteps.toLocaleString()}</Text>
               <Text style={[styles.stepsHeroLabel, { color: colors.mutedForeground }]}>steps today</Text>
             </View>
+
+            {isInLiveRace ? (
+              <View style={[styles.raceStepsRow, { borderTopColor: colors.border }]}>
+                <Feather name="flag" size={14} color={colors.primary} />
+                <Text style={[styles.raceStepsLabel, { color: colors.mutedForeground }]}>Race steps</Text>
+                <Text style={[styles.raceStepsValue, { color: colors.primary }]}>
+                  {userRaceSteps.toLocaleString()}
+                </Text>
+              </View>
+            ) : null}
 
             <View style={styles.goalRow}>
               <Text style={[styles.goalText, { color: colors.mutedForeground }]}>Goal: {todayDailyGoal.toLocaleString()} steps</Text>
@@ -3209,13 +3226,13 @@ export default function WalkScreen() {
                   return;
                 }
                 pendingRaceActionRef.current = () => {
-                  setChallengeModal(true);
+                  openCreateChallengeModal();
                   return Promise.resolve();
                 };
                 setActiveRaceModal(buildActiveRaceInfoFromStatus(anyActive.entryKey, anyActive.cs));
                 return;
               }
-              setChallengeModal(true);
+              openCreateChallengeModal();
             }}
             activeOpacity={0.88}
             style={[styles.friendsCard, { backgroundColor: colors.card, borderColor: "#A855F730" }]}
@@ -4645,6 +4662,16 @@ const styles = StyleSheet.create({
   stepsHero: { alignItems: "flex-start" },
   stepsHeroValue: { fontSize: rf(44), fontWeight: "800", letterSpacing: -2, fontVariant: ["tabular-nums"] },
   stepsHeroLabel: { fontSize: rf(13), marginTop: -2 },
+  raceStepsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingTop: 8,
+    marginTop: 4,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  raceStepsLabel: { fontSize: rf(12), flex: 1 },
+  raceStepsValue: { fontSize: rf(16), fontWeight: "800", fontVariant: ["tabular-nums"] },
   goalRow: { flexDirection: "row", justifyContent: "space-between" },
   goalText: { fontSize: rf(11) },
   goalPercent: { fontSize: rf(11), fontWeight: "700" },

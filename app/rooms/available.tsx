@@ -24,6 +24,7 @@ import { ChannelAdapter, subscribeToChannel, unsubscribeFromChannel } from "@/se
 import { rf, rs } from "@/utils/responsive";
 import { useRace } from "@/context/RaceContext";
 import { useAuth } from "@/context/AuthContext";
+import { SkeletonList } from "@/components/SkeletonRows";
 import { AppAlert } from "@/components/AppAlert";
 import ActiveRaceModal, { type ActiveRaceInfo } from "@/components/ActiveRaceModal";
 import { JoinProgressOverlay } from "@/components/RaceJoinBadge";
@@ -1828,9 +1829,8 @@ export default function AvailableRoomsScreen() {
 
           {/* Instant rooms body */}
           {loading ? (
-            <View style={s.center}>
-              <ActivityIndicator size="large" color={GREEN} />
-              <Text style={s.centerText}>Loading rooms…</Text>
+            <View style={[s.list, { paddingTop: rs(8) }]}>
+              <SkeletonList count={5} variant="race" />
             </View>
           ) : error ? (
             <View style={s.center}>
@@ -1879,9 +1879,8 @@ export default function AvailableRoomsScreen() {
       ) : (
         /* Upcoming Rooms tab */
         upcomingLoading ? (
-          <View style={[s.center, { flex: 1 }]}>
-            <ActivityIndicator color="#00B4FF" size="large" />
-            <Text style={[s.emptySub, { marginTop: 12 }]}>Loading upcoming rooms…</Text>
+          <View style={[s.list, { flex: 1, paddingTop: rs(8) }]}>
+            <SkeletonList count={4} variant="race" />
           </View>
         ) : upcomingError ? (
           <View style={[s.center, { flex: 1, paddingBottom: rs(20) }]}>

@@ -30,6 +30,7 @@ import Animated, {
   withSequence,
   withTiming, } from "react-native-reanimated";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
+import { useParticipantStepAnimator } from "@/hooks/useParticipantStepAnimator";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
@@ -1242,6 +1243,8 @@ export default function LiveRaceDetailScreen() {
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [profileInitialData, setProfileInitialData] = useState<PublicProfileInitialData | undefined>(undefined);
 
+  const { resetForRace, setConfirmedSteps, getDisplaySteps } = useParticipantStepAnimator();
+
   // ── Track-specific state ──────────────────────────────────────────────────
   const [now,                  setNow]                  = useState(Date.now());
   const [heroHeight,           setHeroHeight]           = useState(400);
@@ -1427,6 +1430,20 @@ export default function LiveRaceDetailScreen() {
       : "#00E676"
     : undefined;
 
+  // Feed confirmed step values into the animator (local user + Pusher/backend).
+  useEffect(() => {
+    if (!isActive) return;
+    for (const p of participants) {
+      const isMe =
+        p.userId === user?.id ||
+        (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase());
+      const confirmed = isMe
+        ? Math.max(p.currentSteps, localSteps)
+        : p.currentSteps;
+      setConfirmedSteps(p.userId, confirmed);
+    }
+  }, [participants, localSteps, isActive, user?.id, user?.username, setConfirmedSteps]);
+
   const sortedPlayers = useMemo(() => {
     // Deduplicate by both participant id AND userId — same user can appear
     // with two different participant rows if a reconnect creates a duplicate.
@@ -1444,10 +1461,11 @@ export default function LiveRaceDetailScreen() {
     const withEffective = unique.map((p) => {
       const isMe = p.userId === user?.id ||
         (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase());
-      const effectiveSteps = isMe && isActive && localSteps > 0
+      const effectiveSteps = isMe && isActive
         ? Math.max(p.currentSteps, localSteps)
         : p.currentSteps;
-      return { p, isMe, effectiveSteps };
+      const displaySteps = getDisplaySteps(p.userId, effectiveSteps);
+      return { p, isMe, effectiveSteps: displaySteps };
     });
     const sorted = [...withEffective].sort((a, b) => b.effectiveSteps - a.effectiveSteps);
     return sorted.slice(0, 10).map<Player>(({ p, isMe, effectiveSteps }, index) => {
@@ -1467,7 +1485,7 @@ export default function LiveRaceDetailScreen() {
         avatarVersion: p.avatarVersion ?? null,
       };
     }).sort((a, b) => a.rank - b.rank);
-  }, [participants, user?.id, user?.username, isActive, localSteps]);
+  }, [participants, user?.id, user?.username, isActive, localSteps, getDisplaySteps]);
 
   const myPlayer = useMemo(
     () => sortedPlayers.find((p) => p.isMe) ?? sortedPlayers[0] ?? null,
@@ -1516,8 +1534,8 @@ export default function LiveRaceDetailScreen() {
   // For the local user, prefer the real-time local step count (from device
   // pedometer via RaceContext) over the Pusher-delayed backend value. This
   // gives instant feedback without waiting for the server round-trip.
-  const mySteps   = myPlayer?.isMe && isActive && localSteps > 0
-    ? localSteps
+  const mySteps = myPlayer?.isMe && isActive
+    ? Math.max(myPlayer.steps, localSteps)
     : (myPlayer?.steps ?? 0);
   const myProgress = Math.min(mySteps / Math.max(race?.targetSteps ?? 1, 1), 1);
   const trackPositionText = myPlayer
@@ -1614,9 +1632,12 @@ export default function LiveRaceDetailScreen() {
     if (loadedRaceIdRef.current === raceId) return;
     loadedRaceIdRef.current = raceId;
     resetLiveRaceFetchGate(raceId);
+    prevStepsMapRef.current = {};
+    setStepDeltaFlash({});
+    resetForRace(raceId);
     setLoading(true);
     fetchRace().finally(() => setLoading(false));
-  }, [raceId, sessionToken, fetchRace]);
+  }, [raceId, sessionToken, fetchRace, resetForRace]);
 
   useEffect(() => {
     return () => {
@@ -1637,6 +1658,13 @@ export default function LiveRaceDetailScreen() {
     }, STEP_SYNC_CONFIG.LIVE_RACE_COMPLETION_POLL_MS);
     return () => clearInterval(id);
   }, [shouldPoll, fetchRaceDetails]);
+
+  // Refresh participant snapshot as soon as race goes live (don't wait for poll).
+  useEffect(() => {
+    if (isActive && raceId) {
+      void fetchRaceDetails(true);
+    }
+  }, [isActive, raceId, fetchRaceDetails]);
 
   // ── Spectator heartbeat ───────────────────────────────────────────────────
   // All viewers (participants + spectators) register every 60s for watch count.
@@ -1717,13 +1745,14 @@ export default function LiveRaceDetailScreen() {
       const newSteps = data.steps;
       const uid = data.userId ?? data.participantId ?? "";
 
-      // Calculate step delta so other participants see the "+N" animation when
-      // a background sync catches up (Issue 5: background step animation visibility).
+      // Step delta + animator feed so other participants see catch-up after background sync.
       if (uid && newSteps > 0) {
         const prev = prevStepsMapRef.current[uid] ?? 0;
         const delta = newSteps - prev;
-        // Only animate positive, meaningful deltas from a participant we've seen before.
-        if (delta > 0 && prev > 0) {
+        if (delta > 0) {
+          if (uid !== currentUserId) {
+            setConfirmedSteps(uid, newSteps);
+          }
           setStepDeltaFlash((f) => ({ ...f, [uid]: delta }));
           if (stepDeltaTimersRef.current[uid]) clearTimeout(stepDeltaTimersRef.current[uid]);
           stepDeltaTimersRef.current[uid] = setTimeout(() => {
@@ -2290,13 +2319,19 @@ export default function LiveRaceDetailScreen() {
             {FinishedBanner}
             <LiveBoardPanel
               race={race}
-              participants={isActive && currentUserId && localSteps > 0
+              participants={isActive && currentUserId
                 ? participants.map((p) =>
                     p.userId === currentUserId
                       ? { ...p, currentSteps: Math.max(p.currentSteps, localSteps) }
-                      : p
-                  )
-                : participants}
+                      : p,
+                  ).map((p) => ({
+                    ...p,
+                    currentSteps: getDisplaySteps(p.userId, p.currentSteps),
+                  }))
+                : participants.map((p) => ({
+                    ...p,
+                    currentSteps: getDisplaySteps(p.userId, p.currentSteps),
+                  }))}
               currentUserId={currentUserId}
               stepDeltas={stepDeltaFlash}
               userAvatarUrl={user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` : null}

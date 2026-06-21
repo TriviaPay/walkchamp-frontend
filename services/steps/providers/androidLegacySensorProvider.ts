@@ -153,6 +153,16 @@ export const androidLegacySensorProvider: StepProvider = {
     try {
       const available = await ped.isAvailableAsync();
       if (!available) return { status: "unavailable", providerId: null };
+
+      const { InteractionManager, AppState } =
+        require("react-native") as typeof import("react-native");
+      await new Promise<void>((resolve) => {
+        InteractionManager.runAfterInteractions(() => resolve());
+      });
+      if (AppState.currentState !== "active") {
+        await new Promise((r) => setTimeout(r, 300));
+      }
+
       const { status: before } = await ped.getPermissionsAsync();
       if (before === "granted") {
         return { status: "granted", providerId: "android_legacy_sensor" };

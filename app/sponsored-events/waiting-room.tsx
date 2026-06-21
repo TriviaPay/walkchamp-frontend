@@ -18,6 +18,7 @@ import { authFetch } from "@/utils/authFetch";
 import { useAppDispatch } from "@/store/hooks";
 import { fetchCoinBalance } from "@/store/slices/coinsSlice";
 import { rf, rs } from "@/utils/responsive";
+import { SkeletonList } from "@/components/SkeletonRows";
 import { subscribeToChannel, SPONSORED_EVENTS_CHANNEL, EVENTS } from "@/services/realtimeService";
 import { getApiBase } from "@/utils/apiUrl";
 import { getBadgeColor } from "@/utils/mockData";
@@ -240,9 +241,9 @@ export default function SponsoredWaitingRoom() {
 
   if (loading) {
     return (
-      <SafeAreaView style={s.root} edges={["top"]}>
-        <View style={s.centered}>
-          <ActivityIndicator size="large" color="#7C3AFF" />
+      <SafeAreaView style={s.root} edges={["top", "bottom"]}>
+        <View style={{ paddingHorizontal: rs(16), paddingTop: rs(12) }}>
+          <SkeletonList count={3} variant="event" />
         </View>
       </SafeAreaView>
     );
@@ -250,7 +251,7 @@ export default function SponsoredWaitingRoom() {
 
   if (!event) {
     return (
-      <SafeAreaView style={s.root} edges={["top"]}>
+      <SafeAreaView style={s.root} edges={["top", "bottom"]}>
         <View style={s.centered}>
           <Text style={s.errorText}>Event not found.</Text>
           <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
@@ -266,7 +267,7 @@ export default function SponsoredWaitingRoom() {
   const slotPct = event.maxSlots > 0 ? event.registeredCount / event.maxSlots : 0;
 
   return (
-    <SafeAreaView style={s.root} edges={["top"]}>
+    <SafeAreaView style={s.root} edges={["top", "bottom"]}>
       {/* Header */}
       <LinearGradient colors={["#100030", "#050010"]} style={s.header} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
         <TouchableOpacity onPress={() => router.back()} style={s.headerBack} activeOpacity={0.7}>

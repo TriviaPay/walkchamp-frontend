@@ -14,11 +14,12 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { authFetch } from "@/utils/authFetch";
 import { getApiBase } from "@/utils/apiUrl";
 import { rf, rs } from "@/utils/responsive";
 import { useAuth } from "@/context/AuthContext";
+import { SkeletonList } from "@/components/SkeletonRows";
 import { AppAlert } from "@/components/AppAlert";
 import { TRACK_LAYOUT_OPTIONS } from "@/constants/trackLayouts";
 import { PublicProfileModal, type PublicProfileInitialData } from "@/components/PublicProfileModal";
@@ -375,7 +376,7 @@ const dc = StyleSheet.create({
 });
 
 export default function UpcomingRoomsByDateScreen() {
-  const insets = useSafeAreaInsets();
+  const { safeTop, safeBottom } = useSafeLayout();
   const { user } = useAuth();
   const params = useLocalSearchParams<{ date: string; dateLabel: string }>();
   const targetDate = params.date ?? "";
@@ -484,7 +485,7 @@ export default function UpcomingRoomsByDateScreen() {
   }, []);
 
   return (
-    <View style={[s.container, { paddingTop: insets.top }]}>
+    <View style={[s.container, { paddingTop: safeTop, paddingBottom: safeBottom }]}>
       {/* Header */}
       <View style={s.header}>
         <TouchableOpacity onPress={() => router.back()} style={s.backBtn} activeOpacity={0.7}>
@@ -504,8 +505,8 @@ export default function UpcomingRoomsByDateScreen() {
       </View>
 
       {loading ? (
-        <View style={s.center}>
-          <ActivityIndicator color="#00B4FF" size="large" />
+        <View style={{ paddingHorizontal: rs(16), paddingTop: 12 }}>
+          <SkeletonList count={4} variant="race" />
         </View>
       ) : error ? (
         <View style={s.center}>
@@ -529,7 +530,7 @@ export default function UpcomingRoomsByDateScreen() {
         <FlatList
           data={rooms}
           keyExtractor={(item) => item.room_id}
-          contentContainerStyle={{ paddingHorizontal: rs(16), paddingTop: 12, paddingBottom: insets.bottom + 60 }}
+          contentContainerStyle={{ paddingHorizontal: rs(16), paddingTop: 12, paddingBottom: 24 }}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl

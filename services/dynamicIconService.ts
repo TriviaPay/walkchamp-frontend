@@ -64,25 +64,38 @@ const KEY_USER_ID   = "@dyn_icon_user_id";
 const KEY_DATE      = "@dyn_icon_date";
 const KEY_ENABLED   = "@dyn_icon_enabled";
 
+async function loadAlternateIconModule() {
+  if (Platform.OS === "web") return null;
+  const Constants = (await import("expo-constants")).default;
+  if ((Constants.executionEnvironment as string) === "storeClient") {
+    console.log("[DynamicIcon] Expo Go — skipping native icon switch");
+    return null;
+  }
+  const mod = await import("expo-alternate-app-icons");
+  if (!mod.supportsAlternateIcons) {
+    console.log("[DynamicIcon] device does not support alternate icons");
+    return null;
+  }
+  return mod;
+}
+
+async function getActiveIconName(): Promise<string | null> {
+  try {
+    const mod = await loadAlternateIconModule();
+    return mod?.getAppIconName?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function setNativeIcon(iconName: string | null): Promise<boolean> {
   if (Platform.OS === "web") {
     console.log("[DynamicIcon] unsupported platform: web");
     return false;
   }
   try {
-    // expo-alternate-app-icons requires a native (non-Expo-Go) build.
-    // In Expo Go, TurboModuleRegistry.getEnforcing throws a fatal uncatchable
-    // error when the package is imported — guard before the import.
-    const Constants = (await import("expo-constants")).default;
-    if ((Constants.executionEnvironment as string) === "storeClient") {
-      console.log("[DynamicIcon] Expo Go — skipping native icon switch");
-      return false;
-    }
-    const mod = await import("expo-alternate-app-icons");
-    if (!mod.supportsAlternateIcons) {
-      console.log("[DynamicIcon] device does not support alternate icons");
-      return false;
-    }
+    const mod = await loadAlternateIconModule();
+    if (!mod) return false;
     await mod.setAlternateAppIcon(iconName);
     console.log("[DynamicIcon] icon set success:", iconName ?? "default");
     return true;
@@ -173,16 +186,33 @@ export const dynamicIconService = {
       const iconName  = ICON_FOR_MILESTONE[milestone];
       console.log("[DynamicIcon] calculated milestone:", milestone);
 
-      const [storedMilestone, storedDate, storedUser] = await Promise.all([
-        AsyncStorage.getItem(KEY_MILESTONE),
-        AsyncStorage.getItem(KEY_DATE),
-        AsyncStorage.getItem(KEY_USER_ID),
-      ]);
+      const [storedMilestone, storedDate, storedUser, activeIconName] =
+        await Promise.all([
+          AsyncStorage.getItem(KEY_MILESTONE),
+          AsyncStorage.getItem(KEY_DATE),
+          AsyncStorage.getItem(KEY_USER_ID),
+          getActiveIconName(),
+        ]);
 
       const userMatch = !opts?.userId || storedUser === opts.userId;
-      if (userMatch && storedDate === today && storedMilestone === String(milestone)) {
+      const cacheMatches =
+        userMatch &&
+        storedDate === today &&
+        storedMilestone === String(milestone);
+      const nativeMatches = activeIconName === iconName;
+
+      if (cacheMatches && nativeMatches) {
         console.log("[DynamicIcon] icon already correct:", iconName);
         return;
+      }
+
+      if (cacheMatches && !nativeMatches) {
+        console.log(
+          "[DynamicIcon] cache ok but launcher is",
+          activeIconName ?? "MainActivity",
+          "— re-applying",
+          iconName,
+        );
       }
 
       console.log("[DynamicIcon] setting icon:", iconName);

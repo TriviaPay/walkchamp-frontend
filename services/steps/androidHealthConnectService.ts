@@ -24,6 +24,9 @@
  */
 
 import type { Permission } from "react-native-health-connect";
+import { storageGet, storageSet } from "@/utils/storage";
+
+const HC_MANIFEST_BLOCKED_KEY = "hc_manifest_read_steps_blocked" as never;
 
 export type HCAvailability =
   | "available"
@@ -125,6 +128,31 @@ function loadHCModule(): HCModule | null {
 // ── Module state ──────────────────────────────────────────────────────────────
 
 let _readPermissionBlocked = false;
+/** True when APK manifest is missing READ_STEPS — native HC calls can crash. */
+let _manifestBlockedLoaded = false;
+
+function markHcNativeError(detail: unknown): void {
+  const msg = String(detail);
+  if (msg.includes("not declared")) {
+    _readPermissionBlocked = true;
+    void storageSet(HC_MANIFEST_BLOCKED_KEY, true);
+    hcLog("READ_STEPS missing from manifest — HC native calls disabled");
+  }
+}
+
+async function loadManifestBlockedFlag(): Promise<void> {
+  if (_manifestBlockedLoaded) return;
+  _manifestBlockedLoaded = true;
+  try {
+    const stored = await storageGet<boolean>(HC_MANIFEST_BLOCKED_KEY);
+    if (stored) {
+      _readPermissionBlocked = true;
+      hcLog("READ_STEPS manifest blocked (cached)");
+    }
+  } catch {
+    /* ignore */
+  }
+}
 let _initialized = false;
 let _availability: HCAvailability = "not_supported";
 /** True after requestPermission() was shown at least once this session. */
@@ -280,6 +308,7 @@ export const androidHCService = {
    * Safe to call multiple times — re-runs permission check each call.
    */
   async initialize(): Promise<HCInitResult> {
+    await loadManifestBlockedFlag();
     if (isExpoGo()) {
       return {
         availability: "not_supported",
@@ -377,6 +406,10 @@ export const androidHCService = {
    */
   async requestPermission(): Promise<HCPermStatus> {
     if (isExpoGo()) return "unavailable";
+    if (_readPermissionBlocked) {
+      hcLog("requestPermission skipped — READ_STEPS not in manifest");
+      return "unavailable";
+    }
     if (_permissionRequestInFlight) {
       hcLog("requestPermission skipped — already in flight");
       return this.getPermissionStatus();
@@ -469,6 +502,7 @@ export const androidHCService = {
       hcLog("READ_STEPS not granted — user can retry Enable Step Tracking");
       return "denied";
     } catch (e) {
+      markHcNativeError(e);
       hcLog("requestPermission error", e);
       return "denied";
     } finally {
@@ -486,6 +520,7 @@ export const androidHCService = {
    */
   async readStepsForRange(start: Date, end: Date): Promise<StepReadResult> {
     const fallback = emptyResult(start, end);
+    if (_readPermissionBlocked) return fallback;
     if (!_initialized) return fallback;
 
     const hc = loadHCModule();
@@ -526,13 +561,7 @@ export const androidHCService = {
         timezone: getUserTimezone(),
       };
     } catch (e) {
-      const msg = String(e);
-      if (
-        msg.includes("READ_STEPS") ||
-        msg.includes("SecurityException")
-      ) {
-        _readPermissionBlocked = true;
-      }
+      markHcNativeError(e);
       hcLog("readStepsForRange error", e);
       return fallback;
     }

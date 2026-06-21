@@ -15,6 +15,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useColors } from "@/hooks/useColors";
+import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { getValidSession } from "@/services/authService";
 import { Image } from "expo-image";
 import CoinsStoreModal from "@/components/CoinsStoreModal";
@@ -233,6 +234,7 @@ export interface CoinsBattleModalProps {
 
 export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsBattleModalProps) {
   const colors = useColors();
+  const { safeTop, safeBottom } = useSafeLayout();
   const dispatch = useDispatch<AppDispatch>();
   const { layouts: ownedLayouts } = useOwnedTrackLayouts();
   const { width: SCREEN_W } = useWindowDimensions();
@@ -332,7 +334,7 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
     >
       <View style={[styles.root, { backgroundColor: colors.background }]}>
         {/* Header */}
-        <View style={[styles.header, { borderBottomColor: colors.border }]}>
+        <View style={[styles.header, { borderBottomColor: colors.border, paddingTop: safeTop + 12 }]}>
           <Text style={[styles.headerTitle, { color: colors.foreground }]}>Coins Battle</Text>
           <TouchableOpacity onPress={onClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
             <Feather name="x" size={22} color={colors.foreground} />
@@ -496,7 +498,7 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
         </ScrollView>
 
         {/* Footer */}
-        <View style={[styles.footer, { borderTopColor: colors.border, paddingBottom: 32 }]}>
+        <View style={[styles.footer, { borderTopColor: colors.border, paddingBottom: safeBottom + 16 }]}>
           <TouchableOpacity
             onPress={handleHost}
             activeOpacity={0.85}

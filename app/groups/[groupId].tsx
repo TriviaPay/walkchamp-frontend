@@ -15,7 +15,8 @@ import { getLocalDateStr } from "@/utils/timezone";
 import { getApiBase } from "@/utils/apiUrl";
 import { getStoredSession } from "@/services/authService";
 import { subscribeToChannel } from "@/services/realtimeService";
-import { useWalk } from "@/context/WalkContext";
+import { SkeletonGroupDetailScreen } from "@/components/SkeletonRows";
+import { useSafeLayout } from "@/hooks/useSafeLayout";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
@@ -322,6 +323,7 @@ function GroupImageCircle({ groupId, hasImage, g1, g2, size = 52, onPress }: {
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function GroupDetailScreen() {
   const router = useRouter();
+  const { safeBottom } = useSafeLayout();
   const { groupId } = useLocalSearchParams<{ groupId: string }>();
   const { todaySteps: liveSteps } = useWalk();
 
@@ -400,12 +402,7 @@ export default function GroupDetailScreen() {
   }, [group?.id, todayLB]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) {
-    return (
-      <View style={[s.loadingWrap, { backgroundColor: T.bg }]}>
-        <ActivityIndicator size="large" color={T.cyan} />
-        <Text style={{ color: T.secondary, marginTop: 12, fontSize: 14 }}>Loading group...</Text>
-      </View>
-    );
+    return <SkeletonGroupDetailScreen />;
   }
   if (!group) return null;
 
@@ -431,7 +428,7 @@ export default function GroupDetailScreen() {
     : 0;
 
   return (
-    <View style={[s.root, { backgroundColor: T.bg }]}>
+    <View style={[s.root, { backgroundColor: T.bg, paddingBottom: safeBottom }]}>
       {/* ── Hero gradient header ───────────────────────────────────────────── */}
       <LinearGradient
         colors={[theme.g1 + "30", theme.g2 + "15", T.bg]}
@@ -610,7 +607,7 @@ export default function GroupDetailScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(true); }} tintColor={T.cyan} />}
       >
-        <View style={{ paddingBottom: 48 }}>
+        <View style={{ paddingBottom: 24 }}>
           {activeTab === "today" && (
             <TodayTab
               todayLB={adjustedTodayLB}

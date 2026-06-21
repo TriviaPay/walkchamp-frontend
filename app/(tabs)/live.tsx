@@ -1,6 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { BlueShoe } from "@/components/BlueShoe";
-import { SkeletonList } from "@/components/SkeletonRows";
+import { SkeletonList, SkeletonRaceRow } from "@/components/SkeletonRows";
 import { screenCache } from "@/utils/screenCache";
 import { router } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1363,7 +1363,7 @@ export default function LiveTab() {
           onEndReachedThreshold={0.3}
           ListFooterComponent={
             loadingMore
-              ? <ActivityIndicator color={NEON_PURPLE} style={{ marginVertical: 16 }} />
+              ? <View style={{ paddingVertical: 8 }}><SkeletonRaceRow /></View>
               : null
           }
           renderItem={renderListItem}

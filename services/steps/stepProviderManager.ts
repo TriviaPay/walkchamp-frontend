@@ -35,13 +35,27 @@ function devLog(msg: string, ...args: unknown[]): void {
 }
 
 async function probeHcManifestBlocked(): Promise<boolean> {
-  if (androidHCService.isRangeReadBlocked()) return true;
-  try {
-    await androidHCService.readTodaySteps();
-  } catch {
-    /* readTodaySteps sets _readPermissionBlocked on SecurityException */
-  }
   return androidHCService.isRangeReadBlocked();
+}
+
+async function ensureActivityRecognitionPermission(): Promise<void> {
+  try {
+    const { InteractionManager, AppState } =
+      require("react-native") as typeof import("react-native");
+    await new Promise<void>((resolve) => {
+      InteractionManager.runAfterInteractions(() => resolve());
+    });
+    if (AppState.currentState !== "active") {
+      await new Promise((r) => setTimeout(r, 350));
+    }
+    const sensors = require("expo-sensors") as typeof import("expo-sensors");
+    const { status: before } = await sensors.Pedometer.getPermissionsAsync();
+    if (before !== "granted") {
+      await sensors.Pedometer.requestPermissionsAsync();
+    }
+  } catch (e) {
+    devLog("ACTIVITY_RECOGNITION request error", e);
+  }
 }
 
 async function trySelectAndroidProvider(
@@ -230,29 +244,13 @@ export const stepProviderManager = {
       return androidLegacySensorProvider.requestPermission();
     }
 
-    await this.initialize(true);
-
     if (Platform.OS === "android") {
-      const init = await androidHCService.initialize();
-      const hcBlocked = await probeHcManifestBlocked();
-      const hcUsable =
-        init.initialized &&
-        init.availability === "available" &&
-        !hcBlocked;
+      const hcBlocked = androidHCService.isRangeReadBlocked();
       const legacyAvail = await androidLegacySensorProvider.isAvailable();
-      const hcPerm = hcUsable
-        ? await androidHealthConnectProvider.getPermissionStatus()
-        : "unavailable";
 
-      // Prefer legacy when HC is blocked, unavailable, or not yet granted.
-      if (legacyAvail && (!hcUsable || hcPerm !== "granted")) {
-        devLog(
-          hcBlocked
-            ? "READ_STEPS not declared — using Android Steps"
-            : hcPerm !== "granted"
-              ? "HC not granted — using Android Steps"
-              : `Health Connect skipped (${init.availability}) — using Android Steps`,
-        );
+      // Safe path first — legacy sensor never calls Health Connect native UI.
+      if (legacyAvail) {
+        await ensureActivityRecognitionPermission();
         const legacyResult = await androidLegacySensorProvider.requestPermission();
         if (legacyResult.status === "granted") {
           _activeProvider = androidLegacySensorProvider;
@@ -261,16 +259,27 @@ export const stepProviderManager = {
             message: "Step tracking is ready using Android Steps.",
           };
         }
-        if (!hcUsable || hcBlocked) return legacyResult;
+        if (hcBlocked) {
+          return legacyResult;
+        }
       }
 
-      if (hcUsable) {
-        const hcResult = await androidHealthConnectProvider.requestPermission();
-        if (hcResult.status === "granted") {
-          _activeProvider = androidHealthConnectProvider;
-          return { ...hcResult, message: "Step tracking is ready." };
+      if (!hcBlocked) {
+        try {
+          const init = await androidHCService.initialize();
+          const hcUsable =
+            init.initialized && init.availability === "available";
+          if (hcUsable) {
+            const hcResult = await androidHealthConnectProvider.requestPermission();
+            if (hcResult.status === "granted") {
+              _activeProvider = androidHealthConnectProvider;
+              return { ...hcResult, message: "Step tracking is ready." };
+            }
+            devLog("Health Connect permission not granted — trying legacy fallback");
+          }
+        } catch (e) {
+          devLog("Health Connect permission request failed — using legacy", e);
         }
-        devLog("Health Connect permission not granted — trying legacy fallback");
       }
 
       if (legacyAvail) {
@@ -292,6 +301,7 @@ export const stepProviderManager = {
       };
     }
 
+    await this.initialize(true);
     const result = await iosHealthKitProvider.requestPermission();
     if (result.status === "granted") {
       _activeProvider = iosHealthKitProvider;

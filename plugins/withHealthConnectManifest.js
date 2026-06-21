@@ -19,28 +19,13 @@ function getQueriesBlock(manifest) {
   return block;
 }
 
-function ensureUsesPermission(manifest, name) {
-  manifest["uses-permission"] = ensureArray(manifest["uses-permission"]);
-  const exists = manifest["uses-permission"].some(
-    (p) => p.$?.["android:name"] === name,
-  );
-  if (!exists) {
-    manifest["uses-permission"].push({ $: { "android:name": name } });
-  }
-}
-
 /**
  * Health Connect manifest entries so Walk Champ appears in
  * Health Connect > App permissions (activity-alias + package visibility).
- * Also declares READ_STEPS — required at runtime; app.json permissions alone
- * may not merge into the final manifest on all Expo prebuild paths.
  */
 function withHealthConnectManifest(config) {
   return withAndroidManifest(config, (cfg) => {
     const manifest = cfg.modResults.manifest;
-
-    ensureUsesPermission(manifest, "android.permission.health.READ_STEPS");
-
     const application = manifest.application?.[0];
     if (!application) return cfg;
 

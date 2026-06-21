@@ -14,6 +14,7 @@ import { getApiBase } from "@/utils/apiUrl";
 import { getLocalDateStr } from "@/utils/timezone";
 import CoinIcon from "@/components/CoinIcon";
 import { useColors } from "@/hooks/useColors";
+import { SkeletonEarnTaskCard } from "@/components/SkeletonRows";
 
 const blueShoe = require("../assets/images/blue-shoe.png") as number;
 
@@ -260,9 +261,10 @@ export default function EarnTasksSection({ visible }: Props) {
 
   if (loading && groups.length === 0) {
     return (
-      <View style={s.center}>
-        <ActivityIndicator color="#22C55E" />
-        <Text style={[s.loadingTxt, { color: colors.mutedForeground }]}>Loading tasks…</Text>
+      <View style={{ gap: 10 }}>
+        {Array.from({ length: 3 }).map((_, i) => (
+          <SkeletonEarnTaskCard key={i} />
+        ))}
       </View>
     );
   }

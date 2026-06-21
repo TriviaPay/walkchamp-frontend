@@ -632,17 +632,31 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       // dailySteps / lifetimeSteps are tracked separately in WalkContext — never mixed here.
       const applyRealSteps = (rawSteps: number) => {
         // Guard: if this callback belongs to a previous race (myGen is stale), discard it.
-        // This is the primary defence against step carry-over when a user forfeits race A
-        // and immediately joins race B — the old CMPedometer callback fires one last time
-        // with race A's cumulative steps, and this check prevents them from crediting race B.
         if (subscriptionGenRef.current !== myGen) return;
         if (raceEndedRef.current) return;
-        const antiReg = Math.max(userStepsRef.current, rawSteps);
+
+        let steps = Math.max(0, rawSteps);
+        const raceElapsedMs = raceStart ? Date.now() - raceStart.getTime() : 0;
+        const MAX_FIRST_DELTA = 60;
+        if (
+          userStepsRef.current === 0 &&
+          steps > MAX_FIRST_DELTA &&
+          raceElapsedMs < 20_000
+        ) {
+          if (__DEV__) {
+            console.log(
+              `[RaceStepsRealtime] clamping first spike ${steps} → ${MAX_FIRST_DELTA}`,
+            );
+          }
+          steps = MAX_FIRST_DELTA;
+        }
+
+        const antiReg = Math.max(userStepsRef.current, steps);
         if (__DEV__) {
-          if (rawSteps < userStepsRef.current)
-            if (__DEV__) console.log(`[RaceStepsRealtime] ignored lower value: ${rawSteps} (keeping ${userStepsRef.current})`);
+          if (steps < userStepsRef.current)
+            if (__DEV__) console.log(`[RaceStepsRealtime] ignored lower value: ${steps} (keeping ${userStepsRef.current})`);
           else
-            if (__DEV__) console.log(`[RaceStepsRealtime] calculated race_steps: ${rawSteps} previous: ${userStepsRef.current}`);
+            if (__DEV__) console.log(`[RaceStepsRealtime] calculated race_steps: ${steps} previous: ${userStepsRef.current}`);
         }
         userStepsRef.current = antiReg;
         setUserRaceSteps(antiReg);
@@ -747,9 +761,8 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
             : 0;
 
         if (providerId === "ios_healthkit") {
-          await stepProviderManager.startWatchingSteps((result) => {
-            applyRealSteps(result.steps);
-          });
+          // iOS race steps come from HealthKit range queries via stepPollingService only.
+          // watchStepCount is daily-cumulative since subscription — not used for races.
         }
 
         if (raceIdRef.current && baseline > 0 && providerId === "android_health_connect") {
@@ -762,6 +775,18 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         }
 
         await restartRacePolling(userId, baseline);
+
+        // Immediate read so UI shows 0+ steps without waiting for first poll tick.
+        if (raceIdRef.current && raceStart) {
+          const snap = await stepProviderManager.getRaceSteps(
+            raceIdRef.current,
+            raceStart,
+            userId,
+          );
+          if (snap && subscriptionGenRef.current === myGen && !raceEndedRef.current) {
+            applyRealSteps(snap.steps);
+          }
+        }
       })();
     }
 
@@ -1027,21 +1052,25 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     stepProviderManager.stopWatchingSteps();
   }, []);
 
-  // ── AppState listener: sync steps immediately when app comes to foreground ────
-  // Covers the case where the OS throttled/suspended the step-sync interval while
-  // the app was in the background. On resume, push the current step count so the
-  // backend is up-to-date before any UI refresh fetches participant data.
+  // ── AppState listener: flush steps on background + on foreground resume ───────
+  // Background flush lets other participants see step progress when this user closes
+  // the app mid-race. Foreground flush catches up after OS throttled sync intervals.
   useEffect(() => {
     const sub = AppState.addEventListener("change", (nextState) => {
-      if (nextState === "active" && raceIdRef.current && !raceEndedRef.current) {
-        const steps = userStepsRef.current;
-        if (steps > 0) {
-          void raceStepSyncService.flush(
-            raceIdRef.current,
-            steps,
-            stepProviderManager.toRaceProgressSource(),
-          );
-        }
+      if (!raceIdRef.current || raceEndedRef.current) return;
+      const steps = userStepsRef.current;
+      if (steps <= 0) return;
+
+      if (
+        nextState === "background" ||
+        nextState === "inactive" ||
+        nextState === "active"
+      ) {
+        void raceStepSyncService.flush(
+          raceIdRef.current,
+          steps,
+          stepProviderManager.toRaceProgressSource(),
+        );
       }
     });
     return () => sub.remove();

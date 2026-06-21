@@ -11,10 +11,12 @@ import {
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
+import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { getValidSession } from "@/services/authService";
 import { getLocalDateStr } from "@/utils/timezone";
 import CoinIcon from "@/components/CoinIcon";
 import { Image } from "react-native";
+import { SkeletonCoinsBalance } from "@/components/SkeletonRows";
 import EarnTasksSection from "@/components/EarnTasksSection";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
@@ -36,6 +38,7 @@ interface Props {
 
 export default function CoinsInfoModal({ visible, onClose, onOpenStore }: Props) {
   const colors = useColors();
+  const { safeTop, safeBottom } = useSafeLayout();
   const [summary, setSummary] = useState<CoinSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -70,9 +73,9 @@ export default function CoinsInfoModal({ visible, onClose, onOpenStore }: Props)
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={[styles.root, { backgroundColor: colors.background }]}>
+      <View style={[styles.root, { backgroundColor: colors.background, paddingBottom: safeBottom }]}>
         {/* Header */}
-        <View style={[styles.header, { borderBottomColor: colors.border }]}>
+        <View style={[styles.header, { borderBottomColor: colors.border, paddingTop: safeTop + 8 }]}>
           <View style={styles.headerLeft}>
             <CoinIcon size="medium" />
             <Text style={[styles.headerTitle, { color: colors.foreground }]}>Coins</Text>
@@ -82,14 +85,14 @@ export default function CoinsInfoModal({ visible, onClose, onOpenStore }: Props)
           </TouchableOpacity>
         </View>
 
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.scroll, { paddingBottom: 24 }]}>
           {/* Balance card */}
           <LinearGradient
             colors={["#B8860B22", "#FFD70012"]}
             style={[styles.balanceCard, { borderColor: colors.border }]}
           >
             {loading ? (
-              <ActivityIndicator color={colors.gold} style={{ marginVertical: 24 }} />
+              <SkeletonCoinsBalance />
             ) : error ? (
               <View style={styles.errorRow}>
                 <Feather name="alert-circle" size={16} color={colors.destructive} />
@@ -149,8 +152,6 @@ export default function CoinsInfoModal({ visible, onClose, onOpenStore }: Props)
 
           {/* How to earn — grouped difficulty cards */}
           <EarnTasksSection visible={visible} />
-
-          <View style={styles.bottomPad} />
         </ScrollView>
       </View>
     </Modal>
@@ -179,5 +180,4 @@ const styles = StyleSheet.create({
   storeBtn: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 14, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 24 },
   storeBtnIcon: { width: 28, height: 28 },
   storeBtnText: { flex: 1, fontSize: 15, fontWeight: "700" },
-  bottomPad: { height: 40 },
 });

@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef, memo } from "
 import {
   ActivityIndicator,
   ImageBackground,
+  InteractionManager,
   Modal,
   Platform,
   RefreshControl,
@@ -52,6 +53,7 @@ import {
 } from "@/services/iapService";
 import type { Product } from "react-native-iap";
 import { authFetch } from "@/utils/authFetch";
+import { SkeletonList, SkeletonBalanceValue, SkeletonPriceTag } from "@/components/SkeletonRows";
 import BannerAdView, { BANNER_SLOT_HEIGHT } from "@/components/BannerAdView";
 import {
   preloadRewardedAd,
@@ -115,6 +117,14 @@ const COIN_PACK_FALLBACKS = COIN_IAP_PRODUCTS.map((p) => ({
   coins: p.coins,
   name: p.name,
 }));
+const MAX_DAILY_AD_REWARDS = 5;
+
+type BalanceApiResponse = {
+  currentBalance?: number;
+  adsToday?: number;
+  adsRemaining?: number;
+  maxDailyAdRewards?: number;
+};
 
 function iapLogMissingProducts(missing: string[]): void {
   if (__DEV__) console.log("[IAP] store missing product IDs:", missing.join(", "));
@@ -126,12 +136,13 @@ const StoreBannerFooter = memo(function StoreBannerFooter() {
     <View
       style={{
         width: "100%",
-        minHeight: BANNER_SLOT_HEIGHT,
+        height: BANNER_SLOT_HEIGHT,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: "#1E2640",
         backgroundColor: "#0B0D1A",
         alignItems: "center",
         justifyContent: "center",
+        overflow: "hidden",
       }}
       collapsable={false}
     >
@@ -201,7 +212,13 @@ function useMicPassEntitlement(visible: boolean) {
     } catch { } finally { setLoadingMic(false); }
   }, []);
 
-  useEffect(() => { if (visible) void fetchMicEntitlement(); }, [visible, fetchMicEntitlement]);
+  useEffect(() => {
+    if (!visible) return;
+    const task = InteractionManager.runAfterInteractions(() => {
+      void fetchMicEntitlement();
+    });
+    return () => task.cancel();
+  }, [visible, fetchMicEntitlement]);
 
   return { hasMicPass, setHasMicPass, loadingMic, fetchMicEntitlement };
 }
@@ -332,7 +349,7 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
     [tabScrollPaddingBottom],
   );
   const { themes, coinBalance, loading: themesLoading, error: themesError, purchaseError } = useAppSelector((st) => st.trackThemes);
-  const { purchaseSummary, summaryLoading } = useAppSelector((st) => st.coins);
+  const { purchaseSummary, summaryLoading, balance: reduxBalance } = useAppSelector((st) => st.coins);
 
   const [activeTab, setActiveTab] = useState<ShopTab>("coins");
   const [balance, setBalance]               = useState<number | null>(null);
@@ -362,7 +379,7 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
 
   const { hasMicPass, setHasMicPass, loadingMic, fetchMicEntitlement } = useMicPassEntitlement(visible);
 
-  // Fetch balance
+  // Fetch balance + daily ad-watch count
   const fetchBalance = useCallback(async () => {
     setLoadingBalance(true);
     try {
@@ -370,11 +387,20 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
       if (!session) return;
       const res = await fetch(`${getApiBase()}/api/coins/balance?localDate=${getLocalDateStr()}`, { headers: { Authorization: `Bearer ${session}` } });
       if (res.ok) {
-        const data = await res.json() as { currentBalance?: number };
-        setBalance(data.currentBalance ?? 0);
+        const data = await res.json() as BalanceApiResponse;
+        if (data.currentBalance != null) setBalance(data.currentBalance);
+        if (typeof data.adsToday === "number") setAdsToday(data.adsToday);
       }
     } catch { } finally { setLoadingBalance(false); }
   }, []);
+
+  const refreshCoinStoreState = useCallback(async () => {
+    await Promise.all([
+      fetchBalance(),
+      dispatch(fetchCoinBalance()),
+      dispatch(fetchPurchaseSummary()),
+    ]);
+  }, [fetchBalance, dispatch]);
 
   // Build purchase listeners callback object (stable ref — does not itself trigger useEffect)
   const listenersCallbacks = useCallback(() => ({
@@ -469,7 +495,17 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
     }
   }, [setHasMicPass, listenersCallbacks]);
 
-  // Sync Redux balance into local display state (no refetch loop).
+  // Sync Redux balance + ad count into local display (Pusher / other tabs).
+  useEffect(() => {
+    if (!visible) return;
+    if (reduxBalance?.currentBalance != null) {
+      setBalance((prev) => (prev === reduxBalance.currentBalance ? prev : reduxBalance.currentBalance));
+    }
+    if (typeof reduxBalance?.adsToday === "number") {
+      setAdsToday((prev) => (prev === reduxBalance.adsToday ? prev : reduxBalance.adsToday!));
+    }
+  }, [visible, reduxBalance?.currentBalance, reduxBalance?.adsToday]);
+
   useEffect(() => {
     if (!visible || coinBalance == null) return;
     setBalance((prev) => (prev === coinBalance ? prev : coinBalance));
@@ -480,28 +516,28 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
 
     if (!storeBootstrappedRef.current) {
       storeBootstrappedRef.current = true;
-      void fetchBalance();
-      void dispatch(fetchTrackThemes());
-      void dispatch(fetchPurchaseSummary());
-      void loadProducts();
-      preloadRewardedAd();
+      // Paint skeleton UI first — defer store/IAP work so the tab stays scrollable.
+      const task = InteractionManager.runAfterInteractions(() => {
+        void fetchBalance();
+        void dispatch(fetchTrackThemes());
+        void dispatch(fetchPurchaseSummary());
+        void loadProducts();
+        preloadRewardedAd();
+      });
+      return () => task.cancel();
     }
   // Bootstrap exactly once per modal/screen mount — never on ad or balance updates.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
   const handleRefreshCoins = useCallback(async () => {
     setRefreshingCoins(true);
-    await Promise.all([
-      fetchBalance(),
-      dispatch(fetchCoinBalance()),
-      dispatch(fetchPurchaseSummary()),
-    ]);
+    await refreshCoinStoreState();
     setRefreshingCoins(false);
-  }, [fetchBalance, dispatch]);
+  }, [refreshCoinStoreState]);
 
   // ── Earn Free Coins via rewarded ad ────────────────────────────────────────
   const handleEarnFreeCoins = useCallback(async () => {
-    if (watchingAd) return;
+    if (watchingAd || adsToday >= MAX_DAILY_AD_REWARDS) return;
 
     if (!isRewardedAdReady()) {
       if (!isNativeAdsAvailable()) {
@@ -510,7 +546,6 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
           "Rewarded ads require an installed APK/IPA build with native ads enabled.",
         );
       } else {
-        // Module loaded but ad hasn't finished loading yet
         AppAlert.alert(
           "Ad Not Ready",
           "The ad is still loading. Please wait a moment and try again.",
@@ -539,34 +574,52 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
         };
 
         if (!res.ok) {
+          if (typeof data.ads_today === "number") setAdsToday(data.ads_today);
+          const msg = data.error ?? "Failed to claim coins.";
           if (data.code === "AD_REWARD_LIMIT") {
-            AppAlert.alert("Limit Reached", data.error ?? "You've reached today's ad reward limit.");
+            AppAlert.alert("Limit Reached", msg);
           } else {
-            AppAlert.alert("Error", data.error ?? "Failed to claim coins.");
+            AppAlert.alert("Could Not Claim Coins", msg);
           }
-          return;
+          throw new Error(msg);
         }
 
         const awarded = data.coins_awarded ?? 0;
+        if (data.new_balance != null) setBalance(data.new_balance);
+        if (typeof data.ads_today === "number") setAdsToday(data.ads_today);
+
+        onCoinsAdded?.();
+        await refreshCoinStoreState();
+
         if (awarded > 0) {
-          if (data.new_balance != null) setBalance(data.new_balance);
-          setAdsToday(data.ads_today ?? 0);
-          onCoinsAdded?.();
-          void dispatch(fetchCoinBalance());
           AppAlert.alert(
             "🎉 Coins Earned!",
             `+${awarded} coins added to your balance! (${data.ads_remaining ?? 0} ads remaining today)`,
+          );
+        } else {
+          AppAlert.alert(
+            "Already Credited",
+            "This ad reward was already applied to your account.",
           );
         }
       });
 
       if (result === "skipped") {
         AppAlert.alert("Ad Skipped", "Watch the full ad to earn coins.");
+      } else if (result === "error") {
+        AppAlert.alert(
+          "Could Not Claim Coins",
+          "You watched the ad but we couldn't credit coins. Pull to refresh and try again.",
+        );
+        await refreshCoinStoreState();
       }
+    } catch {
+      await refreshCoinStoreState();
     } finally {
       setWatchingAd(false);
+      preloadRewardedAd();
     }
-  }, [watchingAd, onCoinsAdded, dispatch]);
+  }, [watchingAd, adsToday, onCoinsAdded, refreshCoinStoreState]);
 
   // Full cleanup on unmount
   useEffect(() => {
@@ -701,10 +754,22 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
   const micPassPrice = premiumProduct?.localizedPrice ?? null;
   const buyingMic = buyingProductId === MIC_PASS_PRODUCT_ID;
 
-  const renderStorePrice = (price: string | null, isBuying: boolean, accent = "#6B7280") => {
+  const displayBalance = balance ?? coinBalance;
+  const showBalanceSkeleton = displayBalance == null && (loadingBalance || !iapReady);
+  const showPackSkeleton = !iapReady && coinProducts.length === 0 && !iapError;
+  const coinPacksToRender =
+    coinProducts.length > 0
+      ? coinProducts
+      : showPackSkeleton
+        ? []
+        : iapError
+          ? []
+          : COIN_PACK_FALLBACKS;
+
+  const renderStorePrice = (price: string | null, isBuying: boolean) => {
     if (isBuying) return <ActivityIndicator size="small" color="#000" />;
     if (price) return <Text style={s.priceBtnText}>{price}</Text>;
-    if (iapLoading && !iapReady) return <ActivityIndicator size="small" color={accent} />;
+    if (!iapReady) return <SkeletonPriceTag />;
     return <Text style={[s.priceBtnText, { fontSize: rf(11), color: "#9CA3AF" }]}>—</Text>;
   };
 
@@ -779,17 +844,17 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
             <View style={[s.balanceRow, { marginHorizontal: 0, marginTop: 0 }]}>
               <CoinIcon size="medium" />
               <Text style={s.balanceLabel}>Your Balance</Text>
-              <Text style={s.balanceValue}>{(balance ?? coinBalance)?.toLocaleString() ?? "--"}</Text>
+              {showBalanceSkeleton ? (
+                <SkeletonBalanceValue />
+              ) : (
+                <Text style={s.balanceValue}>{displayBalance?.toLocaleString() ?? "—"}</Text>
+              )}
             </View>
 
             <Text style={s.sectionLabel}>COIN PACKS</Text>
 
-            {/* IAP loading state */}
-            {iapLoading && coinProducts.length === 0 && (
-              <View style={s.iapLoadingRow}>
-                <ActivityIndicator size="small" color="#FFD700" />
-                <Text style={s.iapLoadingTxt}>Loading prices…</Text>
-              </View>
+            {showPackSkeleton && (
+              <SkeletonList count={3} variant="pack" />
             )}
 
             {/* IAP error with retry */}
@@ -804,11 +869,11 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
             )}
 
             {/* Coin pack rows — live store prices when available */}
-            {(coinProducts.length > 0 ? coinProducts : (iapError ? [] : COIN_PACK_FALLBACKS)).map((pack) => {
+            {coinPacksToRender.map((pack) => {
               const liveProduct = coinProducts.find((p) => p.productId === pack.productId);
               const priceLabel = liveProduct?.localizedPrice ?? null;
               const isBuying = buyingProductId === pack.productId;
-              const isDisabled = !!buyingProductId || (iapLoading && !iapReady) || !priceLabel;
+              const isDisabled = !!buyingProductId || !iapReady || !priceLabel;
 
               return (
                 <View key={pack.productId} style={s.packCard}>
@@ -829,28 +894,34 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
               );
             })}
 
+            {(() => {
+              const adsLimitReached = adsToday >= MAX_DAILY_AD_REWARDS;
+              const adsLeft = Math.max(0, MAX_DAILY_AD_REWARDS - adsToday);
+              return (
             <TouchableOpacity
-              style={[s.freeCard, watchingAd && { opacity: 0.6 }]}
+              style={[s.freeCard, (watchingAd || adsLimitReached) && { opacity: 0.6 }]}
               activeOpacity={0.85}
               onPress={() => { void handleEarnFreeCoins(); }}
-              disabled={watchingAd}
+              disabled={watchingAd || adsLimitReached}
             >
               <View style={[s.freeIconCircle, { backgroundColor: "#22C55E20" }]}>
                 {watchingAd
                   ? <ActivityIndicator size="small" color="#22C55E" />
-                  : <Feather name="play-circle" size={22} color="#22C55E" />
+                  : <Feather name="play-circle" size={22} color={adsLimitReached ? "#6B7280" : "#22C55E"} />
                 }
               </View>
               <View style={s.freeTextCol}>
                 <Text style={s.freeTitle}>Earn Free Coins</Text>
                 <Text style={s.freeSub}>
-                  {adsToday >= 5
+                  {adsLimitReached
                     ? "Daily limit reached — come back tomorrow!"
-                    : `Watch a short ad to earn +30 coins (${5 - adsToday} left today)`}
+                    : `Watch a short ad to earn +30 coins (${adsLeft} left today)`}
                 </Text>
               </View>
-              {!watchingAd && <Feather name="chevron-right" size={18} color="#6B7280" />}
+              {!watchingAd && !adsLimitReached && <Feather name="chevron-right" size={18} color="#6B7280" />}
             </TouchableOpacity>
+              );
+            })()}
 
             {/* ── Purchase stats banner ── */}
             {purchaseSummary && purchaseSummary.iap.totalPurchases > 0 && (
@@ -881,10 +952,7 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
 
             {/* ── Purchase history ── */}
             {summaryLoading && !purchaseSummary && (
-              <View style={s.historyLoading}>
-                <ActivityIndicator size="small" color="#6B7280" />
-                <Text style={s.historyLoadingTxt}>Loading history…</Text>
-              </View>
+              <SkeletonList count={2} variant="pack" />
             )}
             {purchaseSummary && purchaseSummary.purchaseHistory.length > 0 && (
               <>
@@ -995,7 +1063,7 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
                   </View>
                   <View style={s.micRight}>
                     {loadingMic ? (
-                      <ActivityIndicator size="small" color="#A855F7" />
+                      <SkeletonPriceTag width={64} height={32} />
                     ) : hasMicPass ? (
                       <View style={s.ownedBadge}>
                         <Feather name="check-circle" size={14} color="#22C55E" />
@@ -1013,8 +1081,8 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
                             <ActivityIndicator size="small" color="#fff" />
                           ) : micPassPrice ? (
                             <Text style={s.micBuyText}>{micPassPrice}</Text>
-                          ) : iapLoading && !iapReady ? (
-                            <ActivityIndicator size="small" color="#A855F7" />
+                          ) : !iapReady ? (
+                            <SkeletonPriceTag width={64} height={32} />
                           ) : (
                             <Text style={[s.micBuyText, { fontSize: rf(11) }]}>—</Text>
                           )}
@@ -1059,12 +1127,6 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
       </View>
   );
 
-  const bannerSlot = (
-    <SafeAreaView edges={["bottom"]} style={{ backgroundColor: "#0B0D1A" }}>
-      <StoreBannerFooter />
-    </SafeAreaView>
-  );
-
   if (standalone) {
     return (
       <SafeAreaView
@@ -1073,7 +1135,7 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
       >
         {storeBody}
         <View style={{ marginBottom: tabBarHeight }} collapsable={false}>
-          {bannerSlot}
+          <StoreBannerFooter />
         </View>
       </SafeAreaView>
     );
@@ -1085,7 +1147,9 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
         style={{ flex: 1, backgroundColor: colors.background }}
       >
         {storeBody}
-        {bannerSlot}
+        <SafeAreaView edges={["bottom"]} style={{ backgroundColor: "#0B0D1A" }}>
+          <StoreBannerFooter />
+        </SafeAreaView>
       </SafeAreaView>
     </Modal>
   );

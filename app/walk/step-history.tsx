@@ -426,7 +426,7 @@ export default function StepHistoryScreen() {
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
-    <View style={[S.root, { paddingTop: safeTop }]}>
+    <View style={[S.root, { paddingTop: safeTop, paddingBottom: safeBottom }]}>
       {/* Header */}
       <View style={S.header}>
         <TouchableOpacity
@@ -442,7 +442,7 @@ export default function StepHistoryScreen() {
 
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingBottom: safeBottom + 24, paddingHorizontal: 16 }}
+        contentContainerStyle={{ paddingBottom: 32, paddingHorizontal: 16 }}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -753,7 +753,7 @@ export default function StepHistoryScreen() {
             onPress={() => setGoalModalVisible(false)}
             activeOpacity={1}
           />
-          <View style={[S.modalSheet, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={[S.modalSheet, { backgroundColor: colors.card, borderColor: colors.border, paddingBottom: safeBottom + 24 }]}>
             <View style={S.modalHandle} />
             <Text style={[S.modalTitle, { color: colors.foreground }]}>Set Daily Goal</Text>
             <Text style={[S.modalSub, { color: colors.mutedForeground }]}>

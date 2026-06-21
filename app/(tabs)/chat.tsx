@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
-import { SkeletonList } from "@/components/SkeletonRows";
+import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows";
 import { screenCache } from "@/utils/screenCache";
 import { getApiBase } from "@/utils/apiUrl";
 import {
@@ -1282,7 +1282,9 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
 
         <KeyboardAvoidingView style={{ flex: 1, backgroundColor: DM_CHAT_BG }} behavior="padding" keyboardVerticalOffset={0}>
         {loadingMsgs ? (
-          <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: DM_CHAT_BG }}><ActivityIndicator color="#00E676" /></View>
+          <View style={{ flex: 1, backgroundColor: DM_CHAT_BG, paddingTop: 12, paddingHorizontal: 12 }}>
+            <SkeletonList count={8} variant="chat" />
+          </View>
         ) : (
           <FlatList
             ref={listRef}
@@ -1678,7 +1680,9 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
             <Text style={[cStyles.sectionTitle, { color: colors.foreground }]}>Search Results</Text>
           </View>
           {searchLoading && (
-            <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: 16 }} />
+            <View style={{ paddingHorizontal: 12, paddingTop: 8 }}>
+              <SkeletonList count={4} variant="user" />
+            </View>
           )}
           {!searchLoading && searchResults.length === 0 && (
             <Text style={[cStyles.emptyHint, { color: colors.mutedForeground }]}>No users found for "{searchQuery}"</Text>

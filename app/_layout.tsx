@@ -46,16 +46,12 @@ import {
   registerDeviceWithBackend,
   setupNotificationClickHandler,
   setupForegroundHandler,
-  setupPushSubscriptionListener,
-  ensurePushPermissionIfNeeded,
-  getPendingDeepLink,
-  clearPendingDeepLink,
 } from "@/services/notificationService";
 
 // ── App startup diagnostics ────────────────────────────────────────────────
 if (__DEV__) {
   console.log(`[AppStart] platform: ${Platform.OS}`);
-  console.log(`[AppStart] env loaded: API_URL=${process.env.EXPO_PUBLIC_API_URL ?? "(unset)"} DESCOPE=${process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID ? "set" : "(unset)"} PUSHER_KEY=${process.env.EXPO_PUBLIC_PUSHER_KEY ? "set" : "(unset)"} ONESIGNAL=${process.env.EXPO_PUBLIC_ONESIGNAL_APP_ID ? "set" : "(unset)"}`);
+  console.log(`[AppStart] env loaded: API_URL=${process.env.EXPO_PUBLIC_API_URL ?? "(unset)"} DESCOPE=${process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID ? "set" : "(unset)"} PUSHER_KEY=${process.env.EXPO_PUBLIC_PUSHER_KEY ? "set" : "(unset)"}`);
 }
 
 // ── Suppress fontfaceobserver timeout crash on web ─────────────────────────
@@ -174,32 +170,28 @@ function RootLayoutNav() {
 function PushNotificationSetup() {
   const { user } = useAuth();
   const prevUserIdRef = useRef<string | null>(null);
-  const foregroundCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
     void (async () => {
       await ensureOneSignalInitialized();
-      cleanup = await setupNotificationClickHandler(
-        (route) => {
-          try {
-            const { router } = require("expo-router") as { router: { push: (r: string) => void } };
-            InteractionManager.runAfterInteractions(() => {
-              try {
-                router.push(route as never);
-              } catch {
-                // Ignore routing errors
-              }
-            });
-          } catch {
-            // Ignore routing errors
-          }
-        },
-        () => !!user?.id,
-      );
+      cleanup = await setupNotificationClickHandler((route) => {
+        try {
+          const { router } = require("expo-router") as { router: { push: (r: string) => void } };
+          InteractionManager.runAfterInteractions(() => {
+            try {
+              router.push(route as never);
+            } catch {
+              // Ignore routing errors
+            }
+          });
+        } catch {
+          // Ignore routing errors
+        }
+      });
     })();
     return () => { cleanup?.(); };
-  }, [user?.id]);
+  }, []);
 
   useEffect(() => {
     if (!user?.id || user.id === prevUserIdRef.current) return;
@@ -207,51 +199,22 @@ function PushNotificationSetup() {
 
     void (async () => {
       try {
-        await initOneSignal({
-          id: user.id,
-          username: user.username,
-          country: user.country,
-        });
+        await initOneSignal(user.id);
         const enabled = await getNotificationPreferences();
         if (enabled) {
-          await ensurePushPermissionIfNeeded(user.id, true);
           await registerDeviceWithBackend();
-          await setupPushSubscriptionListener();
         }
-        foregroundCleanupRef.current?.();
-        foregroundCleanupRef.current = await setupForegroundHandler();
+        await setupForegroundHandler();
       } catch {
         // Never crash on notification setup
       }
     })();
-  }, [user?.id, user?.username, user?.country]);
-
-  // Navigate to pending deep link after session restore
-  useEffect(() => {
-    if (!user?.id) return;
-    const pending = getPendingDeepLink();
-    if (!pending) return;
-    clearPendingDeepLink();
-    try {
-      const { router } = require("expo-router") as { router: { push: (r: string) => void } };
-      InteractionManager.runAfterInteractions(() => {
-        try {
-          router.push(pending as never);
-        } catch {
-          // Ignore routing errors
-        }
-      });
-    } catch {
-      // Ignore routing errors
-    }
   }, [user?.id]);
 
   useEffect(() => {
     if (user?.id) return;
     if (!prevUserIdRef.current) return;
     prevUserIdRef.current = null;
-    foregroundCleanupRef.current?.();
-    foregroundCleanupRef.current = null;
     void logoutOneSignal().catch(() => {});
   }, [user]);
 

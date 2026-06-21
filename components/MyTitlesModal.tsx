@@ -11,6 +11,8 @@ import {
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
+import { useSafeLayout } from "@/hooks/useSafeLayout";
+import { SkeletonList } from "@/components/SkeletonRows";
 import { getValidSession } from "@/services/authService";
 import { TitleBadge } from "@/components/TitleBadge";
 
@@ -240,6 +242,7 @@ interface Props {
 
 export default function MyTitlesModal({ visible, onClose, onSaved }: Props) {
   const colors = useColors();
+  const { safeTop, safeBottom } = useSafeLayout();
 
   const [loading,        setLoading]        = useState(false);
   const [saving,         setSaving]         = useState(false);
@@ -325,7 +328,7 @@ export default function MyTitlesModal({ visible, onClose, onSaved }: Props) {
       <View style={[st.container, { backgroundColor: colors.background }]}>
 
         {/* Header */}
-        <View style={[st.header, { borderBottomColor: colors.border }]}>
+        <View style={[st.header, { borderBottomColor: colors.border, paddingTop: safeTop + 8 }]}>
           <TouchableOpacity
             style={[st.headerBtn, { borderColor: colors.border }]}
             onPress={onClose}
@@ -395,9 +398,8 @@ export default function MyTitlesModal({ visible, onClose, onSaved }: Props) {
 
         {/* Body */}
         {loading ? (
-          <View style={st.center}>
-            <ActivityIndicator size="large" color="#00E676" />
-            <Text style={[st.loadingText, { color: colors.mutedForeground }]}>Loading titles…</Text>
+          <View style={[st.list, { paddingTop: 8 }]}>
+            <SkeletonList count={8} variant="title" />
           </View>
         ) : error ? (
           <TouchableOpacity style={st.center} onPress={load}>
@@ -406,7 +408,10 @@ export default function MyTitlesModal({ visible, onClose, onSaved }: Props) {
             <Text style={[st.retryText, { color: "#00E676" }]}>Tap to retry</Text>
           </TouchableOpacity>
         ) : (
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={st.list}>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={[st.list, { paddingBottom: safeBottom + 24 }]}
+          >
 
             {/* ── Owned section ─────────────────────────────────────────── */}
             {owned.length > 0 && (
@@ -490,6 +495,7 @@ export default function MyTitlesModal({ visible, onClose, onSaved }: Props) {
           <Animated.View style={[
             st.toast,
             {
+              bottom: safeBottom + 16,
               backgroundColor: toast.ok ? "#00E67618" : colors.destructive + "18",
               borderColor:     toast.ok ? "#00E676"   : colors.destructive,
               opacity:         toastAnim,
@@ -530,7 +536,7 @@ const st = StyleSheet.create({
   filterChip:   { height: 34, paddingHorizontal: 14, borderRadius: 17, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
   filterChipText: { fontSize: 12, fontWeight: "600" },
 
-  list:          { paddingHorizontal: 12, paddingVertical: 8, gap: 6, paddingBottom: 60 },
+  list:          { paddingHorizontal: 12, paddingVertical: 8, gap: 6 },
 
   sectionHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 4, paddingVertical: 10 },
   sectionBar:    { width: 3, height: 16, borderRadius: 2, marginRight: 8 },
@@ -585,6 +591,6 @@ const st = StyleSheet.create({
   emptyTitle: { fontSize: 16, fontWeight: "700" },
   emptyDesc:  { fontSize: 13, textAlign: "center", lineHeight: 18 },
 
-  toast:     { position: "absolute", bottom: 32, left: 24, right: 24, flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: 12, borderWidth: 1 },
+  toast:     { position: "absolute", left: 24, right: 24, flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: 12, borderWidth: 1 },
   toastText: { flex: 1, fontSize: 14, fontWeight: "600" },
 });

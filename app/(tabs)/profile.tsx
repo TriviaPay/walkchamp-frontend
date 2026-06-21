@@ -21,6 +21,7 @@ import { dynamicIconService } from "@/services/dynamicIconService";
 import CoinIcon from "@/components/CoinIcon";
 import { AvatarPickerSheet } from "@/components/AvatarPickerSheet";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
+import { SkeletonInlineEditForm } from "@/components/SkeletonRows";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "@/utils/haptics";
 import { useColors } from "@/hooks/useColors";
@@ -786,7 +787,7 @@ export default function ProfileScreen() {
           {isEditing && (
             <Animated.View style={[styles.editPanel, { backgroundColor: colors.background + "CC", borderColor: colors.border, opacity: editOpacity, transform: [{ translateY: editTranslateY }] }]}>
               {editLoading ? (
-                <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: 16 }} />
+                <SkeletonInlineEditForm />
               ) : (
                 <>
                   {/* Full Name */}

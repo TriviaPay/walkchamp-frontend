@@ -836,9 +836,8 @@ export default function LeaderboardScreen() {
       {/* ── Content ── */}
       {isGroups ? (
         groupLoading ? (
-          <View style={st.centered}>
-            <ActivityIndicator size="large" color={colors.primary} />
-            <Text style={[st.centeredText, { color: colors.mutedForeground }]}>Loading groups…</Text>
+          <View style={{ paddingTop: 8 }}>
+            <SkeletonList count={6} variant="leader" />
           </View>
         ) : groupEntries.length === 0 ? (
           <View style={st.centered}>

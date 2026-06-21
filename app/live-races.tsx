@@ -11,7 +11,7 @@ import {
   View} from "react-native";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { Feather } from "@expo/vector-icons";
-import { useColors } from "@/hooks/useColors";
+import { SkeletonList } from "@/components/SkeletonRows";
 import { LiveRace, formatElapsed } from "@/utils/mockLiveRaces";
 import { usePresence } from "@/context/PresenceContext";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
@@ -322,7 +322,9 @@ export default function LiveRacesScreen() {
 
       {/* List */}
       {loading ? (
-        <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary} />
+        <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+          <SkeletonList count={5} variant="race" />
+        </View>
       ) : (
         <FlatList
           data={filtered}

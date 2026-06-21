@@ -13,12 +13,32 @@ $dlRoot = "C:\Users\RACHANA\Downloads\Walk-Tracker (7)\Walk-Tracker\frontend"
 
 $files = @(
     "hooks\useSafeLayout.ts",
+    "hooks\useParticipantStepAnimator.ts",
+    "hooks\useTabBarHeight.ts",
+    "components\ScreenContainer.tsx",
+    "components\SkeletonRows.tsx",
+    "components\EarnTasksSection.tsx",
+    "components\AndroidStepTrackingSetup.tsx",
     "app\rooms\available.tsx",
+    "app\rooms\upcoming\[date].tsx",
+    "app\groups\index.tsx",
+    "app\groups\[groupId].tsx",
+    "app\sponsored-events\index.tsx",
+    "app\sponsored-events\waiting-room.tsx",
+    "app\+not-found.tsx",
     "components\BannerAdView.tsx",
     "components\CoinsStoreModal.tsx",
+    "store\slices\coinsSlice.ts",
     "services\iapService.ts",
+    "app\walk\step-history.tsx",
     "app\race\live-detail.tsx",
+    "app\race\matchmaking.tsx",
+    "app\live-races.tsx",
     "app\(tabs)\walk.tsx",
+    "app\(tabs)\leaderboard.tsx",
+    "app\(tabs)\live.tsx",
+    "app\(tabs)\chat.tsx",
+    "app\(tabs)\profile.tsx",
     # Step provider + live race sync (keep both folders in sync)
     "config\stepSyncConfig.ts",
     "services\StepPollingService.ts",
@@ -36,20 +56,26 @@ $files = @(
     "services\steps\androidStepTrackingStatus.ts",
     "context\RaceContext.tsx",
     "context\WalkContext.tsx",
-    "components\WearableSetupModal.tsx"
+    "components\WearableSetupModal.tsx",
+    "components\RoomInvitationModal.tsx",
+    "components\CoinsInfoModal.tsx",
+    "components\MyTitlesModal.tsx",
+    "components\CoinRewardToast.tsx",
+    "components\CoinsBattleModal.tsx",
+    "services\voiceService.ts"
 )
 
 function Sync-OneWay([string]$from, [string]$to) {
     foreach ($rel in $files) {
         $src = Join-Path $from $rel
         $dst = Join-Path $to $rel
-        if (-not (Test-Path $src)) {
+        if (-not (Test-Path -LiteralPath $src)) {
             Write-Warning "Skip (missing source): $src"
             continue
         }
         $dstDir = Split-Path $dst -Parent
-        if (-not (Test-Path $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
-        Copy-Item -Path $src -Destination $dst -Force
+        if (-not (Test-Path -LiteralPath $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
+        Copy-Item -LiteralPath $src -Destination $dst -Force
         Write-Host "Copied: $rel"
     }
 }

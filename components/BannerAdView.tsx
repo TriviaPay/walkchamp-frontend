@@ -5,8 +5,8 @@
  * • In Expo Go or on web: renders a clearly-labelled placeholder so the
  *   layout is visible and the developer knows where the ad will appear.
  */
-import React, { memo, useCallback, useState } from "react";
-import { LayoutChangeEvent, Platform, Text, View } from "react-native";
+import React, { memo } from "react";
+import { Platform, Text, View } from "react-native";
 import Constants from "expo-constants";
 
 type AdModule = typeof import("react-native-google-mobile-ads");
@@ -17,7 +17,7 @@ const BANNER_AD_UNIT_ID =
     android: "ca-app-pub-3940256099942544/6300978111",
   }) ?? "ca-app-pub-3940256099942544/6300978111";
 
-/** Default slot height before adaptive ad reports its size (~50dp on phones). */
+/** Standard AdMob banner height (320×50) on iOS and Android. */
 export const BANNER_SLOT_HEIGHT = 50;
 const SLOT_BG = "#0B0D1A";
 
@@ -40,44 +40,24 @@ function loadAdModule(): AdModule | null {
 const adMod = loadAdModule();
 
 function BannerAdView({ style }: { style?: object }) {
-  const [containerWidth, setContainerWidth] = useState(0);
-  const [slotHeight, setSlotHeight] = useState(BANNER_SLOT_HEIGHT);
-
-  const onContainerLayout = useCallback((e: LayoutChangeEvent) => {
-    const w = Math.floor(e.nativeEvent.layout.width);
-    setContainerWidth((prev) => (w > 0 && w !== prev ? w : prev));
-  }, []);
-
-  const onAdSizeChange = useCallback(({ height }: { width: number; height: number }) => {
-    if (height > 0) setSlotHeight(Math.ceil(height));
-  }, []);
-
   const slotStyle = {
     alignItems: "center" as const,
     justifyContent: "center" as const,
     width: "100%" as const,
-    minHeight: slotHeight,
+    height: BANNER_SLOT_HEIGHT,
     backgroundColor: SLOT_BG,
+    overflow: "hidden" as const,
   };
 
   if (adMod && !isExpoGo) {
     const { BannerAd, BannerAdSize } = adMod;
     return (
-      <View
-        style={[slotStyle, style]}
-        onLayout={onContainerLayout}
-        collapsable={false}
-      >
-        {containerWidth > 0 && (
-          <BannerAd
-            unitId={BANNER_AD_UNIT_ID}
-            size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
-            width={containerWidth}
-            requestOptions={{ requestNonPersonalizedAdsOnly: true }}
-            onAdLoaded={onAdSizeChange}
-            onSizeChange={onAdSizeChange}
-          />
-        )}
+      <View style={[slotStyle, style]} collapsable={false}>
+        <BannerAd
+          unitId={BANNER_AD_UNIT_ID}
+          size={BannerAdSize.BANNER}
+          requestOptions={{ requestNonPersonalizedAdsOnly: true }}
+        />
       </View>
     );
   }
@@ -95,10 +75,9 @@ function BannerAdView({ style }: { style?: object }) {
         },
         style,
       ]}
-      onLayout={onContainerLayout}
     >
-      <Text style={{ color: "#4B5563", fontSize: 11, fontWeight: "600", letterSpacing: 0.3 }}>
-        Ad banner · available in app build
+      <Text style={{ color: "#4B5563", fontSize: 10, fontWeight: "600", letterSpacing: 0.3 }}>
+        Test ad · 320×50
       </Text>
     </View>
   );

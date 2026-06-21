@@ -23,6 +23,7 @@ import { authFetch } from "@/utils/authFetch";
 import { getLocalDateStr } from "@/utils/timezone";
 import { getApiBase } from "@/utils/apiUrl";
 import { useAuth } from "@/context/AuthContext";
+import { SkeletonGroupsScreen } from "@/components/SkeletonRows";
 import { useWalk } from "@/context/WalkContext";
 import { subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
 import { useUnread } from "@/context/UnreadContext";
@@ -492,18 +493,13 @@ export default function GroupsScreen() {
     }
   };
 
-  if (loading) {
-    return (
-      <View style={[s.centered, { backgroundColor: T.bg }]}>
-        <ActivityIndicator color={T.cyan} size="large" />
-      </View>
-    );
-  }
-
   const filterCfg = selectedFilter !== "all" ? cfg(selectedFilter) : null;
 
   return (
-    <SafeAreaView style={s.safe} edges={["top"]}>
+    <SafeAreaView style={s.safe} edges={["top", "bottom"]}>
+      {loading ? (
+        <SkeletonGroupsScreen />
+      ) : (
       <ScrollView
         contentContainerStyle={s.scroll}
         showsVerticalScrollIndicator={false}
@@ -708,6 +704,7 @@ export default function GroupsScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+      )}
 
       {/* ── Create Group Modal ─────────────────────────────────────────────── */}
       <Modal

@@ -22,6 +22,7 @@ import { authFetch } from "@/utils/authFetch";
 import { useAppDispatch } from "@/store/hooks";
 import { fetchCoinBalance } from "@/store/slices/coinsSlice";
 import { rf, rs } from "@/utils/responsive";
+import { SkeletonList } from "@/components/SkeletonRows";
 import { getBadgeColor } from "@/utils/mockData";
 import { subscribeToChannel, SPONSORED_EVENTS_CHANNEL, EVENTS } from "@/services/realtimeService";
 import { getApiBase } from "@/utils/apiUrl";
@@ -1058,7 +1059,7 @@ export default function SponsoredEventsScreen() {
   const upcomingCount = visibleEvents.filter((e) => e.status === "scheduled").length;
 
   return (
-    <SafeAreaView style={sc.root} edges={["top"]}>
+    <SafeAreaView style={sc.root} edges={["top", "bottom"]}>
       {/* Header */}
       <LinearGradient colors={["#100030", "#050010"]} style={sc.header} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
         <TouchableOpacity onPress={() => router.back()} style={sc.backBtn}>
@@ -1075,9 +1076,8 @@ export default function SponsoredEventsScreen() {
       </LinearGradient>
 
       {(loading || generating) ? (
-        <View style={sc.centered}>
-          <ActivityIndicator size="large" color="#7C3AFF" />
-          <Text style={sc.loadingText}>{generating ? "Generating events…" : "Loading…"}</Text>
+        <View style={[sc.list, { paddingTop: rs(8) }]}>
+          <SkeletonList count={4} variant="event" />
         </View>
       ) : events.length === 0 ? (
         <View style={sc.centered}>

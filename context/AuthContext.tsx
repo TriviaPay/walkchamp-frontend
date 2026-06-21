@@ -139,7 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!didPostRestoreRef.current) {
         didPostRestoreRef.current = true;
         if (sessionToken) {
-          scheduleProactiveTokenRefresh();
+          void scheduleProactiveTokenRefresh();
         }
         refreshUserProfile().catch(() => {});
       }
@@ -195,7 +195,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (refresh) {
         dispatch(authActions.refreshTokenUpdated(refresh));
       }
-      scheduleProactiveTokenRefresh();
+      void scheduleProactiveTokenRefresh();
     });
     return () => {
       offExpired();

@@ -4,12 +4,12 @@
     "slug": "walkchamp",
     "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/icons/adaptive/WalkChampProgress0-launcher.png",
-    "scheme": ["globalwalkerleague", "walkchamp"],
+    "icon": "./android/app/src/main/WalkChampProgress0/android/res/mipmap-xxxhdpi/ic_launcher.png",
+    "scheme": "globalwalkerleague",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/icons/WalkChampProgress0.png",
+      "image": "./android/app/src/main/WalkChampProgress0/ios/AppIcon~ios-marketing.png",
       "resizeMode": "contain",
       "backgroundColor": "#0A0B14"
     },
@@ -19,15 +19,10 @@
       "entitlements": {
         "com.apple.developer.applesignin": [
           "Default"
-        ],
-        "aps-environment": "production",
-        "com.apple.security.application-groups": [
-          "group.com.globalwalkerleague.app.onesignal"
         ]
       },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": ["remote-notification"],
         "NSMotionUsageDescription": "We count your steps only to rank you in walking challenges and leaderboards.",
         "NSHealthShareUsageDescription": "We count your steps only to rank you in walking challenges and leaderboards.",
         "NSLocationWhenInUseUsageDescription": "Location is used for GPS-verified walking mode and city leaderboards.",
@@ -42,7 +37,6 @@
       "softwareKeyboardLayoutMode": "pan",
       "permissions": [
         "com.android.vending.BILLING",
-        "android.permission.POST_NOTIFICATIONS",
         "android.permission.ACTIVITY_RECOGNITION",
         "android.permission.BODY_SENSORS",
         "android.permission.ACCESS_FINE_LOCATION",
@@ -59,20 +53,14 @@
         "barStyle": "light-content"
       },
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icons/adaptive/WalkChampProgress0.png",
+        "foregroundImage": "./android/app/src/main/WalkChampProgress0/android/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
         "backgroundColor": "#0A0B14"
       }
     },
     "web": {
-      "favicon": "./assets/icons/WalkChampProgress0.png"
+      "favicon": "./android/app/src/main/WalkChampProgress0/android/res/mipmap-xxxhdpi/ic_launcher.png"
     },
     "plugins": [
-      [
-        "onesignal-expo-plugin",
-        {
-          "mode": "production"
-        }
-      ],
       "expo-dev-client",
       [
         "expo-build-properties",
@@ -122,41 +110,41 @@
         [
           {
             "name": "WalkChampProgress0",
-            "ios": "./assets/icons/WalkChampProgress0.png",
+            "ios": "./android/app/src/main/WalkChampProgress0/ios/AppIcon~ios-marketing.png",
             "android": {
-              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress0.png",
+              "foregroundImage": "./android/app/src/main/WalkChampProgress0/android/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
               "backgroundColor": "#0A0B14"
             }
           },
           {
             "name": "WalkChampProgress25",
-            "ios": "./assets/icons/WalkChampProgress25.png",
+            "ios": "./android/app/src/main/WalkChampProgress25/ios/AppIcon~ios-marketing.png",
             "android": {
-              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress25.png",
+              "foregroundImage": "./android/app/src/main/WalkChampProgress25/android/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
               "backgroundColor": "#0A0B14"
             }
           },
           {
             "name": "WalkChampProgress50",
-            "ios": "./assets/icons/WalkChampProgress50.png",
+            "ios": "./android/app/src/main/WalkChampProgress50/ios/AppIcon~ios-marketing.png",
             "android": {
-              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress50.png",
+              "foregroundImage": "./android/app/src/main/WalkChampProgress50/android/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
               "backgroundColor": "#0A0B14"
             }
           },
           {
             "name": "WalkChampProgress75",
-            "ios": "./assets/icons/WalkChampProgress75.png",
+            "ios": "./android/app/src/main/WalkChampProgress75/ios/AppIcon~ios-marketing.png",
             "android": {
-              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress75.png",
+              "foregroundImage": "./android/app/src/main/WalkChampProgress75/android/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
               "backgroundColor": "#0A0B14"
             }
           },
           {
             "name": "WalkChampProgress100",
-            "ios": "./assets/icons/WalkChampProgress100.png",
+            "ios": "./android/app/src/main/WalkChampProgress100/ios/AppIcon~ios-marketing.png",
             "android": {
-              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress100.png",
+              "foregroundImage": "./android/app/src/main/WalkChampProgress100/android/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
               "backgroundColor": "#0A0B14"
             }
           }
@@ -170,7 +158,8 @@
         }
       ],
       "react-native-iap",
-      "./plugins/withSplitSchemeIntentFilters.js"
+      "./plugins/withSplitSchemeIntentFilters.js",
+      "./plugins/withWalkChampProgressIcons.js"
     ],
     "experiments": {
       "typedRoutes": true,

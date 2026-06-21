@@ -14,6 +14,7 @@ import { authFetch } from "@/utils/authFetch";
 import { getApiBase } from "@/utils/apiUrl";
 import { router } from "expo-router";
 import { getStoredSession } from "@/services/authService";
+import { useRace } from "@/context/RaceContext";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 const INVITE_TTL = 20;
@@ -39,6 +40,7 @@ interface Props {
 }
 
 export function RoomInvitationModal({ invitation, onDismiss }: Props) {
+  const { setActiveRace, joinRace } = useRace();
   const [secondsLeft, setSecondsLeft] = useState(INVITE_TTL);
   const [responding, setResponding] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -107,6 +109,8 @@ export function RoomInvitationModal({ invitation, onDismiss }: Props) {
 
       const raceId = data.raceId;
       const room = data.room;
+      const entryFee = (room?.entryAmountCents ?? 0) / 100;
+      const maxPlayers = room?.maxPlayers ?? 10;
 
       if (!room || room.entryAmountCents === 0) {
         const { session } = await getStoredSession();
@@ -117,6 +121,9 @@ export function RoomInvitationModal({ invitation, onDismiss }: Props) {
           }).catch(() => {});
         }
       }
+
+      setActiveRace(raceId, false);
+      joinRace(entryFee, maxPlayers, false);
       onDismiss();
       router.push({
         pathname: "/race/matchmaking",
