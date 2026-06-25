@@ -271,6 +271,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
   const raceStepFloorRef = useRef(0);
   const raceDeviceBaselineRef = useRef(0);
   const goalFlushDoneRef = useRef(false);
+  const catchUpInFlightRef = useRef(false);
   const lastCatchUpMsRef = useRef(0);
   // Mirrors raceTargetSteps state so callbacks always see the current target.
   const raceTargetStepsRef = useRef(RACE_DEFAULTS.RACE_TARGET);
