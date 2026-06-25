@@ -24,6 +24,7 @@ import { stepTracker } from "@/services/StepTrackingService";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { stepPollingService, type RacePollingConfig } from "@/services/StepPollingService";
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
+import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
 import {
   postRaceProgress,
   postRaceReconcile,
@@ -157,6 +158,8 @@ interface RaceContextType {
   countdown: number;
   raceTimerSeconds: number;
   userRaceSteps: number;
+  /** Race steps shown on Walk tab — persists after race until a new race starts. */
+  walkRaceStepsDisplay: number;
   results: RaceResult[];
   userFinishRank: number | null;
   totalPool: number;
@@ -175,6 +178,8 @@ interface RaceContextType {
   startRaceManually: () => void;
   /** Called when backend confirms race is in_progress. startedAt from server when available. */
   notifyRaceStarted: (realPlayerCount: number, startedAt?: Date) => void;
+  /** Rejoin an in-progress race with server step count (no countdown). */
+  resumeLiveRace: (realPlayerCount: number, startedAt: Date, initialUserSteps?: number) => void;
   cancelRace: () => void;
   resetRace: () => void;
   setActiveRace: (id: string | null, host: boolean) => void;
@@ -184,6 +189,10 @@ interface RaceContextType {
   pauseRaceStepTracking: () => void;
   /** Re-start race step polling after returning to live-detail (active race only). */
   resumeRaceStepTracking: () => void;
+  /** Read device + merge server steps after background / screen rejoin. */
+  catchUpLiveRaceSteps: (serverSteps?: number, force?: boolean) => Promise<void>;
+  /** Persist final race steps on Walk tab after server-side race completion. */
+  recordFinishedRaceStepsForWalk: (steps: number) => void;
 }
 
 const RaceContext = createContext<RaceContextType | null>(null);
@@ -220,6 +229,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
   const [countdown, setCountdown] = useState(RACE_DEFAULTS.COUNTDOWN_SECONDS);
   const [raceTimerSeconds, setRaceTimerSeconds] = useState(0);
   const [userRaceSteps, setUserRaceSteps] = useState(0);
+  const [walkRaceStepsDisplay, setWalkRaceStepsDisplay] = useState(0);
   const [results, setResults] = useState<RaceResult[]>([]);
   const [userFinishRank, setUserFinishRank] = useState<number | null>(null);
   const [isSuspicious, setIsSuspicious] = useState(false);
@@ -228,6 +238,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
   const [isHost, setIsHost] = useState(false);
   const [raceStartTimeUTC, setRaceStartTimeUTC] = useState<Date | null>(null);
   const [raceTargetSteps, _setRaceTargetSteps] = useState(RACE_DEFAULTS.RACE_TARGET);
+  const racePhaseRef = useRef<RacePhase>("idle");
 
   const matchmakingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -256,6 +267,11 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
   const usingRealStepsRef = useRef(false);
   const racePollingConfigRef = useRef<RacePollingConfig | null>(null);
   const raceStepApplyRef = useRef<((steps: number) => void) | null>(null);
+  /** Server-synced floor — never show fewer steps than backend already recorded. */
+  const raceStepFloorRef = useRef(0);
+  const raceDeviceBaselineRef = useRef(0);
+  const goalFlushDoneRef = useRef(false);
+  const lastCatchUpMsRef = useRef(0);
   // Mirrors raceTargetSteps state so callbacks always see the current target.
   const raceTargetStepsRef = useRef(RACE_DEFAULTS.RACE_TARGET);
 
@@ -268,6 +284,10 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       userId:      user?.id          ?? "user",
     };
   }, [user?.username, user?.countryFlag, user?.avatarColor, user?.id]);
+
+  useEffect(() => {
+    racePhaseRef.current = racePhase;
+  }, [racePhase]);
 
   // Real-time ring update: when the signed-in user changes their avatar color while
   // in an active race, update their own participant entry immediately.
@@ -317,7 +337,12 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     // Stop the centralized polling safety-net
     stepPollingService.stopPolling("race_ended");
     raceStepSyncService.cancelPending();
+    if (raceIdRef.current) {
+      void raceProgressNotificationService.stop(raceIdRef.current, "completed");
+    }
     racePollingConfigRef.current = null;
+    raceStepFloorRef.current = 0;
+    goalFlushDoneRef.current = false;
   };
 
   const stopRaceStepTracking = useCallback((reason = "race_tracking_stopped") => {
@@ -341,12 +366,13 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     }
     subscriptionGenRef.current++;
     racePollingConfigRef.current = null;
+    raceStepFloorRef.current = 0;
   }, []);
 
   const pauseRaceStepTracking = useCallback(() => {
     if (raceEndedRef.current) return;
     stepPollingService.stopPolling("race_paused");
-    stepProviderManager.stopWatchingSteps();
+    raceStepSyncService.cancelPending();
     if (raceIdRef.current && userStepsRef.current > 0) {
       void raceStepSyncService.flush(
         raceIdRef.current,
@@ -356,28 +382,130 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const resumeRaceStepTracking = useCallback(() => {
-    if (raceEndedRef.current || racePhase !== "in_race") return;
-    const cfg = racePollingConfigRef.current;
-    if (!cfg || !usingRealStepsRef.current) return;
+  const resumeRaceStepTracking = useCallback(async (forceRestart = false) => {
+    if (raceEndedRef.current || racePhaseRef.current !== "in_race") return;
 
-    const providerId = stepProviderManager.getActiveProviderId();
-    if (
-      (providerId === "ios_healthkit" || providerId === "android_legacy_sensor") &&
-      raceStepApplyRef.current
-    ) {
+    let cfg = racePollingConfigRef.current;
+    const raceId = raceIdRef.current;
+    const raceStart = raceStartTimeRef.current;
+    const userId = userProfileRef.current.userId;
+
+    if (!cfg && raceId && raceStart && userId && raceStepApplyRef.current) {
+      const baseline = await stepProviderManager.ensureRaceBaseline(
+        raceId,
+        userId,
+        userStepsRef.current > 0 ? userStepsRef.current : undefined,
+      );
       const apply = raceStepApplyRef.current;
-      void stepProviderManager.startWatchingSteps((result) => {
-        void stepProviderManager
-          .getRaceSteps(cfg.raceId, cfg.raceStartTime, cfg.userId)
-          .then((raceResult) => {
-            if (raceResult) apply(raceResult.steps);
-          });
-      });
+      const myGen = subscriptionGenRef.current;
+      cfg = {
+        raceId,
+        raceStartTime: raceStart,
+        userId,
+        baseline,
+        target: raceTargetStepsRef.current,
+        onUpdate: (raceSteps, deviceTotal) => {
+          if (subscriptionGenRef.current !== myGen || raceEndedRef.current) return;
+          apply(raceSteps, deviceTotal);
+        },
+        onReadBlocked: () => {
+          void stepProviderManager.switchToLegacyFallback("read_blocked_on_resume");
+        },
+      };
+      racePollingConfigRef.current = cfg;
+      usingRealStepsRef.current = true;
     }
 
+    if (!cfg) return;
+
+    if (!forceRestart && stepPollingService.isRacePolling(raceId ?? undefined)) {
+      if (raceId && raceStart && userId && raceStepApplyRef.current) {
+        const snap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId);
+        if (snap && !raceEndedRef.current) {
+          raceStepApplyRef.current(snap.steps);
+        }
+      }
+      return;
+    }
+
+    stepPollingService.stopPolling("race_resume");
     stepPollingService.startPolling("race", cfg);
-  }, [racePhase]);
+
+    if (raceId && raceStart && userId && raceStepApplyRef.current) {
+      const snap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId);
+      if (snap && !raceEndedRef.current) {
+        raceStepApplyRef.current(snap.steps);
+      }
+    }
+  }, []);
+
+  const catchUpLiveRaceSteps = useCallback(async (serverSteps = 0, force = false) => {
+    if (!raceIdRef.current || raceEndedRef.current || !raceStartTimeRef.current) return;
+    if (racePhaseRef.current !== "in_race") return;
+
+    const now = Date.now();
+    if (!force && now - lastCatchUpMsRef.current < 2500) return;
+    if (catchUpInFlightRef.current) return;
+    catchUpInFlightRef.current = true;
+    lastCatchUpMsRef.current = now;
+
+    try {
+      const raceId = raceIdRef.current;
+      const raceStart = raceStartTimeRef.current;
+      const userId = userProfileRef.current.userId;
+      const safeServer = Math.max(0, Math.floor(serverSteps));
+      const optimistic = Math.max(safeServer, userStepsRef.current);
+      if (optimistic > 0) {
+        raceStepFloorRef.current = Math.max(raceStepFloorRef.current, optimistic);
+        userStepsRef.current = optimistic;
+        setUserRaceSteps(optimistic);
+      }
+
+      let deviceSteps = 0;
+      try {
+        if (await stepProviderManager.isTrackingReady()) {
+          const snap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId);
+          if (snap) deviceSteps = snap.steps;
+        }
+      } catch {
+        /* non-fatal */
+      }
+
+      // Legacy sensor: realign baseline when server is ahead. HC uses time-range reads.
+      if (
+        safeServer > deviceSteps &&
+        stepProviderManager.usesRaceBaseline()
+      ) {
+        await stepProviderManager.alignRaceBaselineToRaceSteps(raceId, userId, safeServer);
+        const resnap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId);
+        if (resnap) deviceSteps = resnap.steps;
+      }
+
+      const merged = Math.max(deviceSteps, safeServer);
+      raceStepFloorRef.current = merged;
+
+      if (raceStepApplyRef.current) {
+        raceStepApplyRef.current(merged);
+      } else if (merged > 0) {
+        userStepsRef.current = merged;
+        setUserRaceSteps(merged);
+        raceStepSyncService.seedSyncedSteps(merged);
+        raceStepSyncService.notifyStepsUpdated(
+          raceId,
+          merged,
+          stepProviderManager.toRaceProgressSource(),
+        );
+      }
+
+      if (merged > 0) {
+        raceStepSyncService.seedSyncedSteps(merged);
+      }
+
+      await resumeRaceStepTracking(false);
+    } finally {
+      catchUpInFlightRef.current = false;
+    }
+  }, [resumeRaceStepTracking]);
 
   const setActiveRace = useCallback((id: string | null, host: boolean) => {
     raceIdRef.current = id;
@@ -466,6 +594,14 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
     // Flush final steps to backend — use real steps if available, else simulated
     const userParticipant = finalParticipants.find((p) => p.isUser);
+    const finalUserSteps = Math.max(
+      userParticipant?.raceSteps ?? 0,
+      userStepsRef.current,
+    );
+    if (finalUserSteps > 0) {
+      setWalkRaceStepsDisplay(finalUserSteps);
+    }
+
     if (raceIdRef.current && userParticipant) {
       void raceStepSyncService.flush(
         raceIdRef.current,
@@ -594,13 +730,33 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
   const startRace = useCallback((allParticipants: RaceParticipant[]) => {
     finishedCountRef.current = 0;
-    userStepsRef.current = 0;
+    const userFromList = allParticipants.find((p) => p.isUser);
+    const bootSteps = Math.max(0, userFromList?.raceSteps ?? 0);
     raceEndedRef.current = false;
+    goalFlushDoneRef.current = false;
     botStepsRef.current = {};
     BOT_PLAYERS.forEach((b) => { botStepsRef.current[b.id] = 0; });
     participantsRef.current = allParticipants;
+
+    const raceStart = raceStartTimeRef.current;
+    const useRealSteps = FEATURE_FLAGS.REAL_STEP_TRACKING_ENABLED && !!raceStart;
+
+    if (useRealSteps) {
+      userStepsRef.current = bootSteps;
+      raceStepFloorRef.current = bootSteps;
+      raceStepSyncService.reset();
+      if (bootSteps > 0) {
+        raceStepSyncService.seedSyncedSteps(bootSteps);
+      }
+    } else {
+      userStepsRef.current = bootSteps;
+      if (bootSteps === 0) {
+        raceStepSyncService.reset();
+      } else {
+        raceStepSyncService.seedSyncedSteps(bootSteps);
+      }
+    }
     usingRealStepsRef.current = false;
-    raceStepSyncService.reset();
 
     // Capture the generation at race-start time.  All step callbacks created in THIS
     // startRace() call will check this value before touching raceSteps state.
@@ -610,16 +766,26 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
     setRacePhase("in_race");
     setRaceTimerSeconds(0);
-    setUserRaceSteps(0);
+    setUserRaceSteps(bootSteps);
+
+    if (raceIdRef.current) {
+      void raceProgressNotificationService.start({
+        raceId: raceIdRef.current,
+        userId: userProfileRef.current.userId,
+        username: userProfileRef.current.username,
+        raceSteps: bootSteps,
+        rank: 1,
+        totalParticipants: Math.max(1, allParticipants.length),
+        goalSteps: raceTargetStepsRef.current,
+        timeLeftSeconds: 0,
+      });
+    }
 
     raceTimerRef.current = setInterval(() => {
       setRaceTimerSeconds((s) => s + 1);
     }, 1000);
 
-    // ── Real step tracking for race (iOS: periodic query, Android: watchStepCount) ──
-    const raceStart = raceStartTimeRef.current;
-    const useRealSteps = FEATURE_FLAGS.REAL_STEP_TRACKING_ENABLED && !!raceStart;
-
+    // ── Real step tracking for race (iOS HealthKit / Android HC or legacy sensor) ──
     if (useRealSteps) {
       if (__DEV__) {
         if (__DEV__) console.log(`[RaceStepsRealtime] platform: ${Platform.OS}`);
@@ -630,7 +796,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       // ── Helper: apply anti-regression + update UI ─────────────────────────
       // raceSteps = steps walked since THIS race started (isolated per race).
       // dailySteps / lifetimeSteps are tracked separately in WalkContext — never mixed here.
-      const applyRealSteps = (rawSteps: number) => {
+      const applyRealSteps = (rawSteps: number, deviceTotalSteps?: number) => {
         // Guard: if this callback belongs to a previous race (myGen is stale), discard it.
         if (subscriptionGenRef.current !== myGen) return;
         if (raceEndedRef.current) return;
@@ -651,16 +817,20 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           steps = MAX_FIRST_DELTA;
         }
 
-        const antiReg = Math.max(userStepsRef.current, steps);
+        const antiReg = Math.max(userStepsRef.current, steps, raceStepFloorRef.current);
+        const prevSteps = userStepsRef.current;
         if (__DEV__) {
-          if (steps < userStepsRef.current)
-            if (__DEV__) console.log(`[RaceStepsRealtime] ignored lower value: ${steps} (keeping ${userStepsRef.current})`);
-          else
-            if (__DEV__) console.log(`[RaceStepsRealtime] calculated race_steps: ${steps} previous: ${userStepsRef.current}`);
+          if (steps < prevSteps)
+            if (__DEV__) console.log(`[RaceStepsRealtime] ignored lower value: ${steps} (keeping ${prevSteps})`);
+          else if (steps > prevSteps)
+            if (__DEV__) console.log(`[RaceStepsRealtime] calculated race_steps: ${steps} previous: ${prevSteps}`);
         }
         userStepsRef.current = antiReg;
+        raceStepFloorRef.current = Math.max(raceStepFloorRef.current, antiReg);
         setUserRaceSteps(antiReg);
-        if (__DEV__) console.log(`[RaceStepsRealtime] local UI updated: ${antiReg}`);
+        if (__DEV__ && antiReg > prevSteps) {
+          if (__DEV__) console.log(`[RaceStepsRealtime] local UI updated: ${antiReg}`);
+        }
 
         const target = raceTargetStepsRef.current;
         setParticipants((prev) => {
@@ -676,14 +846,39 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           return updated;
         });
 
-        // Batch backend sync — local UI already updated above.
+        // Backend sync — immediate flush when goal reached; otherwise interval batch.
         if (raceIdRef.current) {
-          raceStepSyncService.notifyStepsUpdated(
-            raceIdRef.current,
-            antiReg,
-            stepProviderManager.toRaceProgressSource(),
-            { atTarget: antiReg >= target },
-          );
+          const source = stepProviderManager.toRaceProgressSource();
+          const deviceTotal =
+            deviceTotalSteps ??
+            (raceDeviceBaselineRef.current > 0
+              ? raceDeviceBaselineRef.current + antiReg
+              : undefined);
+          if (antiReg >= target) {
+            if (!goalFlushDoneRef.current) {
+              goalFlushDoneRef.current = true;
+              void raceStepSyncService.flushGoal(
+                raceIdRef.current,
+                antiReg,
+                source,
+                deviceTotal,
+              );
+            } else {
+              raceStepSyncService.notifyStepsUpdated(
+                raceIdRef.current,
+                antiReg,
+                source,
+                { deviceTotalSteps: deviceTotal },
+              );
+            }
+          } else {
+            raceStepSyncService.notifyStepsUpdated(
+              raceIdRef.current,
+              antiReg,
+              source,
+              { deviceTotalSteps: deviceTotal },
+            );
+          }
         }
       };
       raceStepApplyRef.current = applyRealSteps;
@@ -698,7 +893,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           userId,
           baseline,
           target: raceTargetStepsRef.current,
-          onUpdate: (raceSteps) => applyRealSteps(raceSteps),
+          onUpdate: (raceSteps, deviceTotal) => applyRealSteps(raceSteps, deviceTotal),
           onReadBlocked: () => {
             void (async () => {
               const ok = await stepProviderManager.switchToLegacyFallback(
@@ -713,9 +908,10 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
                 return;
               }
               const newBaseline = raceIdRef.current
-                ? await stepProviderManager.createRaceBaseline(
+                ? await stepProviderManager.ensureRaceBaseline(
                     raceIdRef.current,
                     userId,
+                    userStepsRef.current > 0 ? userStepsRef.current : undefined,
                   )
                 : 0;
               await restartRacePolling(userId, newBaseline);
@@ -723,6 +919,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           },
         };
         racePollingConfigRef.current = config;
+        raceDeviceBaselineRef.current = baseline;
         stepPollingService.startPolling("race", config);
       };
 
@@ -754,9 +951,10 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
         const baseline =
           raceIdRef.current && userId
-            ? await stepProviderManager.createRaceBaseline(
+            ? await stepProviderManager.ensureRaceBaseline(
                 raceIdRef.current,
                 userId,
+                bootSteps > 0 ? bootSteps : undefined,
               )
             : 0;
 
@@ -784,7 +982,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
             userId,
           );
           if (snap && subscriptionGenRef.current === myGen && !raceEndedRef.current) {
-            applyRealSteps(snap.steps);
+            applyRealSteps(Math.max(snap.steps, bootSteps, raceStepFloorRef.current));
           }
         }
       })();
@@ -796,16 +994,18 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     // This ensures the no-progress safety-net on the server sees activity = false
     // quickly rather than waiting 3 min with total silence.
     const immediateRaceId = raceIdRef.current;
-    if (immediateRaceId) {
+    if (immediateRaceId && !useRealSteps) {
       raceStepSyncService.notifyStepsUpdated(
         immediateRaceId,
-        0,
-        "race_start",
+        bootSteps,
+        bootSteps > 0 ? stepProviderManager.toRaceProgressSource() : "race_start",
         { force: true },
       );
     }
 
-    // ── Bot simulation tick (bots only — no fake user steps) ─────────────────
+    // Live server races: no bot simulation — steps come from HC/sensor + backend only.
+    if (!raceIdRef.current) {
+    // ── Bot simulation tick (offline/demo matchmaking only) ─────────────────
     const BOT_TICK_MS = 900;
     stepTickRef.current = 0;
     raceStepRef.current = setInterval(() => {
@@ -832,6 +1032,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         return updated;
       });
     }, BOT_TICK_MS);
+    }
 
     // No client-side hard-end timer. Race ends only when the backend broadcasts
     // race:completed (goal reached / all forfeited / scheduled end time).
@@ -935,6 +1136,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     // forward-only guard permanently pins the avatar to the top.
     setUserRaceSteps(0);
     userStepsRef.current = 0;
+    setWalkRaceStepsDisplay(0);
     raceStepSyncService.reset();
 
     // Store server-authoritative race start time
@@ -985,6 +1187,78 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     startCountdown(all);
   }, [startCountdown]);
 
+  const resumeLiveRace = useCallback((
+    realPlayerCount: number,
+    startedAt: Date,
+    initialUserSteps = 0,
+  ) => {
+    if (matchmakingRef.current) {
+      clearInterval(matchmakingRef.current);
+      matchmakingRef.current = null;
+    }
+
+    const steps = Math.max(0, initialUserSteps);
+    raceStartTimeRef.current = startedAt;
+    setRaceStartTimeUTC(startedAt);
+    raceEndedRef.current = false;
+
+    if (raceIdRef.current) {
+      savePendingRace({
+        raceId: raceIdRef.current,
+        raceStartTimeUTC: startedAt.toISOString(),
+        status: "in_progress",
+      });
+    }
+
+    if (raceIdRef.current) {
+      const channelName = `public-live-race-${raceIdRef.current}`;
+      if (forfeitChannelRef.current !== channelName) {
+        forfeitChannelRef.current = channelName;
+        const ch = subscribeToChannel(channelName);
+        if (ch) {
+          ch.bind("race:participant-forfeited", (data: { userId: string }) => {
+            setParticipants((prev) => {
+              const updated = prev.map((p) =>
+                p.id === data.userId ? { ...p, isForfeited: true } : p,
+              );
+              participantsRef.current = updated;
+              return updated;
+            });
+          });
+        }
+      }
+    }
+
+    const userParticipant: RaceParticipant = {
+      id: userProfileRef.current.userId,
+      username: userProfileRef.current.username,
+      countryFlag: userProfileRef.current.countryFlag,
+      avatarColor: userProfileRef.current.avatarColor,
+      raceSteps: steps,
+      isFinished: false,
+      isUser: true,
+    };
+    const botsNeeded = Math.max(0, realPlayerCount - 1);
+    const bots = BOT_PLAYERS.slice(0, botsNeeded).map((b) => ({
+      ...b,
+      raceSteps: 0,
+      isFinished: false,
+    }));
+
+    if (racePhaseRef.current === "in_race" && raceIdRef.current) {
+      const floor = Math.max(steps, userStepsRef.current);
+      if (floor > 0) {
+        raceStepFloorRef.current = Math.max(raceStepFloorRef.current, floor);
+        userStepsRef.current = floor;
+        setUserRaceSteps(floor);
+      }
+      void catchUpLiveRaceSteps(steps, true);
+      return;
+    }
+
+    startRace([userParticipant, ...bots]);
+  }, [startRace, catchUpLiveRaceSteps]);
+
   // ── Join race ─────────────────────────────────────────────────────────────────
 
   const joinRace = useCallback((entryFee: number, maxPlayers: number, hostMode = false): boolean => {
@@ -994,6 +1268,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     setRaceEntryFee(entryFee);
     setRaceMaxPlayers(maxPlayers);
     setRacePhase("matchmaking");
+    setWalkRaceStepsDisplay(0);
     setPlayersJoined(1);
     finishedCountRef.current = 0;
     hostModeRef.current = hostMode;
@@ -1052,28 +1327,58 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     stepProviderManager.stopWatchingSteps();
   }, []);
 
+  const recordFinishedRaceStepsForWalk = useCallback((steps: number) => {
+    const safe = Math.max(0, Math.floor(steps));
+    if (safe > 0) setWalkRaceStepsDisplay(safe);
+  }, []);
+
   // ── AppState listener: flush steps on background + on foreground resume ───────
   // Background flush lets other participants see step progress when this user closes
   // the app mid-race. Foreground flush catches up after OS throttled sync intervals.
   useEffect(() => {
     const sub = AppState.addEventListener("change", (nextState) => {
       if (!raceIdRef.current || raceEndedRef.current) return;
+      if (racePhaseRef.current !== "in_race") return;
+
+      if (nextState === "active") {
+        void catchUpLiveRaceSteps(userStepsRef.current, true);
+        return;
+      }
+
       const steps = userStepsRef.current;
       if (steps <= 0) return;
 
-      if (
-        nextState === "background" ||
-        nextState === "inactive" ||
-        nextState === "active"
-      ) {
+      if (nextState === "background" || nextState === "inactive") {
         void raceStepSyncService.flush(
           raceIdRef.current,
           steps,
           stepProviderManager.toRaceProgressSource(),
         );
+        pauseRaceStepTracking();
       }
     });
     return () => sub.remove();
+  }, [catchUpLiveRaceSteps, pauseRaceStepTracking]);
+
+  // Backend rank/steps → Android ongoing notification / iOS Live Activity
+  useEffect(() => {
+    raceStepSyncService.setProgressSyncedHandler((result) => {
+      if (!result.ok || result.rank === undefined) return;
+      const userId = result.userId ?? userProfileRef.current.userId;
+      void raceProgressNotificationService.onBackendProgressSynced({
+        raceId: result.raceId,
+        userId,
+        username: result.username ?? userProfileRef.current.username,
+        raceSteps: result.acceptedSteps,
+        rank: result.rank,
+        totalParticipants: result.totalParticipants ?? participantsRef.current.length,
+        goalSteps: result.goalSteps ?? raceTargetStepsRef.current,
+        timeLeftSeconds: result.timeLeftSeconds ?? 0,
+        raceStatus: result.raceStatus ?? "in_progress",
+        lastSyncedAt: new Date().toISOString(),
+      });
+    });
+    return () => raceStepSyncService.setProgressSyncedHandler(null);
   }, []);
 
   useEffect(() => () => {
@@ -1085,7 +1390,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       value={{
         racePhase, raceEntryFee, raceMaxPlayers,
         playersJoined, participants, countdown,
-        raceTimerSeconds, userRaceSteps, results, userFinishRank,
+        raceTimerSeconds, userRaceSteps, walkRaceStepsDisplay, results, userFinishRank,
         totalPool: prizeState.totalPool,
         winnersPool: prizeState.winnersPool,
         platformFee: prizeState.platformFee,
@@ -1093,8 +1398,9 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         isSuspicious,
         raceId, isHost, raceStartTimeUTC,
         raceTargetSteps, setRaceTargetSteps,
-        joinRace, startRaceManually, notifyRaceStarted, cancelRace, resetRace, setActiveRace,
-        stopRaceStepTracking, pauseRaceStepTracking, resumeRaceStepTracking,
+        joinRace, startRaceManually, notifyRaceStarted, resumeLiveRace, cancelRace, resetRace, setActiveRace,
+        stopRaceStepTracking, pauseRaceStepTracking, resumeRaceStepTracking, catchUpLiveRaceSteps,
+        recordFinishedRaceStepsForWalk,
       }}
     >
       {children}

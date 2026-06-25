@@ -1671,14 +1671,15 @@ export default function WalkScreen() {
   const colors = useColors();
   const { isDark } = useTheme();
   const { insets, safeTop, safeBottom } = useSafeLayout();
-  const { trackingStatus, session, todaySteps, allTimeSteps, currentStreak, togglePause, milestoneReached, clearMilestone, usingRealTracking, stepPermissionStatus, hcAvailability, requestStepPermission, todayActiveMinutes, todayDailyRank, todayDailyGoal, refreshTodayRank } = useWalkContext();
+  const { trackingStatus, session, todaySteps, allTimeSteps, currentStreak, togglePause, milestoneReached, clearMilestone, usingRealTracking, stepPermissionStatus, hcAvailability, requestStepPermission, todayActiveMinutes, todayDailyRank, todayDailyGoal, refreshTodayRank, resumeStepWatching, refreshTodaySteps } = useWalkContext();
   const { guardRewardAction, canJoinRewardRaces, verificationLevel } = useStepSourceGuard();
   const { userRank, walletBalance } = useApp();
   const { user, logout } = useAuth();
   const tabBarHeight = useTabBarHeight();
   const modalScrollPad = { paddingBottom: safeBottom + rs(40) };
-  const { joinRace, setActiveRace, setRaceTargetSteps, racePhase, userRaceSteps, raceId: activeRaceId } = useRace();
-  const isInLiveRace = racePhase === "in_race" && !!activeRaceId;
+  const { joinRace, setActiveRace, setRaceTargetSteps, racePhase, userRaceSteps, walkRaceStepsDisplay, raceId: activeRaceId } = useRace();
+  const raceStepsOnWalk = racePhase === "in_race" ? userRaceSteps : walkRaceStepsDisplay;
+  const showRaceStepsOnWalk = raceStepsOnWalk > 0;
   const { counts, formatCount } = usePresence();
   const { pendingGroupInvites } = useUnread();
   const dispatch = useDispatch<AppDispatch>();
@@ -1850,7 +1851,14 @@ export default function WalkScreen() {
       setChallengeStatuses({});
       loadChallengeStatuses();
     }
-  }, [racePhase, loadChallengeStatuses]);
+    if (
+      (racePhase === "finished" || racePhase === "idle") &&
+      (prev === "in_race" || prev === "finished")
+    ) {
+      void refreshTodaySteps();
+      void resumeStepWatching();
+    }
+  }, [racePhase, loadChallengeStatuses, refreshTodaySteps, resumeStepWatching]);
 
   // Consolidated focus loader — fires one batch of fetches and starts the
   // 5-second background-refresh interval while the Walk tab is focused.
@@ -1858,6 +1866,10 @@ export default function WalkScreen() {
   // network traffic when the user is on a different tab.
   useFocusEffect(useCallback(() => {
     refreshTodayRank().catch(() => {});
+    if (usingRealTracking) {
+      void refreshTodaySteps();
+      void resumeStepWatching();
+    }
     if (!showCoinStoreRef.current) {
       dispatch(fetchTrackThemes());
       dispatch(fetchCoinBalance());
@@ -1865,7 +1877,7 @@ export default function WalkScreen() {
     loadChallengeStatuses();
     const pollInterval = setInterval(loadChallengeStatuses, 5_000);
     return () => clearInterval(pollInterval);
-  }, [dispatch, refreshTodayRank, loadChallengeStatuses]));
+  }, [dispatch, refreshTodayRank, loadChallengeStatuses, usingRealTracking, refreshTodaySteps, resumeStepWatching]));
 
   // Animate picker sheet in/out
   useEffect(() => {
@@ -2646,12 +2658,14 @@ export default function WalkScreen() {
               <Text style={[styles.stepsHeroLabel, { color: colors.mutedForeground }]}>steps today</Text>
             </View>
 
-            {isInLiveRace ? (
+            {showRaceStepsOnWalk ? (
               <View style={[styles.raceStepsRow, { borderTopColor: colors.border }]}>
                 <Feather name="flag" size={14} color={colors.primary} />
-                <Text style={[styles.raceStepsLabel, { color: colors.mutedForeground }]}>Race steps</Text>
+                <Text style={[styles.raceStepsLabel, { color: colors.mutedForeground }]}>
+                  {racePhase === "in_race" ? "Race steps" : "Last race steps"}
+                </Text>
                 <Text style={[styles.raceStepsValue, { color: colors.primary }]}>
-                  {userRaceSteps.toLocaleString()}
+                  {raceStepsOnWalk.toLocaleString()}
                 </Text>
               </View>
             ) : null}
