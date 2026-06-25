@@ -1616,13 +1616,17 @@ export default function LiveRaceDetailScreen() {
     }
   }, [raceId, user?.id, user?.username, setActiveRace, resumeLiveRace, catchUpLiveRaceSteps, setConfirmedSteps]);
 
-  const fetchRaceDetails = useCallback(async (force = false) => {
+  const fetchRaceDetails = useCallback(async (
+    force = false,
+    options?: { gateKey?: string; minIntervalMs?: number },
+  ) => {
     if (!raceId || !sessionTokenRef.current || fetchInFlightRef.current) return;
-    const gateKey = `${raceId}:detail`;
+    const gateKey = options?.gateKey ?? `${raceId}:detail`;
+    const minIntervalMs = options?.minIntervalMs ?? STEP_SYNC_CONFIG.LIVE_RACE_DETAIL_REFRESH_MS;
     if (
       !liveRaceFetchAllowed(
         gateKey,
-        STEP_SYNC_CONFIG.LIVE_RACE_DETAIL_REFRESH_MS,
+        minIntervalMs,
         force,
         STEP_SYNC_CONFIG.LIVE_RACE_FORCE_FETCH_MIN_GAP_MS,
       )
@@ -1781,7 +1785,10 @@ export default function LiveRaceDetailScreen() {
   useEffect(() => {
     if (!isActive || !raceId || race?.status !== "in_progress" || !sessionToken) return;
     const id = setInterval(() => {
-      void fetchRaceDetails(false);
+      void fetchRaceDetails(false, {
+        gateKey: `${raceId}:participants`,
+        minIntervalMs: STEP_SYNC_CONFIG.LIVE_RACE_PARTICIPANTS_POLL_MS,
+      });
     }, STEP_SYNC_CONFIG.LIVE_RACE_PARTICIPANTS_POLL_MS);
     return () => clearInterval(id);
   }, [isActive, raceId, race?.status, sessionToken, fetchRaceDetails]);
