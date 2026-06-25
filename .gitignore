@@ -9,9 +9,13 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Native
+# Native (app shells — not Expo local modules under modules/)
 ios/
 android/
+!modules/walkchamp-race-progress/android/
+!modules/walkchamp-race-progress/android/**
+!modules/walkchamp-race-progress/ios/
+!modules/walkchamp-race-progress/ios/**
 *.orig.*
 *.jks
 *.p8

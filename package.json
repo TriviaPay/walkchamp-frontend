@@ -95,6 +95,7 @@
     "react-native-iap": "^12.16.4",
     "react-native-onesignal": "^5.4.5",
     "react-redux": "^9.3.0",
+    "walkchamp-race-progress": "file:./modules/walkchamp-race-progress",
     "expo": "~54.0.35",
     "react": "19.1.0",
     "react-native": "0.81.5"

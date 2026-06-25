@@ -41,6 +41,7 @@ import {
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { dynamicIconService } from "@/services/dynamicIconService";
+import { stepTrackingNotificationService } from "@/services/stepTrackingNotificationService";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -102,6 +103,10 @@ interface WalkContextType {
    * Resolves when the sync completes (or fails silently). Never throws.
    */
   triggerSync: () => Promise<void>;
+  /** Re-query today's steps from the active health provider. */
+  refreshTodaySteps: () => Promise<void>;
+  /** Resume step watching + persistent step notification after race / foreground. */
+  resumeStepWatching: () => Promise<void>;
 }
 
 const WalkContext = createContext<WalkContextType | null>(null);
@@ -237,6 +242,31 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   const sessionStartTimeRef = useRef<Date | null>(null);
   const activeStepSourceRef = useRef<AndroidStepSourceId | "ios_healthkit" | null>(
     null,
+  );
+
+  const syncStepTrackingNotification = useCallback(
+    async (steps: number, goal: number, force = false) => {
+      if (!FEATURE_FLAGS.ENABLE_STEP_TRACKING_NOTIFICATIONS) return;
+      if (!usingRealRef.current || !user?.id) return;
+      const payload = {
+        userId: user.id,
+        todaySteps: steps,
+        dailyGoal: goal > 0 ? goal : 10_000,
+      };
+      if (stepTrackingNotificationService.isActive()) {
+        await stepTrackingNotificationService.update(payload, force);
+      } else {
+        await stepTrackingNotificationService.start(payload);
+      }
+    },
+    [user?.id],
+  );
+
+  const startStepTrackingNotification = useCallback(
+    async (steps: number, goal: number) => {
+      await syncStepTrackingNotification(steps, goal, true);
+    },
+    [syncStepTrackingNotification],
   );
 
   useEffect(() => {
@@ -392,7 +422,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       await persistDailySteps(displaySteps);
       checkMilestone(displaySteps);
     }
-  }, [checkMilestone, persistDailySteps]);
+    void syncStepTrackingNotification(displaySteps, todayDailyGoalRef.current);
+  }, [checkMilestone, persistDailySteps, syncStepTrackingNotification]);
 
   const startRealPollInterval = useCallback(() => {
     if (realStepPollRef.current) clearInterval(realStepPollRef.current);
@@ -483,6 +514,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           syncDeltaToBackend,
           BACKEND_SYNC_INTERVAL_MS,
         );
+        void startStepTrackingNotification(todayStepsRef.current, todayDailyGoalRef.current);
       } else if (Platform.OS === "android") {
         const tracking = await getAndroidStepTrackingStatus();
         if (!mounted) return;
@@ -511,6 +543,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           syncDeltaToBackend,
           BACKEND_SYNC_INTERVAL_MS,
         );
+        void startStepTrackingNotification(todayStepsRef.current, todayDailyGoalRef.current);
       }
     };
 
@@ -521,6 +554,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     return () => {
       mounted = false;
       stopRealPollInterval();
+      void stepTrackingNotificationService.stop();
       // Both platforms use polling — no subscription to tear down
       if (backendSyncRef.current) {
         clearInterval(backendSyncRef.current);
@@ -569,6 +603,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
                 BACKEND_SYNC_INTERVAL_MS,
               );
             }
+            void startStepTrackingNotification(todayStepsRef.current, todayDailyGoalRef.current);
           }
         });
       }
@@ -580,6 +615,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     checkDayChange,
     syncDeltaToBackend,
     startRealPollInterval,
+    startStepTrackingNotification,
     user?.id,
   ]);
 
@@ -606,7 +642,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         BACKEND_SYNC_INTERVAL_MS,
       );
     }
-  }, [verificationLevel, refreshRealSteps, startRealPollInterval, syncDeltaToBackend]);
+    void startStepTrackingNotification(todayStepsRef.current, todayDailyGoalRef.current);
+  }, [verificationLevel, refreshRealSteps, startRealPollInterval, syncDeltaToBackend, startStepTrackingNotification]);
 
   // ── Permission request helper ─────────────────────────────────────────────────
 
@@ -636,6 +673,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             BACKEND_SYNC_INTERVAL_MS,
           );
         }
+        void startStepTrackingNotification(todayStepsRef.current, todayDailyGoalRef.current);
       } else if (Platform.OS === "android" && status !== "unavailable") {
         await enableLimitedSensorTracking();
       }
@@ -647,7 +685,16 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     startRealPollInterval,
     syncDeltaToBackend,
     enableLimitedSensorTracking,
+    startStepTrackingNotification,
   ]);
+
+  const resumeStepWatching = useCallback(async () => {
+    if (!usingRealRef.current) return;
+    await startProviderWatching();
+    await refreshRealSteps();
+    if (!realStepPollRef.current) startRealPollInterval();
+    void startStepTrackingNotification(todayStepsRef.current, todayDailyGoalRef.current);
+  }, [refreshRealSteps, startRealPollInterval, startStepTrackingNotification]);
 
   // ── Real session tracking ─────────────────────────────────────────────────────
 
@@ -814,6 +861,12 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     }
   }, [persistDailySteps]);
 
+  useEffect(() => {
+    if (!user?.id) {
+      void stepTrackingNotificationService.stop();
+    }
+  }, [user?.id]);
+
   // ── Cleanup on unmount ────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -883,6 +936,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         requestStepPermission,
         enableLimitedSensorTracking,
         refreshTodayRank: fetchTodayFromBackend,
+        refreshTodaySteps: refreshRealSteps,
+        resumeStepWatching,
         triggerSync: syncDeltaToBackend,
       }}
     >

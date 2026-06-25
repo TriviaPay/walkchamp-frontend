@@ -159,7 +159,8 @@
       ],
       "react-native-iap",
       "./plugins/withSplitSchemeIntentFilters.js",
-      "./plugins/withWalkChampProgressIcons.js"
+      "./plugins/withWalkChampProgressIcons.js",
+      "./plugins/withWalkChampRaceProgress.js"
     ],
     "experiments": {
       "typedRoutes": true,

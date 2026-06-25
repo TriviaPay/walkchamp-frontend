@@ -12,10 +12,15 @@ export const FEATURE_FLAGS = {
   FALLBACK_ANDROID_PEDOMETER: false,
   SERVER_TIME_RACE_VALIDATION_ENABLED: true,
   /**
-   * Android FGS / iOS Live Activity for live race progress.
-   * Keep false until modules/walkchamp-race-progress is wired via expo prebuild.
+   * Persistent daily step notification (Android FGS) / Live Activity (iOS).
+   * Starts automatically when step tracking permission is granted.
    */
-  ENABLE_RACE_PROGRESS_NOTIFICATIONS: false,
+  ENABLE_STEP_TRACKING_NOTIFICATIONS: true,
+  /**
+   * Live race progress notification during an active race.
+   * Requires native rebuild via expo prebuild.
+   */
+  ENABLE_RACE_PROGRESS_NOTIFICATIONS: true,
 } as const;
 
 // ── Mic Pass / Voice Chat flags ───────────────────────────────────────────────
