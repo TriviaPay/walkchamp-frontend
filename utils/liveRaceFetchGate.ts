@@ -9,11 +9,13 @@ export function liveRaceFetchAllowed(
   key: string,
   minIntervalMs: number,
   force = false,
+  forceMinGapMs = 3_000,
 ): boolean {
-  if (force) return true;
   const now = Date.now();
   const last = lastFetchAt.get(key) ?? 0;
-  return now - last >= minIntervalMs;
+  const elapsed = now - last;
+  if (force) return elapsed >= forceMinGapMs;
+  return elapsed >= minIntervalMs;
 }
 
 export function markLiveRaceFetched(key: string): void {

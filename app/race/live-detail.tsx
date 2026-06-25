@@ -44,6 +44,7 @@ import {
   markLiveRaceFetched,
   resetLiveRaceFetchGate,
 } from "@/utils/liveRaceFetchGate";
+import { debounceKeyed } from "@/utils/apiRequestCoordinator";
 import {
   connectPusher,
   subscribeToChannel,
@@ -1623,6 +1624,7 @@ export default function LiveRaceDetailScreen() {
         gateKey,
         STEP_SYNC_CONFIG.LIVE_RACE_DETAIL_REFRESH_MS,
         force,
+        STEP_SYNC_CONFIG.LIVE_RACE_FORCE_FETCH_MIN_GAP_MS,
       )
     ) {
       return;
@@ -1671,7 +1673,7 @@ export default function LiveRaceDetailScreen() {
         (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase()),
     );
     void catchUpStepsRef.current(me?.currentSteps ?? 0, true);
-    void fetchDetailsOnFocusRef.current(true);
+    void fetchDetailsOnFocusRef.current(false);
 
     return () => {
       pauseRaceStepTracking();
@@ -1773,20 +1775,13 @@ export default function LiveRaceDetailScreen() {
       fetchRaceDetails().catch(() => {});
     }, STEP_SYNC_CONFIG.LIVE_RACE_COMPLETION_POLL_MS);
     return () => clearInterval(id);
-  }, [shouldPoll, fetchRaceDetails]);
+  }, [shouldPoll, fetchRaceDetails, sessionToken]);
 
-  // Refresh participant snapshot as soon as race goes live (don't wait for poll).
-  useEffect(() => {
-    if (isActive && raceId) {
-      void fetchRaceDetails(true);
-    }
-  }, [isActive, raceId, fetchRaceDetails]);
-
-  // Periodic participant refresh — fallback when Pusher events are delayed or missed.
+  // Periodic participant refresh — Pusher-first; gated HTTP fallback only.
   useEffect(() => {
     if (!isActive || !raceId || race?.status !== "in_progress" || !sessionToken) return;
     const id = setInterval(() => {
-      void fetchRaceDetails(true);
+      void fetchRaceDetails(false);
     }, STEP_SYNC_CONFIG.LIVE_RACE_PARTICIPANTS_POLL_MS);
     return () => clearInterval(id);
   }, [isActive, raceId, race?.status, sessionToken, fetchRaceDetails]);
@@ -1838,9 +1833,9 @@ export default function LiveRaceDetailScreen() {
     if (!channel) return;
 
     const refresh = (force = false) => {
-      setTimeout(() => {
+      debounceKeyed(`race-detail:${raceId}`, () => {
         void fetchRaceDetailsRef.current(force);
-      }, 250);
+      }, 400);
     };
 
     const flushFinalSteps = () => {

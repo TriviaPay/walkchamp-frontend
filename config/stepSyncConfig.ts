@@ -26,6 +26,18 @@ export const STEP_SYNC_CONFIG = {
   /** Live race screen — min gap between background GET /api/races/:id refreshes */
   LIVE_RACE_DETAIL_REFRESH_MS: 20_000,
 
+  /** Participant list fallback poll when Pusher is delayed (not a tight loop) */
+  LIVE_RACE_PARTICIPANTS_POLL_MS: 30_000,
+
+  /** Walk tab — challenge card refresh while focused (Pusher handles room events) */
+  WALK_CHALLENGE_POLL_MS: 20_000,
+
+  /** Debounce parallel AppState foreground handlers */
+  APP_FOREGROUND_DEBOUNCE_MS: 400,
+
+  /** Min gap between soft-forced race detail GETs */
+  LIVE_RACE_FORCE_FETCH_MIN_GAP_MS: 3_000,
+
   /** Live race — completion safety-net poll (after 60s elapsed) */
   LIVE_RACE_COMPLETION_POLL_MS: 8_000,
 

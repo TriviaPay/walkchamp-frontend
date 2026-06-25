@@ -61,7 +61,7 @@ class RaceStepSyncService {
     source: RaceProgressSource,
     deviceTotalSteps?: number,
   ): Promise<void> {
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       raceStepSyncBuffer.onLocalRaceStepUpdate(raceId, steps, source, {
         atTarget: true,
         deviceTotalSteps,

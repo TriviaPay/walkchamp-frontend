@@ -68,6 +68,13 @@ class StepPollingService {
     this._clearInterval(reason);
   }
 
+  /** True when race-mode polling is active (optionally for a specific race). */
+  isRacePolling(raceId?: string): boolean {
+    if (this._mode !== "race" || this._interval === null) return false;
+    if (!raceId) return true;
+    return this._raceConfig?.raceId === raceId;
+  }
+
   switchMode(mode: PollingMode, raceConfig?: RacePollingConfig): void {
     this.startPolling(mode, raceConfig);
   }

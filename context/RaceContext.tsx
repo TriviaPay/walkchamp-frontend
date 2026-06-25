@@ -25,6 +25,7 @@ import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { stepPollingService, type RacePollingConfig } from "@/services/StepPollingService";
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
 import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
+import { setWalkBackendSyncPaused } from "@/services/walkSyncCoordinator";
 import {
   postRaceProgress,
   postRaceReconcile,
@@ -623,6 +624,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
     clearAllIntervals();
     setRacePhase("finished");
+    setWalkBackendSyncPaused(false);
 
     const sorted = [...finalParticipants].sort((a, b) => {
       if (a.isFinished && b.isFinished) return (a.finishRank ?? 99) - (b.finishRank ?? 99);
@@ -766,6 +768,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     const myGen = subscriptionGenRef.current;
 
     setRacePhase("in_race");
+    setWalkBackendSyncPaused(true);
     setRaceTimerSeconds(0);
     setUserRaceSteps(bootSteps);
 
@@ -1284,6 +1287,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     clearAllIntervals();
     raceEndedRef.current = false;
     stepTickRef.current = 0;
+    setWalkBackendSyncPaused(false);
     setRacePhase("idle");
     setPlayersJoined(0);
     setParticipants([]);
@@ -1301,6 +1305,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     raceIdRef.current = null;
     raceStartTimeRef.current = null;
     usingRealStepsRef.current = false;
+    setWalkBackendSyncPaused(false);
     setRacePhase("idle");
     setPlayersJoined(0);
     setParticipants([]);
@@ -1346,16 +1351,10 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const steps = userStepsRef.current;
-      if (steps <= 0) return;
-
       if (nextState === "background" || nextState === "inactive") {
-        void raceStepSyncService.flush(
-          raceIdRef.current,
-          steps,
-          stepProviderManager.toRaceProgressSource(),
-        );
-        pauseRaceStepTracking();
+        stepPollingService.stopPolling("race_background");
+        // raceStepSyncBuffer AppState listener flushes pending progress once.
+        return;
       }
     });
     return () => sub.remove();

@@ -42,6 +42,7 @@ import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { dynamicIconService } from "@/services/dynamicIconService";
 import { stepTrackingNotificationService } from "@/services/stepTrackingNotificationService";
+import { isWalkBackendSyncPaused } from "@/services/walkSyncCoordinator";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -440,6 +441,10 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   // ── Backend delta sync ────────────────────────────────────────────────────────
 
   const syncDeltaToBackend = useCallback(async () => {
+    if (isWalkBackendSyncPaused()) {
+      if (__DEV__) console.log("[WalkSync] skipped — live race owns step sync");
+      return;
+    }
     const current = todayStepsRef.current;
     const lastSynced = lastSyncedStepsRef.current;
     const delta = current - lastSynced;
@@ -566,50 +571,68 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
   // ── AppState handler — refresh on foreground ──────────────────────────────────
 
+  const foregroundDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const handleAppState = (nextState: AppStateStatus) => {
-      // Flush any unsaved steps immediately when leaving the app.
-      // Prevents step loss when the OS kills the process between 30 s intervals.
       if (nextState === "background" || nextState === "inactive") {
-        if (usingRealRef.current) syncDeltaToBackend().catch(() => {});
+        if (usingRealRef.current && !isWalkBackendSyncPaused()) {
+          syncDeltaToBackend().catch(() => {});
+        }
         return;
       }
       if (nextState !== "active") return;
 
-      if (usingRealRef.current) {
-        refreshRealSteps();
-        checkDayChange();
-        syncDeltaToBackend().catch(() => {});
-      } else if (
-        Platform.OS === "android" &&
-        FEATURE_FLAGS.REAL_STEP_TRACKING_ENABLED &&
-        !!user?.id
-      ) {
-        void stepProviderManager.initialize(true).then(async (status) => {
-          setStepPermissionStatus(status.permission as PermissionStatus);
-          setActiveStepSource(providerToActiveSource(status.providerId));
-          setVerificationLevel(providerToVerification(status.providerId));
-          if (status.permission === "granted" && !usingRealRef.current) {
-            setUsingRealTracking(true);
-            usingRealRef.current = true;
-            setTrackingStatusState("walking");
-            await startProviderWatching();
-            await refreshRealSteps();
-            fetchTodayFromBackend().catch(() => {});
-            startRealPollInterval();
-            if (!backendSyncRef.current) {
-              backendSyncRef.current = setInterval(
-                syncDeltaToBackend,
-                BACKEND_SYNC_INTERVAL_MS,
-              );
-            }
-            void startStepTrackingNotification(todayStepsRef.current, todayDailyGoalRef.current);
-          }
-        });
+      if (foregroundDebounceRef.current) {
+        clearTimeout(foregroundDebounceRef.current);
       }
+      foregroundDebounceRef.current = setTimeout(() => {
+        foregroundDebounceRef.current = null;
+        if (usingRealRef.current) {
+          refreshRealSteps();
+          checkDayChange();
+          if (!isWalkBackendSyncPaused()) {
+            syncDeltaToBackend().catch(() => {});
+          }
+        } else if (
+          Platform.OS === "android" &&
+          FEATURE_FLAGS.REAL_STEP_TRACKING_ENABLED &&
+          !!user?.id
+        ) {
+          void stepProviderManager.initialize(true).then(async (status) => {
+            setStepPermissionStatus(status.permission as PermissionStatus);
+            setActiveStepSource(providerToActiveSource(status.providerId));
+            setVerificationLevel(providerToVerification(status.providerId));
+            if (status.permission === "granted" && !usingRealRef.current) {
+              setUsingRealTracking(true);
+              usingRealRef.current = true;
+              setTrackingStatusState("walking");
+              await startProviderWatching();
+              await refreshRealSteps();
+              if (!isWalkBackendSyncPaused()) {
+                fetchTodayFromBackend().catch(() => {});
+              }
+              startRealPollInterval();
+              if (!backendSyncRef.current) {
+                backendSyncRef.current = setInterval(
+                  syncDeltaToBackend,
+                  BACKEND_SYNC_INTERVAL_MS,
+                );
+              }
+              void startStepTrackingNotification(todayStepsRef.current, todayDailyGoalRef.current);
+            }
+          });
+        }
+      }, STEP_SYNC_CONFIG.APP_FOREGROUND_DEBOUNCE_MS);
     };
     const sub = AppState.addEventListener("change", handleAppState);
-    return () => sub.remove();
+    return () => {
+      sub.remove();
+      if (foregroundDebounceRef.current) {
+        clearTimeout(foregroundDebounceRef.current);
+        foregroundDebounceRef.current = null;
+      }
+    };
   }, [
     refreshRealSteps,
     checkDayChange,

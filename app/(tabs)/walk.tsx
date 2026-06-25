@@ -41,6 +41,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useRace } from "@/context/RaceContext";
 import { formatDistance, formatCalories, stepsToDistance } from "@/utils/format";
 import { getApiBase } from "@/utils/apiUrl";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import MyTitlesModal, { type ActiveTitle, difficultyColor } from "@/components/MyTitlesModal";
 import { TitleBadge } from "@/components/TitleBadge";
 import WearableSetupModal from "@/components/WearableSetupModal";
@@ -1834,8 +1835,7 @@ export default function WalkScreen() {
     } catch { /* silent */ }
   }, []);
 
-  // Initial load
-  useEffect(() => { loadChallengeStatuses(); }, [loadChallengeStatuses]);
+  // Initial load handled by useFocusEffect below (avoids duplicate fetch on mount + focus).
 
   // When a race ends (racePhase → "idle"), immediately clear any stale HOSTING /
   // JOINED status so the challenge cards revert to "Host / Join" without waiting
@@ -1875,7 +1875,7 @@ export default function WalkScreen() {
       dispatch(fetchCoinBalance());
     }
     loadChallengeStatuses();
-    const pollInterval = setInterval(loadChallengeStatuses, 5_000);
+    const pollInterval = setInterval(loadChallengeStatuses, STEP_SYNC_CONFIG.WALK_CHALLENGE_POLL_MS);
     return () => clearInterval(pollInterval);
   }, [dispatch, refreshTodayRank, loadChallengeStatuses, usingRealTracking, refreshTodaySteps, resumeStepWatching]));
 
