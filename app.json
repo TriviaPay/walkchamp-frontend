@@ -4,12 +4,12 @@
     "slug": "walkchamp",
     "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./android/app/src/main/WalkChampProgress0/android/res/mipmap-xxxhdpi/ic_launcher.png",
+    "icon": "./assets/icons/WalkChampProgress0.png",
     "scheme": "globalwalkerleague",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
-      "image": "./android/app/src/main/WalkChampProgress0/ios/AppIcon~ios-marketing.png",
+      "image": "./assets/icons/WalkChampProgress0.png",
       "resizeMode": "contain",
       "backgroundColor": "#0A0B14"
     },
@@ -53,12 +53,12 @@
         "barStyle": "light-content"
       },
       "adaptiveIcon": {
-        "foregroundImage": "./android/app/src/main/WalkChampProgress0/android/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
+        "foregroundImage": "./assets/icons/adaptive/WalkChampProgress0.png",
         "backgroundColor": "#0A0B14"
       }
     },
     "web": {
-      "favicon": "./android/app/src/main/WalkChampProgress0/android/res/mipmap-xxxhdpi/ic_launcher.png"
+      "favicon": "./assets/icons/WalkChampProgress0.png"
     },
     "plugins": [
       "expo-dev-client",
@@ -110,41 +110,41 @@
         [
           {
             "name": "WalkChampProgress0",
-            "ios": "./android/app/src/main/WalkChampProgress0/ios/AppIcon~ios-marketing.png",
+            "ios": "./assets/icons/WalkChampProgress0.png",
             "android": {
-              "foregroundImage": "./android/app/src/main/WalkChampProgress0/android/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
+              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress0.png",
               "backgroundColor": "#0A0B14"
             }
           },
           {
             "name": "WalkChampProgress25",
-            "ios": "./android/app/src/main/WalkChampProgress25/ios/AppIcon~ios-marketing.png",
+            "ios": "./assets/icons/WalkChampProgress25.png",
             "android": {
-              "foregroundImage": "./android/app/src/main/WalkChampProgress25/android/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
+              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress25.png",
               "backgroundColor": "#0A0B14"
             }
           },
           {
             "name": "WalkChampProgress50",
-            "ios": "./android/app/src/main/WalkChampProgress50/ios/AppIcon~ios-marketing.png",
+            "ios": "./assets/icons/WalkChampProgress50.png",
             "android": {
-              "foregroundImage": "./android/app/src/main/WalkChampProgress50/android/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
+              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress50.png",
               "backgroundColor": "#0A0B14"
             }
           },
           {
             "name": "WalkChampProgress75",
-            "ios": "./android/app/src/main/WalkChampProgress75/ios/AppIcon~ios-marketing.png",
+            "ios": "./assets/icons/WalkChampProgress75.png",
             "android": {
-              "foregroundImage": "./android/app/src/main/WalkChampProgress75/android/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
+              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress75.png",
               "backgroundColor": "#0A0B14"
             }
           },
           {
             "name": "WalkChampProgress100",
-            "ios": "./android/app/src/main/WalkChampProgress100/ios/AppIcon~ios-marketing.png",
+            "ios": "./assets/icons/WalkChampProgress100.png",
             "android": {
-              "foregroundImage": "./android/app/src/main/WalkChampProgress100/android/res/mipmap-xxxhdpi/ic_launcher_foreground.png",
+              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress100.png",
               "backgroundColor": "#0A0B14"
             }
           }

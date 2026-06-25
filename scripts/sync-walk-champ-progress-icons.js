@@ -94,9 +94,51 @@ function defaultAdaptiveIconXml(hasBackground, hasMonochrome) {
   return lines.join("\n") + "\n";
 }
 
-function syncMilestone(mainDir, resDir, milestoneName, isDefault) {
+function syncMilestoneFromAssets(projectRoot, resDir, milestoneName, isDefault) {
+  const adaptiveSrc = path.join(projectRoot, "assets", "icons", "adaptive", `${milestoneName}.png`);
+  const launcherSrc = path.join(projectRoot, "assets", "icons", `${milestoneName}.png`);
+  if (!fs.existsSync(adaptiveSrc)) return false;
+
+  const snake = toSnakeCase(milestoneName);
+  for (const dpi of MIPMAP_DPI) {
+    const destDpi = path.join(resDir, dpi);
+    const fgDest = isDefault
+      ? "ic_launcher_foreground.png"
+      : `ic_launcher_foreground_${snake}.png`;
+    const iconDest = isDefault ? "ic_launcher.png" : `ic_launcher_${snake}.png`;
+    copyFile(adaptiveSrc, path.join(destDpi, fgDest));
+    if (fs.existsSync(launcherSrc)) {
+      copyFile(launcherSrc, path.join(destDpi, iconDest));
+    }
+  }
+
+  const anydpi = path.join(resDir, "mipmap-anydpi-v26");
+  ensureDir(anydpi);
+  fs.writeFileSync(
+    path.join(anydpi, `ic_launcher_${snake}.xml`),
+    adaptiveIconXml(snake, false, false),
+  );
+  if (isDefault) {
+    fs.writeFileSync(
+      path.join(anydpi, "ic_launcher.xml"),
+      defaultAdaptiveIconXml(false, false),
+    );
+    fs.writeFileSync(
+      path.join(anydpi, "ic_launcher_round.xml"),
+      defaultAdaptiveIconXml(false, false),
+    );
+  }
+
+  console.log(`synced ${milestoneName} from assets/icons${isDefault ? " (default launcher)" : ""}`);
+  return true;
+}
+
+function syncMilestone(projectRoot, mainDir, resDir, milestoneName, isDefault) {
   const srcRes = path.join(mainDir, milestoneName, "android", "res");
   if (!fs.existsSync(srcRes)) {
+    if (syncMilestoneFromAssets(projectRoot, resDir, milestoneName, isDefault)) {
+      return;
+    }
     console.warn(`skip ${milestoneName}: missing ${srcRes}`);
     return;
   }
@@ -184,7 +226,7 @@ function syncWalkChampProgressIcons(projectRoot) {
   ensureDir(resDir);
 
   for (const milestoneName of MILESTONES) {
-    syncMilestone(mainDir, resDir, milestoneName, milestoneName === "WalkChampProgress0");
+    syncMilestone(projectRoot, mainDir, resDir, milestoneName, milestoneName === "WalkChampProgress0");
   }
 
   syncInAppAssets(mainDir, assetsDir);
