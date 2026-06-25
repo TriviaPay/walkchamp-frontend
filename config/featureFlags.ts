@@ -11,6 +11,11 @@ export const FEATURE_FLAGS = {
   /** Fall back to old expo-sensors Pedometer if HC fails (set true for debugging only). */
   FALLBACK_ANDROID_PEDOMETER: false,
   SERVER_TIME_RACE_VALIDATION_ENABLED: true,
+  /**
+   * Android FGS / iOS Live Activity for live race progress.
+   * Keep false until modules/walkchamp-race-progress is wired via expo prebuild.
+   */
+  ENABLE_RACE_PROGRESS_NOTIFICATIONS: false,
 } as const;
 
 // ── Mic Pass / Voice Chat flags ───────────────────────────────────────────────

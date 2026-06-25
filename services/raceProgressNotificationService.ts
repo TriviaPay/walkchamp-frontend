@@ -1,5 +1,5 @@
 import { Platform } from "react-native";
-import { requireOptionalNativeModule } from "expo-modules-core";
+import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { RACE_PROGRESS_NOTIFICATION_CONFIG } from "@/config/raceProgressNotificationConfig";
 import { registerLiveActivityToken } from "@/services/raceProgressApi";
 
@@ -27,7 +27,22 @@ type NativeModule = {
   endRaceLiveActivity: (payload: { raceId: string; raceStatus?: string }) => Promise<void>;
 };
 
-const native = requireOptionalNativeModule<NativeModule>("WalkChampRaceProgress");
+let nativeModule: NativeModule | null | undefined;
+
+function getNativeModule(): NativeModule | null {
+  if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return null;
+  if (nativeModule !== undefined) return nativeModule;
+  nativeModule = null;
+  try {
+    const { requireOptionalNativeModule } =
+      require("expo-modules-core") as typeof import("expo-modules-core");
+    nativeModule = requireOptionalNativeModule<NativeModule>("WalkChampRaceProgress");
+  } catch (err) {
+    if (__DEV__) console.warn("[RaceProgressNotif] native module unavailable", err);
+    nativeModule = null;
+  }
+  return nativeModule;
+}
 
 function toNativePayload(payload: RaceProgressNotificationPayload): Record<string, unknown> {
   return {
@@ -79,6 +94,10 @@ class RaceProgressNotificationService {
   }
 
   async start(payload: RaceProgressNotificationPayload): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    const native = getNativeModule();
+    if (!native) return;
+
     this.clearRegisterTimer();
     this.activeRaceId = payload.raceId;
     this.lastSteps = -1;
@@ -86,10 +105,10 @@ class RaceProgressNotificationService {
     const nativePayload = toNativePayload(payload);
 
     try {
-      if (Platform.OS === "android" && native?.startRaceProgressNotification) {
+      if (Platform.OS === "android" && native.startRaceProgressNotification) {
         await native.startRaceProgressNotification(nativePayload);
       }
-      if (Platform.OS === "ios" && native?.startRaceLiveActivity) {
+      if (Platform.OS === "ios" && native.startRaceLiveActivity) {
         const result = await native.startRaceLiveActivity(nativePayload);
         const activityId = result?.activityId;
         const pushToken = result?.pushToken;
@@ -106,15 +125,19 @@ class RaceProgressNotificationService {
   }
 
   async stop(raceId: string, raceStatus = "completed"): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    const native = getNativeModule();
+    if (!native) return;
+
     this.clearRegisterTimer();
     if (this.activeRaceId === raceId) {
       this.activeRaceId = null;
     }
     try {
-      if (Platform.OS === "android" && native?.stopRaceProgressNotification) {
+      if (Platform.OS === "android" && native.stopRaceProgressNotification) {
         await native.stopRaceProgressNotification({ raceId });
       }
-      if (Platform.OS === "ios" && native?.endRaceLiveActivity) {
+      if (Platform.OS === "ios" && native.endRaceLiveActivity) {
         await native.endRaceLiveActivity({ raceId, raceStatus });
       }
     } catch (err) {
@@ -123,6 +146,10 @@ class RaceProgressNotificationService {
   }
 
   async onBackendProgressSynced(payload: RaceProgressNotificationPayload): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    const native = getNativeModule();
+    if (!native) return;
+
     if (!payload.raceId || this.activeRaceId !== payload.raceId) return;
     if (payload.raceStatus === "completed" || payload.raceStatus === "cancelled") {
       await this.stop(payload.raceId, payload.raceStatus);
@@ -133,10 +160,10 @@ class RaceProgressNotificationService {
 
     const nativePayload = toNativePayload(payload);
     try {
-      if (Platform.OS === "android" && native?.updateRaceProgressNotification) {
+      if (Platform.OS === "android" && native.updateRaceProgressNotification) {
         await native.updateRaceProgressNotification(nativePayload);
       }
-      if (Platform.OS === "ios" && native?.updateRaceLiveActivity) {
+      if (Platform.OS === "ios" && native.updateRaceLiveActivity) {
         await native.updateRaceLiveActivity(nativePayload);
       }
       this.markUpdated(payload.raceSteps, payload.rank);
