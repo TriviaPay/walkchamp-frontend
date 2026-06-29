@@ -5,7 +5,7 @@
  * step polling. Goal completion and race end always force an immediate flush.
  */
 
-import { AppState, type AppStateStatus } from "react-native";
+import { AppState, Platform, type AppStateStatus } from "react-native";
 import { LIVE_RACE_SYNC_CONFIG, STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import {
   postRaceProgress,
@@ -100,6 +100,10 @@ class RaceStepSyncBuffer {
     source: RaceProgressSource,
     options: RaceSyncBufferOptions = {},
   ): void {
+    // Native foreground service owns background race sync on Android.
+    if (Platform.OS === "android" && AppState.currentState !== "active") {
+      return;
+    }
     const { force = false, atTarget = false, deviceTotalSteps } = options;
     const cfg = LIVE_RACE_SYNC_CONFIG;
     const now = Date.now();

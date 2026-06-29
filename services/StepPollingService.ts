@@ -28,6 +28,7 @@ class StepPollingService {
   private _interval: ReturnType<typeof setInterval> | null = null;
   private _raceConfig: RacePollingConfig | null = null;
   private _lastEmittedSteps = -1;
+  private _unchangedTicks = 0;
 
   startPolling(mode: PollingMode, raceConfig?: RacePollingConfig): void {
     if (mode === "race" && !FEATURE_FLAGS.REAL_STEP_TRACKING_ENABLED) {
@@ -51,6 +52,7 @@ class StepPollingService {
     this._mode = mode;
     this._raceConfig = raceConfig ?? null;
     this._lastEmittedSteps = -1;
+    this._unchangedTicks = 0;
 
     const intervalMs = mode === "race" ? RACE_INTERVAL_MS : WALK_INTERVAL_MS;
 
@@ -88,6 +90,7 @@ class StepPollingService {
     this._mode = "inactive";
     this._raceConfig = null;
     this._lastEmittedSteps = -1;
+    this._unchangedTicks = 0;
   }
 
   private async _tick(): Promise<void> {
@@ -119,8 +122,14 @@ class StepPollingService {
       }
 
       if (raceSteps === this._lastEmittedSteps) {
-        if (__DEV__) console.log(`[RaceSync] skippedNoChange raceSteps:${raceSteps}`);
-        return;
+        this._unchangedTicks = (this._unchangedTicks ?? 0) + 1;
+        if (this._unchangedTicks < 3) {
+          if (__DEV__) console.log(`[RaceSync] skippedNoChange raceSteps:${raceSteps}`);
+          return;
+        }
+        if (__DEV__) console.log(`[RaceSync] re-emit unchanged raceSteps:${raceSteps} (keepalive)`);
+      } else {
+        this._unchangedTicks = 0;
       }
 
       this._lastEmittedSteps = raceSteps;

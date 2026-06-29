@@ -76,8 +76,8 @@ async function loadDailyState(): Promise<void> {
   const storedToday = (await storageGet<number>(DAILY_TODAY_KEY as never)) ?? 0;
 
   if (storedDate === today) {
+    _todaySteps = Math.max(_todaySteps, storedToday);
     _dailyBaseline = storedBaseline;
-    _todaySteps = storedToday;
   } else {
     _dailyBaseline = 0;
     _todaySteps = 0;
@@ -94,17 +94,29 @@ async function persistDaily(steps: number): Promise<void> {
   await storageSet(DAILY_TODAY_KEY as never, steps);
 }
 
+/** Freeze today's count at subscribe — delta since subscribe adds on top. */
+function alignDailyBaselineForWatch(): void {
+  _dailyBaseline = _todaySteps;
+  void storageSet(DAILY_BASELINE_KEY as never, _dailyBaseline);
+}
+
 function ensureSubscription(): boolean {
   if (_sub) return true;
   const ped = loadPedometer();
   if (!ped) return false;
 
+  alignDailyBaselineForWatch();
+
   _sub = ped.watchStepCount((result) => {
-    const todayTotal = Math.max(_todaySteps, _dailyBaseline + result.steps);
+    const delta = Math.max(0, Math.floor(result.steps));
+    if (delta <= 0) return;
+    const todayTotal = _dailyBaseline + delta;
+    if (todayTotal <= _todaySteps) return;
+
     void persistDaily(todayTotal);
-    if (__DEV__ && result.steps > 0) {
+    if (__DEV__) {
       console.log(
-        `[StepProvider] legacy sensor delta=${result.steps} today=${todayTotal}`,
+        `[StepProvider] legacy sensor delta=${delta} today=${todayTotal} (base=${_dailyBaseline})`,
       );
     }
     if (_watchCallback) {
@@ -185,12 +197,6 @@ export const androidLegacySensorProvider: StepProvider = {
     from.setHours(0, 0, 0, 0);
     const to = new Date();
     await loadDailyState();
-
-    const perm = await this.getPermissionStatus();
-    if (perm === "granted") {
-      ensureSubscription();
-    }
-
     return buildResult(_todaySteps, from, to);
   },
 
@@ -238,6 +244,25 @@ export const androidLegacySensorProvider: StepProvider = {
     await clearRaceBaseline(raceId, userId, "android_legacy_sensor");
   },
 
+  async reconcileTodaySteps(steps: number): Promise<void> {
+    await loadDailyState();
+    const next = Math.max(_todaySteps, Math.floor(steps));
+    if (next <= _todaySteps) return;
+
+    _todaySteps = next;
+    await persistDaily(next);
+
+    if (!_sub) return;
+
+    _dailyBaseline = next;
+    await storageSet(DAILY_BASELINE_KEY as never, _dailyBaseline);
+    try {
+      _sub.remove();
+    } catch {}
+    _sub = null;
+    ensureSubscription();
+  },
+
   async startWatchingSteps(
     callback: (result: StepReadResult) => void,
   ): Promise<() => void> {
@@ -251,6 +276,13 @@ export const androidLegacySensorProvider: StepProvider = {
     _watchCallback = callback;
     _rawAtSubscription = _todaySteps;
     await storageSet(RAW_COUNTER_AT_SUB_KEY as never, _rawAtSubscription);
+    if (_sub) {
+      try {
+        _sub.remove();
+      } catch {}
+      _sub = null;
+    }
+    alignDailyBaselineForWatch();
     ensureSubscription();
 
     return () => {

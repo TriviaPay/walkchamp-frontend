@@ -52,6 +52,13 @@ function formatRelativeTime(iso: string | null | undefined): string {
 
 type ChatTab = "global" | "private" | "friends";
 
+function normalizeChatTab(raw?: string): ChatTab | null {
+  if (!raw) return null;
+  if (raw === "global" || raw === "private" || raw === "friends") return raw;
+  if (raw === "requests") return "friends";
+  return null;
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface ReplyPreview {
@@ -1487,13 +1494,15 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
 
 // ── Friends Tab ────────────────────────────────────────────────────────────────
 
-function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], refreshTrigger = 0, onUnfriend }: {
+function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], refreshTrigger = 0, onUnfriend, highlightUserId = null }: {
   colors: ReturnType<typeof useColors>;
   insets: EdgeInsets;
   onOpenPrivateChat: (friend: FriendItem) => void;
   incomingRequests?: FriendRequest[];
   refreshTrigger?: number;
-  onUnfriend?: (friendId: string, conversationId: string | null) => void; }) {
+  onUnfriend?: (friendId: string, conversationId: string | null) => void;
+  highlightUserId?: string | null;
+}) {
   const { getAvatarVersion } = useAvatarVersionContext();
   const { user } = useAuth();
   const [friends, setFriends] = useState<FriendItem[]>([]);
@@ -1745,7 +1754,12 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
       </View>
 
       {received.map((r) => (
-        <View key={r.id} style={[cStyles.neonCard, { backgroundColor: colors.card, borderColor: colors.border, alignItems: "flex-start" }]}>
+        <View key={r.id} style={[cStyles.neonCard, {
+          backgroundColor: colors.card,
+          borderColor: highlightUserId === r.userId ? "#A855F7" : colors.border,
+          borderWidth: highlightUserId === r.userId ? 2 : 1,
+          alignItems: "flex-start",
+        }]}>
           <View style={{ position: "relative" }}>
             {r.avatarUrl && r.userId ? (
               <View style={{ width: 48, height: 48, borderRadius: 24, overflow: "hidden", borderWidth: 2, borderColor: r.avatarColor + "80" }}>
@@ -1881,7 +1895,15 @@ export default function ChatScreen() {
   const colors = useColors();
   const { insets, safeTop } = useSafeLayout();
   const { user } = useAuth();
-  const { tab: tabParam } = useLocalSearchParams<{ tab?: string }>();
+  const searchParams = useLocalSearchParams<{
+    tab?: string | string[];
+    senderUserId?: string | string[];
+    friendId?: string | string[];
+  }>();
+  const paramTab = Array.isArray(searchParams.tab) ? searchParams.tab[0] : searchParams.tab;
+  const paramSenderUserId = Array.isArray(searchParams.senderUserId)
+    ? searchParams.senderUserId[0]
+    : searchParams.senderUserId;
   const tabBarHeight = useTabBarHeight();
   const { getAvatarVersion } = useAvatarVersionContext();
   const { markRequestsSeen, clearPrivateUnread } = useUnread();
@@ -1894,13 +1916,10 @@ export default function ChatScreen() {
   const [privateUnread, setPrivateUnread] = useState(0);
   const activeTabRef = useRef<ChatTab>("global");
 
-  // Deep link tab selection (walkchamp://chat/requests | walkchamp://chat/friends)
   useEffect(() => {
-    if (!tabParam) return;
-    if (tabParam === "requests") setActiveTab("friends");
-    else if (tabParam === "friends" || tabParam === "private") setActiveTab("private");
-    else if (tabParam === "global") setActiveTab("global");
-  }, [tabParam]);
+    const tab = normalizeChatTab(paramTab);
+    if (tab) setActiveTab(tab);
+  }, [paramTab]);
 
   // Seed badge counts from DB on screen mount
   useEffect(() => {
@@ -2052,7 +2071,17 @@ export default function ChatScreen() {
             onUnfriend={(fid, cid) => setUnfriendedConv({ friendId: fid, conversationId: cid })}
           />
         )}
-        {activeTab === "friends" && <FriendsTab colors={colors} insets={insets} onOpenPrivateChat={handleOpenPrivateChat} incomingRequests={incomingFriendRequests} refreshTrigger={friendsRefreshTrigger} onUnfriend={(fid, cid) => setUnfriendedConv({ friendId: fid, conversationId: cid })} />}
+        {activeTab === "friends" && (
+          <FriendsTab
+            colors={colors}
+            insets={insets}
+            onOpenPrivateChat={handleOpenPrivateChat}
+            incomingRequests={incomingFriendRequests}
+            refreshTrigger={friendsRefreshTrigger}
+            onUnfriend={(fid, cid) => setUnfriendedConv({ friendId: fid, conversationId: cid })}
+            highlightUserId={paramSenderUserId ?? null}
+          />
+        )}
       </KeyboardAvoidingView>
     </View>
     </TouchableWithoutFeedback>

@@ -11,6 +11,8 @@ export function resolveDeepLink(raw: string | undefined | null): string | null {
   let path = trimmed;
   if (path.startsWith("walkchamp://")) {
     path = path.slice("walkchamp://".length);
+  } else if (path.startsWith("globalwalkerleague://")) {
+    path = path.slice("globalwalkerleague://".length);
   } else if (path.startsWith("/")) {
     return path;
   }

@@ -1,6 +1,9 @@
 import Foundation
 import ActivityKit
 import ExpoModulesCore
+import HealthKit
+
+// MARK: - Live Activity attributes (shared with Widget Extension target when added in Xcode)
 
 @available(iOS 16.2, *)
 public struct WalkChampRaceAttributes: ActivityAttributes {
@@ -31,12 +34,54 @@ public struct WalkChampWalkAttributes: ActivityAttributes {
   public var userId: String
 }
 
+// MARK: - HealthKit background observer for race step wake-ups
+
+@available(iOS 15.0, *)
+final class WalkChampHealthKitRaceObserver {
+  static let shared = WalkChampHealthKitRaceObserver()
+
+  private let store = HKHealthStore()
+  private var observerQuery: HKObserverQuery?
+  private var raceStart: Date?
+
+  var onStepsUpdated: (() -> Void)?
+
+  func start(raceStartAt: Date) {
+    guard HKHealthStore.isHealthDataAvailable() else { return }
+    stop()
+    raceStart = raceStartAt
+
+    guard let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return }
+
+    store.requestAuthorization(toShare: [], read: [stepType]) { _, _ in }
+
+    store.enableBackgroundDelivery(for: stepType, frequency: .immediate) { _, _ in }
+
+    let query = HKObserverQuery(sampleType: stepType, predicate: nil) { [weak self] _, completionHandler, _ in
+      self?.onStepsUpdated?()
+      completionHandler()
+    }
+    observerQuery = query
+    store.execute(query)
+  }
+
+  func stop() {
+    if let query = observerQuery {
+      store.stop(query)
+    }
+    observerQuery = nil
+    raceStart = nil
+  }
+}
+
+// MARK: - Race Live Activity manager
+
 @available(iOS 16.2, *)
 enum WalkChampRaceLiveActivityManager {
   private static var activities: [String: Activity<WalkChampRaceAttributes>] = [:]
   private static var tokenCache: [String: String] = [:]
 
-  static func start(payload: [String: Any]) -> [String: String] {
+  static func start(payload: [String: Any]) async -> [String: String] {
     guard ActivityAuthorizationInfo().areActivitiesEnabled else { return [:] }
     let raceId = payload["raceId"] as? String ?? ""
     let userId = payload["userId"] as? String ?? ""
@@ -55,19 +100,45 @@ enum WalkChampRaceLiveActivityManager {
       )
       activities[raceId] = activity
 
-      Task {
-        for await tokenData in activity.pushTokenUpdates {
-          let token = tokenData.map { String(format: "%02x", $0) }.joined()
-          tokenCache[raceId] = token
-        }
-      }
-
+      let token = await waitForPushToken(activity: activity, raceId: raceId)
       return [
         "activityId": activity.id,
-        "pushToken": tokenCache[raceId] ?? "",
+        "pushToken": token,
       ]
     } catch {
       return [:]
+    }
+  }
+
+  private static func waitForPushToken(
+    activity: Activity<WalkChampRaceAttributes>,
+    raceId: String,
+    timeoutSeconds: Double = 5.0,
+  ) async -> String {
+    if let cached = tokenCache[raceId], !cached.isEmpty { return cached }
+
+    return await withTaskGroup(of: String?.self) { group in
+      group.addTask {
+        for await tokenData in activity.pushTokenUpdates {
+          let token = tokenData.map { String(format: "%02x", $0) }.joined()
+          if !token.isEmpty {
+            tokenCache[raceId] = token
+            return token
+          }
+        }
+        return nil
+      }
+      group.addTask {
+        try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+        return nil
+      }
+      for await result in group {
+        if let token = result, !token.isEmpty {
+          group.cancelAll()
+          return token
+        }
+      }
+      return tokenCache[raceId] ?? ""
     }
   }
 
@@ -106,7 +177,7 @@ enum WalkChampRaceLiveActivityManager {
       totalParticipants: intValue(payload["totalParticipants"], default: 1),
       goalSteps: intValue(payload["goalSteps"]),
       timeLeftSeconds: intValue(payload["timeLeftSeconds"]),
-      raceStatus: payload["raceStatus"] as? String ?? "active",
+      raceStatus: payload["raceStatus"] as? String ?? "in_progress",
       lastUpdatedAt: Date()
     )
   }
@@ -181,6 +252,8 @@ public class WalkChampRaceProgressModule: Module {
   public func definition() -> ModuleDefinition {
     Name("WalkChampRaceProgress")
 
+    Events("onHealthKitRaceStepsWake")
+
     AsyncFunction("startRaceProgressNotification") { (_: [String: Any]) in
       // Android only
     }
@@ -207,7 +280,7 @@ public class WalkChampRaceProgressModule: Module {
 
     AsyncFunction("startRaceLiveActivity") { (payload: [String: Any]) -> [String: String] in
       if #available(iOS 16.2, *) {
-        return WalkChampRaceLiveActivityManager.start(payload: payload)
+        return await WalkChampRaceLiveActivityManager.start(payload: payload)
       }
       return [:]
     }
@@ -223,6 +296,23 @@ public class WalkChampRaceProgressModule: Module {
         let raceId = payload["raceId"] as? String ?? ""
         let status = payload["raceStatus"] as? String ?? "completed"
         WalkChampRaceLiveActivityManager.end(raceId: raceId, raceStatus: status)
+      }
+    }
+
+    AsyncFunction("enableRaceHealthKitBackground") { (raceStartISO: String) in
+      if #available(iOS 15.0, *) {
+        let formatter = ISO8601DateFormatter()
+        let start = formatter.date(from: raceStartISO) ?? Date()
+        WalkChampHealthKitRaceObserver.shared.onStepsUpdated = { [weak self] in
+          self?.sendEvent("onHealthKitRaceStepsWake", [:])
+        }
+        WalkChampHealthKitRaceObserver.shared.start(raceStartAt: start)
+      }
+    }
+
+    AsyncFunction("disableRaceHealthKitBackground") {
+      if #available(iOS 15.0, *) {
+        WalkChampHealthKitRaceObserver.shared.stop()
       }
     }
 

@@ -1,18 +1,17 @@
 /**
  * Step sync intervals — single source of truth for local polling vs backend batching.
  *
- * Walk tab: low-frequency backend sync (30 s).
- * Live race: frequent local reads for smooth UI, batched backend sync (7 s default).
+ * Walk + live race: backend progress every 3 s; local UI from sensor/HealthKit/HC immediately.
  */
 export const STEP_SYNC_CONFIG = {
-  /** Walk screen — push step delta to /api/me/steps */
-  WALK_BACKEND_SYNC_MS: 30_000,
+  /** Walk screen — push step delta to /api/walk/steps */
+  WALK_BACKEND_SYNC_MS: 3_000,
 
-  /** Race — read device steps locally for UI (no network) */
+  /** Race — read device steps locally for UI (sensor / HealthKit / Health Connect) */
   RACE_LOCAL_POLL_MS: 1_000,
 
   /** Race — minimum time between /api/races/:id/progress calls */
-  RACE_BACKEND_SYNC_MS: 5_000,
+  RACE_BACKEND_SYNC_MS: 3_000,
 
   /** Race — sync when this many new steps accumulated AND interval elapsed */
   RACE_BACKEND_SYNC_MIN_DELTA: 1,
@@ -44,8 +43,14 @@ export const STEP_SYNC_CONFIG = {
   /** Matchmaking lobby — room status poll while waiting for start */
   MATCHMAKING_ROOM_POLL_MS: 8_000,
 
-  /** Spectator heartbeat POST /spectate */
-  LIVE_RACE_SPECTATE_HEARTBEAT_MS: 60_000,
+  /** Walk — min new steps before POST /api/walk/steps (Health Connect / HealthKit) */
+  WALK_BACKEND_SYNC_MIN_DELTA_VERIFIED: 5,
+
+  /** Legacy sensor — smaller batches OK */
+  WALK_BACKEND_SYNC_MIN_DELTA_LEGACY: 3,
+
+  /** Ignore single-step HC spikes without a confirming read (phantom on app open) */
+  WALK_PHANTOM_STEP_BUMP: 1,
 } as const;
 
 /** Live race backend sync buffer — used by raceStepSyncBuffer.ts */
@@ -53,7 +58,7 @@ export const LIVE_RACE_SYNC_CONFIG = {
   uiUpdateMs: STEP_SYNC_CONFIG.RACE_UI_UPDATE_MS,
   backendSyncMs: STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_MS,
   minStepDeltaToSync: STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_MIN_DELTA,
-  maxPendingAgeMs: 15_000,
+  maxPendingAgeMs: 3_000,
   flushOnGoalComplete: true,
   flushOnAppBackground: true,
   flushOnForfeit: true,

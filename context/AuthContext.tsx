@@ -25,6 +25,7 @@ import { screenCache } from "@/utils/screenCache";
 import { storageSet, storageRemove, STORAGE_KEYS } from "@/utils/storage";
 import { dynamicIconService } from "@/services/dynamicIconService";
 import { stepPollingService } from "@/services/StepPollingService";
+import { clearStepSessionForLogout } from "@/services/stepProgressCoordinator";
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
 
 export type { UserProfile };
@@ -92,8 +93,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     if (__DEV__) console.log("[Auth] logout started");
+    const userId = user?.id;
     cancelProactiveTokenRefresh();
     stepPollingService.stopPolling("logout");
+    void clearStepSessionForLogout(userId);
     raceStepSyncService.cancelPending();
     // Clear in-memory screen cache so the next user never sees stale data.
     screenCache.clearAll();
@@ -109,7 +112,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .then(({ refresh }) => (refresh ? authLogout(refresh) : clearSession()))
       .catch(() => clearSession())
       .finally(() => { if (__DEV__) console.log("[Auth] logout completed"); });
-  }, [dispatch]);
+  }, [dispatch, user?.id]);
 
   const updateUser = useCallback(
     async (updates: Partial<UserProfile>) => {

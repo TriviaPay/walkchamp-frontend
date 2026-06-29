@@ -18,6 +18,8 @@ function withWalkChampRaceProgress(config) {
       "android.permission.FOREGROUND_SERVICE",
       "android.permission.FOREGROUND_SERVICE_HEALTH",
       "android.permission.POST_NOTIFICATIONS",
+      "android.permission.ACTIVITY_RECOGNITION",
+      "android.permission.WAKE_LOCK",
     ];
     for (const name of permissions) {
       const exists = manifest["uses-permission"].some(
@@ -40,10 +42,21 @@ function withWalkChampRaceProgress(config) {
         application.service.push({
           $: {
             "android:name": serviceName,
+            "android:enabled": "true",
             "android:exported": "false",
             "android:foregroundServiceType": "health",
+            "android:stopWithTask": "false",
           },
         });
+      } else {
+        const svc = application.service.find(
+          (s) => s.$?.["android:name"] === serviceName,
+        );
+        if (svc?.$) {
+          svc.$["android:enabled"] = "true";
+          svc.$["android:stopWithTask"] = "false";
+          svc.$["android:foregroundServiceType"] = "health";
+        }
       }
     }
 
@@ -52,6 +65,14 @@ function withWalkChampRaceProgress(config) {
 
   config = withInfoPlist(config, (cfg) => {
     cfg.modResults.NSSupportsLiveActivities = true;
+    if (!cfg.modResults.UIBackgroundModes) {
+      cfg.modResults.UIBackgroundModes = [];
+    }
+    const modes = Array.isArray(cfg.modResults.UIBackgroundModes)
+      ? cfg.modResults.UIBackgroundModes
+      : [cfg.modResults.UIBackgroundModes];
+    if (!modes.includes("fetch")) modes.push("fetch");
+    cfg.modResults.UIBackgroundModes = modes;
     return cfg;
   });
 

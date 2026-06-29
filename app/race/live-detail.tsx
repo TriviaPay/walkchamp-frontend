@@ -37,6 +37,8 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useRace } from "@/context/RaceContext";
 import { useWalkContext } from "@/context/WalkContext";
+import { useRaceProgress } from "@/hooks/useRaceProgress";
+import { updateRankFromBackend } from "@/services/stepProgressCoordinator";
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import {
@@ -734,7 +736,7 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
         const nameColor = isForfeited ? "#FF4444" : isUser ? colors.primary : colors.foreground;
         const pct = race.targetSteps > 0 ? Math.min((p.currentSteps / race.targetSteps) * 100, 100) : 0;
         const prize = isCompleted && !isForfeited && (p.prizeAmount ?? 0) > 0 ? `$${p.prizeAmount!.toFixed(2)}` : null;
-        const pAvatarUrl = p.avatarUrl && p.userId
+        const pAvatarUrl = p.userId
           ? `${getApiBase()}/api/profile/avatar/${p.userId}?v=${getAvatarVersion(p.userId ?? "", p.avatarVersion ?? 0)}`
           : (isUser ? userAvatarUrl : null);
         return (
@@ -1210,10 +1212,13 @@ export default function LiveRaceDetailScreen() {
   );
 
   const { user, sessionToken }                     = useAuth();
-  const { userRaceSteps: localSteps, setRaceTargetSteps, resumeLiveRace, setActiveRace, pauseRaceStepTracking, catchUpLiveRaceSteps, recordFinishedRaceStepsForWalk } = useRace();
+  const { setRaceTargetSteps, resumeLiveRace, setActiveRace, catchUpLiveRaceSteps, recordFinishedRaceStepsForWalk } = useRace();
   const { resumeStepWatching, refreshTodaySteps } = useWalkContext();
-  const localStepsRef = useRef(localSteps);
-  localStepsRef.current = localSteps;
+  const raceProgress = useRaceProgress();
+  const canonicalRaceSteps = raceProgress.raceSteps;
+  const canonicalRank = raceProgress.rank;
+  const localStepsRef = useRef(canonicalRaceSteps);
+  localStepsRef.current = canonicalRaceSteps;
   const raceResumedRef = useRef(false);
   const sessionTokenRef = useRef(sessionToken);
   const setRaceTargetStepsRef = useRef(setRaceTargetSteps);
@@ -1460,15 +1465,12 @@ export default function LiveRaceDetailScreen() {
       const isMe =
         p.userId === user?.id ||
         (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase());
-      const confirmed = isMe
-        ? Math.max(localSteps, p.currentSteps)
+      const confirmed = isMe && isActive
+        ? canonicalRaceSteps
         : p.currentSteps;
-      setConfirmedSteps(p.userId, confirmed, {
-        instant: !isMe,
-        sensorDriven: isMe,
-      });
+      setConfirmedSteps(p.userId, confirmed);
     }
-  }, [participants, localSteps, isActive, user?.id, user?.username, setConfirmedSteps]);
+  }, [participants, canonicalRaceSteps, isActive, user?.id, user?.username, setConfirmedSteps]);
 
   const sortedPlayers = useMemo(() => {
     // Deduplicate by both participant id AND userId — same user can appear
@@ -1488,14 +1490,19 @@ export default function LiveRaceDetailScreen() {
       const isMe = p.userId === user?.id ||
         (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase());
       const effectiveSteps = isMe && isActive
-        ? Math.max(localSteps, p.currentSteps)
+        ? canonicalRaceSteps
         : p.currentSteps;
       const displaySteps = getDisplaySteps(p.userId, effectiveSteps);
       return { p, isMe, effectiveSteps: displaySteps };
     });
     const sorted = [...withEffective].sort((a, b) => b.effectiveSteps - a.effectiveSteps);
     return sorted.slice(0, 10).map<Player>(({ p, isMe, effectiveSteps }, index) => {
-      const rank = p.rank && p.rank > 0 ? p.rank : index + 1;
+      const rank =
+        isMe && isActive && canonicalRank != null && canonicalRank > 0
+          ? canonicalRank
+          : p.rank && p.rank > 0
+            ? p.rank
+            : index + 1;
       const username = p.username || "Runner";
       return {
         id: p.id, userId: p.userId, rank,
@@ -1507,11 +1514,11 @@ export default function LiveRaceDetailScreen() {
         country: p.countryFlag ?? undefined,
         isHost: p.isHost,
         isForfeited: p.status === "forfeited",
-        avatarUrl: p.avatarUrl && p.userId ? `${getApiBase()}/api/profile/avatar/${p.userId}?v=${p.avatarVersion ?? 0}` : null,
+        avatarUrl: p.userId ? `${getApiBase()}/api/profile/avatar/${p.userId}?v=${p.avatarVersion ?? 0}` : null,
         avatarVersion: p.avatarVersion ?? null,
       };
     }).sort((a, b) => a.rank - b.rank);
-  }, [participants, user?.id, user?.username, isActive, localSteps, getDisplaySteps]);
+  }, [participants, user?.id, user?.username, isActive, canonicalRaceSteps, canonicalRank, getDisplaySteps]);
 
   const myPlayer = useMemo(
     () => sortedPlayers.find((p) => p.isMe) ?? sortedPlayers[0] ?? null,
@@ -1561,11 +1568,11 @@ export default function LiveRaceDetailScreen() {
   // pedometer via RaceContext) over the Pusher-delayed backend value. This
   // gives instant feedback without waiting for the server round-trip.
   const mySteps = myPlayer?.isMe && isActive
-    ? Math.max(myPlayer.steps, localSteps)
+    ? canonicalRaceSteps
     : (myPlayer?.steps ?? 0);
   const myProgress = Math.min(mySteps / Math.max(race?.targetSteps ?? 1, 1), 1);
   const trackPositionText = myPlayer
-    ? `#${myPlayer.rank} of ${Math.max(sortedPlayers.length, participants.length || 1)}`
+    ? `#${canonicalRank ?? myPlayer.rank} of ${raceProgress.totalParticipants ?? Math.max(sortedPlayers.length, participants.length || 1)}`
     : "Waiting";
   const trackStatusText = isCompleted ? "FINISHED" : isActive ? "LIVE" : "WAITING";
 
@@ -1611,7 +1618,7 @@ export default function LiveRaceDetailScreen() {
         p.userId === user.id ||
         (!!user.username && p.username.toLowerCase() === user.username.toLowerCase());
       if (isMe) continue;
-      setConfirmedSteps(p.userId, p.currentSteps, { instant: true });
+      setConfirmedSteps(p.userId, p.currentSteps);
       prevStepsMapRef.current[p.userId] = p.currentSteps;
     }
   }, [raceId, user?.id, user?.username, setActiveRace, resumeLiveRace, catchUpLiveRaceSteps, setConfirmedSteps]);
@@ -1680,11 +1687,10 @@ export default function LiveRaceDetailScreen() {
     void fetchDetailsOnFocusRef.current(false);
 
     return () => {
-      pauseRaceStepTracking();
       void resumeStepWatching();
       void refreshTodaySteps();
     };
-  }, [raceId, race?.status, user?.id, user?.username, pauseRaceStepTracking, resumeStepWatching, refreshTodaySteps]));
+  }, [raceId, race?.status, user?.id, user?.username, resumeStepWatching, refreshTodaySteps]));
 
   // ── Full fetch (initial load — race first, comments/reactions in background) ─
   const fetchRace = useCallback(async () => {
@@ -1885,14 +1891,21 @@ export default function LiveRaceDetailScreen() {
       const newSteps = data.steps;
       const uid = data.userId ?? data.participantId ?? "";
 
+      if (uid === currentUserId) {
+        updateRankFromBackend({
+          raceSteps: newSteps,
+          rank: data.rank,
+          totalParticipants: raceProgress.totalParticipants ?? undefined,
+          goalSteps: race?.targetSteps,
+        });
+      }
+
       // Step delta + animator feed so other participants see catch-up after background sync.
-      if (uid && newSteps > 0) {
+      if (uid && newSteps > 0 && uid !== currentUserId) {
         const prev = prevStepsMapRef.current[uid] ?? 0;
         const delta = newSteps - prev;
         if (delta > 0) {
-          if (uid !== currentUserId) {
-            setConfirmedSteps(uid, newSteps);
-          }
+          setConfirmedSteps(uid, newSteps);
           setStepDeltaFlash((f) => ({ ...f, [uid]: delta }));
           if (stepDeltaTimersRef.current[uid]) clearTimeout(stepDeltaTimersRef.current[uid]);
           stepDeltaTimersRef.current[uid] = setTimeout(() => {
@@ -1907,6 +1920,12 @@ export default function LiveRaceDetailScreen() {
         const next = prev.map((p) => {
           const match = (data.participantId && p.id === data.participantId) || (data.userId && p.userId === data.userId);
           if (!match) return p;
+          if (p.userId === currentUserId) {
+            const newRank = data.rank ?? p.rank;
+            if (newRank === p.rank) return p;
+            changed = true;
+            return { ...p, rank: newRank };
+          }
           const capped = Math.max(p.currentSteps, newSteps);
           const newRank = data.rank ?? p.rank;
           if (capped === p.currentSteps && newRank === p.rank) return p; // no change — avoid re-render
@@ -2205,7 +2224,7 @@ export default function LiveRaceDetailScreen() {
           <View key={`${w.userId}-${i}`} style={s.winnerRow}>
             <Text style={s.winnerCrown}>{rankCrown}</Text>
             <View style={[s.winnerAv, { backgroundColor: (w.avatarColor ?? "#00E676") + "25", borderColor: w.avatarColor ?? "#00E676" }]}>
-              {w.avatarUrl && w.userId ? (
+              {w.userId ? (
                 <Image
                   source={{ uri: `${getApiBase()}/api/profile/avatar/${w.userId}?v=${getAvatarVersion(w.userId, w.avatarVersion ?? 0)}` }}
                   style={s.winnerAvImg}
@@ -2481,7 +2500,7 @@ export default function LiveRaceDetailScreen() {
               participants={isActive && currentUserId
                 ? participants.map((p) =>
                     p.userId === currentUserId
-                      ? { ...p, currentSteps: Math.max(p.currentSteps, localSteps) }
+                      ? { ...p, currentSteps: canonicalRaceSteps }
                       : p,
                   ).map((p) => ({
                     ...p,
@@ -2580,7 +2599,7 @@ export default function LiveRaceDetailScreen() {
                     {...(isFailed ? { onPress: retryHandler, activeOpacity: 0.6 } : {})}
                   >
                     <View style={[st.liveChatAv, { backgroundColor: (cheer.avatarColor ?? colors.primary) + "22", borderColor: cheer.avatarColor ?? colors.primary }]}>
-                      {cheer.avatarUrl && cheer.userId ? (
+                      {cheer.userId ? (
                         <Image
                           source={{ uri: `${getApiBase()}/api/profile/avatar/${cheer.userId}?v=${getAvatarVersion(cheer.userId, cheer.avatarVersion ?? 0)}` }}
                           style={st.liveChatAvImg}

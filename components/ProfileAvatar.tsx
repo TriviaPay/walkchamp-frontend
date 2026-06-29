@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View, ViewStyle } from "react-native";
 import { Image } from "expo-image";
 import { getApiBase } from "@/utils/apiUrl";
@@ -19,10 +19,8 @@ interface ProfileAvatarProps {
 /**
  * Shared avatar component — single source of truth for profile picture display.
  *
- * - Shows the proxy-served avatar with a cache-busting ?v= param.
- * - Falls back to an initials placeholder when there is no image — never shows
- *   a stale fallback or random image.
- * - Cache-busts automatically whenever avatarVersion changes (upload or remove).
+ * - Tries the proxy URL whenever userId is known (profileImageUrl is optional).
+ * - Falls back to initials when load fails or no userId.
  */
 export function ProfileAvatar({
   userId,
@@ -36,13 +34,18 @@ export function ProfileAvatar({
   style,
 }: ProfileAvatarProps) {
   const { getAvatarVersion } = useAvatarVersionContext();
+  const [loadFailed, setLoadFailed] = useState(false);
   const initials = displayName.trim() ? displayName.trim().charAt(0).toUpperCase() : "?";
-  const hasAvatar = !!(profileImageUrl && userId);
 
   const effectiveVersion = userId ? getAvatarVersion(userId, avatarVersion ?? 0) : (avatarVersion ?? 0);
-  const imageUri = hasAvatar
+  const tryImage = !!userId && !loadFailed;
+  const imageUri = tryImage
     ? `${getApiBase()}/api/profile/avatar/${userId}?v=${effectiveVersion}`
     : null;
+
+  useEffect(() => {
+    setLoadFailed(false);
+  }, [userId, effectiveVersion, profileImageUrl]);
 
   const containerStyle: ViewStyle[] = [
     styles.container,
@@ -63,6 +66,7 @@ export function ProfileAvatar({
       style={{ width: size, height: size, borderRadius: size / 2 }}
       contentFit="cover"
       cachePolicy="memory-disk"
+      onError={() => setLoadFailed(true)}
     />
   ) : (
     <Text style={[styles.initials, { color: avatarColor, fontSize: size * 0.38 }]}>

@@ -23,6 +23,7 @@ import Animated, {
   withSequence,
   cancelAnimation, } from "react-native-reanimated";
 import { useAuth } from "@/context/AuthContext";
+import { useRace } from "@/context/RaceContext";
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import {
@@ -395,6 +396,12 @@ export default function LiveTrackTab() {
   const { insets, safeTop, safeBottom } = useSafeLayout();
   const tabBarHeight = useTabBarHeight();
   const { user } = useAuth();
+  const {
+    userRaceSteps,
+    setActiveRace,
+    resumeLiveRace,
+    catchUpLiveRaceSteps,
+  } = useRace();
   const { width: screenW } = useWindowDimensions();
   const isTablet = screenW >= 768;
   // Scale UI elements proportionally: 0.87× on 320px phones, 1.0× on 390px, up to 1.5× on tablets
@@ -422,6 +429,7 @@ export default function LiveTrackTab() {
   // Dev-only calibration debug overlay (tap race title 5× to toggle)
   const [debugMode, setDebugMode] = useState(false);
   const debugTapCount = useRef(0);
+  const raceResumedRef = useRef(false);
 
   const activeRaceId = race?.id ?? null;
   const isActive = race?.status === "in_progress";
@@ -433,13 +441,19 @@ export default function LiveTrackTab() {
   const leaderboardProgress = useSharedValue(1);
   const pulseOpacity = useSharedValue(0);
 
-  const loadRaceSnapshot = useCallback(async (raceId: string, force = false) => {
-    const gateKey = `${raceId}:snapshot`;
+  const loadRaceSnapshot = useCallback(async (
+    raceId: string,
+    force = false,
+    options?: { gateKey?: string; minIntervalMs?: number },
+  ) => {
+    const gateKey = options?.gateKey ?? `${raceId}:snapshot`;
+    const minIntervalMs = options?.minIntervalMs ?? STEP_SYNC_CONFIG.LIVE_RACE_DETAIL_REFRESH_MS;
     if (
       !liveRaceFetchAllowed(
         gateKey,
-        STEP_SYNC_CONFIG.LIVE_RACE_DETAIL_REFRESH_MS,
+        minIntervalMs,
         force,
+        STEP_SYNC_CONFIG.LIVE_RACE_FORCE_FETCH_MIN_GAP_MS,
       )
     ) {
       return;
@@ -455,8 +469,26 @@ export default function LiveTrackTab() {
       const detail = (await detailRes.json()) as {
         race?: RaceData;
         participants?: RaceParticipant[]; };
+      const parts = Array.isArray(detail.participants) ? detail.participants : [];
       setRace(detail.race ?? null);
-      setParticipants(Array.isArray(detail.participants) ? detail.participants : []);
+      setParticipants(parts);
+      if (detail.race?.status === "in_progress" && user?.id) {
+        setActiveRace(raceId, false);
+        const me = parts.find(
+          (p) =>
+            p.userId === user.id ||
+            (!!user.username && p.username.toLowerCase() === user.username.toLowerCase()),
+        );
+        if (!raceResumedRef.current) {
+          raceResumedRef.current = true;
+          resumeLiveRace(
+            detail.race.currentPlayers ?? parts.length,
+            new Date(detail.race.startedAt ?? Date.now()),
+            me?.currentSteps ?? 0,
+          );
+        }
+        void catchUpLiveRaceSteps(me?.currentSteps ?? 0, true);
+      }
       // Apply track layout from DB — shared for all users in the race
       if (detail.race?.trackLayout && detail.race.trackLayout in TRACK_BACKGROUNDS) {
         setTrackLayoutId(detail.race.trackLayout as TrackLayoutId); } }
@@ -467,7 +499,8 @@ export default function LiveTrackTab() {
 
     if (reactionsRes.ok) {
       const body = (await reactionsRes.json()) as { reactions?: ReactionCount[] };
-      setReactionCounts(Array.isArray(body.reactions) ? normalizeCounts(body.reactions) : {}); } }, []);
+      setReactionCounts(Array.isArray(body.reactions) ? normalizeCounts(body.reactions) : {}); }
+  }, [user?.id, user?.username, setActiveRace, resumeLiveRace, catchUpLiveRaceSteps]);
 
   const loadActiveRace = useCallback(async () => {
     setLoading(true);
@@ -548,15 +581,21 @@ export default function LiveTrackTab() {
         prev ? { ...prev, status: "completed", completedAt: prev.completedAt ?? new Date().toISOString() } : prev,
       );
       refresh(); };
-    const onProgress = (data: { participantId?: string; steps?: number; rank?: number }) => {
-      if (!data.participantId || typeof data.steps !== "number") return;
+    const onProgress = (data: { participantId?: string; userId?: string; steps?: number; rank?: number }) => {
+      if (typeof data.steps !== "number") return;
       const nextSteps = data.steps;
       setParticipants((prev) =>
-        prev.map((p) =>
-          p.id === data.participantId
-            ? { ...p, currentSteps: Math.max(p.currentSteps, nextSteps), rank: data.rank ?? p.rank }
-            : p,
-        ),
+        prev.map((p) => {
+          const match =
+            (data.participantId && p.id === data.participantId) ||
+            (data.userId && p.userId === data.userId);
+          if (!match) return p;
+          return {
+            ...p,
+            currentSteps: Math.max(p.currentSteps, nextSteps),
+            rank: data.rank ?? p.rank,
+          };
+        }),
       ); };
     const onComment = (data: RaceCommentPayload) => {
       const comment = normalizeIncomingComment(data);
@@ -614,12 +653,12 @@ export default function LiveTrackTab() {
         userId: p.userId,
         rank,
         name: isMe ? "You" : username,
-        steps: p.currentSteps,
+        steps: isMe && isActive ? Math.max(p.currentSteps, userRaceSteps) : p.currentSteps,
         isMe,
         rankColor: p.avatarColor ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length],
         initial: (isMe ? "Y" : username.slice(0, 1).toUpperCase()) || "R",
         country: p.countryFlag ?? undefined,
-        isHost: p.isHost, }; }).sort((a, b) => a.rank - b.rank); }, [participants, user?.id, user?.username]);
+        isHost: p.isHost, }; }).sort((a, b) => a.rank - b.rank); }, [participants, user?.id, user?.username, isActive, userRaceSteps]);
 
   const myPlayer = useMemo(
     () => sortedPlayers.find((p) => p.isMe) ?? sortedPlayers[0] ?? null,
@@ -640,7 +679,13 @@ export default function LiveTrackTab() {
     !!currentParticipant &&
     (race?.status === "open" || race?.status === "in_progress");
   const canLeaveRace = showLeaveButton && !currentParticipant.isHost;
-  const mySteps = myPlayer?.steps ?? 0;
+  const mySteps = useMemo(() => {
+    const fromList = myPlayer?.steps ?? 0;
+    if (isActive && myPlayer?.isMe) {
+      return Math.max(fromList, userRaceSteps);
+    }
+    return fromList;
+  }, [myPlayer, isActive, userRaceSteps]);
   const myProgress = Math.min(mySteps / Math.max(targetSteps, 1), 1);
 
   useEffect(() => {
@@ -667,6 +712,19 @@ export default function LiveTrackTab() {
     }, STEP_SYNC_CONFIG.LIVE_RACE_COMPLETION_POLL_MS);
     return () => clearInterval(id);
   }, [shouldPollCompletion, activeRaceId, loadRaceSnapshot]);
+
+  // Participant fallback poll — Pusher-first; gated HTTP every 3s.
+  useEffect(() => {
+    if (!isActive || !activeRaceId) return;
+    const id = setInterval(() => {
+      void loadRaceSnapshot(activeRaceId, false, {
+        gateKey: `${activeRaceId}:participants`,
+        minIntervalMs: STEP_SYNC_CONFIG.LIVE_RACE_PARTICIPANTS_POLL_MS,
+      });
+    }, STEP_SYNC_CONFIG.LIVE_RACE_PARTICIPANTS_POLL_MS);
+    return () => clearInterval(id);
+  }, [isActive, activeRaceId, loadRaceSnapshot]);
+
   const raceTitle = race?.title || "LIVE WALK RACE";
   const statusLabel = isFinished ? "FINISHED" : isActive ? "LIVE" : race ? "WAITING" : "NO LIVE RACE";
   // Instant races: show elapsed time (race ends by backend when winners done).

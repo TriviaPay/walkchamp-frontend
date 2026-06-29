@@ -548,7 +548,12 @@ export default function ProfileScreen() {
   // Skip while an upload is in progress to avoid overwriting the optimistic preview.
   useEffect(() => {
     if (uploadingAvatar) return;
-    setAvatarUri(user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user.avatarVersion ?? ''}` : null); }, [user?.id, user?.profileImageUrl, uploadingAvatar]);
+    setAvatarUri(
+      user?.id
+        ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user.avatarVersion ?? ""}`
+        : null,
+    );
+  }, [user?.id, user?.profileImageUrl, user?.avatarVersion, uploadingAvatar]);
 
   useFocusEffect(
     useCallback(() => {

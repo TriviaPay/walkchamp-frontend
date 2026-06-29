@@ -1,6 +1,10 @@
 import { PermissionsAndroid, Platform } from "react-native";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotificationConfig";
+import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import { getValidSession } from "@/services/authService";
+
+const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
 export type WalkStepNotificationPayload = {
   userId: string;
@@ -8,13 +12,38 @@ export type WalkStepNotificationPayload = {
   dailyGoal: number;
 };
 
+type NativeWalkStepState = {
+  userId?: string | null;
+  todaySteps: number;
+  raceSteps?: number;
+  activeRaceId?: string | null;
+  stepSource: string;
+  notificationMode?: string;
+  walkActive?: boolean;
+  lastUpdatedAt: number;
+  updatedAt?: number;
+  sensorSupported?: boolean;
+  sensorTotal?: number;
+};
+
 type NativeModule = {
   startWalkStepNotification: (payload: Record<string, unknown>) => Promise<void>;
   updateWalkStepNotification: (payload: Record<string, unknown>) => Promise<void>;
   stopWalkStepNotification: () => Promise<void>;
+  startStepTrackingService?: (payload: Record<string, unknown>) => Promise<void>;
+  updateStepTrackingService?: (payload: Record<string, unknown>) => Promise<void>;
+  stopStepTrackingService?: (reason?: Record<string, unknown>) => Promise<void>;
   startWalkLiveActivity: (payload: Record<string, unknown>) => Promise<void>;
   updateWalkLiveActivity: (payload: Record<string, unknown>) => Promise<void>;
   endWalkLiveActivity: () => Promise<void>;
+  getNativeWalkStepState?: () => Promise<NativeWalkStepState | null>;
+  getNativeStepState?: () => Promise<NativeWalkStepState | null>;
+  clearNativeStepStateForUser?: (userId: string) => Promise<void>;
+  flushRaceSyncOutbox?: () => Promise<void>;
+  addListener?: (
+    event: string,
+    handler: (state: NativeWalkStepState) => void,
+  ) => { remove: () => void };
 };
 
 let nativeModule: NativeModule | null | undefined;
@@ -37,16 +66,24 @@ function getNativeModule(): NativeModule | null {
   return nativeModule;
 }
 
-function toNativePayload(payload: WalkStepNotificationPayload): Record<string, unknown> {
+async function toNativePayload(payload: WalkStepNotificationPayload): Promise<Record<string, unknown>> {
   const goal = Math.max(1, payload.dailyGoal);
-  const pct = Math.min(100, Math.round((payload.todaySteps / goal) * 100));
+  const steps = Math.max(0, Math.floor(payload.todaySteps));
+  const pct = Math.min(100, Math.round((steps / goal) * 100));
+  // Auth token and API base are stored in native SharedPreferences so the FGS
+  // background sync loop can POST to /api/walk/steps without the JS runtime being alive.
+  const session = await getValidSession();
   return {
     userId: payload.userId,
-    todaySteps: payload.todaySteps,
+    todaySteps: steps,
     dailyGoal: goal,
     percentComplete: pct,
     title: "Walk Champ",
     deepLink: "globalwalkerleague://walk",
+    stepSource: stepProviderManager.toRaceProgressSource(),
+    body: `${steps.toLocaleString("en-US")} total steps today`,
+    authToken: session ?? "",
+    apiBaseUrl: API_BASE,
   };
 }
 
@@ -84,7 +121,7 @@ class StepTrackingNotificationService {
 
     active = true;
     lastSteps = -1;
-    const nativePayload = toNativePayload(payload);
+    const nativePayload = await toNativePayload(payload);
 
     try {
       if (Platform.OS === "android" && native.startWalkStepNotification) {
@@ -107,9 +144,10 @@ class StepTrackingNotificationService {
     }
     const native = getNativeModule();
     if (!native) return;
-    if (shouldThrottle(payload.todaySteps, force)) return;
+    const steps = Math.max(0, Math.floor(payload.todaySteps));
+    if (!force && shouldThrottle(steps, false)) return;
 
-    const nativePayload = toNativePayload(payload);
+    const nativePayload = await toNativePayload({ ...payload, todaySteps: steps });
     try {
       if (Platform.OS === "android" && native.updateWalkStepNotification) {
         await native.updateWalkStepNotification(nativePayload);
@@ -118,10 +156,15 @@ class StepTrackingNotificationService {
         await native.updateWalkLiveActivity(nativePayload);
       }
       lastUpdateMs = Date.now();
-      lastSteps = payload.todaySteps;
+      lastSteps = steps;
     } catch (err) {
       if (__DEV__) console.warn("[StepTrackingNotif] update failed", err);
     }
+  }
+
+  /** Force notification to exactly match the walk screen total (including resets). */
+  async mirrorWalkScreen(payload: WalkStepNotificationPayload): Promise<void> {
+    await this.update(payload, true);
   }
 
   async stop(): Promise<void> {
@@ -132,8 +175,12 @@ class StepTrackingNotificationService {
     if (!native) return;
 
     try {
-      if (Platform.OS === "android" && native.stopWalkStepNotification) {
-        await native.stopWalkStepNotification();
+      if (Platform.OS === "android") {
+        if (native.stopStepTrackingService) {
+          await native.stopStepTrackingService({ reason: "tracking_stopped" });
+        } else if (native.stopWalkStepNotification) {
+          await native.stopWalkStepNotification();
+        }
       }
       if (Platform.OS === "ios" && native.endWalkLiveActivity) {
         await native.endWalkLiveActivity();
@@ -143,8 +190,83 @@ class StepTrackingNotificationService {
     }
   }
 
+  async clearNativeStepStateForUser(userId: string): Promise<void> {
+    if (Platform.OS !== "android" || !userId) return;
+    const native = getNativeModule();
+    if (!native?.clearNativeStepStateForUser) return;
+    try {
+      await native.clearNativeStepStateForUser(userId);
+      if (__DEV__) {
+        console.log(`[NativeStepState] cleared userScopedKey=nativeStepState:${userId}`);
+      }
+    } catch (err) {
+      if (__DEV__) console.warn("[StepTrackingNotif] clearNativeStepStateForUser failed", err);
+    }
+  }
+
+  async flushRaceSyncOutbox(): Promise<void> {
+    if (Platform.OS !== "android") return;
+    const native = getNativeModule();
+    if (!native?.flushRaceSyncOutbox) return;
+    try {
+      await native.flushRaceSyncOutbox();
+    } catch (err) {
+      if (__DEV__) console.warn("[StepTrackingNotif] flushRaceSyncOutbox failed", err);
+    }
+  }
+
   isActive(): boolean {
     return active;
+  }
+
+  /**
+   * Full native step state from the foreground service / sensor engine.
+   */
+  async getNativeStepState(): Promise<NativeWalkStepState | null> {
+    if (Platform.OS !== "android") return null;
+    const native = getNativeModule();
+    if (!native) return null;
+    try {
+      const reader = native.getNativeStepState ?? native.getNativeWalkStepState;
+      if (!reader) return null;
+      const state = await reader();
+      if (!state || typeof state.todaySteps !== "number") return null;
+      if (__DEV__) {
+        console.log(
+          `[AppResume] getNativeStepState todaySteps=${state.todaySteps} raceSteps=${state.raceSteps ?? 0} source=${state.stepSource}`,
+        );
+      }
+      return state;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Return the last daily step count that was pushed to the native notification /
+   * Live Activity, or null if unavailable.
+   *
+   * Priority:
+   *  1. In-memory `lastSteps` — set on every start/update, most current while JS is alive.
+   *  2. Native sensor engine state via `getNativeStepState` — survives JS restarts / cold launch.
+   */
+  async getNativeWalkSteps(): Promise<number | null> {
+    if (lastSteps >= 0) return lastSteps;
+
+    const state = await this.getNativeStepState();
+    if (!state) return null;
+    const walkActive = state.walkActive ?? state.notificationMode === "daily_steps";
+    if (!walkActive && (state.todaySteps ?? 0) <= 0) return null;
+    return state.todaySteps > 0 ? state.todaySteps : null;
+  }
+
+  subscribeNativeStepUpdates(
+    handler: (state: NativeWalkStepState) => void,
+  ): (() => void) | null {
+    const native = getNativeModule();
+    if (!native?.addListener) return null;
+    const sub = native.addListener("WalkChampStepStateUpdated", handler);
+    return () => sub.remove();
   }
 }
 

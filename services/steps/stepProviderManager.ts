@@ -12,6 +12,10 @@ import { androidHealthConnectProvider } from "./providers/androidHealthConnectPr
 import { androidLegacySensorProvider } from "./providers/androidLegacySensorProvider";
 import { iosHealthKitProvider } from "./providers/iosHealthKitProvider";
 import { androidHCService } from "./androidHealthConnectService";
+import {
+  getRaceBaseline,
+  setRaceBaseline,
+} from "./raceBaselineStorage";
 import type {
   StepPermissionResult,
   StepProvider,
@@ -166,6 +170,11 @@ export const stepProviderManager = {
     return _activeProvider;
   },
 
+  getVerificationLevel(): "verified" | "legacy" | "unsupported" {
+    if (!_activeProvider) return "unsupported";
+    return _activeProvider.verificationLevel;
+  },
+
   getStepTrackingStatus(): StepTrackingStatus {
     const providerId = _activeProvider?.providerId ?? null;
     return {
@@ -236,6 +245,82 @@ export const stepProviderManager = {
   async clearRaceBaseline(raceId: string, userId: string): Promise<void> {
     if (_activeProvider?.clearRaceBaseline) {
       await _activeProvider.clearRaceBaseline(raceId, userId);
+    }
+  },
+
+  /**
+   * True if the active provider relies on a stored delta baseline for race steps
+   * (Android legacy sensor only). HC / HealthKit use time-range queries and never
+   * need a baseline.
+   */
+  usesRaceBaseline(): boolean {
+    return _activeProvider?.providerId === "android_legacy_sensor";
+  },
+
+  /** True when the active provider is Health Connect or HealthKit (verified, not sensor-only). */
+  usesVerifiedStepSource(): boolean {
+    const id = _activeProvider?.providerId;
+    return id === "android_health_connect" || id === "ios_healthkit";
+  },
+
+  /**
+   * Ensure a race step baseline exists for the active provider.
+   * Returns the existing baseline if already stored, otherwise creates a fresh one.
+   * For HC / HealthKit (range-based) this always returns 0 — no baseline needed.
+   */
+  async ensureRaceBaseline(
+    raceId: string,
+    userId: string,
+    seedSteps?: number,
+  ): Promise<number> {
+    if (!_activeProvider) return 0;
+    if (_activeProvider.providerId !== "android_legacy_sensor") return 0;
+
+    const existing = await getRaceBaseline(raceId, userId, "android_legacy_sensor");
+    if (existing !== null) {
+      devLog(`ensureRaceBaseline raceId=${raceId} existing=${existing}`);
+      return existing;
+    }
+
+    // If caller already knows the baseline (e.g. server-seeded bootSteps), store it
+    // directly rather than reading device steps which may be behind.
+    if (typeof seedSteps === "number" && seedSteps > 0) {
+      const today = await _activeProvider.getTodaySteps();
+      // baseline = todaySteps - seedSteps → so getRaceSteps() returns seedSteps
+      const baseline = Math.max(0, today.steps - seedSteps);
+      await setRaceBaseline(raceId, userId, "android_legacy_sensor", baseline);
+      devLog(`ensureRaceBaseline raceId=${raceId} created from seed=${seedSteps} baseline=${baseline}`);
+      return baseline;
+    }
+
+    const baseline = await this.createRaceBaseline(raceId, userId);
+    devLog(`ensureRaceBaseline raceId=${raceId} created=${baseline}`);
+    return baseline;
+  },
+
+  /**
+   * Realign the legacy sensor race baseline so that the next getRaceSteps() call
+   * returns serverConfirmedSteps. Called when the server reports more steps than
+   * the local delta counter — e.g. after the app was backgrounded for a long time.
+   * No-op for HC / HealthKit.
+   */
+  async alignRaceBaselineToRaceSteps(
+    raceId: string,
+    userId: string,
+    serverConfirmedSteps: number,
+  ): Promise<void> {
+    if (!this.usesRaceBaseline()) return;
+    if (!_activeProvider) return;
+    try {
+      const today = await _activeProvider.getTodaySteps();
+      // newBaseline = todaySteps - serverConfirmedSteps
+      const newBaseline = Math.max(0, today.steps - serverConfirmedSteps);
+      await setRaceBaseline(raceId, userId, "android_legacy_sensor", newBaseline);
+      devLog(
+        `alignRaceBaselineToRaceSteps raceId=${raceId} newBaseline=${newBaseline} todaySteps=${today.steps}`,
+      );
+    } catch (e) {
+      devLog("alignRaceBaselineToRaceSteps error", e);
     }
   },
 

@@ -38,6 +38,7 @@ import { TopBannerProvider } from "@/context/TopBannerContext";
 import TitleUnlockModal from "@/components/TitleUnlockModal";
 import { useAuth } from "@/context/AuthContext";
 import { connectPusher, subscribeToChannel, unsubscribeFromChannel, CHANNELS } from "@/services/realtimeService";
+import { initStepProgressCoordinator } from "@/services/stepProgressCoordinator";
 import {
   ensureOneSignalInitialized,
   initOneSignal,
@@ -110,6 +111,16 @@ if (typeof globalThis !== "undefined" && "addEventListener" in globalThis) {
 
 SplashScreen.preventAutoHideAsync();
 
+// Harmless on some Android builds — expo-router / keep-awake when no window focus.
+if (Platform.OS === "android" && typeof (global as { ErrorUtils?: { setGlobalHandler?: (h: (e: Error, f?: boolean) => void) => void; getGlobalHandler?: () => (e: Error, f?: boolean) => void } }).ErrorUtils?.setGlobalHandler === "function") {
+  const { ErrorUtils } = global as { ErrorUtils: { setGlobalHandler: (h: (e: Error, f?: boolean) => void) => void; getGlobalHandler: () => (e: Error, f?: boolean) => void } };
+  const prev = ErrorUtils.getGlobalHandler();
+  ErrorUtils.setGlobalHandler((error, isFatal) => {
+    if (String(error?.message ?? "").includes("Unable to activate keep awake")) return;
+    prev(error, isFatal);
+  });
+}
+
 // Suppress known Expo-Go-only TurboModule warnings.
 // These native modules require an EAS / development build to link properly.
 // In Expo Go the JS module loads but the native bridge is absent — our
@@ -133,6 +144,11 @@ function ThemedStatusBar() {
 
 function RootLayoutNav() {
   const { isDark } = useTheme();
+
+  useEffect(() => {
+    initStepProgressCoordinator();
+  }, []);
+
   const navTheme = React.useMemo(() => ({
     ...(isDark ? DarkTheme : DefaultTheme),
     colors: {

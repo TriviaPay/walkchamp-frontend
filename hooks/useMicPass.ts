@@ -240,6 +240,10 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
         autoConnectAttemptedRef.current = false;
         if (__DEV__) console.log("[Voice] auto-connect as listener failed (non-fatal)");
       }
+    }).catch(() => {
+      if (!mountedRef.current) return;
+      setMicState("idle");
+      autoConnectAttemptedRef.current = false;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [raceId]);

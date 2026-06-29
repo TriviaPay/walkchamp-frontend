@@ -9,6 +9,7 @@ import chatReducer from "./slices/chatSlice";
 import walletReducer from "./slices/walletSlice";
 import coinsReducer from "./slices/coinsSlice";
 import trackThemesReducer from "./slices/trackThemesSlice";
+import raceProgressReducer from "./slices/raceProgressSlice";
 
 const appReducer = combineReducers({
   auth: authReducer,
@@ -20,6 +21,7 @@ const appReducer = combineReducers({
   wallet: walletReducer,
   coins: coinsReducer,
   trackThemes: trackThemesReducer,
+  raceProgress: raceProgressReducer,
 });
 
 type AppState = ReturnType<typeof appReducer>;

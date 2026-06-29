@@ -102,10 +102,13 @@ function syncMilestoneFromAssets(projectRoot, resDir, milestoneName, isDefault) 
   const snake = toSnakeCase(milestoneName);
   for (const dpi of MIPMAP_DPI) {
     const destDpi = path.join(resDir, dpi);
+    ensureDir(destDpi);
     const fgDest = isDefault
       ? "ic_launcher_foreground.png"
       : `ic_launcher_foreground_${snake}.png`;
     const iconDest = isDefault ? "ic_launcher.png" : `ic_launcher_${snake}.png`;
+    removeStaleFormats(destDpi, path.basename(fgDest, ".png"));
+    removeStaleFormats(destDpi, path.basename(iconDest, ".png"));
     copyFile(adaptiveSrc, path.join(destDpi, fgDest));
     if (fs.existsSync(launcherSrc)) {
       copyFile(launcherSrc, path.join(destDpi, iconDest));
@@ -159,13 +162,11 @@ function syncMilestone(projectRoot, mainDir, resDir, milestoneName, isDefault) {
 
       for (const destName of destNames) {
         const destPath = path.join(destDpi, destName);
+        removeStaleFormats(
+          destDpi,
+          path.basename(destName, path.extname(destName)),
+        );
         if (copyFile(path.join(srcDpi, srcName), destPath)) {
-          if (isDefault && destName === srcName) {
-            removeStaleFormats(
-              destDpi,
-              path.basename(destName, path.extname(destName)),
-            );
-          }
           if (srcName.includes("background")) hasBackground = true;
           if (srcName.includes("monochrome")) hasMonochrome = true;
         }
@@ -213,6 +214,20 @@ function syncInAppAssets(mainDir, assetsDir) {
   }
 }
 
+function purgeWebpWhenPngExists(resDir) {
+  for (const dpi of MIPMAP_DPI) {
+    const destDpi = path.join(resDir, dpi);
+    if (!fs.existsSync(destDpi)) continue;
+    for (const file of fs.readdirSync(destDpi)) {
+      if (!file.endsWith(".webp")) continue;
+      const base = file.slice(0, -".webp".length);
+      if (fs.existsSync(path.join(destDpi, `${base}.png`))) {
+        fs.unlinkSync(path.join(destDpi, file));
+      }
+    }
+  }
+}
+
 function syncWalkChampProgressIcons(projectRoot) {
   const mainDir = path.join(projectRoot, "android", "app", "src", "main");
   const resDir = path.join(mainDir, "res");
@@ -229,6 +244,7 @@ function syncWalkChampProgressIcons(projectRoot) {
     syncMilestone(projectRoot, mainDir, resDir, milestoneName, milestoneName === "WalkChampProgress0");
   }
 
+  purgeWebpWhenPngExists(resDir);
   syncInAppAssets(mainDir, assetsDir);
   console.log("WalkChamp progress icons sync complete.");
 }

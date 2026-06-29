@@ -756,7 +756,7 @@ function RaceCard({
                   onPress={() => onAvatarPress?.(p)}
                   hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                 >
-                  {p.avatarUrl && p.userId ? (
+                  {p.userId ? (
                     <Image
                       source={{ uri: `${getApiBase()}/api/profile/avatar/${p.userId}?v=${getAvatarVersion(p.userId, p.avatarVersion ?? 0)}` }}
                       style={[st.avatar, { borderColor: p.avatarColor }]}

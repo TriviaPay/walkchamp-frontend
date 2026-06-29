@@ -25,6 +25,16 @@ import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { stepPollingService, type RacePollingConfig } from "@/services/StepPollingService";
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
 import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
+import {
+  clearActiveRaceProgress,
+  deactivateRaceInStore,
+  feedRaceStepsToStore,
+  handleBackendProgressSynced,
+  setActiveRaceProgress,
+  setStepProgressUser,
+} from "@/services/stepProgressCoordinator";
+import { mergeRaceStepsWithNative } from "@/services/stepDisplayMerge";
+import type { StepProgressSource } from "@/store/slices/raceProgressSlice";
 import { setWalkBackendSyncPaused } from "@/services/walkSyncCoordinator";
 import {
   postRaceProgress,
@@ -186,7 +196,7 @@ interface RaceContextType {
   setActiveRace: (id: string | null, host: boolean) => void;
   /** Stop HC/pedometer polling and simulation ticks (e.g. when race completes on live-detail). */
   stopRaceStepTracking: (reason?: string) => void;
-  /** Pause step reads when leaving live-detail — flushes backend, no fake steps. */
+  /** Flush pending steps when leaving a screen — does not stop device polling. */
   pauseRaceStepTracking: () => void;
   /** Re-start race step polling after returning to live-detail (active race only). */
   resumeRaceStepTracking: () => void;
@@ -285,6 +295,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       avatarColor: user?.avatarColor ?? "#00E676",
       userId:      user?.id          ?? "user",
     };
+    setStepProgressUser(user?.id ?? null, user?.username ?? null);
   }, [user?.username, user?.countryFlag, user?.avatarColor, user?.id]);
 
   useEffect(() => {
@@ -311,7 +322,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     _setRaceTargetSteps(steps);
   }, []);
 
-  const clearAllIntervals = () => {
+  const clearRaceJsTimers = () => {
     if (matchmakingRef.current) clearInterval(matchmakingRef.current);
     if (countdownRef.current) clearInterval(countdownRef.current);
     if (raceStepRef.current) clearInterval(raceStepRef.current);
@@ -324,27 +335,23 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     raceTimerRef.current = null;
     raceEndTimeoutRef.current = null;
     realStepPollRef.current = null;
-    // Unsubscribe from forfeit Pusher channel
     if (forfeitChannelRef.current) {
       unsubscribeFromChannel(forfeitChannelRef.current);
       forfeitChannelRef.current = null;
     }
-    // Invalidate all step-tracking callbacks created by the current startRace() closure.
-    // Any CMPedometer or HC callback that fires after this point will see a different
-    // generation number and discard its payload, preventing step carry-over to a new race.
     subscriptionGenRef.current++;
-    // Stop iOS live step subscription (Android HC is polling-based, no subscription to stop)
     stepTracker.stopLiveTracking();
     stepProviderManager.stopWatchingSteps();
-    // Stop the centralized polling safety-net
     stepPollingService.stopPolling("race_ended");
     raceStepSyncService.cancelPending();
-    if (raceIdRef.current) {
-      void raceProgressNotificationService.stop(raceIdRef.current, "completed");
-    }
     racePollingConfigRef.current = null;
     raceStepFloorRef.current = 0;
     goalFlushDoneRef.current = false;
+  };
+
+  /** Stop JS timers only. Notification lifecycle is owned by stepProgressCoordinator. */
+  const clearAllIntervals = () => {
+    clearRaceJsTimers();
   };
 
   const stopRaceStepTracking = useCallback((reason = "race_tracking_stopped") => {
@@ -373,8 +380,6 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
   const pauseRaceStepTracking = useCallback(() => {
     if (raceEndedRef.current) return;
-    stepPollingService.stopPolling("race_paused");
-    raceStepSyncService.cancelPending();
     if (raceIdRef.current && userStepsRef.current > 0) {
       void raceStepSyncService.flush(
         raceIdRef.current,
@@ -424,7 +429,8 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       if (raceId && raceStart && userId && raceStepApplyRef.current) {
         const snap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId);
         if (snap && !raceEndedRef.current) {
-          raceStepApplyRef.current(snap.steps);
+          const baseline = raceDeviceBaselineRef.current || cfg.baseline;
+          raceStepApplyRef.current(snap.steps, Math.max(baseline, baseline + snap.steps));
         }
       }
       return;
@@ -436,7 +442,8 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     if (raceId && raceStart && userId && raceStepApplyRef.current) {
       const snap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId);
       if (snap && !raceEndedRef.current) {
-        raceStepApplyRef.current(snap.steps);
+        const baseline = raceDeviceBaselineRef.current || cfg.baseline;
+        raceStepApplyRef.current(snap.steps, Math.max(baseline, baseline + snap.steps));
       }
     }
   }, []);
@@ -483,7 +490,10 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         if (resnap) deviceSteps = resnap.steps;
       }
 
-      const merged = Math.max(deviceSteps, safeServer);
+      // Include any steps tracked by the native Android FGS while JS was asleep
+      // (legacy sensor only — HC uses time-range reads and doesn't need this).
+      const nativeMerged = await mergeRaceStepsWithNative(Math.max(deviceSteps, safeServer));
+      const merged = Math.max(deviceSteps, safeServer, nativeMerged);
       raceStepFloorRef.current = merged;
 
       if (raceStepApplyRef.current) {
@@ -603,6 +613,13 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     if (finalUserSteps > 0) {
       setWalkRaceStepsDisplay(finalUserSteps);
     }
+
+    // Mark race as finished in canonical store; coordinator stops notification.
+    const finishedRaceId = raceIdRef.current;
+    clearActiveRaceProgress("finished", {
+      preserveWalkDisplay: finalUserSteps > 0 ? finalUserSteps : undefined,
+      raceId: finishedRaceId ?? undefined,
+    });
 
     if (raceIdRef.current && userParticipant) {
       void raceStepSyncService.flush(
@@ -772,16 +789,16 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     setRaceTimerSeconds(0);
     setUserRaceSteps(bootSteps);
 
+    // Register race in canonical store and start notification from coordinator.
     if (raceIdRef.current) {
-      void raceProgressNotificationService.start({
+      setActiveRaceProgress({
         raceId: raceIdRef.current,
+        raceStartTime: raceStart?.toISOString() ?? new Date().toISOString(),
         userId: userProfileRef.current.userId,
         username: userProfileRef.current.username,
-        raceSteps: bootSteps,
-        rank: 1,
-        totalParticipants: Math.max(1, allParticipants.length),
         goalSteps: raceTargetStepsRef.current,
-        timeLeftSeconds: 0,
+        totalParticipants: Math.max(1, allParticipants.length),
+        bootSteps,
       });
     }
 
@@ -832,6 +849,16 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         userStepsRef.current = antiReg;
         raceStepFloorRef.current = Math.max(raceStepFloorRef.current, antiReg);
         setUserRaceSteps(antiReg);
+
+        // Feed the canonical Redux store so live-detail and the notification
+        // pipeline receive every validated step update without a duplicate
+        // backend sync (RaceStepSyncBuffer drives that separately).
+        feedRaceStepsToStore({
+          raceSteps: antiReg,
+          stepSource: stepProviderManager.toRaceProgressSource() as StepProgressSource,
+          updatedAt: new Date().toISOString(),
+        });
+
         if (__DEV__ && antiReg > prevSteps) {
           if (__DEV__) console.log(`[RaceStepsRealtime] local UI updated: ${antiReg}`);
         }
@@ -976,6 +1003,13 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           );
         }
 
+        if (providerId === "ios_healthkit") {
+          stepTracker.startLiveTracking((data) => {
+            if (subscriptionGenRef.current !== myGen || raceEndedRef.current) return;
+            applyRealSteps(data.steps);
+          });
+        }
+
         await restartRacePolling(userId, baseline);
 
         // Immediate read so UI shows 0+ steps without waiting for first poll tick.
@@ -998,11 +1032,15 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     // This ensures the no-progress safety-net on the server sees activity = false
     // quickly rather than waiting 3 min with total silence.
     const immediateRaceId = raceIdRef.current;
-    if (immediateRaceId && !useRealSteps) {
+    if (immediateRaceId) {
       raceStepSyncService.notifyStepsUpdated(
         immediateRaceId,
         bootSteps,
-        bootSteps > 0 ? stepProviderManager.toRaceProgressSource() : "race_start",
+        useRealSteps
+          ? stepProviderManager.toRaceProgressSource()
+          : bootSteps > 0
+            ? stepProviderManager.toRaceProgressSource()
+            : "race_start",
         { force: true },
       );
     }
@@ -1294,6 +1332,11 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     setCountdown(RACE_DEFAULTS.COUNTDOWN_SECONDS);
     pendingBotsRef.current = [];
     playersJoinedRef.current = 0;
+
+    // Clear race from canonical Redux store so screens don't show stale data.
+    const cancelledRaceId = raceIdRef.current;
+    clearActiveRaceProgress("cancelled", { raceId: cancelledRaceId ?? undefined });
+
     raceStartTimeRef.current = null;
     setRaceStartTimeUTC(null);
   }, []);
@@ -1324,13 +1367,16 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     setRaceStartTimeUTC(null);
     // Clear pending race from storage after reset (user saw results)
     clearPendingRace();
-    if (raceIdRef.current) {
+    const resetRaceId = raceIdRef.current;
+    if (resetRaceId) {
       void stepProviderManager.clearRaceBaseline(
-        raceIdRef.current,
+        resetRaceId,
         userProfileRef.current.userId,
       );
     }
     stepProviderManager.stopWatchingSteps();
+
+    deactivateRaceInStore("idle");
   }, []);
 
   const recordFinishedRaceStepsForWalk = useCallback((steps: number) => {
@@ -1352,8 +1398,13 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (nextState === "background" || nextState === "inactive") {
-        stepPollingService.stopPolling("race_background");
-        // raceStepSyncBuffer AppState listener flushes pending progress once.
+        if (raceIdRef.current && userStepsRef.current > 0) {
+          void raceStepSyncService.flush(
+            raceIdRef.current,
+            userStepsRef.current,
+            stepProviderManager.toRaceProgressSource(),
+          );
+        }
         return;
       }
     });
@@ -1362,27 +1413,34 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
   // Backend rank/steps → Android ongoing notification / iOS Live Activity
   useEffect(() => {
+    raceProgressNotificationService.setHealthKitWakeHandler(() => {
+      void catchUpLiveRaceSteps(userStepsRef.current, true);
+    });
     raceStepSyncService.setProgressSyncedHandler((result) => {
       if (!result.ok || result.rank === undefined) return;
-      const userId = result.userId ?? userProfileRef.current.userId;
-      void raceProgressNotificationService.onBackendProgressSynced({
+      handleBackendProgressSynced({
+        ok: result.ok,
         raceId: result.raceId,
-        userId,
-        username: result.username ?? userProfileRef.current.username,
-        raceSteps: result.acceptedSteps,
+        acceptedSteps: result.acceptedSteps,
         rank: result.rank,
         totalParticipants: result.totalParticipants ?? participantsRef.current.length,
         goalSteps: result.goalSteps ?? raceTargetStepsRef.current,
         timeLeftSeconds: result.timeLeftSeconds ?? 0,
+        username: result.username ?? userProfileRef.current.username,
+        userId: result.userId ?? userProfileRef.current.userId,
         raceStatus: result.raceStatus ?? "in_progress",
-        lastSyncedAt: new Date().toISOString(),
       });
     });
-    return () => raceStepSyncService.setProgressSyncedHandler(null);
-  }, []);
+    return () => {
+      raceProgressNotificationService.setHealthKitWakeHandler(null);
+      raceStepSyncService.setProgressSyncedHandler(null);
+    };
+  }, [catchUpLiveRaceSteps]);
 
+  // App close / swipe from recents must NOT stop the native foreground service.
+  // Native FGS keeps the notification alive; only explicit race end/cancel/logout stops it.
   useEffect(() => () => {
-    clearAllIntervals();
+    clearRaceJsTimers();
   }, []);
 
   return (
