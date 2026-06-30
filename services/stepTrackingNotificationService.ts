@@ -1,8 +1,14 @@
 import { PermissionsAndroid, Platform } from "react-native";
+import Constants from "expo-constants";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotificationConfig";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { getValidSession } from "@/services/authService";
+import {
+  ensureNotificationPermissionForOngoingTracking,
+  getNotificationPermissionStatus,
+  hasNotificationPermissionGranted,
+} from "@/services/permissions/notificationPermissionService";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -52,6 +58,7 @@ let nativeModule: NativeModule | null | undefined;
 let active = false;
 let lastUpdateMs = 0;
 let lastSteps = -1;
+let lastPermissionDeniedMessageAt = 0;
 
 function getNativeModule(): NativeModule | null {
   if (!FEATURE_FLAGS.ENABLE_STEP_TRACKING_NOTIFICATIONS) return null;
@@ -61,19 +68,53 @@ function getNativeModule(): NativeModule | null {
     const { requireOptionalNativeModule } =
       require("expo-modules-core") as typeof import("expo-modules-core");
     nativeModule = requireOptionalNativeModule<NativeModule>("WalkChampRaceProgress");
+    if (!nativeModule) {
+      logOngoing("native module WalkChampRaceProgress unavailable");
+    }
   } catch (err) {
-    if (__DEV__) console.warn("[StepTrackingNotif] native module unavailable", err);
+    logOngoing(`native module load failed: ${String(err)}`);
     nativeModule = null;
   }
   return nativeModule;
+}
+
+function getPackageName(): string {
+  return (
+    Constants.expoConfig?.android?.package ??
+    Constants.manifest2?.extra?.expoClient?.android?.package ??
+    "unknown"
+  );
+}
+
+async function getActivityRecognitionGranted(): Promise<boolean | "n/a"> {
+  if (Platform.OS !== "android") return "n/a";
+  try {
+    if (!PermissionsAndroid.PERMISSIONS.ACTIVITY_RECOGNITION) return "n/a";
+    return await PermissionsAndroid.check(
+      PermissionsAndroid.PERMISSIONS.ACTIVITY_RECOGNITION,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function logOngoing(msg: string): void {
+  console.log(`[OngoingNotification] ${msg}`);
+}
+
+async function logOngoingDiagnostics(phase: string): Promise<void> {
+  if (Platform.OS !== "android") return;
+  const notif = await getNotificationPermissionStatus();
+  const activity = await getActivityRecognitionGranted();
+  logOngoing(
+    `${phase} buildType=${__DEV__ ? "debug" : "release"} packageName=${getPackageName()} platformVersion=${Platform.Version} notificationPermission=${notif} activityRecognitionPermission=${activity}`,
+  );
 }
 
 async function toNativePayload(payload: WalkStepNotificationPayload): Promise<Record<string, unknown>> {
   const goal = Math.max(1, payload.dailyGoal);
   const steps = Math.max(0, Math.floor(payload.todaySteps));
   const pct = Math.min(100, Math.round((steps / goal) * 100));
-  // Auth token and API base are stored in native SharedPreferences so the FGS
-  // background sync loop can POST to /api/walk/steps without the JS runtime being alive.
   const session = await getValidSession();
   return {
     userId: payload.userId,
@@ -89,22 +130,21 @@ async function toNativePayload(payload: WalkStepNotificationPayload): Promise<Re
   };
 }
 
-/** Request POST_NOTIFICATIONS before starting the Android foreground service. */
+/** Check-only — never shows a system prompt. */
 export async function ensureTrackingNotificationPermission(): Promise<boolean> {
-  return ensureAndroidNotificationPermission();
+  return hasNotificationPermissionGranted();
 }
 
-async function ensureAndroidNotificationPermission(): Promise<boolean> {
-  if (Platform.OS !== "android") return true;
-  if (typeof Platform.Version === "number" && Platform.Version < 33) return true;
-  try {
-    const granted = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-    );
-    return granted === PermissionsAndroid.RESULTS.GRANTED;
-  } catch {
-    return false;
-  }
+/** User-visible message when notification permission blocks the ongoing notification. */
+export function getOngoingNotificationDeniedMessage(): string {
+  return "Notifications are disabled. Please enable notifications in Settings to show ongoing step tracking.";
+}
+
+export function shouldShowOngoingNotificationDeniedMessage(): boolean {
+  const now = Date.now();
+  if (now - lastPermissionDeniedMessageAt < 30_000) return false;
+  lastPermissionDeniedMessageAt = now;
+  return true;
 }
 
 function shouldThrottle(steps: number, force = false): boolean {
@@ -116,23 +156,27 @@ function shouldThrottle(steps: number, force = false): boolean {
   return false;
 }
 
-function logNotification(msg: string): void {
-  console.log(`[Notification] ${msg}`);
-}
-
 class StepTrackingNotificationService {
-  async start(payload: WalkStepNotificationPayload): Promise<void> {
-    logNotification("start requested");
+  async start(payload: WalkStepNotificationPayload): Promise<boolean> {
+    logOngoing("start requested");
+    await logOngoingDiagnostics("start");
+
     const native = getNativeModule();
     if (!native) {
-      logNotification("native module unavailable");
-      return;
+      logOngoing("abort native module unavailable");
+      return false;
     }
 
     if (Platform.OS === "android") {
-      const ok = await ensureAndroidNotificationPermission();
-      logNotification(`permissionGranted=${ok}`);
-      if (!ok) return;
+      logOngoing("channelEnsure requested");
+      const perm = await ensureNotificationPermissionForOngoingTracking();
+      logOngoing(
+        `notificationPermission result granted=${perm.granted} requestedNow=${perm.requestedNow}`,
+      );
+      if (!perm.granted) {
+        logOngoing("abort POST_NOTIFICATIONS denied — foreground service not started");
+        return false;
+      }
     }
 
     active = true;
@@ -141,18 +185,21 @@ class StepTrackingNotificationService {
 
     try {
       if (Platform.OS === "android" && native.startWalkStepNotification) {
+        logOngoing("foregroundServiceStart requested");
         await native.startWalkStepNotification(nativePayload);
-        logNotification(`serviceStartRequested=true steps=${payload.todaySteps}`);
+        logOngoing(`foregroundServiceStart complete steps=${payload.todaySteps}`);
       }
       if (Platform.OS === "ios" && native.startWalkLiveActivity) {
         await native.startWalkLiveActivity(nativePayload);
-        logNotification(`liveActivityStart=true steps=${payload.todaySteps}`);
+        logOngoing(`liveActivityStart=true steps=${payload.todaySteps}`);
       }
       lastUpdateMs = Date.now();
       lastSteps = payload.todaySteps;
+      return true;
     } catch (err) {
-      logNotification(`start failed: ${String(err)}`);
-      if (__DEV__) console.warn("[StepTrackingNotif] start failed", err);
+      logOngoing(`start failed error=${String(err)}`);
+      console.warn("[StepTrackingNotif] start failed", err);
+      return false;
     }
   }
 
@@ -177,11 +224,11 @@ class StepTrackingNotificationService {
       lastUpdateMs = Date.now();
       lastSteps = steps;
     } catch (err) {
+      logOngoing(`update failed error=${String(err)}`);
       if (__DEV__) console.warn("[StepTrackingNotif] update failed", err);
     }
   }
 
-  /** Force notification to exactly match the walk screen total (including resets). */
   async mirrorWalkScreen(payload: WalkStepNotificationPayload): Promise<void> {
     await this.update(payload, true);
   }
@@ -215,9 +262,6 @@ class StepTrackingNotificationService {
     if (!native?.clearNativeStepStateForUser) return;
     try {
       await native.clearNativeStepStateForUser(userId);
-      if (__DEV__) {
-        console.log(`[NativeStepState] cleared userScopedKey=nativeStepState:${userId}`);
-      }
     } catch (err) {
       if (__DEV__) console.warn("[StepTrackingNotif] clearNativeStepStateForUser failed", err);
     }
@@ -240,7 +284,6 @@ class StepTrackingNotificationService {
     if (!native?.resetDailyStepsForNewDay) return;
     try {
       await native.resetDailyStepsForNewDay();
-      if (__DEV__) console.log("[StepFGS] resetDailyStepsForNewDay completed");
     } catch (err) {
       if (__DEV__) console.warn("[StepTrackingNotif] resetDailyStepsForNewDay failed", err);
     }
@@ -250,9 +293,6 @@ class StepTrackingNotificationService {
     return active;
   }
 
-  /**
-   * Full native step state from the foreground service / sensor engine.
-   */
   async getNativeStepState(): Promise<NativeWalkStepState | null> {
     if (Platform.OS !== "android") return null;
     const native = getNativeModule();
@@ -262,28 +302,14 @@ class StepTrackingNotificationService {
       if (!reader) return null;
       const state = await reader();
       if (!state || typeof state.todaySteps !== "number") return null;
-      if (__DEV__) {
-        console.log(
-          `[AppResume] getNativeStepState todaySteps=${state.todaySteps} raceSteps=${state.raceSteps ?? 0} source=${state.stepSource}`,
-        );
-      }
       return state;
     } catch {
       return null;
     }
   }
 
-  /**
-   * Return the last daily step count that was pushed to the native notification /
-   * Live Activity, or null if unavailable.
-   *
-   * Priority:
-   *  1. In-memory `lastSteps` — set on every start/update, most current while JS is alive.
-   *  2. Native sensor engine state via `getNativeStepState` — survives JS restarts / cold launch.
-   */
   async getNativeWalkSteps(): Promise<number | null> {
     if (lastSteps >= 0) return lastSteps;
-
     const state = await this.getNativeStepState();
     if (!state) return null;
     const walkActive = state.walkActive ?? state.notificationMode === "daily_steps";

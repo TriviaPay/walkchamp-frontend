@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -478,6 +479,22 @@ export default function SignupScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          {step === 0 && (
+            <View style={styles.authLogoHeader}>
+              <View style={[styles.logoContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Image
+                  source={require("@/assets/icons/WalkChampProgress0.png")}
+                  style={styles.logoImage}
+                  resizeMode="contain"
+                />
+              </View>
+              <Text style={[styles.authAppName, { color: colors.foreground }]}>Walk Champ</Text>
+              <Text style={[styles.authTagline, { color: colors.mutedForeground }]}>
+                Global Walking Competition
+              </Text>
+            </View>
+          )}
+
           {/* Header */}
           <View style={styles.topRow}>
             <TouchableOpacity
@@ -868,6 +885,11 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   flex: { flex: 1 },
   scroll: { paddingHorizontal: rs(24), maxWidth: MAX_CONTENT_WIDTH, alignSelf: "center", width: "100%" },
+  authLogoHeader: { alignItems: "center", marginBottom: rs(20) },
+  logoContainer: { width: rs(70), height: rs(70), borderRadius: rs(20), borderWidth: 1, alignItems: "center", justifyContent: "center", marginBottom: rs(12) },
+  logoImage: { width: rs(48), height: rs(48) },
+  authAppName: { fontSize: rf(24), fontWeight: "800", letterSpacing: -0.5 },
+  authTagline: { fontSize: rf(14), marginTop: 4 },
   topRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: rs(24) },
   back: { padding: 4 },
   stepIndicator: { flexDirection: "row", gap: 4, flex: 1 },

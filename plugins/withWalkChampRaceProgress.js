@@ -1,8 +1,26 @@
-const { withAndroidManifest, withInfoPlist } = require("@expo/config-plugins");
+const {
+  withAndroidManifest,
+  withInfoPlist,
+  withDangerousMod,
+} = require("@expo/config-plugins");
+const fs = require("fs");
+const path = require("path");
 
 function ensureArray(value) {
   if (Array.isArray(value)) return value;
   return value ? [value] : [];
+}
+
+function copyNotificationIcons(projectRoot) {
+  const src = path.join(
+    projectRoot,
+    "modules/walkchamp-race-progress/android/src/main/res/drawable/ic_walkchamp_notification.xml",
+  );
+  const destDir = path.join(projectRoot, "android/app/src/main/res/drawable");
+  if (!fs.existsSync(src)) return;
+  fs.mkdirSync(destDir, { recursive: true });
+  fs.copyFileSync(src, path.join(destDir, "ic_walkchamp_notification.xml"));
+  fs.copyFileSync(src, path.join(destDir, "ic_notification.xml"));
 }
 
 /**
@@ -62,6 +80,14 @@ function withWalkChampRaceProgress(config) {
 
     return cfg;
   });
+
+  config = withDangerousMod(config, [
+    "android",
+    async (cfg) => {
+      copyNotificationIcons(cfg.modRequest.projectRoot);
+      return cfg;
+    },
+  ]);
 
   config = withInfoPlist(config, (cfg) => {
     cfg.modResults.NSSupportsLiveActivities = true;

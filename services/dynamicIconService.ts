@@ -22,6 +22,12 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 import { getLocalDateStr } from "@/utils/timezone";
 
+let androidIconSwitchTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingAndroidIconName: string | null = null;
+
+/** Android activity-alias icon switches recreate MainActivity — defer past login bootstrap. */
+const ANDROID_ICON_SWITCH_DELAY_MS = 6000;
+
 const ICON_FOR_MILESTONE: Record<number, string> = {
   0:   "WalkChampProgress0",
   25:  "WalkChampProgress25",
@@ -108,6 +114,35 @@ async function setNativeIcon(iconName: string | null): Promise<boolean> {
   }
 }
 
+function scheduleAndroidNativeIcon(iconName: string): Promise<boolean> {
+  pendingAndroidIconName = iconName;
+  if (androidIconSwitchTimer) clearTimeout(androidIconSwitchTimer);
+  return new Promise((resolve) => {
+    androidIconSwitchTimer = setTimeout(() => {
+      androidIconSwitchTimer = null;
+      const name = pendingAndroidIconName;
+      pendingAndroidIconName = null;
+      if (!name) {
+        resolve(false);
+        return;
+      }
+      console.log("[DynamicIcon] applying deferred Android icon:", name);
+      void setNativeIcon(name).then(resolve);
+    }, ANDROID_ICON_SWITCH_DELAY_MS);
+  });
+}
+
+async function applyNativeIcon(iconName: string): Promise<boolean> {
+  if (Platform.OS === "android") {
+    console.log(
+      `[DynamicIcon] deferring Android icon switch ${ANDROID_ICON_SWITCH_DELAY_MS}ms:`,
+      iconName,
+    );
+    return scheduleAndroidNativeIcon(iconName);
+  }
+  return setNativeIcon(iconName);
+}
+
 export const dynamicIconService = {
   async isEnabled(): Promise<boolean> {
     try {
@@ -122,7 +157,7 @@ export const dynamicIconService = {
     try {
       await AsyncStorage.setItem(KEY_ENABLED, enabled ? "true" : "false");
       if (!enabled) {
-        await setNativeIcon("WalkChampProgress0");
+        await applyNativeIcon("WalkChampProgress0");
         await AsyncStorage.setItem(KEY_MILESTONE, "0");
       } else {
         await this.checkAndUpdate({ userId });
@@ -216,7 +251,7 @@ export const dynamicIconService = {
       }
 
       console.log("[DynamicIcon] setting icon:", iconName);
-      const ok = await setNativeIcon(iconName);
+      const ok = await applyNativeIcon(iconName);
       if (ok) {
         const pairs: [string, string][] = [
           [KEY_MILESTONE, String(milestone)],

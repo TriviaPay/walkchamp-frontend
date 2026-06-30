@@ -17,6 +17,7 @@ import { RACE_PROGRESS_NOTIFICATION_CONFIG } from "@/config/raceProgressNotifica
 import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotificationConfig";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { AppState, type AppStateStatus, Platform } from "react-native";
+import { waitForAppStartupReady } from "@/services/appStartup";
 import { getLocalDateStr } from "@/utils/timezone";
 import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
 
@@ -215,10 +216,14 @@ type DailyStepsMap = Record<string, number>;
 export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   const today = getLocalDateStr();
   const syncedDate = await storageGet<string>(STORAGE_KEYS.LAST_SYNCED_STEPS_DATE);
-  const native =
-    Platform.OS === "android"
-      ? await stepTrackingNotificationService.getNativeStepState()
-      : null;
+  let native: Awaited<ReturnType<typeof stepTrackingNotificationService.getNativeStepState>> = null;
+  if (Platform.OS === "android") {
+    try {
+      native = await stepTrackingNotificationService.getNativeStepState();
+    } catch (err) {
+      console.log("[Startup] native step state read failed", err);
+    }
+  }
   const nativeStale = !!(native?.localDate && native.localDate !== today);
   const staleBySync = !!(syncedDate && syncedDate !== today);
   const staleByMemory = !!(lastKnownTrackingDate && lastKnownTrackingDate !== today);
@@ -436,20 +441,21 @@ export async function hydrateOnAppResume(): Promise<void> {
 export function initStepProgressCoordinator(): void {
   console.log("[Startup] step coordinator initializing");
 
-  try {
-    initNativeStepEventListener();
-    scheduleNextMidnightCheck();
-  } catch (err) {
-    console.log("[Startup] step coordinator native listener failed", err);
-  }
-
   AppState.addEventListener("change", (next: AppStateStatus) => {
     if (next === "active") {
       void hydrateOnAppResume();
     }
   });
 
-  console.log("[Startup] step coordinator initialized");
+  void waitForAppStartupReady().then(() => {
+    try {
+      initNativeStepEventListener();
+      scheduleNextMidnightCheck();
+    } catch (err) {
+      console.log("[Startup] step coordinator native listener failed", err);
+    }
+    console.log("[Startup] step coordinator initialized");
+  });
 }
 
 let nativeStepUnsubscribe: (() => void) | null = null;

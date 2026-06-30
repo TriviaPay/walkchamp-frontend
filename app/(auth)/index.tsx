@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -21,6 +22,7 @@ import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { rf, rs, MAX_CONTENT_WIDTH } from "@/utils/responsive";
 
 const EMAIL_DOMAINS = ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com"];
+const APP_LOGO = require("@/assets/icons/WalkChampProgress0.png");
 
 function getEmailSuggestions(email: string): string[] {
   const atIdx = email.indexOf("@");
@@ -235,7 +237,7 @@ export default function LoginScreen() {
         >
           <View style={styles.header}>
             <View style={[styles.logoContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.logoText, { color: colors.primary }]}>WC</Text>
+              <Image source={APP_LOGO} style={styles.logoImage} resizeMode="contain" />
             </View>
             <Text style={[styles.appName, { color: colors.foreground }]}>Walk Champ</Text>
             <Text style={[styles.tagline, { color: colors.mutedForeground }]}>Global Walking Competition</Text>
@@ -394,7 +396,7 @@ const styles = StyleSheet.create({
   scroll: { paddingHorizontal: rs(24), maxWidth: MAX_CONTENT_WIDTH, alignSelf: "center", width: "100%" },
   header: { alignItems: "center", marginBottom: rs(40) },
   logoContainer: { width: rs(70), height: rs(70), borderRadius: rs(20), borderWidth: 1, alignItems: "center", justifyContent: "center", marginBottom: rs(12) },
-  logoText: { fontSize: rf(26), fontWeight: "800" },
+  logoImage: { width: rs(48), height: rs(48) },
   appName: { fontSize: rf(28), fontWeight: "800", letterSpacing: -0.5 },
   tagline: { fontSize: rf(14), marginTop: 4 },
   form: { gap: rs(14) },

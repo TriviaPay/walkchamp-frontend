@@ -40,6 +40,10 @@ import { useAuth } from "@/context/AuthContext";
 import { connectPusher, subscribeToChannel, unsubscribeFromChannel, CHANNELS } from "@/services/realtimeService";
 import { initStepProgressCoordinator } from "@/services/stepProgressCoordinator";
 import {
+  scheduleAppStartupReady,
+  waitForAppStartupReady,
+} from "@/services/appStartup";
+import {
   ensureOneSignalInitialized,
   logoutOneSignal,
   setupNotificationClickHandler,
@@ -113,7 +117,9 @@ if (Platform.OS === "android" && typeof (global as { ErrorUtils?: { setGlobalHan
   const { ErrorUtils } = global as { ErrorUtils: { setGlobalHandler: (h: (e: Error, f?: boolean) => void) => void; getGlobalHandler: () => (e: Error, f?: boolean) => void } };
   const prev = ErrorUtils.getGlobalHandler();
   ErrorUtils.setGlobalHandler((error, isFatal) => {
-    if (String(error?.message ?? "").includes("Unable to activate keep awake")) return;
+    const msg = String(error?.message ?? "");
+    if (msg.includes("Unable to activate keep awake")) return;
+    console.log(`[Startup] global error fatal=${isFatal} message=${msg}`);
     prev(error, isFatal);
   });
 }
@@ -143,12 +149,14 @@ function RootLayoutNav() {
   const { isDark } = useTheme();
 
   useEffect(() => {
-    try {
-      console.log("[Startup] begin");
-      initStepProgressCoordinator();
-    } catch (err) {
-      console.log("[Startup] step coordinator failed", err);
-    }
+    void waitForAppStartupReady().then(() => {
+      try {
+        console.log("[Startup] begin");
+        initStepProgressCoordinator();
+      } catch (err) {
+        console.log("[Startup] step coordinator failed", err);
+      }
+    });
   }, []);
 
   const navTheme = React.useMemo(() => ({
@@ -191,23 +199,27 @@ function PushNotificationSetup() {
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
-    void (async () => {
-      await ensureOneSignalInitialized();
-      cleanup = await setupNotificationClickHandler((route) => {
-        try {
-          const { router } = require("expo-router") as { router: { push: (r: string) => void } };
-          InteractionManager.runAfterInteractions(() => {
-            try {
-              router.push(route as never);
-            } catch {
-              // Ignore routing errors
-            }
-          });
-        } catch {
-          // Ignore routing errors
-        }
-      });
-    })();
+    void waitForAppStartupReady().then(async () => {
+      try {
+        await ensureOneSignalInitialized();
+        cleanup = await setupNotificationClickHandler((route) => {
+          try {
+            const { router } = require("expo-router") as { router: { push: (r: string) => void } };
+            InteractionManager.runAfterInteractions(() => {
+              try {
+                router.push(route as never);
+              } catch {
+                // Ignore routing errors
+              }
+            });
+          } catch {
+            // Ignore routing errors
+          }
+        });
+      } catch (err) {
+        console.log("[Startup] push setup failed", err);
+      }
+    });
     return () => { cleanup?.(); };
   }, []);
 
@@ -289,12 +301,15 @@ export default function RootLayout() {
   useEffect(() => {
     if (fontsLoaded || fontError || fontTimedOut) {
       SplashScreen.hideAsync().catch(() => undefined);
+      scheduleAppStartupReady();
     }
   }, [fontsLoaded, fontError, fontTimedOut]);
 
-  // Initialize AdMob SDK once after fonts settle
+  // Initialize AdMob SDK after startup gate (avoids racing native ads on cold APK install)
   useEffect(() => {
-    void initializeAds().catch(() => {});
+    void waitForAppStartupReady().then(() => {
+      void initializeAds().catch(() => {});
+    });
   }, []);
 
   if (!fontsLoaded && !fontError && !fontTimedOut) {

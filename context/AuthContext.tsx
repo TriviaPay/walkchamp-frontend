@@ -24,6 +24,7 @@ import { authEvents } from "@/utils/authEvents";
 import { screenCache } from "@/utils/screenCache";
 import { storageSet, storageRemove, STORAGE_KEYS } from "@/utils/storage";
 import { dynamicIconService } from "@/services/dynamicIconService";
+import { waitForAppStartupReady } from "@/services/appStartup";
 import { stepPollingService } from "@/services/StepPollingService";
 import { clearStepSessionForLogout } from "@/services/stepProgressCoordinator";
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
@@ -86,7 +87,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Give the caller's router.replace() time to be queued before
       // releasing the gate — prevents index.tsx from racing ahead.
       authTimerRef.current = setTimeout(() => setIsAuthenticating(false), 500);
-      dynamicIconService.checkAndUpdate({ userId: profile.id }).catch(() => {});
+      void waitForAppStartupReady().then(() => {
+        dynamicIconService.checkAndUpdate({ userId: profile.id }).catch(() => {});
+      });
     },
     [dispatch],
   );

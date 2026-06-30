@@ -2,6 +2,10 @@ import { Platform } from "react-native";
 import Constants from "expo-constants";
 import { getValidSession } from "./authService";
 import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
+import {
+  hasNotificationPermissionGranted,
+  requestNotificationPermissionOnce,
+} from "@/services/permissions/notificationPermissionService";
 
 /**
  * In Expo Go, TurboModuleRegistry.getEnforcing() throws an Invariant Violation
@@ -126,35 +130,47 @@ export async function initOneSignal(userId: string): Promise<void> {
   }
 }
 
-// ── Request push notification permission ──────────────────────────────────────
-// Returns true if permission was granted, false if denied or unavailable
-export async function requestNotificationPermission(): Promise<boolean> {
-  if (Platform.OS === "web") return false;
+// ── iOS-only helpers (called from notificationPermissionService) ─────────────
+export async function getIOSNotificationPermissionGranted(): Promise<boolean> {
+  if (Platform.OS !== "ios") return false;
+  const OneSignal = await ensureOneSignalInitialized();
+  if (!OneSignal) return false;
+  try {
+    return await OneSignal.Notifications.getPermissionAsync();
+  } catch {
+    return false;
+  }
+}
+
+export async function requestIOSNotificationPermission(): Promise<boolean> {
+  if (Platform.OS !== "ios") return false;
   const OneSignal = await ensureOneSignalInitialized();
   if (!OneSignal) return false;
   try {
     const granted = await OneSignal.Notifications.requestPermission(true);
-    pushLog(`permission requested result=${granted}`);
+    pushLog(`iOS permission requested result=${granted}`);
     return granted;
   } catch (error) {
-    pushLog("permission request failed", error);
+    pushLog("iOS permission request failed", error);
     return false;
   }
+}
+
+// ── Request push notification permission ──────────────────────────────────────
+// Returns true if permission was granted, false if denied or unavailable
+export async function requestNotificationPermission(): Promise<boolean> {
+  if (Platform.OS === "web") return false;
+  const result = await requestNotificationPermissionOnce("settings", { forceRetry: true });
+  pushLog(`permission requested result=${result.status} requestedNow=${result.requestedNow}`);
+  return result.status === "granted";
 }
 
 // ── Check current permission without prompting ────────────────────────────────
 export async function hasNotificationPermission(): Promise<boolean> {
   if (Platform.OS === "web") return false;
-  const OneSignal = await ensureOneSignalInitialized();
-  if (!OneSignal) return false;
-  try {
-    const granted = await OneSignal.Notifications.getPermissionAsync();
-    pushLog(`permission status checked granted=${granted}`);
-    return granted;
-  } catch (error) {
-    pushLog("permission check failed", error);
-    return false;
-  }
+  const granted = await hasNotificationPermissionGranted();
+  pushLog(`permission status checked granted=${granted}`);
+  return granted;
 }
 
 /** Dev-only push registration snapshot (no secrets). */
@@ -196,8 +212,10 @@ export async function runPostLoginPushSetup(userId: string): Promise<{
   pushLog("post-login setup started");
   await initOneSignal(userId);
 
-  const granted = await hasNotificationPermission();
-  const alreadyPrompted = await storageGet<boolean>(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED);
+  const granted = await hasNotificationPermissionGranted();
+  const alreadyPrompted =
+    (await storageGet<boolean>(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED)) ||
+    (await storageGet<boolean>(STORAGE_KEYS.NOTIFICATION_PERMISSION_ASKED));
 
   if (granted) {
     try {
@@ -227,8 +245,8 @@ export async function runPostLoginPushSetup(userId: string): Promise<{
 
 /** Called when user accepts the in-app push permission prompt. */
 export async function completePushPermissionPrompt(): Promise<boolean> {
-  await storageSet(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED, true);
-  const granted = await requestNotificationPermission();
+  const result = await requestNotificationPermissionOnce("onboarding");
+  const granted = result.status === "granted";
   if (granted) {
     try {
       await optInNotifications();
@@ -248,6 +266,7 @@ export async function completePushPermissionPrompt(): Promise<boolean> {
 /** User dismissed the prompt — do not block the app. */
 export async function dismissPushPermissionPrompt(): Promise<void> {
   await storageSet(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED, true);
+  await storageSet(STORAGE_KEYS.NOTIFICATION_PERMISSION_ASKED, true);
   pushLog("permission prompt dismissed");
 }
 

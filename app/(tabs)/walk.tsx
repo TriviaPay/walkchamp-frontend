@@ -48,7 +48,6 @@ import WearableSetupModal from "@/components/WearableSetupModal";
 import { usePresence } from "@/context/PresenceContext";
 import { useUnread } from "@/context/UnreadContext";
 import { getStoredSession } from "@/services/authService";
-import { progressIconSourceForSteps } from "@/services/dynamicIconService";
 import { authFetch } from "@/utils/authFetch";
 import { STORAGE_KEYS, storageGet, storageSet } from "@/utils/storage";
 import {
@@ -1706,11 +1705,6 @@ export default function WalkScreen() {
     dispatch(fetchTrackThemes());
   }, [dispatch]);
 
-  const progressLogoSource = useMemo(
-    () => progressIconSourceForSteps(todaySteps, todayDailyGoal),
-    [todaySteps, todayDailyGoal],
-  );
-
   const statusConf = STATUS_CONFIG[trackingStatus];
   const dotAnim = useRef(new Animated.Value(1)).current;
   const bannerAnim = useRef(new Animated.Value(0)).current;
@@ -2525,7 +2519,6 @@ export default function WalkScreen() {
         {/* Header */}
         <View style={styles.pageHeader}>
           <View style={styles.pageTitleRow}>
-            <Image source={progressLogoSource} style={styles.progressLogo} resizeMode="contain" />
             <Text style={[styles.pageTitle, { color: colors.foreground }]}>Walk Champ</Text>
           </View>
           <View style={styles.headerRight}>
@@ -4654,8 +4647,7 @@ const styles = StyleSheet.create({
   milestoneText: { fontSize: rf(15), fontWeight: "700" },
   scroll: { paddingHorizontal: rs(20) },
   pageHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
-  pageTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  progressLogo: { width: 34, height: 34, borderRadius: 8 },
+  pageTitleRow: { flexDirection: "row", alignItems: "center" },
   pageTitle: { fontSize: rf(26), fontWeight: "800", letterSpacing: -0.5 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
   coinPill: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: rs(10), paddingVertical: rs(5), borderRadius: 20, borderWidth: 1 },

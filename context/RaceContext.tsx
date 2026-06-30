@@ -42,6 +42,7 @@ import {
   postRaceReconcile,
 } from "@/services/raceProgressApi";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
+import { waitForAppStartupReady } from "@/services/appStartup";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { STORAGE_KEYS, storageGet, storageSet, storageRemove } from "@/utils/storage";
 import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
@@ -556,6 +557,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
     const recover = async () => {
       try {
+        await waitForAppStartupReady();
         const pending = await storageGet<PendingRace>(STORAGE_KEYS.PENDING_RACE);
         if (!pending) return;
 
@@ -613,11 +615,11 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           await clearPendingRace();
         }
       } catch (err) {
-        if (__DEV__) console.log("[Startup] race recovery failed", err);
+        console.log("[Startup] race recovery failed", err);
       }
     };
 
-    recover();
+    void recover();
   }, [user?.id]);
 
   // ── endRace ───────────────────────────────────────────────────────────────────

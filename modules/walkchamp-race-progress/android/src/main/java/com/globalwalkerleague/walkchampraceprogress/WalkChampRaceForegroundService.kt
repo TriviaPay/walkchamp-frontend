@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -16,6 +17,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.PermissionChecker
 
 class WalkChampRaceForegroundService : Service() {
   companion object {
@@ -61,6 +63,35 @@ class WalkChampRaceForegroundService : Service() {
     private var walkRunning = false
     private var lastWalkNotification: Notification? = null
 
+    /** Launcher/adaptive icons are invalid for status bar — use module drawable. */
+    private fun notificationSmallIcon(ctx: Context): Int {
+      val iconId = R.drawable.ic_walkchamp_notification
+      return try {
+        if (androidx.core.content.ContextCompat.getDrawable(ctx, iconId) == null) {
+          Log.w(TAG, "[WalkChampFGS] invalid notification icon resId=$iconId")
+          android.R.drawable.stat_sys_download
+        } else {
+          iconId
+        }
+      } catch (e: Exception) {
+        Log.w(TAG, "[WalkChampFGS] invalid notification icon error=${e.message}")
+        android.R.drawable.stat_sys_download
+      }
+    }
+
+    private fun logPostNotificationsGranted(ctx: Context) {
+      if (Build.VERSION.SDK_INT < 33) {
+        Log.d(TAG, "[WalkChampFGS] permission POST_NOTIFICATIONS granted=true (pre-33)")
+        return
+      }
+      val granted =
+        PermissionChecker.checkSelfPermission(
+          ctx,
+          android.Manifest.permission.POST_NOTIFICATIONS,
+        ) == PermissionChecker.PERMISSION_GRANTED
+      Log.d(TAG, "[WalkChampFGS] permission POST_NOTIFICATIONS granted=$granted")
+    }
+
     fun ensureChannels(ctx: Context) {
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
       val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -90,6 +121,7 @@ class WalkChampRaceForegroundService : Service() {
           },
         )
       }
+      Log.d(TAG, "[WalkChampFGS] createNotificationChannel channelId=$CHANNEL_RACE,$CHANNEL_STEPS")
     }
 
     fun buildRaceNotification(ctx: Context, state: RaceNotificationState): Notification {
@@ -112,7 +144,7 @@ class WalkChampRaceForegroundService : Service() {
       return NotificationCompat.Builder(ctx, CHANNEL_RACE)
         .setContentTitle("Live Race")
         .setContentText(body)
-        .setSmallIcon(ctx.applicationInfo.icon)
+        .setSmallIcon(notificationSmallIcon(ctx))
         .setOngoing(true)
         .setOnlyAlertOnce(true)
         .setSilent(true)
@@ -141,12 +173,15 @@ class WalkChampRaceForegroundService : Service() {
         .setContentTitle(title.ifBlank { "Walk Champ" })
         .setContentText(body.lines().firstOrNull() ?: body)
         .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-        .setSmallIcon(ctx.applicationInfo.icon)
+        .setSmallIcon(notificationSmallIcon(ctx))
         .setOngoing(true)
         .setOnlyAlertOnce(true)
         .setSilent(true)
         .setContentIntent(pending)
         .build()
+        .also {
+          Log.d(TAG, "[WalkChampFGS] buildNotification success channelId=$CHANNEL_STEPS")
+        }
     }
   }
 
@@ -223,15 +258,35 @@ class WalkChampRaceForegroundService : Service() {
    * Falls back to a regular ongoing notification when Android blocks background FGS.
    */
   private fun safeStartForeground(notificationId: Int, notification: Notification): Boolean {
+    if (Build.VERSION.SDK_INT >= 33) {
+      val granted =
+        PermissionChecker.checkSelfPermission(
+          this,
+          android.Manifest.permission.POST_NOTIFICATIONS,
+        ) == PermissionChecker.PERMISSION_GRANTED
+      if (!granted) {
+        Log.w(TAG, "[WalkChampFGS] notification permission denied")
+      }
+    }
     return try {
+      ensureChannels(this)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val channelId =
+          if (notificationId == NOTIFICATION_ID_RACE) CHANNEL_RACE else CHANNEL_STEPS
+        if (notificationManager().getNotificationChannel(channelId) == null) {
+          Log.w(TAG, "[WalkChampFGS] channel missing channelId=$channelId")
+        }
+      }
       startForeground(notificationId, notification)
+      val mode =
+        if (notificationId == NOTIFICATION_ID_RACE) "live_race" else "total_steps"
+      Log.d(TAG, "[WalkChampFGS] startForeground called notificationId=$notificationId")
+      Log.d(TAG, "[WalkChampFGS] service running mode=$mode")
+      Log.d(TAG, "[WalkChampFGS] notification built successfully")
       Log.d(TAG, "[StepFGS] startForeground called notificationId=$notificationId")
       true
     } catch (e: Exception) {
-      Log.w(
-        TAG,
-        "[RaceService] startForeground blocked (${e.javaClass.simpleName}): ${e.message}",
-      )
+      Log.w(TAG, "[WalkChampFGS] start failed error=${e.message}")
       try {
         notificationManager().notify(notificationId, notification)
       } catch (_: Exception) {
@@ -357,6 +412,7 @@ class WalkChampRaceForegroundService : Service() {
 
   private fun startSensorTrackingIfNeeded() {
     if (!isTrackingActive()) return
+    Log.d(TAG, "[WalkChampFGS] sensor registered")
     Log.d(TAG, "[StepFGS] service started — registering hardware step sensor")
     ensureSensorEngine().start()
   }
@@ -681,13 +737,20 @@ class WalkChampRaceForegroundService : Service() {
 
   private fun applyRaceState(incoming: RaceNotificationState, allowReset: Boolean = false) {
     if (!allowReset && !isStepUpdateForCurrentUser(incoming.userId)) return
+    val previousRaceId = raceState?.raceId
     var merged = raceState?.mergeIncoming(incoming, allowReset) ?: incoming
     if (RaceNotificationState.isVerifiedStepSource(merged.stepSource)) {
       merged = merged.copy(sensorCounterBaseline = 0L, raceStepsAtSensorBaseline = 0)
     }
+    raceState = merged.withComputedTimeLeft()
+    RaceNotificationState.save(this, raceState)
+    persistRaceSyncCredentials(raceState!!)
+    persistRaceNativeMode(raceState!!)
+
     if (allowReset) {
       Log.d(TAG, "[RaceNotification] switch mode=daily_steps -> race_live raceId=${merged.raceId}")
-      val previousRaceId = raceState?.raceId
+      publishRaceNotification()
+      Log.d(TAG, "[WalkChampFGS] service running mode=live_race")
       val isNewRace = !previousRaceId.isNullOrBlank() && previousRaceId != merged.raceId
       if (isNewRace) {
         lastSyncedRaceSteps = -1
@@ -707,6 +770,9 @@ class WalkChampRaceForegroundService : Service() {
       } else {
         engine.resumeRace(merged.raceId, merged.raceSteps)
       }
+      raceState = merged.withComputedTimeLeft()
+      RaceNotificationState.save(this, raceState)
+      persistRaceNativeMode(raceState!!)
     } else {
       ensureSensorEngine().mergeJsRaceUpdate(
         merged.raceSteps,
@@ -717,13 +783,10 @@ class WalkChampRaceForegroundService : Service() {
         merged.username,
         merged.stepSource,
       )
+      raceState = merged.withComputedTimeLeft()
+      publishRaceNotification()
     }
     startSensorTrackingIfNeeded()
-    raceState = merged.withComputedTimeLeft()
-    RaceNotificationState.save(this, raceState)
-    persistRaceSyncCredentials(raceState!!)
-    persistRaceNativeMode(raceState!!)
-    publishRaceNotification()
   }
 
   private fun parseStepsFromWalkBody(body: String): Int {
@@ -1043,7 +1106,9 @@ class WalkChampRaceForegroundService : Service() {
 
   override fun onCreate() {
     super.onCreate()
+    Log.d(TAG, "[WalkChampFGS] onCreate buildType=${if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) "debug" else "release"} sdk=${Build.VERSION.SDK_INT}")
     ensureChannels(this)
+    logPostNotificationsGranted(this)
     ensureWorker()
     Log.d(TAG, "[StepFGS] service onCreate")
     if (restoreRaceFromStorage(promoteForeground = true)) {
@@ -1056,6 +1121,7 @@ class WalkChampRaceForegroundService : Service() {
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     val action = intent?.action
+    Log.d(TAG, "[WalkChampFGS] onStartCommand action=$action")
     Log.d(TAG, "[RaceService] onStartCommand action=$action START_STICKY")
 
     if (action == null || action == ACTION_RESTORE) {
@@ -1161,6 +1227,19 @@ class WalkChampRaceForegroundService : Service() {
         val authToken = intent.getStringExtra("authToken")
         persistWalkState(body, deepLink, title, parsedSteps, null, stepSource, userId, apiBaseUrl, authToken)
 
+        val nm = notificationManager()
+        if (raceState != null && isActiveRace(raceState!!)) {
+          nm.notify(NOTIFICATION_ID_WALK, lastWalkNotification!!)
+        } else if (action == ACTION_START_WALK) {
+          safeStartForeground(NOTIFICATION_ID_WALK, lastWalkNotification!!)
+          nm.notify(NOTIFICATION_ID_WALK, lastWalkNotification!!)
+          startWalkLoopsIfNeeded()
+          Log.d(TAG, "[WalkChampFGS] service running mode=total_steps")
+        } else {
+          safeStartForeground(NOTIFICATION_ID_WALK, lastWalkNotification!!)
+          nm.notify(NOTIFICATION_ID_WALK, lastWalkNotification!!)
+        }
+
         val engine = ensureSensorEngine()
         engine.updateMetadata(userId, "daily_steps", stepSource)
         engine.setPendingKnownTodaySteps(parsedSteps.coerceAtLeast(0))
@@ -1172,12 +1251,7 @@ class WalkChampRaceForegroundService : Service() {
         startSensorTrackingIfNeeded()
 
         Log.d(TAG, "[StepFGS] stepUpdate todaySteps=$parsedSteps source=$stepSource sensor=always_on")
-        val nm = notificationManager()
-        if (raceState != null && isActiveRace(raceState!!)) {
-          nm.notify(NOTIFICATION_ID_WALK, lastWalkNotification!!)
-        } else {
-          safeStartForeground(NOTIFICATION_ID_WALK, lastWalkNotification!!)
-          nm.notify(NOTIFICATION_ID_WALK, lastWalkNotification!!)
+        if (action != ACTION_START_WALK && raceState == null) {
           startWalkLoopsIfNeeded()
         }
       }

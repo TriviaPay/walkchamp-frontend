@@ -6,7 +6,7 @@ import { Platform } from "react-native";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import type { StepProviderId } from "@/services/steps/stepProviderTypes";
 import { setStepProgressUser } from "@/services/stepProgressCoordinator";
-import { ensureTrackingNotificationPermission } from "@/services/stepTrackingNotificationService";
+import { ensureNotificationPermissionForOngoingTracking } from "@/services/permissions/notificationPermissionService";
 import type { PermissionStatus } from "@/services/StepTrackingService";
 
 export type StepTrackingEnableResult = {
@@ -49,10 +49,16 @@ export async function activateStepTracking(options: {
 
     let ongoingNotificationEnabled = true;
     if (Platform.OS === "android") {
-      ongoingNotificationEnabled = await ensureTrackingNotificationPermission();
+      const perm = await ensureNotificationPermissionForOngoingTracking();
+      ongoingNotificationEnabled = perm.granted;
       console.log(
-        `[Steps] notification permission for FGS granted=${ongoingNotificationEnabled}`,
+        `[Steps] notification permission for FGS granted=${ongoingNotificationEnabled} requestedNow=${perm.requestedNow}`,
       );
+      if (!ongoingNotificationEnabled) {
+        console.log(
+          "[Steps] notification permission not granted — ongoing notification will not start",
+        );
+      }
     }
 
     let permission: PermissionStatus = "unavailable";

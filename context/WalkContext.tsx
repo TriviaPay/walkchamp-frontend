@@ -42,14 +42,19 @@ import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { dynamicIconService } from "@/services/dynamicIconService";
 import {
+  getOngoingNotificationDeniedMessage,
+  shouldShowOngoingNotificationDeniedMessage,
+  stepTrackingNotificationService,
+} from "@/services/stepTrackingNotificationService";
+import {
   hydrateOnAppResume,
   handleMidnightRolloverIfNeeded,
   pushWalkNotificationFromCanonicalStore,
   setStepProgressUser,
   updateStepProgressFromRealSource,
 } from "@/services/stepProgressCoordinator";
-import { stepTrackingNotificationService } from "@/services/stepTrackingNotificationService";
 import { activateStepTracking } from "@/services/stepTrackingStartup";
+import { waitForAppStartupReady } from "@/services/appStartup";
 import { mergeWalkStepsWithNative } from "@/services/stepDisplayMerge";
 import { isWalkBackendSyncPaused } from "@/services/walkSyncCoordinator";
 import {
@@ -294,7 +299,9 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const load = async () => {
-      await handleMidnightRolloverIfNeeded();
+      try {
+        await waitForAppStartupReady();
+        await handleMidnightRolloverIfNeeded();
       const daily = await storageGet<DailySteps>(STORAGE_KEYS.DAILY_STEPS);
       const allTime = await storageGet<number>(STORAGE_KEYS.TOTAL_STEPS);
       const streak = await storageGet<number>(STORAGE_KEYS.STREAK);
@@ -364,8 +371,11 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       }
 
       await checkDayChange();
+    } catch (err) {
+      console.log("[Startup] WalkContext load failed", err);
+    }
     };
-    load();
+    void load();
   }, [checkDayChange]);
 
   // ── Milestone helper ─────────────────────────────────────────────────────────
@@ -557,6 +567,11 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         }
         if (ongoingNotificationEnabled) {
           void pushWalkNotificationFromCanonicalStore(true);
+        } else if (
+          Platform.OS === "android" &&
+          shouldShowOngoingNotificationDeniedMessage()
+        ) {
+          Alert.alert("Notifications Disabled", getOngoingNotificationDeniedMessage());
         }
       } catch (e) {
         if (__DEV__) console.log("[WalkContext] applyTrackingActivation error", e);
@@ -591,7 +606,10 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
     let mounted = true;
     const init = async () => {
-      if (__DEV__) console.log(`[WalkContext] platform path: ${Platform.OS}`);
+      try {
+        await waitForAppStartupReady();
+        if (!mounted) return;
+        if (__DEV__) console.log(`[WalkContext] platform path: ${Platform.OS}`);
       if (Platform.OS === "ios") {
         // ── iOS path (unchanged) ──────────────────────────────────────────────
         const available = await stepTracker.isAvailable();
@@ -633,9 +651,12 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
         await applyTrackingActivation(true);
       }
+      } catch (err) {
+        console.log("[Startup] WalkContext tracking init failed", err);
+      }
     };
 
-    init().catch(() => {
+    void init().catch(() => {
       // Real tracking unavailable — context stays in "idle" state.
     });
 

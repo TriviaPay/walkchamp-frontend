@@ -1,10 +1,11 @@
-import { PermissionsAndroid, Platform } from "react-native";
+import { Platform } from "react-native";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { RACE_PROGRESS_NOTIFICATION_CONFIG } from "@/config/raceProgressNotificationConfig";
 import { registerLiveActivityToken } from "@/services/raceProgressApi";
 import { getValidSession } from "@/services/authService";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { store } from "@/store";
+import { getNotificationPermissionStatus } from "@/services/permissions/notificationPermissionService";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -58,20 +59,12 @@ function getNativeModule(): NativeModule | null {
   return nativeModule;
 }
 
-async function ensureAndroidNotificationPermission(): Promise<boolean> {
+async function checkAndroidNotificationPermission(): Promise<boolean> {
   if (Platform.OS !== "android") return true;
-  if (typeof Platform.Version === "number" && Platform.Version < 33) return true;
-  try {
-    const granted = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-    );
-    const ok = granted === PermissionsAndroid.RESULTS.GRANTED;
-    notificationPermissionDenied = !ok;
-    return ok;
-  } catch {
-    notificationPermissionDenied = true;
-    return false;
-  }
+  const status = await getNotificationPermissionStatus();
+  const ok = status === "granted";
+  notificationPermissionDenied = !ok;
+  return ok;
 }
 
 async function toNativePayload(
@@ -215,9 +208,11 @@ class RaceProgressNotificationService {
 
     try {
       if (Platform.OS === "android") {
-        const permitted = await ensureAndroidNotificationPermission();
-        if (!permitted && __DEV__) {
-          console.warn("[RaceProgressNotif] POST_NOTIFICATIONS denied — FGS still starting");
+        const permitted = await checkAndroidNotificationPermission();
+        if (!permitted) {
+          console.warn(
+            "[RaceProgressNotif] POST_NOTIFICATIONS denied — FGS still starting",
+          );
         }
         const startFn =
           native.startRaceBackgroundService ?? native.startRaceProgressNotification;
