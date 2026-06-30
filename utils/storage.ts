@@ -39,4 +39,6 @@ export const STORAGE_KEYS = {
    * Shape: { raceId: string, raceStartTimeUTC: string, raceEndTimeUTC?: string, status: 'in_progress'|'completed' }
    */
   PENDING_RACE: "walkchamp_pending_race",
+  /** True after the post-login push permission prompt was shown once. */
+  PUSH_PERMISSION_PROMPTED: "walkchamp_push_permission_prompted_v1",
 };

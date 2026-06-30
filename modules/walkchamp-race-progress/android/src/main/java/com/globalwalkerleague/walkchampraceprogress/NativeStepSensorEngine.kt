@@ -59,6 +59,13 @@ class NativeStepSensorEngine(
 
   fun currentState(): NativeStepState = state
 
+  /** Returns true when the local calendar day rolled over and daily steps were reset. */
+  fun checkAndRollDailyDay(): Boolean {
+    val beforeDate = state.localDate
+    val rolled = ensureCurrentDay()
+    return rolled || (beforeDate != state.localDate)
+  }
+
   fun isSensorSupported(): Boolean = stepCounterSensor != null
 
   fun hasActivityRecognitionPermission(): Boolean {
@@ -105,6 +112,7 @@ class NativeStepSensorEngine(
     } catch (e: Exception) {
       Log.w(TAG, "[StepFGS] sensor register failed: ${e.message}")
     }
+    ensureCurrentDay()
   }
 
   private fun ensureSensorHandler() {
@@ -390,9 +398,9 @@ class NativeStepSensorEngine(
     )
   }
 
-  private fun ensureCurrentDay() {
+  private fun ensureCurrentDay(): Boolean {
     val today = NativeStepState.localDateString()
-    if (state.localDate == today) return
+    if (state.localDate == today) return false
     Log.d(TAG, "[StepFGS] new day detected — resetting daily baseline")
     val total = lastSensorTotal.takeIf { it >= 0f } ?: state.sensorTotal
     state = state.copy(
@@ -401,7 +409,8 @@ class NativeStepSensorEngine(
       todaySteps = 0,
       updatedAt = System.currentTimeMillis(),
     )
-    NativeStepState.save(context, state)
+    persistAndEmit(state, force = true)
+    return true
   }
 
   private fun resetBaselinesSafely(sensorTotal: Float) {

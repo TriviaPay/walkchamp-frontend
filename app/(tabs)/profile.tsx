@@ -37,6 +37,7 @@ import { authFetch } from "@/utils/authFetch";
 import {
   getNotificationPreferences,
   setNotificationPreferences,
+  initOneSignal,
   requestNotificationPermission,
   optInNotifications,
   optOutNotifications,
@@ -315,6 +316,9 @@ export default function ProfileScreen() {
     setPushLoading(true);
     try {
       if (value) {
+        if (user?.id) {
+          await initOneSignal(user.id);
+        }
         // Request permission first — if denied, keep toggle off
         const granted = await requestNotificationPermission();
         if (!granted) {
@@ -343,7 +347,7 @@ export default function ProfileScreen() {
     } finally {
       setPushLoading(false);
     }
-  }, [pushLoading]);
+  }, [pushLoading, user?.id]);
 
   // Achievement title unlocks — global modal popup across all screens
   const { triggerUnlocks, lastEquipped } = useTitleUnlock();

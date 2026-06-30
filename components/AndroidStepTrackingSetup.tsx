@@ -151,6 +151,8 @@ export default function AndroidStepTrackingSetup({
       const det = detection ?? await detectAndroidStepSources();
       setDetection(det);
       applyHCResult(result, det);
+    } catch (e) {
+      if (__DEV__) console.log("[AndroidStepSetup] enable failed", e);
     } finally {
       setLoadingMain(false);
     }

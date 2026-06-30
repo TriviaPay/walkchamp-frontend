@@ -135,6 +135,18 @@ data class NativeStepState(
         if (uid == null && !state.userId.isNullOrBlank()) {
           save(ctx, state)
         }
+        val today = localDateString()
+        if (state.localDate != today) {
+          val total = state.sensorTotal.takeIf { it > 0f }
+          val migrated = state.copy(
+            localDate = today,
+            dailyBaseline = total ?: state.dailyBaseline,
+            todaySteps = 0,
+            updatedAt = System.currentTimeMillis(),
+          )
+          save(ctx, migrated)
+          return migrated
+        }
         state
       } catch (_: Exception) {
         null

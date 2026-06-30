@@ -148,40 +148,54 @@ export async function enableAndroidStepTracking(): Promise<AndroidStepTrackingSt
     };
   }
 
-  const before = await getAndroidStepTrackingStatus();
-  if (
-    before.status === "provider_update_required" ||
-    before.status === "provider_not_installed"
-  ) {
-    const legacy = await stepProviderManager.requestStepPermission();
-    invalidateAndroidStepTrackingStatusCache();
-    if (legacy.status === "granted") {
-      return getAndroidStepTrackingStatus(true);
+  try {
+    const before = await getAndroidStepTrackingStatus();
+    if (
+      before.status === "provider_update_required" ||
+      before.status === "provider_not_installed"
+    ) {
+      const legacy = await stepProviderManager.requestStepPermission().catch(() => ({
+        status: "unavailable" as const,
+        providerId: null,
+      }));
+      invalidateAndroidStepTrackingStatusCache();
+      if (legacy.status === "granted") {
+        return getAndroidStepTrackingStatus(true);
+      }
+      await androidHCService.openInstallPage().catch(() => {});
+      return before;
     }
-    await androidHCService.openInstallPage();
-    return before;
-  }
-  if (
-    before.status === "unsupported" ||
-    before.status === "expo_go" ||
-    before.status === "error"
-  ) {
-    const fallback = await stepProviderManager.requestStepPermission();
-    invalidateAndroidStepTrackingStatusCache();
-    if (fallback.status === "granted") {
-      return getAndroidStepTrackingStatus(true);
+    if (
+      before.status === "unsupported" ||
+      before.status === "expo_go" ||
+      before.status === "error"
+    ) {
+      const fallback = await stepProviderManager.requestStepPermission().catch(() => ({
+        status: "unavailable" as const,
+        providerId: null,
+      }));
+      invalidateAndroidStepTrackingStatusCache();
+      if (fallback.status === "granted") {
+        return getAndroidStepTrackingStatus(true);
+      }
+      return before;
     }
-    return before;
-  }
 
-  const result = await stepProviderManager.requestStepPermission();
-  invalidateAndroidStepTrackingStatusCache();
-  if (result.status === "granted") {
-    await stepProviderManager.getTodaySteps();
+    const result = await stepProviderManager.requestStepPermission().catch(() => ({
+      status: "unavailable" as const,
+      providerId: null,
+    }));
+    invalidateAndroidStepTrackingStatusCache();
+    if (result.status === "granted") {
+      await stepProviderManager.getTodaySteps().catch(() => null);
+      return getAndroidStepTrackingStatus(true);
+    }
+
+    return getAndroidStepTrackingStatus(true);
+  } catch (e) {
+    if (__DEV__) console.log("[AndroidHC] enableAndroidStepTracking error", e);
     return getAndroidStepTrackingStatus(true);
   }
-
-  return getAndroidStepTrackingStatus(true);
 }
 
 // Re-export for WalkContext

@@ -20,6 +20,7 @@ type NativeWalkStepState = {
   stepSource: string;
   notificationMode?: string;
   walkActive?: boolean;
+  localDate?: string;
   lastUpdatedAt: number;
   updatedAt?: number;
   sensorSupported?: boolean;
@@ -40,6 +41,7 @@ type NativeModule = {
   getNativeStepState?: () => Promise<NativeWalkStepState | null>;
   clearNativeStepStateForUser?: (userId: string) => Promise<void>;
   flushRaceSyncOutbox?: () => Promise<void>;
+  resetDailyStepsForNewDay?: () => Promise<boolean>;
   addListener?: (
     event: string,
     handler: (state: NativeWalkStepState) => void,
@@ -87,6 +89,11 @@ async function toNativePayload(payload: WalkStepNotificationPayload): Promise<Re
   };
 }
 
+/** Request POST_NOTIFICATIONS before starting the Android foreground service. */
+export async function ensureTrackingNotificationPermission(): Promise<boolean> {
+  return ensureAndroidNotificationPermission();
+}
+
 async function ensureAndroidNotificationPermission(): Promise<boolean> {
   if (Platform.OS !== "android") return true;
   if (typeof Platform.Version === "number" && Platform.Version < 33) return true;
@@ -109,13 +116,22 @@ function shouldThrottle(steps: number, force = false): boolean {
   return false;
 }
 
+function logNotification(msg: string): void {
+  console.log(`[Notification] ${msg}`);
+}
+
 class StepTrackingNotificationService {
   async start(payload: WalkStepNotificationPayload): Promise<void> {
+    logNotification("start requested");
     const native = getNativeModule();
-    if (!native) return;
+    if (!native) {
+      logNotification("native module unavailable");
+      return;
+    }
 
     if (Platform.OS === "android") {
       const ok = await ensureAndroidNotificationPermission();
+      logNotification(`permissionGranted=${ok}`);
       if (!ok) return;
     }
 
@@ -126,13 +142,16 @@ class StepTrackingNotificationService {
     try {
       if (Platform.OS === "android" && native.startWalkStepNotification) {
         await native.startWalkStepNotification(nativePayload);
+        logNotification(`serviceStartRequested=true steps=${payload.todaySteps}`);
       }
       if (Platform.OS === "ios" && native.startWalkLiveActivity) {
         await native.startWalkLiveActivity(nativePayload);
+        logNotification(`liveActivityStart=true steps=${payload.todaySteps}`);
       }
       lastUpdateMs = Date.now();
       lastSteps = payload.todaySteps;
     } catch (err) {
+      logNotification(`start failed: ${String(err)}`);
       if (__DEV__) console.warn("[StepTrackingNotif] start failed", err);
     }
   }
@@ -212,6 +231,18 @@ class StepTrackingNotificationService {
       await native.flushRaceSyncOutbox();
     } catch (err) {
       if (__DEV__) console.warn("[StepTrackingNotif] flushRaceSyncOutbox failed", err);
+    }
+  }
+
+  async resetDailyStepsForNewDay(): Promise<void> {
+    if (Platform.OS !== "android") return;
+    const native = getNativeModule();
+    if (!native?.resetDailyStepsForNewDay) return;
+    try {
+      await native.resetDailyStepsForNewDay();
+      if (__DEV__) console.log("[StepFGS] resetDailyStepsForNewDay completed");
+    } catch (err) {
+      if (__DEV__) console.warn("[StepTrackingNotif] resetDailyStepsForNewDay failed", err);
     }
   }
 

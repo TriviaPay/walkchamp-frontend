@@ -6,7 +6,7 @@
  *     reaches "navigating" — which is set exclusively by:
  *       a) host: local countdown completes after startRace API call succeeds, OR
  *       b) all:  Pusher "race:starting" fires for THIS raceId (drives countdown)
- *       c) all:  Pusher "race:started"  fires for THIS raceId (safety-net fallback)
+ *       c) all:  Pusher "race:started"  fires for THIS raceId (API-verified countdown)
  *   • NEVER navigate from racePhase (context) — stale phase from a previous race
  *     would cause an immediate spurious navigation on mount.
  *   • NEVER navigate from polling liveRoom.status — API response can be stale
@@ -416,19 +416,41 @@ export default function MatchmakingScreen() {
   const isHostModeRef = useRef(isHostMode);
   useEffect(() => { isHostModeRef.current = isHostMode; }, [isHostMode]);
 
+  // ── Server-authoritative race status check ─────────────────────────────────
+  const fetchRaceStartState = useCallback(async (): Promise<{
+    inProgress: boolean;
+    currentPlayers: number;
+  }> => {
+    if (!backendRaceId) return { inProgress: false, currentPlayers: 2 };
+    try {
+      const res = await authFetch(`/api/races/${backendRaceId}`);
+      if (!res.ok) return { inProgress: false, currentPlayers: 2 };
+      const data = await res.json();
+      return {
+        inProgress: data.race?.status === "in_progress",
+        currentPlayers: data.race?.currentPlayers ?? 2,
+      };
+    } catch {
+      return { inProgress: false, currentPlayers: 2 };
+    }
+  }, [backendRaceId]);
+
   // ── Navigate to race track ────────────────────────────────────────────────
-  // Only called from the countdown completion or race:started safety-net.
-  // NOT called from racePhase watcher or polling.
+  // Only called from countdown completion after API confirms in_progress.
   const navigateToRace = useCallback(
-    (playerCount: number) => {
+    async (playerCount: number) => {
+      if (startPhaseRef.current === "navigating") return;
+      const { inProgress } = await fetchRaceStartState();
+      if (!inProgress) {
+        setStart("idle");
+        return;
+      }
       if (startPhaseRef.current === "navigating") return;
       setStart("navigating");
       if (countdownIntervalRef.current) {
         clearInterval(countdownIntervalRef.current);
         countdownIntervalRef.current = null;
       }
-      // Wire up the race context so the in-race screen has participants + steps.
-      // Pass server startedAt so RaceContext can use it for step reconciliation.
       if (isHostMode) {
         startRaceManually();
       } else {
@@ -440,7 +462,7 @@ export default function MatchmakingScreen() {
         router.replace("/(tabs)/live");
       }
     },
-    [isHostMode, startRaceManually, notifyRaceStarted, backendRaceId, setStart],
+    [isHostMode, startRaceManually, notifyRaceStarted, backendRaceId, setStart, fetchRaceStartState],
   );
 
   // ── Begin countdown (3-2-1 → GO → navigate) ──────────────────────────────
@@ -532,7 +554,7 @@ export default function MatchmakingScreen() {
             data.race.status === "in_progress" &&
             startPhaseRef.current === "idle"
           ) {
-            beginCountdown(1, data.race.currentPlayers ?? 2);
+            beginCountdown(3, data.race.currentPlayers ?? 2);
           }
         } catch { /* silent */ }
       };
@@ -574,13 +596,16 @@ export default function MatchmakingScreen() {
     };
 
     // race:started — safety-net in case the client missed race:starting
-    const onStarted = (data: { raceId?: string }) => {
+    const onStarted = async (data: { raceId?: string }) => {
       if (data.raceId && data.raceId !== backendRaceId) return;
-      // If countdown is already running, let it finish naturally.
-      // If we're still idle (missed race:starting), navigate immediately.
-      if (startPhaseRef.current === "idle") {
-        navigateToRace(currentPlayers());
-      }
+      if (startPhaseRef.current !== "idle") return;
+      try {
+        const res = await authFetch(`/api/races/${backendRaceId}`);
+        if (!res.ok) return;
+        const body = await res.json();
+        if (body.race?.status !== "in_progress") return;
+        beginCountdown(3, body.race.currentPlayers ?? currentPlayers());
+      } catch { /* silent */ }
     };
 
     // race:cancelled

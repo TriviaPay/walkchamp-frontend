@@ -17,6 +17,8 @@ import { RACE_PROGRESS_NOTIFICATION_CONFIG } from "@/config/raceProgressNotifica
 import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotificationConfig";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { AppState, type AppStateStatus, Platform } from "react-native";
+import { getLocalDateStr } from "@/utils/timezone";
+import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
 
 let notificationTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingNotification = false;
@@ -24,6 +26,8 @@ let walkNotificationTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingWalkNotification = false;
 let lastWalkNotificationSteps = -1;
 let lastWalkNotificationPushMs = 0;
+let lastKnownTrackingDate: string | null = null;
+let midnightCheckTimer: ReturnType<typeof setTimeout> | null = null;
 
 function mapProviderSource(): StepProgressSource {
   switch (stepProviderManager.getActiveProviderId()) {
@@ -153,12 +157,15 @@ export async function pushWalkNotificationFromCanonicalStore(force = false): Pro
   // Never push stale JS/Redux values over a higher native FGS sensor count.
   if (Platform.OS === "android") {
     const native = await stepTrackingNotificationService.getNativeStepState();
+    const today = getLocalDateStr();
+    const nativeStale = !!(native?.localDate && native.localDate !== today);
     const nativeSteps = native?.todaySteps ?? 0;
     const nativeUpdatedAt = native?.updatedAt ?? native?.lastUpdatedAt ?? 0;
     const jsUpdatedAt = s.todayStepsLastUpdatedAt
       ? new Date(s.todayStepsLastUpdatedAt).getTime()
       : 0;
     if (
+      !nativeStale &&
       nativeSteps > steps &&
       nativeUpdatedAt > 0 &&
       (jsUpdatedAt === 0 || nativeUpdatedAt >= jsUpdatedAt)
@@ -197,6 +204,72 @@ export async function pushWalkNotificationFromCanonicalStore(force = false): Pro
 
   lastWalkNotificationSteps = steps;
   lastWalkNotificationPushMs = now;
+}
+
+type DailyStepsMap = Record<string, number>;
+
+/**
+ * Detect local-midnight rollover and reset daily steps in Redux, storage, native FGS,
+ * and the ongoing notification. Safe to call repeatedly (idempotent per calendar day).
+ */
+export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
+  const today = getLocalDateStr();
+  const syncedDate = await storageGet<string>(STORAGE_KEYS.LAST_SYNCED_STEPS_DATE);
+  const native =
+    Platform.OS === "android"
+      ? await stepTrackingNotificationService.getNativeStepState()
+      : null;
+  const nativeStale = !!(native?.localDate && native.localDate !== today);
+  const staleBySync = !!(syncedDate && syncedDate !== today);
+  const staleByMemory = !!(lastKnownTrackingDate && lastKnownTrackingDate !== today);
+
+  if (!staleBySync && !nativeStale && !staleByMemory) {
+    lastKnownTrackingDate = today;
+    return false;
+  }
+
+  if (__DEV__) {
+    console.log(
+      `[StepStore] midnight rollover today=${today} synced=${syncedDate} nativeDate=${native?.localDate ?? "n/a"}`,
+    );
+  }
+
+  if (Platform.OS === "android") {
+    await stepTrackingNotificationService.resetDailyStepsForNewDay();
+  }
+
+  store.dispatch(
+    raceProgressActions.resetDailyStepsForNewDay({
+      todaySteps: 0,
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+
+  lastWalkNotificationSteps = -1;
+
+  const daily =
+    (await storageGet<DailyStepsMap>(STORAGE_KEYS.DAILY_STEPS)) ?? {};
+  daily[today] = 0;
+  await storageSet(STORAGE_KEYS.DAILY_STEPS, daily);
+  await storageSet(STORAGE_KEYS.LAST_SYNCED_STEPS_DATE, today);
+  await storageSet(STORAGE_KEYS.LAST_SYNCED_STEPS_COUNT, 0);
+
+  lastKnownTrackingDate = today;
+  await pushWalkNotificationFromCanonicalStore(true);
+  return true;
+}
+
+function scheduleNextMidnightCheck(): void {
+  if (midnightCheckTimer) clearTimeout(midnightCheckTimer);
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(24, 0, 1, 0);
+  const delayMs = Math.max(1_000, next.getTime() - now.getTime());
+  midnightCheckTimer = setTimeout(() => {
+    midnightCheckTimer = null;
+    void handleMidnightRolloverIfNeeded();
+    scheduleNextMidnightCheck();
+  }, delayMs);
 }
 
 /**
@@ -342,29 +415,41 @@ async function pushNotificationFromStore(): Promise<void> {
 
 /** Called on app resume — hydrates native sensor state before HC/backend/AsyncStorage. */
 export async function hydrateOnAppResume(): Promise<void> {
-  if (Platform.OS === "android") {
-    await stepTrackingNotificationService.flushRaceSyncOutbox();
-    await hydrateFromNativeStepState();
-    await hydrateFromNativeRaceService();
-  }
-  if (__DEV__) {
-    const s = store.getState().raceProgress;
-    console.log(
-      `[AppResume] hydrated canonical todaySteps=${s.todaySteps} raceSteps=${s.raceSteps} source=${s.stepSource}`,
-    );
+  try {
+    await handleMidnightRolloverIfNeeded();
+    if (Platform.OS === "android") {
+      await stepTrackingNotificationService.flushRaceSyncOutbox();
+      await hydrateFromNativeStepState();
+      await hydrateFromNativeRaceService();
+    }
+    if (__DEV__) {
+      const s = store.getState().raceProgress;
+      console.log(
+        `[AppResume] hydrated canonical todaySteps=${s.todaySteps} raceSteps=${s.raceSteps} source=${s.stepSource}`,
+      );
+    }
+  } catch (err) {
+    console.log("[Startup] hydrateOnAppResume failed", err);
   }
 }
 
 export function initStepProgressCoordinator(): void {
-  if (__DEV__) console.log("[StepStore] coordinator initialized");
+  console.log("[Startup] step coordinator initializing");
 
-  initNativeStepEventListener();
+  try {
+    initNativeStepEventListener();
+    scheduleNextMidnightCheck();
+  } catch (err) {
+    console.log("[Startup] step coordinator native listener failed", err);
+  }
 
   AppState.addEventListener("change", (next: AppStateStatus) => {
     if (next === "active") {
       void hydrateOnAppResume();
     }
   });
+
+  console.log("[Startup] step coordinator initialized");
 }
 
 let nativeStepUnsubscribe: (() => void) | null = null;
@@ -393,6 +478,12 @@ function initNativeStepEventListener(): void {
 
       // During an active race, native sensor race steps update UI + notification immediately.
       if (raceActive && typeof state.raceSteps === "number") {
+        if (stepProviderManager.usesVerifiedStepSource() && isDeviceSensorSource(source)) {
+          if (__DEV__) {
+            console.log("[StepStore] ignored native race sensor — verified source active");
+          }
+          return;
+        }
         feedRaceStepsToStore({
           raceSteps: state.raceSteps,
           stepSource: mapNativeStepSource(source),
@@ -407,6 +498,13 @@ function initNativeStepEventListener(): void {
       }
 
       if (stepProviderManager.usesVerifiedStepSource() && isDeviceSensorSource(source)) {
+        return;
+      }
+      const today = getLocalDateStr();
+      if (!raceActive && state.localDate && state.localDate !== today) {
+        if (__DEV__) {
+          console.log("[StepStore] ignored native update — stale localDate");
+        }
         return;
       }
       updateStepProgressFromRealSource({
@@ -428,6 +526,13 @@ async function hydrateFromNativeStepState(): Promise<void> {
   if (native.userId && current.userId && native.userId !== current.userId) {
     if (__DEV__) {
       console.log("[StepStore] ignored update for previous user");
+    }
+    return;
+  }
+  const today = getLocalDateStr();
+  if (native.localDate && native.localDate !== today) {
+    if (__DEV__) {
+      console.log("[StepStore] skip native hydrate — stale localDate");
     }
     return;
   }
@@ -499,17 +604,36 @@ async function hydrateFromNativeStepState(): Promise<void> {
 }
 
 async function hydrateFromNativeRaceService(): Promise<void> {
+  const current = store.getState().raceProgress;
   const nativeWalk = await stepTrackingNotificationService.getNativeStepState();
   if (
     nativeWalk?.notificationMode === "race_live" &&
     typeof nativeWalk.raceSteps === "number"
   ) {
-    const current = store.getState().raceProgress;
     if (
       nativeWalk.userId &&
       current.userId &&
       nativeWalk.userId !== current.userId
     ) {
+      return;
+    }
+    // Never hydrate steps from a previous race into a new active race.
+    if (
+      current.activeRaceId &&
+      nativeWalk.activeRaceId &&
+      nativeWalk.activeRaceId !== current.activeRaceId
+    ) {
+      if (__DEV__) {
+        console.log(
+          `[StepStore] skip native race hydrate — stale raceId native=${nativeWalk.activeRaceId} active=${current.activeRaceId}`,
+        );
+      }
+      return;
+    }
+    if (!current.activeRaceId) {
+      if (__DEV__) {
+        console.log("[StepStore] skip native race hydrate — no active race in store");
+      }
       return;
     }
     const updatedAt = new Date(
@@ -532,6 +656,20 @@ async function hydrateFromNativeRaceService(): Promise<void> {
   if (!raw) return;
   try {
     const json = JSON.parse(raw) as Record<string, unknown>;
+    const nativeRaceId = typeof json.raceId === "string" ? json.raceId : null;
+    if (
+      current.activeRaceId &&
+      nativeRaceId &&
+      nativeRaceId !== current.activeRaceId
+    ) {
+      if (__DEV__) {
+        console.log(
+          `[StepStore] skip native race hydrate — stale raceId native=${nativeRaceId} active=${current.activeRaceId}`,
+        );
+      }
+      return;
+    }
+    if (!current.activeRaceId) return;
     const stepSource = typeof json.stepSource === "string" ? json.stepSource : "";
     const isVerified =
       stepSource === "health_connect" ||
@@ -588,17 +726,23 @@ export function setActiveRaceProgress(params: {
   goalSteps: number;
   totalParticipants?: number;
   bootSteps?: number;
+  /** When true (default), stale race steps from a previous match are discarded. */
+  freshStart?: boolean;
 }): void {
-  store.dispatch(raceProgressActions.setActiveRace(params));
-  if ((params.bootSteps ?? 0) > 0) {
-    raceStepSyncService.seedSyncedSteps(params.bootSteps ?? 0);
+  const freshStart = params.freshStart !== false;
+  const boot = freshStart ? 0 : Math.max(0, params.bootSteps ?? 0);
+  raceStepSyncService.reset();
+  if (!freshStart && boot > 0) {
+    raceStepSyncService.seedSyncedSteps(boot);
   }
+  store.dispatch(raceProgressActions.resetRaceStepBuffer());
+  store.dispatch(raceProgressActions.setActiveRace({ ...params, bootSteps: boot }));
   void raceProgressNotificationService.start(
     {
       raceId: params.raceId,
       userId: params.userId,
       username: params.username,
-      raceSteps: params.bootSteps ?? 0,
+      raceSteps: boot,
       rank: 1,
       totalParticipants: params.totalParticipants ?? 1,
       goalSteps: params.goalSteps,
@@ -770,6 +914,13 @@ export function feedRaceStepsToStore(params: {
   updatedAt?: string;
 }): void {
   const s = store.getState().raceProgress;
+  const next = Math.max(0, Math.floor(params.raceSteps));
+  if (next === s.raceSteps) {
+    if (__DEV__) {
+      console.log(`[StepCoordinator] skip feedRaceStepsToStore unchanged raceSteps=${next}`);
+    }
+    return;
+  }
   const source = params.stepSource ?? mapProviderSource();
   const updatedAt = params.updatedAt ?? new Date().toISOString();
   store.dispatch(

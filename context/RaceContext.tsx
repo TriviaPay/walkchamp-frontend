@@ -30,6 +30,7 @@ import {
   deactivateRaceInStore,
   feedRaceStepsToStore,
   handleBackendProgressSynced,
+  resetRaceStepBuffer,
   setActiveRaceProgress,
   setStepProgressUser,
 } from "@/services/stepProgressCoordinator";
@@ -41,6 +42,7 @@ import {
   postRaceReconcile,
 } from "@/services/raceProgressApi";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { STORAGE_KEYS, storageGet, storageSet, storageRemove } from "@/utils/storage";
 import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
 import { subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
@@ -493,7 +495,28 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       // Include any steps tracked by the native Android FGS while JS was asleep
       // (legacy sensor only — HC uses time-range reads and doesn't need this).
       const nativeMerged = await mergeRaceStepsWithNative(Math.max(deviceSteps, safeServer));
-      const merged = Math.max(deviceSteps, safeServer, nativeMerged);
+      let merged = Math.max(deviceSteps, safeServer, nativeMerged);
+
+      // Reject single-step phantom bumps on refresh/catch-up when using verified sources.
+      if (
+        force &&
+        merged > userStepsRef.current &&
+        merged - userStepsRef.current <= STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP &&
+        stepProviderManager.usesVerifiedStepSource() &&
+        !stepProviderManager.usesRaceBaseline()
+      ) {
+        if (__DEV__) {
+          console.log(
+            `[RaceStepsRealtime] ignored phantom race +${merged - userStepsRef.current} on catch-up`,
+          );
+        }
+        merged = userStepsRef.current;
+      }
+
+      if (merged <= userStepsRef.current) {
+        return;
+      }
+
       raceStepFloorRef.current = merged;
 
       if (raceStepApplyRef.current) {
@@ -525,72 +548,77 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     setIsHost(host);
   }, []);
 
-  // ── Race recovery on mount ─────────────────────────────────────────────────────
+  // ── Race recovery on mount (after auth is ready) ─────────────────────────────
 
   useEffect(() => {
     if (!FEATURE_FLAGS.SERVER_TIME_RACE_VALIDATION_ENABLED) return;
+    if (!user?.id) return;
 
     const recover = async () => {
-      const pending = await storageGet<PendingRace>(STORAGE_KEYS.PENDING_RACE);
-      if (!pending) return;
+      try {
+        const pending = await storageGet<PendingRace>(STORAGE_KEYS.PENDING_RACE);
+        if (!pending) return;
 
-      const { raceId: pendingRaceId, raceStartTimeUTC: startStr, status } = pending;
-      const raceStart = new Date(startStr);
+        const { raceId: pendingRaceId, raceStartTimeUTC: startStr } = pending;
+        const raceStart = new Date(startStr);
 
-      // Fetch current race status from backend
-      const raceData = await fetchRaceStatus(pendingRaceId);
-      if (!raceData) {
-        // Race not found — clear pending state
-        await clearPendingRace();
-        return;
-      }
+        const raceData = await fetchRaceStatus(pendingRaceId);
+        if (!raceData) {
+          await clearPendingRace();
+          return;
+        }
 
-      if (raceData.status === "in_progress") {
-        if (Platform.OS === "ios") {
-          // iOS: recover exact historical steps from HealthKit for the race window.
-          const data = await stepTracker.getStepsForTimeRange(raceStart, new Date());
-          if (__DEV__) console.log(`[RaceSteps] iOS recovery: device latest steps=${data?.steps ?? 0} raceStartedAt=${raceStart}`);
-          if (data && data.steps > 0) {
-            await postRaceProgress(pendingRaceId, data.steps, undefined, undefined, "healthkit");
-          }
-        } else {
-          const uid = userProfileRef.current.userId;
-          const raceData2 = await stepProviderManager.getRaceSteps(
-            pendingRaceId,
-            raceStart,
-            uid,
-          );
-          if (__DEV__) console.log(`[RaceSteps] Android recovery: steps=${raceData2?.steps ?? 0}`);
-          if (raceData2 && raceData2.steps > 0) {
-            await postRaceProgress(
+        if (raceData.status === "in_progress") {
+          if (Platform.OS === "ios") {
+            const available = await stepTracker.isAvailable().catch(() => false);
+            if (!available) return;
+            const data = await stepTracker.getStepsForTimeRange(raceStart, new Date()).catch(() => null);
+            if (__DEV__) console.log(`[RaceSteps] iOS recovery: device latest steps=${data?.steps ?? 0} raceStartedAt=${raceStart}`);
+            if (data && data.steps > 0) {
+              await postRaceProgress(pendingRaceId, data.steps, undefined, undefined, "healthkit");
+            }
+          } else {
+            const uid = userProfileRef.current.userId;
+            if (!uid || uid === "user") return;
+            const raceData2 = await stepProviderManager.getRaceSteps(
               pendingRaceId,
-              raceData2.steps,
-              undefined,
-              undefined,
-              stepProviderManager.toRaceProgressSource(),
-            );
+              raceStart,
+              uid,
+            ).catch(() => null);
+            if (__DEV__) console.log(`[RaceSteps] Android recovery: steps=${raceData2?.steps ?? 0}`);
+            if (raceData2 && raceData2.steps > 0) {
+              await postRaceProgress(
+                pendingRaceId,
+                raceData2.steps,
+                undefined,
+                undefined,
+                stepProviderManager.toRaceProgressSource(),
+              );
+            }
           }
-        }
-        // Leave pending race in storage so we can reconcile when it completes
-      } else if (raceData.status === "completed") {
-        const raceEnd = raceData.completedAt ? new Date(raceData.completedAt) : new Date();
+        } else if (raceData.status === "completed") {
+          const raceEnd = raceData.completedAt ? new Date(raceData.completedAt) : new Date();
 
-        if (Platform.OS === "ios") {
-          // iOS: recover exact steps from HealthKit for the race window
-          const data = await stepTracker.getStepsForTimeRange(raceStart, raceEnd);
-          if (data && data.steps > 0) {
-            await postRaceReconcile(pendingRaceId, data.steps, data.source);
+          if (Platform.OS === "ios") {
+            const available = await stepTracker.isAvailable().catch(() => false);
+            if (available) {
+              const data = await stepTracker.getStepsForTimeRange(raceStart, raceEnd).catch(() => null);
+              if (data && data.steps > 0) {
+                await postRaceReconcile(pendingRaceId, data.steps, data.source);
+              }
+            }
           }
+          await clearPendingRace();
+        } else if (raceData.status === "cancelled" || raceData.status === "open") {
+          await clearPendingRace();
         }
-        // Android or unavailable: steps could not be verified — just clear
-        await clearPendingRace();
-      } else if (raceData.status === "cancelled" || raceData.status === "open") {
-        await clearPendingRace();
+      } catch (err) {
+        if (__DEV__) console.log("[Startup] race recovery failed", err);
       }
     };
 
     recover();
-  }, []);
+  }, [user?.id]);
 
   // ── endRace ───────────────────────────────────────────────────────────────────
 
@@ -748,10 +776,13 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
   // ── startRace ─────────────────────────────────────────────────────────────────
 
-  const startRace = useCallback((allParticipants: RaceParticipant[]) => {
+  const startRace = useCallback((allParticipants: RaceParticipant[], options?: { isRejoin?: boolean }) => {
     finishedCountRef.current = 0;
     const userFromList = allParticipants.find((p) => p.isUser);
-    const bootSteps = Math.max(0, userFromList?.raceSteps ?? 0);
+    // Fresh races always begin at 0 — only an explicit rejoin may restore server steps.
+    const bootSteps = options?.isRejoin
+      ? Math.max(0, userFromList?.raceSteps ?? 0)
+      : 0;
     raceEndedRef.current = false;
     goalFlushDoneRef.current = false;
     botStepsRef.current = {};
@@ -791,6 +822,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
     // Register race in canonical store and start notification from coordinator.
     if (raceIdRef.current) {
+      resetRaceStepBuffer();
       setActiveRaceProgress({
         raceId: raceIdRef.current,
         raceStartTime: raceStart?.toISOString() ?? new Date().toISOString(),
@@ -799,6 +831,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         goalSteps: raceTargetStepsRef.current,
         totalParticipants: Math.max(1, allParticipants.length),
         bootSteps,
+        freshStart: !options?.isRejoin,
       });
     }
 
@@ -845,6 +878,9 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
             if (__DEV__) console.log(`[RaceStepsRealtime] ignored lower value: ${steps} (keeping ${prevSteps})`);
           else if (steps > prevSteps)
             if (__DEV__) console.log(`[RaceStepsRealtime] calculated race_steps: ${steps} previous: ${prevSteps}`);
+        }
+        if (antiReg === prevSteps) {
+          return;
         }
         userStepsRef.current = antiReg;
         raceStepFloorRef.current = Math.max(raceStepFloorRef.current, antiReg);
@@ -1158,6 +1194,9 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     // Reset step state before participants are set — same reason as notifyRaceStarted.
     setUserRaceSteps(0);
     userStepsRef.current = 0;
+    raceStepFloorRef.current = 0;
+    raceStepSyncService.reset();
+    resetRaceStepBuffer();
 
     const all = [userParticipant, ...bots];
     setParticipants(all);
@@ -1180,6 +1219,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     userStepsRef.current = 0;
     setWalkRaceStepsDisplay(0);
     raceStepSyncService.reset();
+    resetRaceStepBuffer();
 
     // Store server-authoritative race start time
     const startTime = startedAt ?? new Date();
@@ -1298,7 +1338,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    startRace([userParticipant, ...bots]);
+    startRace([userParticipant, ...bots], { isRejoin: true });
   }, [startRace, catchUpLiveRaceSteps]);
 
   // ── Join race ─────────────────────────────────────────────────────────────────
@@ -1311,6 +1351,11 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     setRaceMaxPlayers(maxPlayers);
     setRacePhase("matchmaking");
     setWalkRaceStepsDisplay(0);
+    setUserRaceSteps(0);
+    userStepsRef.current = 0;
+    raceStepFloorRef.current = 0;
+    raceStepSyncService.reset();
+    resetRaceStepBuffer();
     setPlayersJoined(1);
     finishedCountRef.current = 0;
     hostModeRef.current = hostMode;
@@ -1345,6 +1390,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     clearAllIntervals();
     raceEndedRef.current = false;
     stepTickRef.current = 0;
+    const resetRaceId = raceIdRef.current;
     raceIdRef.current = null;
     raceStartTimeRef.current = null;
     usingRealStepsRef.current = false;
@@ -1367,7 +1413,6 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     setRaceStartTimeUTC(null);
     // Clear pending race from storage after reset (user saw results)
     clearPendingRace();
-    const resetRaceId = raceIdRef.current;
     if (resetRaceId) {
       void stepProviderManager.clearRaceBaseline(
         resetRaceId,

@@ -11,6 +11,7 @@ import { Platform } from "react-native";
 import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
 import { stepTrackingNotificationService } from "@/services/stepTrackingNotificationService";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import { getLocalDateStr } from "@/utils/timezone";
 
 export function mergeMonotonic(current: number, incoming: number): number {
   return Math.max(Math.max(0, Math.floor(current)), Math.max(0, Math.floor(incoming)));
@@ -33,6 +34,18 @@ export async function mergeWalkStepsWithNative(providerSteps: number): Promise<n
 
   const nativeSteps = await stepTrackingNotificationService.getNativeWalkSteps();
   if (nativeSteps == null) return provider;
+
+  const nativeState = await stepTrackingNotificationService.getNativeStepState();
+  const today = getLocalDateStr();
+  if (nativeState?.localDate && nativeState.localDate !== today) {
+    if (__DEV__) {
+      console.log(
+        `[StepStore] skipped native walk merge — stale localDate=${nativeState.localDate}`,
+      );
+    }
+    return provider;
+  }
+
   const merged = Math.max(provider, nativeSteps);
   if (__DEV__ && merged > provider) {
     console.log(

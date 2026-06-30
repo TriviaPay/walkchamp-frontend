@@ -265,6 +265,19 @@ const raceProgressSlice = createSlice({
       state.raceSteps = next;
       state.raceStepsLastUpdatedAt = ts;
     },
+
+    /** Force daily step count down on local-midnight rollover (bypasses monotonic guard). */
+    resetDailyStepsForNewDay(
+      state,
+      action: PayloadAction<{ todaySteps?: number; updatedAt?: string }>,
+    ) {
+      state.todaySteps = Math.max(0, Math.floor(action.payload.todaySteps ?? 0));
+      state.todayStepsLastUpdatedAt =
+        action.payload.updatedAt ?? new Date().toISOString();
+      if (__DEV__) {
+        console.log(`[StepStore] resetDailyStepsForNewDay todaySteps=${state.todaySteps}`);
+      }
+    },
   },
 });
 

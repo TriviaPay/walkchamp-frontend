@@ -1,7 +1,7 @@
-import { Platform, PermissionsAndroid } from "react-native";
+import { Platform } from "react-native";
 import Constants from "expo-constants";
 import { getValidSession } from "./authService";
-import { resolveNotificationRoute } from "@/utils/deepLinkUtils";
+import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
 
 /**
  * In Expo Go, TurboModuleRegistry.getEnforcing() throws an Invariant Violation
@@ -19,20 +19,11 @@ interface PushSubscription {
   optedIn: boolean;
   optIn: () => Promise<void>;
   optOut: () => Promise<void>;
-  addEventListener: (event: "change", handler: (event: PushSubscriptionChangedState) => void) => void;
-  removeEventListener: (event: "change", handler: (event: PushSubscriptionChangedState) => void) => void;
-}
-
-interface PushSubscriptionChangedState {
-  previous: { id?: string; optedIn: boolean };
-  current: { id?: string; optedIn: boolean };
 }
 
 interface NotificationClickEvent {
-  result?: { url?: string };
   notification: {
     additionalData?: Record<string, unknown>;
-    launchURL?: string;
     title?: string;
     body?: string;
   };
@@ -52,32 +43,18 @@ type NotifEventHandler = (e: NotificationClickEvent | ForegroundWillDisplayEvent
 
 interface OneSignalV5 {
   initialize: (appId: string) => void;
-  login: (externalId: string) => void;
-  logout: () => void;
+  login: (externalId: string) => Promise<void>;
+  logout: () => Promise<void>;
   Notifications: {
     requestPermission: (fallbackToSettings?: boolean) => Promise<boolean>;
     getPermissionAsync: () => Promise<boolean>;
-    canRequestPermission: () => Promise<boolean>;
-    addEventListener: (
-      event: "click" | "foregroundWillDisplay" | "permissionChange",
-      handler: NotifEventHandler | ((granted: boolean) => void),
-    ) => void;
-    removeEventListener: (
-      event: "click" | "foregroundWillDisplay" | "permissionChange",
-      handler: NotifEventHandler | ((granted: boolean) => void),
-    ) => void;
+    addEventListener: (event: "click" | "foregroundWillDisplay", handler: NotifEventHandler) => void;
+    removeEventListener: (event: "click" | "foregroundWillDisplay", handler: NotifEventHandler) => void;
   };
   User: {
     pushSubscription: PushSubscription;
-    addTags: (tags: Record<string, string>) => void;
   };
 }
-
-export type OneSignalUserInfo = {
-  id: string;
-  username?: string;
-  country?: string;
-};
 
 async function getOneSignal(): Promise<OneSignalV5 | null> {
   if (Platform.OS === "web") return null;
@@ -85,6 +62,8 @@ async function getOneSignal(): Promise<OneSignalV5 | null> {
   try {
     const mod = await import("react-native-onesignal");
     const sdk = ((mod as Record<string, unknown>).OneSignal ?? mod.default ?? mod) as OneSignalV5;
+    // Validate that the native module actually linked — in Expo Go the JS
+    // module loads but .Notifications / .User are undefined.
     if (!sdk?.Notifications?.addEventListener) return null;
     return sdk;
   } catch {
@@ -94,21 +73,14 @@ async function getOneSignal(): Promise<OneSignalV5 | null> {
 
 let _initialized = false;
 let _initPromise: Promise<OneSignalV5 | null> | null = null;
-let _loggedInUserId: string | null = null;
-let _pendingDeepLink: string | null = null;
-let _foregroundCleanup: (() => void) | null = null;
-let _subscriptionCleanup: (() => void) | null = null;
+let _foregroundHandlerCleanup: (() => void) | null = null;
 
-export function getPendingDeepLink(): string | null {
-  return _pendingDeepLink;
-}
-
-export function clearPendingDeepLink(): void {
-  _pendingDeepLink = null;
-}
-
-export function setPendingDeepLink(route: string): void {
-  _pendingDeepLink = route;
+function pushLog(msg: string, extra?: unknown): void {
+  if (extra !== undefined) {
+    console.log(`[Push] ${msg}`, extra);
+  } else {
+    console.log(`[Push] ${msg}`);
+  }
 }
 
 export async function ensureOneSignalInitialized(): Promise<OneSignalV5 | null> {
@@ -122,10 +94,16 @@ export async function ensureOneSignalInitialized(): Promise<OneSignalV5 | null> 
     if (!OneSignal) return null;
 
     if (!_initialized) {
-      OneSignal.initialize(appId);
-      _initialized = true;
-      if (__DEV__) console.log("[OneSignal] initialization complete");
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      try {
+        OneSignal.initialize(appId);
+        _initialized = true;
+        pushLog("OneSignal initialized");
+        // Native initWithContext completes asynchronously after the JS call returns.
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      } catch (error) {
+        pushLog("initialize failed", error);
+        return null;
+      }
     }
     return OneSignal;
   })();
@@ -133,56 +111,33 @@ export async function ensureOneSignalInitialized(): Promise<OneSignalV5 | null> 
   return _initPromise;
 }
 
-async function requestAndroidNotificationPermission(): Promise<boolean> {
-  if (Platform.OS !== "android" || Platform.Version < 33) return true;
-  try {
-    const result = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-    );
-    return result === PermissionsAndroid.RESULTS.GRANTED;
-  } catch {
-    return false;
-  }
-}
-
 // ── Initialize OneSignal and associate authenticated user ─────────────────────
-export async function initOneSignal(user: OneSignalUserInfo): Promise<void> {
-  if (!user?.id) return;
+export async function initOneSignal(userId: string): Promise<void> {
   const OneSignal = await ensureOneSignalInitialized();
-  if (!OneSignal) return;
+  if (!OneSignal || !userId) return;
 
   try {
-    if (_loggedInUserId !== user.id) {
-      OneSignal.login(user.id);
-      _loggedInUserId = user.id;
-      if (__DEV__) console.log("[OneSignal] login", user.id);
-    }
-
-    OneSignal.User.addTags({
-      user_id: user.id,
-      username: user.username ?? "",
-      platform: Platform.OS,
-      country: user.country ?? "",
-      push_registered: "true",
-    });
-  } catch {
-    // Never crash on notification setup
+    await OneSignal.login(userId);
+    pushLog(`OneSignal login userId=${userId}`);
+    const subId = OneSignal.User.pushSubscription.id;
+    pushLog(`push subscription id=${subId ?? "pending"}`);
+  } catch (error) {
+    pushLog("login failed", error);
   }
 }
 
 // ── Request push notification permission ──────────────────────────────────────
+// Returns true if permission was granted, false if denied or unavailable
 export async function requestNotificationPermission(): Promise<boolean> {
   if (Platform.OS === "web") return false;
   const OneSignal = await ensureOneSignalInitialized();
   if (!OneSignal) return false;
   try {
-    if (Platform.OS === "android") {
-      await requestAndroidNotificationPermission();
-    }
     const granted = await OneSignal.Notifications.requestPermission(true);
-    if (__DEV__) console.log("[OneSignal] permission status", granted);
+    pushLog(`permission requested result=${granted}`);
     return granted;
-  } catch {
+  } catch (error) {
+    pushLog("permission request failed", error);
     return false;
   }
 }
@@ -193,38 +148,107 @@ export async function hasNotificationPermission(): Promise<boolean> {
   const OneSignal = await ensureOneSignalInitialized();
   if (!OneSignal) return false;
   try {
-    return await OneSignal.Notifications.getPermissionAsync();
-  } catch {
+    const granted = await OneSignal.Notifications.getPermissionAsync();
+    pushLog(`permission status checked granted=${granted}`);
+    return granted;
+  } catch (error) {
+    pushLog("permission check failed", error);
     return false;
   }
 }
 
-// ── Prompt permission once after login when prefs allow (non-spammy) ─────────
-let _permissionPromptedForUser: string | null = null;
-
-export async function ensurePushPermissionIfNeeded(userId: string, prefsEnabled: boolean): Promise<void> {
-  if (!prefsEnabled || !userId) return;
-  if (_permissionPromptedForUser === userId) return;
-
+/** Dev-only push registration snapshot (no secrets). */
+export async function getPushRegistrationDebugInfo(): Promise<{
+  permissionGranted: boolean;
+  pushSubscriptionId: string | null;
+  optedIn: boolean;
+  externalIdSet: boolean;
+} | null> {
+  if (!__DEV__) return null;
   const OneSignal = await ensureOneSignalInitialized();
-  if (!OneSignal) return;
-
+  if (!OneSignal) return null;
   try {
-    const hasPermission = await OneSignal.Notifications.getPermissionAsync();
-    if (hasPermission) {
-      _permissionPromptedForUser = userId;
-      return;
-    }
-    const canRequest = await OneSignal.Notifications.canRequestPermission();
-    if (!canRequest) {
-      _permissionPromptedForUser = userId;
-      return;
-    }
-    _permissionPromptedForUser = userId;
-    await requestNotificationPermission();
+    const permissionGranted = await OneSignal.Notifications.getPermissionAsync();
+    const sub = OneSignal.User.pushSubscription;
+    return {
+      permissionGranted,
+      pushSubscriptionId: sub.id ?? null,
+      optedIn: sub.optedIn,
+      externalIdSet: !!sub.id,
+    };
   } catch {
-    // Permission denied must not crash
+    return null;
   }
+}
+
+/**
+ * Post-login push setup: init SDK, login external ID, check permission,
+ * register device when already granted, or signal that UI should prompt once.
+ */
+export async function runPostLoginPushSetup(userId: string): Promise<{
+  permissionGranted: boolean;
+  shouldShowPrompt: boolean;
+}> {
+  if (!userId || Platform.OS === "web") {
+    return { permissionGranted: false, shouldShowPrompt: false };
+  }
+
+  pushLog("post-login setup started");
+  await initOneSignal(userId);
+
+  const granted = await hasNotificationPermission();
+  const alreadyPrompted = await storageGet<boolean>(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED);
+
+  if (granted) {
+    try {
+      await optInNotifications();
+      await registerDeviceWithBackend();
+      if (!_foregroundHandlerCleanup) {
+        _foregroundHandlerCleanup = await setupForegroundHandler();
+      }
+      if (__DEV__) {
+        const debug = await getPushRegistrationDebugInfo();
+        if (debug) pushLog("registration debug", debug);
+      }
+    } catch (error) {
+      pushLog("post-login register failed", error);
+    }
+    return { permissionGranted: true, shouldShowPrompt: false };
+  }
+
+  if (!alreadyPrompted) {
+    pushLog("permission not granted — will show prompt");
+    return { permissionGranted: false, shouldShowPrompt: true };
+  }
+
+  pushLog("permission denied but app continues");
+  return { permissionGranted: false, shouldShowPrompt: false };
+}
+
+/** Called when user accepts the in-app push permission prompt. */
+export async function completePushPermissionPrompt(): Promise<boolean> {
+  await storageSet(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED, true);
+  const granted = await requestNotificationPermission();
+  if (granted) {
+    try {
+      await optInNotifications();
+      await registerDeviceWithBackend();
+      if (!_foregroundHandlerCleanup) {
+        _foregroundHandlerCleanup = await setupForegroundHandler();
+      }
+    } catch (error) {
+      pushLog("register after prompt failed", error);
+    }
+  } else {
+    pushLog("permission denied but app continues");
+  }
+  return granted;
+}
+
+/** User dismissed the prompt — do not block the app. */
+export async function dismissPushPermissionPrompt(): Promise<void> {
+  await storageSet(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED, true);
+  pushLog("permission prompt dismissed");
 }
 
 // ── Register this device with our backend ─────────────────────────────────────
@@ -240,8 +264,6 @@ export async function registerDeviceWithBackend(): Promise<void> {
     const session = await getValidSession();
     if (!session) return;
 
-    const appVersion = Constants.expoConfig?.version ?? "1.0.1";
-
     await fetch(`${API_BASE}/api/push/register-device`, {
       method: "POST",
       headers: {
@@ -251,26 +273,12 @@ export async function registerDeviceWithBackend(): Promise<void> {
       body: JSON.stringify({
         onesignalSubscriptionId: subscriptionId,
         devicePlatform: Platform.OS,
-        appVersion,
+        appVersion: "1.0.0",
       }),
     });
   } catch {
     // Best-effort registration
   }
-}
-
-async function setupSubscriptionChangeListener(): Promise<() => void> {
-  const OneSignal = await ensureOneSignalInitialized();
-  if (!OneSignal) return () => {};
-
-  const onChange = (event: PushSubscriptionChangedState) => {
-    if (event.current.id) {
-      void registerDeviceWithBackend();
-    }
-  };
-
-  OneSignal.User.pushSubscription.addEventListener("change", onChange);
-  return () => OneSignal.User.pushSubscription.removeEventListener("change", onChange);
 }
 
 // ── Opt device out of push (user disabled notifications) ─────────────────────
@@ -303,15 +311,10 @@ export async function logoutOneSignal(): Promise<void> {
   const OneSignal = await ensureOneSignalInitialized();
   if (!OneSignal) return;
   try {
-    OneSignal.logout();
-    _loggedInUserId = null;
-    _permissionPromptedForUser = null;
-    _foregroundCleanup?.();
-    _foregroundCleanup = null;
-    _subscriptionCleanup?.();
-    _subscriptionCleanup = null;
-  } catch {
-    // Ignore
+    await OneSignal.logout();
+    pushLog("logged out");
+  } catch (error) {
+    pushLog("logout failed", error);
   }
 }
 
@@ -348,41 +351,49 @@ export async function setNotificationPreferences(enabled: boolean): Promise<bool
   }
 }
 
-function handleNotificationOpen(
-  data: Record<string, unknown>,
-  launchUrl: string | undefined,
-  navigate: (route: string) => void,
-  isAuthenticated: boolean,
-): void {
-  const route = resolveNotificationRoute(data, launchUrl);
-  if (!route) return;
-
-  if (__DEV__) {
-    console.log("[OneSignal] notification opened", { type: data.type, route });
-  }
-
-  if (!isAuthenticated) {
-    setPendingDeepLink(route);
-    return;
-  }
-
-  navigate(route);
-}
-
 // ── Set up notification click handler (routes taps to correct screen) ─────────
 export async function setupNotificationClickHandler(
   navigate: (route: string) => void,
-  isAuthenticated: () => boolean,
 ): Promise<() => void> {
   if (Platform.OS === "web") return () => {};
   const OneSignal = await ensureOneSignalInitialized();
   if (!OneSignal) return () => {};
 
   const handleClick: NotifEventHandler = (event) => {
-    const clickEvent = event as NotificationClickEvent;
-    const data = (clickEvent.notification.additionalData ?? {}) as Record<string, unknown>;
-    const launchUrl = clickEvent.result?.url ?? clickEvent.notification.launchURL;
-    handleNotificationOpen(data, launchUrl, navigate, isAuthenticated());
+    const data = (event as NotificationClickEvent).notification.additionalData as
+      | Record<string, string>
+      | undefined;
+    if (!data?.type) return;
+
+    const { type, room_id, event_id } = data;
+
+    switch (type) {
+      case "race_invite":
+      case "race_starting":
+      case "race_joined":
+      case "coins_battle_joined":
+        navigate(room_id ? `/race/${room_id}` : "/(tabs)/walk");
+        break;
+      case "race_finished":
+        navigate(room_id ? `/race/${room_id}` : "/(tabs)/walk");
+        break;
+      case "reward_ready":
+      case "withdrawal_approved":
+        navigate("/(tabs)/wallet");
+        break;
+      case "friend_request":
+      case "friend_request_accepted":
+        navigate("/(tabs)/chat");
+        break;
+      case "group_invite":
+        navigate("/(tabs)/walk");
+        break;
+      case "sponsored_event_reminder":
+        navigate(event_id ? `/sponsored-event/${event_id}` : "/(tabs)/walk");
+        break;
+      default:
+        navigate("/(tabs)/walk");
+    }
   };
 
   OneSignal.Notifications.addEventListener("click", handleClick);
@@ -390,39 +401,20 @@ export async function setupNotificationClickHandler(
 }
 
 // ── Foreground notification handler ──────────────────────────────────────────
-export async function setupForegroundHandler(
-  getCurrentRoute?: () => string | undefined,
-): Promise<() => void> {
+export async function setupForegroundHandler(): Promise<() => void> {
   if (Platform.OS === "web") return () => {};
   const OneSignal = await ensureOneSignalInitialized();
   if (!OneSignal) return () => {};
 
   const handleForeground: NotifEventHandler = (event) => {
-    const fgEvent = event as ForegroundWillDisplayEvent;
-    const data = (fgEvent.notification.additionalData ?? {}) as Record<string, unknown>;
-    const route = resolveNotificationRoute(data);
-    const currentRoute = getCurrentRoute?.() ?? "";
-
-    if (__DEV__) {
-      console.log("[OneSignal] notification received foreground", { type: data.type, route });
-    }
-
-    // Skip banner when user is already on the target screen
-    if (route && currentRoute && currentRoute.includes(route.split("?")[0])) {
-      return;
-    }
-
-    fgEvent.notification.display();
+    // Show the banner even in foreground — Pusher handles live race UI updates
+    // but push is still useful for out-of-context messages (e.g. friend request
+    // while user is on the Leaderboard screen)
+    (event as ForegroundWillDisplayEvent).notification.display();
   };
 
   OneSignal.Notifications.addEventListener("foregroundWillDisplay", handleForeground);
   return () => OneSignal.Notifications.removeEventListener("foregroundWillDisplay", handleForeground);
-}
-
-export async function setupPushSubscriptionListener(): Promise<() => void> {
-  _subscriptionCleanup?.();
-  _subscriptionCleanup = await setupSubscriptionChangeListener();
-  return _subscriptionCleanup;
 }
 
 // ── In-app notification helpers (unchanged) ───────────────────────────────────
@@ -455,7 +447,7 @@ export async function markNotificationRead(id: string): Promise<void> {
 }
 
 // ── Legacy compat shims ───────────────────────────────────────────────────────
-/** @deprecated — use initOneSignal(user) then registerDeviceWithBackend() */
+/** @deprecated — use initOneSignal(userId) then registerDeviceWithBackend() */
 export async function registerDevice(): Promise<void> {
   return registerDeviceWithBackend();
 }

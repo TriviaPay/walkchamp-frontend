@@ -43,6 +43,9 @@ export const STEP_SYNC_CONFIG = {
   /** Matchmaking lobby — room status poll while waiting for start */
   MATCHMAKING_ROOM_POLL_MS: 8_000,
 
+  /** Live race — spectator watch-count heartbeat (POST /spectate) */
+  LIVE_RACE_SPECTATE_HEARTBEAT_MS: 60_000,
+
   /** Walk — min new steps before POST /api/walk/steps (Health Connect / HealthKit) */
   WALK_BACKEND_SYNC_MIN_DELTA_VERIFIED: 5,
 

@@ -4508,7 +4508,7 @@ export default function WalkScreen() {
         onComplete={(_platform, permissionStatus) => {
           setShowStepSetup(false);
           if (permissionStatus === "connected") {
-            void requestStepPermission();
+            void resumeStepWatching();
           }
         }}
       />

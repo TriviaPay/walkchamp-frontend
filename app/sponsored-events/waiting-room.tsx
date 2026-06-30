@@ -142,17 +142,26 @@ export default function SponsoredWaitingRoom() {
     fetchEvent();
   }, [fetchEvent]));
 
-  // Navigate to live race when started (via polled state or direct trigger)
-  const navigateToRace = useCallback((raceId: string) => {
+  // Navigate to live race only when backend confirms in_progress
+  const navigateToRace = useCallback(async (raceId: string) => {
     if (navigatedRef.current) return;
+    try {
+      const res = await authFetch("/api/sponsored-events");
+      if (!res.ok) return;
+      const data = await res.json() as { events: SponsoredEvent[] };
+      const found = (data.events ?? []).find((e) => e.id === id);
+      if (!found || found.status !== "in_progress") return;
+    } catch {
+      return;
+    }
     navigatedRef.current = true;
     router.replace({ pathname: "/race/live-detail", params: { id: raceId } });
-  }, []);
+  }, [id]);
 
   useEffect(() => {
     if (!event) return;
     if (event.status === "in_progress") {
-      navigateToRace(id);
+      void navigateToRace(id);
     }
   }, [event, id, navigateToRace]);
 
@@ -169,7 +178,7 @@ export default function SponsoredWaitingRoom() {
           setEvent(found);
           if (found.status === "in_progress") {
             clearInterval(poll);
-            navigateToRace(id);
+            void navigateToRace(id);
           }
         }
       } catch { /* silent */ }
@@ -184,7 +193,7 @@ export default function SponsoredWaitingRoom() {
 
     ch.bind(EVENTS.SPONSORED_EVENT_STARTED, (d: { room_id: string }) => {
       if (d.room_id !== id) return;
-      navigateToRace(d.room_id);
+      void navigateToRace(d.room_id);
     });
 
     ch.bind(EVENTS.SPONSORED_EVENT_CANCELLED, (d: { room_id: string }) => {

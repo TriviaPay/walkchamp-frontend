@@ -201,8 +201,6 @@ export default function WearableSetupModal({
         const s = await stepTracker.requestPermission();
         setPermStatus(s as typeof permStatus);
       } else {
-        onClose();
-        await new Promise((r) => setTimeout(r, 400));
         await grantAndroidSteps();
       }
     } catch { /* ignore */ }

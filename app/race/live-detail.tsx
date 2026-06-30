@@ -1683,14 +1683,13 @@ export default function LiveRaceDetailScreen() {
         p.userId === user?.id ||
         (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase()),
     );
-    void catchUpStepsRef.current(me?.currentSteps ?? 0, true);
+    void catchUpStepsRef.current(me?.currentSteps ?? 0, false);
     void fetchDetailsOnFocusRef.current(false);
 
     return () => {
       void resumeStepWatching();
-      void refreshTodaySteps();
     };
-  }, [raceId, race?.status, user?.id, user?.username, resumeStepWatching, refreshTodaySteps]));
+  }, [raceId, race?.status, user?.id, user?.username, resumeStepWatching]));
 
   // ── Full fetch (initial load — race first, comments/reactions in background) ─
   const fetchRace = useCallback(async () => {
@@ -1803,19 +1802,38 @@ export default function LiveRaceDetailScreen() {
   // All viewers (participants + spectators) register every 60s for watch count.
   useEffect(() => {
     if (!raceId || !isActive) return;
+
+    let cancelled = false;
+    let inFlight = false;
+    const gateKey = `${raceId}:spectate`;
+    const heartbeatMs = STEP_SYNC_CONFIG.LIVE_RACE_SPECTATE_HEARTBEAT_MS;
+
     const postSpectate = async () => {
-      if (!sessionTokenRef.current) return;
+      if (cancelled || inFlight || !sessionTokenRef.current) return;
+      if (!liveRaceFetchAllowed(gateKey, heartbeatMs)) return;
+
+      inFlight = true;
       try {
         const res = await authFetch(`/api/races/${raceId}/spectate`, { method: "POST" });
+        if (cancelled) return;
         if (res.ok) {
+          markLiveRaceFetched(gateKey);
           const body = await res.json() as { count?: number };
           if (typeof body.count === "number") setSpectatorCount(body.count);
         }
-      } catch {}
+      } catch {
+        // silent — watch count is best-effort
+      } finally {
+        inFlight = false;
+      }
     };
+
     void postSpectate();
-    const id = setInterval(postSpectate, STEP_SYNC_CONFIG.LIVE_RACE_SPECTATE_HEARTBEAT_MS);
-    return () => clearInterval(id);
+    const id = setInterval(() => void postSpectate(), heartbeatMs);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [raceId, isActive]);
 
   // ── Cheer toast helper ────────────────────────────────────────────────────

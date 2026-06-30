@@ -119,6 +119,29 @@ class WalkChampRaceProgressModule : Module() {
       null
     }
 
+    AsyncFunction("resetDailyStepsForNewDay") {
+      val ctx = appContext.reactContext ?: return@AsyncFunction false
+      val today = NativeStepState.localDateString()
+      val loaded = NativeStepState.load(ctx)
+      if (loaded != null && (loaded.localDate != today || loaded.todaySteps != 0)) {
+        val total = loaded.sensorTotal.takeIf { it > 0f }
+        NativeStepState.save(
+          ctx,
+          loaded.copy(
+            localDate = today,
+            dailyBaseline = total ?: loaded.dailyBaseline,
+            todaySteps = 0,
+            updatedAt = System.currentTimeMillis(),
+          ),
+        )
+      }
+      val intent = Intent(ctx, WalkChampRaceForegroundService::class.java).apply {
+        action = WalkChampRaceForegroundService.ACTION_MIDNIGHT_RESET
+      }
+      deliverToService(ctx, intent)
+      true
+    }
+
     AsyncFunction("clearNativeStepStateForUser") { userId: String ->
       val ctx = appContext.reactContext ?: return@AsyncFunction null
       NativeStepState.clearForUser(ctx, userId)
@@ -272,12 +295,14 @@ class WalkChampRaceProgressModule : Module() {
     val steps = parseStepsFromWalkBody(body)
     val source = p.getString("walk_step_source", "health_connect") ?: "health_connect"
     val updatedAt = p.getLong("walk_state_updated_at", 0L)
+    val walkDate = p.getString("walk_local_date", NativeStepState.localDateString())
     return mapOf(
       "todaySteps" to steps,
       "raceSteps" to 0,
       "stepSource" to source,
       "notificationMode" to "daily_steps",
       "walkActive" to true,
+      "localDate" to walkDate,
       "updatedAt" to updatedAt,
       "lastUpdatedAt" to updatedAt,
       "sensorSupported" to true,
@@ -289,6 +314,11 @@ class WalkChampRaceProgressModule : Module() {
    * Only safe to call when the app is in the foreground (START actions).
    */
   private fun startServiceForeground(ctx: android.content.Context, intent: Intent): Unit {
+    WalkChampRaceForegroundService.ensureChannels(ctx)
+    android.util.Log.d(
+      "WalkChampFGS",
+      "[Notification] serviceStartRequested=true action=${intent.action}",
+    )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       try {
         ctx.startForegroundService(intent)

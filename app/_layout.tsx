@@ -41,13 +41,10 @@ import { connectPusher, subscribeToChannel, unsubscribeFromChannel, CHANNELS } f
 import { initStepProgressCoordinator } from "@/services/stepProgressCoordinator";
 import {
   ensureOneSignalInitialized,
-  initOneSignal,
   logoutOneSignal,
-  getNotificationPreferences,
-  registerDeviceWithBackend,
   setupNotificationClickHandler,
-  setupForegroundHandler,
 } from "@/services/notificationService";
+import { PushPermissionPrompt } from "@/components/PushPermissionPrompt";
 
 // ── App startup diagnostics ────────────────────────────────────────────────
 if (__DEV__) {
@@ -146,7 +143,12 @@ function RootLayoutNav() {
   const { isDark } = useTheme();
 
   useEffect(() => {
-    initStepProgressCoordinator();
+    try {
+      console.log("[Startup] begin");
+      initStepProgressCoordinator();
+    } catch (err) {
+      console.log("[Startup] step coordinator failed", err);
+    }
   }, []);
 
   const navTheme = React.useMemo(() => ({
@@ -181,8 +183,8 @@ function RootLayoutNav() {
 }
 
 // ── OneSignal push notification setup ────────────────────────────────────────
-// Initializes OneSignal after login, registers the device, and wires up
-// notification click routing. Tears down on logout.
+// Initializes click routing at startup. Post-login permission + login flow is
+// handled by PushPermissionPrompt via runPostLoginPushSetup.
 function PushNotificationSetup() {
   const { user } = useAuth();
   const prevUserIdRef = useRef<string | null>(null);
@@ -210,31 +212,13 @@ function PushNotificationSetup() {
   }, []);
 
   useEffect(() => {
-    if (!user?.id || user.id === prevUserIdRef.current) return;
-    prevUserIdRef.current = user.id;
-
-    void (async () => {
-      try {
-        await initOneSignal(user.id);
-        const enabled = await getNotificationPreferences();
-        if (enabled) {
-          await registerDeviceWithBackend();
-        }
-        await setupForegroundHandler();
-      } catch {
-        // Never crash on notification setup
-      }
-    })();
-  }, [user?.id]);
-
-  useEffect(() => {
     if (user?.id) return;
     if (!prevUserIdRef.current) return;
     prevUserIdRef.current = null;
     void logoutOneSignal().catch(() => {});
   }, [user]);
 
-  return null;
+  return <PushPermissionPrompt />;
 }
 
 // ── Global room invitation overlay ────────────────────────────────────────────
