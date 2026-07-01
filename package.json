@@ -11,6 +11,7 @@
     "verify:build": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-local-build.ps1",
     "android": "node scripts/run-android-dev.js",
     "android:direct": "expo run:android",
+    "android:release": "node scripts/run-android-release.js",
     "ios": "expo run:ios",
     "postinstall": "patch-package && node scripts/ensure-walkchamp-native-module.js",
     "lock:verify": "npm ci --include=dev"

@@ -87,6 +87,7 @@
         }
       ],
       "./plugins/withIapStoreFlavor.js",
+      "./plugins/withCodegenCMakeFix.js",
       "./plugins/withReactNativeIapKotlinFix.js",
       [
         "expo-router",
