@@ -561,6 +561,13 @@ export default function ProfileScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      dynamicIconService.beginUiSensitivePeriod();
+      return () => dynamicIconService.endUiSensitivePeriod();
+    }, []),
+  );
+
+  useFocusEffect(
+    useCallback(() => {
       (async () => {
         const [stats, profileData] = await Promise.all([
           fetchServerStats(),
@@ -1026,7 +1033,12 @@ export default function ProfileScreen() {
               <Text style={[styles.settingLabel, { color: colors.foreground }]}>Dynamic App Icon</Text>
               <Text style={[styles.settingSubtitle, { color: colors.mutedForeground }]}>Icon updates when you hit your daily step goal</Text>
             </View>
-            <Switch value={dynIconEnabled} onValueChange={(v) => { setDynIconEnabled(v); dynamicIconService.setEnabled(v, user?.id).catch(() => {}); }}
+            <Switch
+              value={dynIconEnabled}
+              onValueChange={(v) => {
+                setDynIconEnabled(v);
+                void dynamicIconService.setEnabled(v, user?.id);
+              }}
               trackColor={{ false: colors.border, true: colors.primary + "80" }}
               thumbColor={dynIconEnabled ? colors.primary : colors.mutedForeground}
               ios_backgroundColor={colors.border}

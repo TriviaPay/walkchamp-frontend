@@ -49,6 +49,7 @@ import {
   setupNotificationClickHandler,
 } from "@/services/notificationService";
 import { PushPermissionPrompt } from "@/components/PushPermissionPrompt";
+import { StepTrackingNotificationPrompt } from "@/components/StepTrackingNotificationPrompt";
 
 // ── App startup diagnostics ────────────────────────────────────────────────
 if (__DEV__) {
@@ -230,7 +231,12 @@ function PushNotificationSetup() {
     void logoutOneSignal().catch(() => {});
   }, [user]);
 
-  return <PushPermissionPrompt />;
+  return (
+    <>
+      <PushPermissionPrompt />
+      <StepTrackingNotificationPrompt />
+    </>
+  );
 }
 
 // ── Global room invitation overlay ────────────────────────────────────────────

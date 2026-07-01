@@ -34,6 +34,8 @@ export const STORAGE_KEYS = {
   LAST_SYNCED_STEPS_DATE: "walkchamp_last_synced_steps_date",
   /** Steps already synced to the backend for today (so we only send deltas). */
   LAST_SYNCED_STEPS_COUNT: "walkchamp_last_synced_steps_count",
+  /** Local calendar date (YYYY-MM-DD) for which daily steps were last persisted. */
+  TRACKING_LOCAL_DATE: "walkchamp_tracking_local_date",
   /**
    * Pending race state persisted across app close/kill.
    * Shape: { raceId: string, raceStartTimeUTC: string, raceEndTimeUTC?: string, status: 'in_progress'|'completed' }

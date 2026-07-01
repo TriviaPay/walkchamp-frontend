@@ -6,6 +6,8 @@
 
 import { PermissionsAndroid, Platform } from "react-native";
 import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
+import { areAppNotificationsEnabled } from "@/services/permissions/androidNotificationAccess";
+import { ensureNotificationsForStepTracking } from "@/services/permissions/notificationGate";
 
 export type NotificationPermissionStatus =
   | "granted"
@@ -33,10 +35,12 @@ export async function getNotificationPermissionStatus(): Promise<NotificationPer
   if (Platform.OS === "web") return "unavailable";
 
   if (Platform.OS === "android") {
-    if (typeof Platform.Version === "number" && Platform.Version < 33) {
-      return "granted";
-    }
     try {
+      const appEnabled = await areAppNotificationsEnabled();
+      if (!appEnabled) return "denied";
+      if (typeof Platform.Version === "number" && Platform.Version < 33) {
+        return "granted";
+      }
       const granted = await PermissionsAndroid.check(
         PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
       );
@@ -89,14 +93,30 @@ export async function requestNotificationPermissionOnce(
       let granted = false;
 
       if (Platform.OS === "android") {
-        if (typeof Platform.Version === "number" && Platform.Version < 33) {
-          granted = true;
+        permLog(
+          `Android SDK version=${Platform.Version} notification permission required=${Platform.Version >= 33}`,
+        );
+        const isOngoingOnly =
+          reason === "step_tracking" || reason === "ongoing_fgs";
+        if (isOngoingOnly) {
+          if (typeof Platform.Version === "number" && Platform.Version < 33) {
+            granted = await areAppNotificationsEnabled();
+          } else {
+            const result = await PermissionsAndroid.request(
+              PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+            );
+            granted = result === PermissionsAndroid.RESULTS.GRANTED;
+            permLog(`Android POST_NOTIFICATIONS result=${result}`);
+            if (!granted) {
+              granted = await areAppNotificationsEnabled();
+            }
+          }
         } else {
-          const result = await PermissionsAndroid.request(
-            PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+          const { requestAndroidPushNotificationPermission } = await import(
+            "@/services/notificationService"
           );
-          granted = result === PermissionsAndroid.RESULTS.GRANTED;
-          permLog(`Android POST_NOTIFICATIONS result=${result}`);
+          granted = await requestAndroidPushNotificationPermission();
+          permLog(`Android push permission granted=${granted}`);
         }
       } else if (Platform.OS === "ios") {
         const { requestIOSNotificationPermission } = await import(
@@ -125,28 +145,24 @@ export async function hasNotificationPermissionGranted(): Promise<boolean> {
 }
 
 /**
- * Ensure POST_NOTIFICATIONS is granted before starting ongoing FGS (Android 13+).
- * Uses centralized once-flow — does not duplicate raw permission dialogs elsewhere.
+ * Ensure notifications are enabled before starting ongoing FGS (Android).
+ * Uses custom modal + settings when app-level notifications are off.
  */
 export async function ensureNotificationPermissionForOngoingTracking(): Promise<{
   granted: boolean;
   requestedNow: boolean;
+  blockedBySettings?: boolean;
+  message?: string;
 }> {
   if (Platform.OS !== "android") {
     return { granted: true, requestedNow: false };
   }
-  if (typeof Platform.Version === "number" && Platform.Version < 33) {
-    return { granted: true, requestedNow: false };
-  }
 
-  const current = await getNotificationPermissionStatus();
-  if (current === "granted") {
-    return { granted: true, requestedNow: false };
-  }
-
-  const result = await requestNotificationPermissionOnce("step_tracking");
+  const result = await ensureNotificationsForStepTracking();
   return {
-    granted: result.status === "granted",
+    granted: result.granted,
     requestedNow: result.requestedNow,
+    blockedBySettings: result.blockedBySettings,
+    message: result.message,
   };
 }

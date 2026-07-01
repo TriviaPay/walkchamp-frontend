@@ -36,6 +36,14 @@ export function getLocalDateStr(): string {
   );
 }
 
+/** Milliseconds until the next local midnight plus optional offset (default 1s). */
+export function msUntilNextLocalMidnight(offsetMs = 1_000): number {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(24, 0, 0, 0);
+  return Math.max(500, next.getTime() - now.getTime() + offsetMs);
+}
+
 /**
  * Returns YYYY-MM-DD for the start of the local calendar week (Monday).
  * Monday is used because that is what the server currently computes for "week".

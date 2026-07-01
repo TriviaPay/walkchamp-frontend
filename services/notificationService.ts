@@ -156,6 +156,87 @@ export async function requestIOSNotificationPermission(): Promise<boolean> {
   }
 }
 
+/**
+ * Android push permission — POST_NOTIFICATIONS on API 33+, then OneSignal registration.
+ * Never requests POST_NOTIFICATIONS on Android 12 and below.
+ */
+export async function requestAndroidPushNotificationPermission(): Promise<boolean> {
+  if (Platform.OS !== "android") return false;
+
+  const OneSignal = await ensureOneSignalInitialized();
+  if (!OneSignal) {
+    pushLog("OneSignal unavailable — treating push as optional");
+    return true;
+  }
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    if (typeof Platform.Version === "number" && Platform.Version >= 33) {
+      const { PermissionsAndroid } = await import("react-native");
+      const postPerm = PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS;
+      const alreadyGranted = await PermissionsAndroid.check(postPerm);
+      if (!alreadyGranted) {
+        const result = await PermissionsAndroid.request(postPerm);
+        pushLog(`Android POST_NOTIFICATIONS result=${result}`);
+        if (result !== PermissionsAndroid.RESULTS.GRANTED) {
+          return false;
+        }
+      }
+    }
+
+    const existing = await OneSignal.Notifications.getPermissionAsync();
+    if (existing) return true;
+
+    const granted = await OneSignal.Notifications.requestPermission(false);
+    pushLog(`Android OneSignal requestPermission result=${granted}`);
+    return granted;
+  } catch (error) {
+    pushLog("Android push permission request failed", error);
+    return false;
+  }
+}
+
+/** Opt into push subscription after permission is granted — avoids native crash on optIn alone. */
+export async function registerPushAfterPermissionGranted(): Promise<void> {
+  if (Platform.OS === "web") return;
+
+  const OneSignal = await ensureOneSignalInitialized();
+  if (!OneSignal) return;
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    if (Platform.OS === "android") {
+      if (typeof Platform.Version === "number" && Platform.Version >= 33) {
+        const permitted = await OneSignal.Notifications.getPermissionAsync();
+        if (!permitted) {
+          pushLog("Android push opt-in skipped — notification permission not granted");
+          return;
+        }
+      }
+    } else if (Platform.OS === "ios") {
+      const permitted = await OneSignal.Notifications.getPermissionAsync();
+      if (!permitted) return;
+    }
+
+    await OneSignal.User.pushSubscription.optIn();
+    pushLog("push subscription opted in");
+  } catch (error) {
+    pushLog("registerPushAfterPermissionGranted failed", error);
+  }
+}
+
+async function setupForegroundHandlerDeferred(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  if (_foregroundHandlerCleanup) return;
+  try {
+    _foregroundHandlerCleanup = await setupForegroundHandler();
+  } catch (error) {
+    pushLog("foreground handler setup failed", error);
+  }
+}
+
 // ── Request push notification permission ──────────────────────────────────────
 // Returns true if permission was granted, false if denied or unavailable
 export async function requestNotificationPermission(): Promise<boolean> {
@@ -219,11 +300,13 @@ export async function runPostLoginPushSetup(userId: string): Promise<{
 
   if (granted) {
     try {
-      await optInNotifications();
-      await registerDeviceWithBackend();
-      if (!_foregroundHandlerCleanup) {
-        _foregroundHandlerCleanup = await setupForegroundHandler();
+      if (Platform.OS === "android") {
+        await registerPushAfterPermissionGranted();
+      } else {
+        await optInNotifications();
       }
+      await registerDeviceWithBackend();
+      void setupForegroundHandlerDeferred();
       if (__DEV__) {
         const debug = await getPushRegistrationDebugInfo();
         if (debug) pushLog("registration debug", debug);
@@ -249,11 +332,13 @@ export async function completePushPermissionPrompt(): Promise<boolean> {
   const granted = result.status === "granted";
   if (granted) {
     try {
-      await optInNotifications();
-      await registerDeviceWithBackend();
-      if (!_foregroundHandlerCleanup) {
-        _foregroundHandlerCleanup = await setupForegroundHandler();
+      if (Platform.OS === "android") {
+        await registerPushAfterPermissionGranted();
+      } else {
+        await optInNotifications();
       }
+      await registerDeviceWithBackend();
+      void setupForegroundHandlerDeferred();
     } catch (error) {
       pushLog("register after prompt failed", error);
     }

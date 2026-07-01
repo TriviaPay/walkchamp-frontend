@@ -1,28 +1,15 @@
-apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
 
 group = 'com.globalwalkerleague.walkchampraceprogress'
 version = '1.0.0'
 
 android {
   namespace "com.globalwalkerleague.walkchampraceprogress"
-  compileSdkVersion safeExtGet("compileSdkVersion", 35)
-
   defaultConfig {
-    minSdkVersion safeExtGet("minSdkVersion", 26)
-    targetSdkVersion safeExtGet("targetSdkVersion", 35)
+    versionCode 1
+    versionName "1.0.0"
   }
-
-  kotlinOptions {
-    jvmTarget = JavaVersion.VERSION_17.toString()
-  }
-}
-
-dependencies {
-  implementation project(':expo-modules-core')
-  implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:${safeExtGet('kotlinVersion', '2.0.21')}"
-}
-
-def safeExtGet(prop, fallback) {
-  rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
 }

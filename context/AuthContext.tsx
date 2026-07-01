@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { Alert, AppState, AppStateStatus } from "react-native";
+import { Alert, AppState, AppStateStatus, Platform } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 import type { RootState, AppDispatch } from "@/store";
 import {
@@ -88,7 +88,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // releasing the gate — prevents index.tsx from racing ahead.
       authTimerRef.current = setTimeout(() => setIsAuthenticating(false), 500);
       void waitForAppStartupReady().then(() => {
-        dynamicIconService.checkAndUpdate({ userId: profile.id }).catch(() => {});
+        dynamicIconService
+          .checkAndUpdate({
+            userId: profile.id,
+            allowApiFetch: Platform.OS === "android",
+          })
+          .catch(() => {});
       });
     },
     [dispatch],

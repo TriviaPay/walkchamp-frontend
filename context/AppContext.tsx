@@ -1,11 +1,12 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { AppState, type AppStateStatus } from "react-native";
+import { AppState, Platform, type AppStateStatus } from "react-native";
 import { type LeaderboardUser, type WalletTransaction } from "@/utils/mockData";
 import { STORAGE_KEYS, storageGet, storageSet } from "@/utils/storage";
 import { getValidSession } from "@/services/authService";
 import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
 import { getDeviceTimezone, getLocalDateStr, getLocalWeekStart, getLocalMonthStart } from "@/utils/timezone";
 import { dynamicIconService } from "@/services/dynamicIconService";
+import { waitForAppStartupReady } from "@/services/appStartup";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -258,17 +259,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       await Promise.all([refreshWallet(), refreshLeaderboard()]);
 
-      // Refresh dynamic app icon on every app load / foreground.
-      // Fire-and-forget — must never delay the main load or throw.
-      dynamicIconService.checkAndUpdate().catch(() => {});
+      void waitForAppStartupReady().then(() => {
+        setTimeout(() => {
+          dynamicIconService
+            .checkAndUpdate({ allowApiFetch: true })
+            .catch(() => {});
+        }, __DEV__ ? 3000 : 8000);
+      });
     };
     load();
   }, [refreshWallet, refreshLeaderboard]);
 
   useEffect(() => {
     const onChange = (state: AppStateStatus) => {
-      if (state === "active") {
-        dynamicIconService.checkAndUpdate().catch(() => {});
+      if (state === "active" && Platform.OS !== "android") {
+        void waitForAppStartupReady().then(() => {
+          setTimeout(() => {
+            dynamicIconService.checkAndUpdate({ allowApiFetch: true }).catch(() => {});
+          }, 1500);
+        });
       }
     };
     const sub = AppState.addEventListener("change", onChange);

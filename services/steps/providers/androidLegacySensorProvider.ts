@@ -166,6 +166,13 @@ export const androidLegacySensorProvider: StepProvider = {
       const available = await ped.isAvailableAsync();
       if (!available) return { status: "unavailable", providerId: null };
 
+      const { hasActivityRecognitionPermission } = await import(
+        "@/services/permissions/activityRecognitionPermissionService"
+      );
+      if (await hasActivityRecognitionPermission()) {
+        return { status: "granted", providerId: "android_legacy_sensor" };
+      }
+
       const { InteractionManager, AppState } =
         require("react-native") as typeof import("react-native");
       await new Promise<void>((resolve) => {
@@ -304,6 +311,28 @@ export const androidLegacySensorProvider: StepProvider = {
         _sub.remove();
       } catch {}
       _sub = null;
+    }
+  },
+
+  /** Reset in-memory + persisted daily counters at local midnight. */
+  async resetForNewLocalDay(): Promise<void> {
+    const today = getLocalDateKey();
+    _dailyBaseline = 0;
+    _todaySteps = 0;
+    _rawAtSubscription = 0;
+    await storageSet(DAILY_BASELINE_DATE_KEY as never, today);
+    await storageSet(DAILY_BASELINE_KEY as never, 0);
+    await storageSet(DAILY_TODAY_KEY as never, 0);
+    await storageSet(RAW_COUNTER_AT_SUB_KEY as never, 0);
+    if (_sub) {
+      try {
+        _sub.remove();
+      } catch {}
+      _sub = null;
+    }
+    if (_watchCallback) {
+      alignDailyBaselineForWatch();
+      ensureSubscription();
     }
   },
 };

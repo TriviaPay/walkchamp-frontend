@@ -5,10 +5,10 @@ import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotifica
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { getValidSession } from "@/services/authService";
 import {
-  ensureNotificationPermissionForOngoingTracking,
   getNotificationPermissionStatus,
-  hasNotificationPermissionGranted,
 } from "@/services/permissions/notificationPermissionService";
+import { formatWalkOngoingNotificationBody } from "@/services/permissions/androidNotificationAccess";
+import { hasOngoingNotificationAccess } from "@/services/permissions/notificationGate";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -54,27 +54,49 @@ type NativeModule = {
   ) => { remove: () => void };
 };
 
-let nativeModule: NativeModule | null | undefined;
+let nativeModule: NativeModule | null = null;
+let nativeModuleResolved = false;
 let active = false;
 let lastUpdateMs = 0;
 let lastSteps = -1;
 let lastPermissionDeniedMessageAt = 0;
 
-function getNativeModule(): NativeModule | null {
-  if (!FEATURE_FLAGS.ENABLE_STEP_TRACKING_NOTIFICATIONS) return null;
-  if (nativeModule !== undefined) return nativeModule;
-  nativeModule = null;
+function resolveNativeModule(): NativeModule | null {
   try {
-    const { requireOptionalNativeModule } =
-      require("expo-modules-core") as typeof import("expo-modules-core");
-    nativeModule = requireOptionalNativeModule<NativeModule>("WalkChampRaceProgress");
-    if (!nativeModule) {
-      logOngoing("native module WalkChampRaceProgress unavailable");
+    const ExpoModulesCore = require("expo-modules-core") as typeof import("expo-modules-core");
+    if (typeof ExpoModulesCore.ensureNativeModulesAreInstalled === "function") {
+      ExpoModulesCore.ensureNativeModulesAreInstalled();
     }
+    const direct = ExpoModulesCore.requireOptionalNativeModule<NativeModule>(
+      "WalkChampRaceProgress",
+    );
+    if (direct) return direct;
+
+    try {
+      const fromPackage = require("walkchamp-race-progress") as NativeModule;
+      if (fromPackage) return fromPackage;
+    } catch {
+      // package entry unavailable in this runtime
+    }
+
+    const expoKeys = Object.keys(
+      (globalThis as { expo?: { modules?: Record<string, unknown> } }).expo?.modules ?? {},
+    );
+    logOngoing(
+      `native module WalkChampRaceProgress unavailable (expo.modules keys=${expoKeys.length})`,
+    );
+    return null;
   } catch (err) {
     logOngoing(`native module load failed: ${String(err)}`);
-    nativeModule = null;
+    return null;
   }
+}
+
+function getNativeModule(forceRefresh = false): NativeModule | null {
+  if (!FEATURE_FLAGS.ENABLE_STEP_TRACKING_NOTIFICATIONS) return null;
+  if (nativeModuleResolved && !forceRefresh) return nativeModule;
+  nativeModule = resolveNativeModule();
+  nativeModuleResolved = true;
   return nativeModule;
 }
 
@@ -124,7 +146,7 @@ async function toNativePayload(payload: WalkStepNotificationPayload): Promise<Re
     title: "Walk Champ",
     deepLink: "globalwalkerleague://walk",
     stepSource: stepProviderManager.toRaceProgressSource(),
-    body: `${steps.toLocaleString("en-US")} total steps today`,
+    body: formatWalkOngoingNotificationBody(steps),
     authToken: session ?? "",
     apiBaseUrl: API_BASE,
   };
@@ -132,7 +154,7 @@ async function toNativePayload(payload: WalkStepNotificationPayload): Promise<Re
 
 /** Check-only — never shows a system prompt. */
 export async function ensureTrackingNotificationPermission(): Promise<boolean> {
-  return hasNotificationPermissionGranted();
+  return hasOngoingNotificationAccess();
 }
 
 /** User-visible message when notification permission blocks the ongoing notification. */
@@ -161,7 +183,7 @@ class StepTrackingNotificationService {
     logOngoing("start requested");
     await logOngoingDiagnostics("start");
 
-    const native = getNativeModule();
+    const native = getNativeModule(true);
     if (!native) {
       logOngoing("abort native module unavailable");
       return false;
@@ -169,12 +191,10 @@ class StepTrackingNotificationService {
 
     if (Platform.OS === "android") {
       logOngoing("channelEnsure requested");
-      const perm = await ensureNotificationPermissionForOngoingTracking();
-      logOngoing(
-        `notificationPermission result granted=${perm.granted} requestedNow=${perm.requestedNow}`,
-      );
-      if (!perm.granted) {
-        logOngoing("abort POST_NOTIFICATIONS denied — foreground service not started");
+      const granted = await hasOngoingNotificationAccess();
+      logOngoing(`notificationPermission result granted=${granted}`);
+      if (!granted) {
+        logOngoing("abort app notifications disabled — foreground service not started");
         return false;
       }
     }

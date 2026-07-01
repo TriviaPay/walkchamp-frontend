@@ -36,9 +36,9 @@ export function scheduleAppStartupReady(): void {
       resolveReady = null;
     };
 
-    // APK cold install: bridge + Expo modules need a short beat on some devices.
+    // Release APK / EAS cold install: bridge + native modules need extra time.
     if (Platform.OS === "android") {
-      setTimeout(markReady, 350);
+      setTimeout(markReady, __DEV__ ? 800 : 2000);
     } else {
       requestAnimationFrame(markReady);
     }

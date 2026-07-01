@@ -51,7 +51,7 @@ export default function WearableSetupModal({
 }: Props) {
   const colors = useColors();
   const { safeTop, safeBottom } = useSafeLayout();
-  const { enableLimitedSensorTracking, requestStepPermission } = useWalkContext();
+  const { enableLimitedSensorTracking } = useWalkContext();
 
   const platform   = isIOS ? "ios_healthkit" : "android_health_connect";
   const healthName = isIOS ? "Apple Health"  : "Health Connect";
@@ -170,9 +170,8 @@ export default function WearableSetupModal({
 
   const grantAndroidSteps = async (): Promise<boolean> => {
     try {
-      await requestStepPermission();
-      const s = await stepProviderManager.refreshStatus();
-      const granted = s.permission === "granted";
+      const result = await stepProviderManager.requestStepPermission();
+      const granted = result.status === "granted";
       if (granted) {
         setPermStatus("granted");
         setAndroidPhase("setup");
@@ -190,7 +189,7 @@ export default function WearableSetupModal({
       if (isIOS) {
         Linking.openSettings();
       } else {
-        void requestStepPermission();
+        void grantAndroidSteps();
       }
       return;
     }

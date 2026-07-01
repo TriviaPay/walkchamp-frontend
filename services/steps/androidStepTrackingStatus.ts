@@ -148,7 +148,7 @@ export async function enableAndroidStepTracking(): Promise<AndroidStepTrackingSt
     };
   }
 
-  try {
+  const withTimeout = async (): Promise<AndroidStepTrackingStatusResult> => {
     const before = await getAndroidStepTrackingStatus();
     if (
       before.status === "provider_update_required" ||
@@ -192,6 +192,18 @@ export async function enableAndroidStepTracking(): Promise<AndroidStepTrackingSt
     }
 
     return getAndroidStepTrackingStatus(true);
+  };
+
+  try {
+    return await Promise.race([
+      withTimeout(),
+      new Promise<AndroidStepTrackingStatusResult>((resolve) => {
+        setTimeout(() => {
+          console.log("[AndroidHC] enableAndroidStepTracking timed out after 45s");
+          void getAndroidStepTrackingStatus(true).then(resolve);
+        }, 45_000);
+      }),
+    ]);
   } catch (e) {
     if (__DEV__) console.log("[AndroidHC] enableAndroidStepTracking error", e);
     return getAndroidStepTrackingStatus(true);

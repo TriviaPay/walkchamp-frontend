@@ -1,7 +1,11 @@
 package com.globalwalkerleague.walkchampraceprogress
 
+import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
+import androidx.core.app.NotificationManagerCompat
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -12,6 +16,10 @@ class WalkChampRaceProgressModule : Module() {
     Events("WalkChampStepStateUpdated")
 
     OnCreate {
+      android.util.Log.i(
+        "WalkChampFGS",
+        "[Module] WalkChampRaceProgress native module OnCreate — registered",
+      )
       WalkChampStepStateEmitter.onStepStateUpdated = { payload ->
         sendEvent("WalkChampStepStateUpdated", payload)
       }
@@ -177,6 +185,181 @@ class WalkChampRaceProgressModule : Module() {
 
     AsyncFunction("endWalkLiveActivity") {
       WalkChampWalkLiveActivity.end()
+    }
+
+    /** App-level notification toggle (Samsung allowNoti, etc.) — not POST_NOTIFICATIONS alone. */
+    AsyncFunction("areAppNotificationsEnabled") {
+      val ctx = appContext.reactContext ?: return@AsyncFunction false
+      NotificationManagerCompat.from(ctx).areNotificationsEnabled()
+    }
+
+    AsyncFunction("openAppNotificationSettings") {
+      val ctx = appContext.reactContext ?: return@AsyncFunction false
+      openNotificationSettingsIntent(
+        ctx,
+        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+          putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
+        },
+      )
+    }
+
+    AsyncFunction("openNotificationChannelSettings") { channelId: String ->
+      val ctx = appContext.reactContext ?: return@AsyncFunction false
+      val safeChannel = channelId.trim()
+      if (safeChannel.isEmpty()) return@AsyncFunction false
+      openNotificationSettingsIntent(
+        ctx,
+        Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+          putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
+          putExtra(Settings.EXTRA_CHANNEL_ID, safeChannel)
+        },
+      )
+    }
+
+    AsyncFunction("openStepNotificationChannelSettings") {
+      val ctx = appContext.reactContext ?: return@AsyncFunction false
+      openNotificationSettingsIntent(
+        ctx,
+        Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+          putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
+          putExtra(Settings.EXTRA_CHANNEL_ID, WalkChampRaceForegroundService.CHANNEL_STEPS)
+        },
+      )
+    }
+
+    AsyncFunction("openRaceNotificationChannelSettings") {
+      val ctx = appContext.reactContext ?: return@AsyncFunction false
+      openNotificationSettingsIntent(
+        ctx,
+        Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+          putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
+          putExtra(Settings.EXTRA_CHANNEL_ID, WalkChampRaceForegroundService.CHANNEL_RACE)
+        },
+      )
+    }
+
+    AsyncFunction("getLauncherIconName") {
+      val ctx = appContext.reactContext ?: return@AsyncFunction null
+      getEnabledLauncherIconName(ctx)
+    }
+
+    AsyncFunction("setLauncherIcon") { iconName: String? ->
+      val ctx = appContext.reactContext ?: return@AsyncFunction false
+      setLauncherIcon(ctx, iconName)
+    }
+  }
+
+  private val launcherIconNames = listOf(
+    "WalkChampProgress0",
+    "WalkChampProgress25",
+    "WalkChampProgress50",
+    "WalkChampProgress75",
+    "WalkChampProgress100",
+  )
+
+  private fun launcherComponent(ctx: android.content.Context, iconName: String?): ComponentName {
+    val suffix = iconName ?: ""
+    return ComponentName(ctx.packageName, "${ctx.packageName}.MainActivity$suffix")
+  }
+
+  private fun isLauncherComponentEnabled(
+    pm: PackageManager,
+    component: ComponentName,
+  ): Boolean {
+    return when (pm.getComponentEnabledSetting(component)) {
+      PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> true
+      PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+      PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER,
+      PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED -> false
+      else -> {
+        try {
+          pm.getActivityInfo(component, 0).enabled
+        } catch (_: Exception) {
+          false
+        }
+      }
+    }
+  }
+
+  private fun milestoneValue(iconName: String): Int = when (iconName) {
+    "WalkChampProgress100" -> 100
+    "WalkChampProgress75" -> 75
+    "WalkChampProgress50" -> 50
+    "WalkChampProgress25" -> 25
+    else -> 0
+  }
+
+  private fun getEnabledLauncherIconName(ctx: android.content.Context): String? {
+    val pm = ctx.packageManager
+    var bestName: String? = null
+    var bestValue = -1
+
+    val defaultComponent = launcherComponent(ctx, null)
+    if (isLauncherComponentEnabled(pm, defaultComponent)) {
+      bestName = "WalkChampProgress0"
+      bestValue = 0
+    }
+
+    for (name in launcherIconNames) {
+      val component = launcherComponent(ctx, name)
+      if (!isLauncherComponentEnabled(pm, component)) continue
+      val value = milestoneValue(name)
+      if (value > bestValue) {
+        bestValue = value
+        bestName = name
+      }
+    }
+
+    return bestName
+  }
+
+  private fun setLauncherIcon(ctx: android.content.Context, iconName: String?): Boolean {
+    if (iconName != null && !launcherIconNames.contains(iconName)) return false
+
+    return try {
+      val pm = ctx.packageManager
+      val target = launcherComponent(ctx, iconName)
+      pm.setComponentEnabledSetting(
+        target,
+        PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+        PackageManager.DONT_KILL_APP,
+      )
+
+      val components =
+        listOf(launcherComponent(ctx, null)) +
+          launcherIconNames.map { launcherComponent(ctx, it) }
+      for (component in components) {
+        if (component.className == target.className) continue
+        pm.setComponentEnabledSetting(
+          component,
+          PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+          PackageManager.DONT_KILL_APP,
+        )
+      }
+
+      val applied = getEnabledLauncherIconName(ctx)
+      android.util.Log.i(
+        "DynamicIcon",
+        "[LauncherIcon] requested=${iconName ?: "default"} active=$applied",
+      )
+      applied == (iconName ?: "WalkChampProgress0")
+    } catch (e: Exception) {
+      android.util.Log.w("DynamicIcon", "[LauncherIcon] apply failed: ${e.message}")
+      false
+    }
+  }
+
+  private fun openNotificationSettingsIntent(
+    ctx: android.content.Context,
+    intent: Intent,
+  ): Boolean {
+    return try {
+      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      ctx.startActivity(intent)
+      true
+    } catch (e: Exception) {
+      android.util.Log.w("WalkChampFGS", "[Notification] open settings failed: ${e.message}")
+      false
     }
   }
 
@@ -362,6 +545,6 @@ class WalkChampRaceProgressModule : Module() {
 
   private fun formatWalkBody(payload: Map<String, Any?>): String {
     val steps = (payload["todaySteps"] as? Number)?.toInt() ?: 0
-    return "${String.format("%,d", steps)} total steps today"
+    return WalkChampRaceForegroundService.formatWalkNotificationBody(steps)
   }
 }

@@ -42,24 +42,11 @@ async function probeHcManifestBlocked(): Promise<boolean> {
   return androidHCService.isRangeReadBlocked();
 }
 
-async function ensureActivityRecognitionPermission(): Promise<void> {
-  try {
-    const { InteractionManager, AppState } =
-      require("react-native") as typeof import("react-native");
-    await new Promise<void>((resolve) => {
-      InteractionManager.runAfterInteractions(() => resolve());
-    });
-    if (AppState.currentState !== "active") {
-      await new Promise((r) => setTimeout(r, 350));
-    }
-    const sensors = require("expo-sensors") as typeof import("expo-sensors");
-    const { status: before } = await sensors.Pedometer.getPermissionsAsync();
-    if (before !== "granted") {
-      await sensors.Pedometer.requestPermissionsAsync();
-    }
-  } catch (e) {
-    devLog("ACTIVITY_RECOGNITION request error", e);
-  }
+async function ensureActivityRecognitionPermission(): Promise<boolean> {
+  const { ensureActivityRecognitionPermission: ensureActivity } = await import(
+    "@/services/permissions/activityRecognitionPermissionService"
+  );
+  return ensureActivity();
 }
 
 async function trySelectAndroidProvider(
@@ -335,7 +322,14 @@ export const stepProviderManager = {
 
       // Safe path first — legacy sensor never calls Health Connect native UI.
       if (legacyAvail) {
-        await ensureActivityRecognitionPermission();
+        const activityGranted = await ensureActivityRecognitionPermission();
+        if (!activityGranted) {
+          return {
+            status: "denied",
+            providerId: null,
+            message: "Physical activity permission is required to track steps.",
+          };
+        }
         const legacyResult = await androidLegacySensorProvider.requestPermission();
         if (legacyResult.status === "granted") {
           _activeProvider = androidLegacySensorProvider;

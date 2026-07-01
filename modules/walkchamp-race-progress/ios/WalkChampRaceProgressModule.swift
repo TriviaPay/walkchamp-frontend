@@ -3,37 +3,6 @@ import ActivityKit
 import ExpoModulesCore
 import HealthKit
 
-// MARK: - Live Activity attributes (shared with Widget Extension target when added in Xcode)
-
-@available(iOS 16.2, *)
-public struct WalkChampRaceAttributes: ActivityAttributes {
-  public struct ContentState: Codable, Hashable {
-    public var username: String
-    public var raceSteps: Int
-    public var rank: Int
-    public var totalParticipants: Int
-    public var goalSteps: Int
-    public var timeLeftSeconds: Int
-    public var raceStatus: String
-    public var lastUpdatedAt: Date
-  }
-
-  public var raceId: String
-  public var userId: String
-}
-
-@available(iOS 16.2, *)
-public struct WalkChampWalkAttributes: ActivityAttributes {
-  public struct ContentState: Codable, Hashable {
-    public var todaySteps: Int
-    public var dailyGoal: Int
-    public var percentComplete: Int
-    public var lastUpdatedAt: Date
-  }
-
-  public var userId: String
-}
-
 // MARK: - HealthKit background observer for race step wake-ups
 
 @available(iOS 15.0, *)
@@ -188,7 +157,10 @@ enum WalkChampWalkLiveActivityManager {
   private static var activity: Activity<WalkChampWalkAttributes>?
 
   static func start(payload: [String: Any]) {
-    guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+    guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+      NSLog("[WalkChampLiveActivity] walk start skipped — Live Activities disabled")
+      return
+    }
     end()
 
     let userId = payload["userId"] as? String ?? "user"
@@ -201,8 +173,10 @@ enum WalkChampWalkLiveActivityManager {
         content: .init(state: state, staleDate: nil),
         pushType: nil
       )
+      NSLog("[WalkChampLiveActivity] walk Live Activity started steps=%d", state.todaySteps)
     } catch {
       activity = nil
+      NSLog("[WalkChampLiveActivity] walk Live Activity start failed: %@", String(describing: error))
     }
   }
 

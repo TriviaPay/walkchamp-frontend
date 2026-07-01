@@ -10,6 +10,7 @@ import {
   type StepProgressSource,
 } from "@/store/slices/raceProgressSlice";
 import { walkActions } from "@/store/slices/walkSlice";
+import { notifyMidnightRollover } from "@/services/walkMidnightEvents";
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
 import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
 import { stepTrackingNotificationService } from "@/services/stepTrackingNotificationService";
@@ -18,7 +19,7 @@ import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotifica
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { AppState, type AppStateStatus, Platform } from "react-native";
 import { waitForAppStartupReady } from "@/services/appStartup";
-import { getLocalDateStr } from "@/utils/timezone";
+import { getLocalDateStr, msUntilNextLocalMidnight } from "@/utils/timezone";
 import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
 
 let notificationTimer: ReturnType<typeof setTimeout> | null = null;
@@ -147,9 +148,16 @@ function scheduleWalkNotificationUpdate(force = false): void {
  * Push the daily-steps notification from the canonical Redux store only.
  * The notification must never generate or increment steps independently.
  */
-export async function pushWalkNotificationFromCanonicalStore(force = false): Promise<void> {
+export async function pushWalkNotificationFromCanonicalStore(
+  force = false,
+  userIdOverride?: string | null,
+): Promise<void> {
   const s = store.getState().raceProgress;
-  if (!s.userId) return;
+  const userId = userIdOverride ?? s.userId;
+  if (!userId) {
+    console.log("[OngoingNotification] push skipped — no userId in store");
+    return;
+  }
 
   const steps = Math.max(0, Math.floor(s.todaySteps));
   const now = Date.now();
@@ -198,7 +206,7 @@ export async function pushWalkNotificationFromCanonicalStore(force = false): Pro
   }
 
   await stepTrackingNotificationService.mirrorWalkScreen({
-    userId: s.userId,
+    userId,
     todaySteps: steps,
     dailyGoal: 10_000,
   });
@@ -215,6 +223,19 @@ type DailyStepsMap = Record<string, number>;
  */
 export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   const today = getLocalDateStr();
+  const trackingDate = await storageGet<string>(STORAGE_KEYS.TRACKING_LOCAL_DATE);
+
+  if (trackingDate === today) {
+    lastKnownTrackingDate = today;
+    return false;
+  }
+
+  if (trackingDate == null) {
+    await storageSet(STORAGE_KEYS.TRACKING_LOCAL_DATE, today);
+    lastKnownTrackingDate = today;
+    return false;
+  }
+
   const syncedDate = await storageGet<string>(STORAGE_KEYS.LAST_SYNCED_STEPS_DATE);
   let native: Awaited<ReturnType<typeof stepTrackingNotificationService.getNativeStepState>> = null;
   if (Platform.OS === "android") {
@@ -224,23 +245,23 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
       console.log("[Startup] native step state read failed", err);
     }
   }
-  const nativeStale = !!(native?.localDate && native.localDate !== today);
-  const staleBySync = !!(syncedDate && syncedDate !== today);
-  const staleByMemory = !!(lastKnownTrackingDate && lastKnownTrackingDate !== today);
-
-  if (!staleBySync && !nativeStale && !staleByMemory) {
-    lastKnownTrackingDate = today;
-    return false;
-  }
 
   if (__DEV__) {
     console.log(
-      `[StepStore] midnight rollover today=${today} synced=${syncedDate} nativeDate=${native?.localDate ?? "n/a"}`,
+      `[StepStore] midnight rollover today=${today} trackingDate=${trackingDate} synced=${syncedDate ?? "n/a"} nativeDate=${native?.localDate ?? "n/a"}`,
     );
   }
 
   if (Platform.OS === "android") {
     await stepTrackingNotificationService.resetDailyStepsForNewDay();
+    try {
+      const { androidLegacySensorProvider } = await import(
+        "@/services/steps/providers/androidLegacySensorProvider"
+      );
+      await androidLegacySensorProvider.resetForNewLocalDay?.();
+    } catch {
+      // non-fatal
+    }
   }
 
   store.dispatch(
@@ -249,6 +270,7 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
       updatedAt: new Date().toISOString(),
     }),
   );
+  store.dispatch(walkActions.setTodaySteps(0));
 
   lastWalkNotificationSteps = -1;
 
@@ -258,18 +280,17 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   await storageSet(STORAGE_KEYS.DAILY_STEPS, daily);
   await storageSet(STORAGE_KEYS.LAST_SYNCED_STEPS_DATE, today);
   await storageSet(STORAGE_KEYS.LAST_SYNCED_STEPS_COUNT, 0);
+  await storageSet(STORAGE_KEYS.TRACKING_LOCAL_DATE, today);
 
   lastKnownTrackingDate = today;
   await pushWalkNotificationFromCanonicalStore(true);
+  notifyMidnightRollover();
   return true;
 }
 
 function scheduleNextMidnightCheck(): void {
   if (midnightCheckTimer) clearTimeout(midnightCheckTimer);
-  const now = new Date();
-  const next = new Date(now);
-  next.setHours(24, 0, 1, 0);
-  const delayMs = Math.max(1_000, next.getTime() - now.getTime());
+  const delayMs = msUntilNextLocalMidnight(1_000);
   midnightCheckTimer = setTimeout(() => {
     midnightCheckTimer = null;
     void handleMidnightRolloverIfNeeded();

@@ -24,6 +24,7 @@ import Animated, {
   cancelAnimation, } from "react-native-reanimated";
 import { useAuth } from "@/context/AuthContext";
 import { useRace } from "@/context/RaceContext";
+import { useRaceProgress } from "@/hooks/useRaceProgress";
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import {
@@ -397,11 +398,13 @@ export default function LiveTrackTab() {
   const tabBarHeight = useTabBarHeight();
   const { user } = useAuth();
   const {
-    userRaceSteps,
     setActiveRace,
     resumeLiveRace,
     catchUpLiveRaceSteps,
   } = useRace();
+  const raceProgress = useRaceProgress();
+  const canonicalRaceSteps = raceProgress.raceSteps;
+  const canonicalRank = raceProgress.rank;
   const { width: screenW } = useWindowDimensions();
   const isTablet = screenW >= 768;
   // Scale UI elements proportionally: 0.87× on 320px phones, 1.0× on 390px, up to 1.5× on tablets
@@ -643,22 +646,27 @@ export default function LiveTrackTab() {
   const sortedPlayers = useMemo(() => {
     const sorted = [...participants].sort((a, b) => b.currentSteps - a.currentSteps);
     return sorted.slice(0, 10).map<Player>((p, index) => {
-      const rank = p.rank && p.rank > 0 ? p.rank : index + 1;
       const username = p.username || "Runner";
       const isMe =
         p.userId === user?.id ||
         (!!user?.username && username.toLowerCase() === user.username.toLowerCase());
+      const rank =
+        isMe && isActive && canonicalRank != null && canonicalRank > 0
+          ? canonicalRank
+          : p.rank && p.rank > 0
+            ? p.rank
+            : index + 1;
       return {
         id: p.id,
         userId: p.userId,
         rank,
         name: isMe ? "You" : username,
-        steps: isMe && isActive ? Math.max(p.currentSteps, userRaceSteps) : p.currentSteps,
+        steps: isMe && isActive ? canonicalRaceSteps : p.currentSteps,
         isMe,
         rankColor: p.avatarColor ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length],
         initial: (isMe ? "Y" : username.slice(0, 1).toUpperCase()) || "R",
         country: p.countryFlag ?? undefined,
-        isHost: p.isHost, }; }).sort((a, b) => a.rank - b.rank); }, [participants, user?.id, user?.username, isActive, userRaceSteps]);
+        isHost: p.isHost, }; }).sort((a, b) => a.rank - b.rank); }, [participants, user?.id, user?.username, isActive, canonicalRaceSteps, canonicalRank]);
 
   const myPlayer = useMemo(
     () => sortedPlayers.find((p) => p.isMe) ?? sortedPlayers[0] ?? null,
@@ -680,12 +688,11 @@ export default function LiveTrackTab() {
     (race?.status === "open" || race?.status === "in_progress");
   const canLeaveRace = showLeaveButton && !currentParticipant.isHost;
   const mySteps = useMemo(() => {
-    const fromList = myPlayer?.steps ?? 0;
     if (isActive && myPlayer?.isMe) {
-      return Math.max(fromList, userRaceSteps);
+      return canonicalRaceSteps;
     }
-    return fromList;
-  }, [myPlayer, isActive, userRaceSteps]);
+    return myPlayer?.steps ?? 0;
+  }, [myPlayer, isActive, canonicalRaceSteps]);
   const myProgress = Math.min(mySteps / Math.max(targetSteps, 1), 1);
 
   useEffect(() => {

@@ -1,66 +1,66 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator,
+  AppState,
+  type AppStateStatus,
   Modal,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
-import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf } from "@/utils/responsive";
 import {
-  completePushPermissionPrompt,
-  dismissPushPermissionPrompt,
-  runPostLoginPushSetup,
-} from "@/services/notificationService";
+  handleAppResumeNotificationRecheck,
+  onStepTrackingNotificationDismiss,
+  onStepTrackingNotificationOpenSettings,
+  registerStepTrackingNotificationModalHost,
+  NOTIFICATION_STILL_DISABLED_MESSAGE,
+  unregisterStepTrackingNotificationModal,
+} from "@/services/permissions/notificationGate";
 
 /**
- * One-time post-login prompt to enable push notifications via OneSignal.
- * Does not block the app if the user declines.
+ * Custom modal when app-level Android notifications are off before step tracking.
+ * Separate from push (OneSignal) onboarding.
  */
-export function PushPermissionPrompt() {
-  const { user, loading } = useAuth();
+export function StepTrackingNotificationPrompt() {
   const colors = useColors();
   const { safeBottom } = useSafeLayout();
   const [visible, setVisible] = useState(false);
-  const [requesting, setRequesting] = useState(false);
-  const handledUserRef = React.useRef<string | null>(null);
+  const [stillDisabled, setStillDisabled] = useState(false);
 
   useEffect(() => {
-    if (loading || !user?.id) return;
-    if (handledUserRef.current === user.id) return;
-    handledUserRef.current = user.id;
+    registerStepTrackingNotificationModalHost({
+      show: ({ stillDisabled: showStillDisabled }) => {
+        setStillDisabled(showStillDisabled);
+        setVisible(true);
+      },
+      hide: () => {
+        setStillDisabled(false);
+        setVisible(false);
+      },
+    });
+    return () => unregisterStepTrackingNotificationModal();
+  }, []);
 
-    void (async () => {
-      try {
-        const { shouldShowPrompt } = await runPostLoginPushSetup(user.id);
-        if (shouldShowPrompt) setVisible(true);
-      } catch {
-        // Never crash on notification setup
-      }
-    })();
-  }, [user?.id, loading]);
+  useEffect(() => {
+    const onAppState = (next: AppStateStatus) => {
+      if (next !== "active") return;
+      void handleAppResumeNotificationRecheck();
+    };
+    const sub = AppState.addEventListener("change", onAppState);
+    return () => sub.remove();
+  }, []);
 
-  const handleEnable = useCallback(async () => {
-    if (requesting) return;
-    setRequesting(true);
-    try {
-      await completePushPermissionPrompt();
-    } catch (error) {
-      console.log("[Push] permission prompt enable failed", error);
-    } finally {
-      setRequesting(false);
-      setVisible(false);
-    }
-  }, [requesting]);
+  const handleOpenSettings = useCallback(() => {
+    setStillDisabled(false);
+    onStepTrackingNotificationOpenSettings();
+  }, []);
 
-  const handleNotNow = useCallback(async () => {
-    await dismissPushPermissionPrompt();
-    setVisible(false);
+  const handleNotNow = useCallback(() => {
+    onStepTrackingNotificationDismiss();
   }, []);
 
   if (!visible) return null;
@@ -70,33 +70,28 @@ export function PushPermissionPrompt() {
       visible={visible}
       transparent
       animationType="fade"
-      onRequestClose={() => void handleNotNow()}
+      onRequestClose={handleNotNow}
     >
       <View style={s.overlay}>
         <View style={[s.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={[s.iconCircle, { backgroundColor: colors.primary + "18" }]}>
             <Feather name="bell" size={28} color={colors.primary} />
           </View>
-          <Text style={[s.title, { color: colors.foreground }]}>Stay in the loop</Text>
+          <Text style={[s.title, { color: colors.foreground }]}>Enable Notifications</Text>
           <Text style={[s.body, { color: colors.mutedForeground }]}>
-            Enable notifications for race invites, friend requests, rewards, and live race updates.
-            You can change this anytime in Profile settings.
+            Walk Champ needs notifications to show ongoing step tracking while you walk.
           </Text>
-          <TouchableOpacity
-            style={[s.primaryBtn, { opacity: requesting ? 0.7 : 1 }]}
-            onPress={() => void handleEnable()}
-            disabled={requesting}
-          >
-            {requesting ? (
-              <ActivityIndicator size="small" color="#000" />
-            ) : (
-              <Text style={s.primaryBtnText}>Enable Notifications</Text>
-            )}
+          {stillDisabled ? (
+            <Text style={[s.warning, { color: "#ef4444" }]}>
+              {NOTIFICATION_STILL_DISABLED_MESSAGE}
+            </Text>
+          ) : null}
+          <TouchableOpacity style={s.primaryBtn} onPress={handleOpenSettings}>
+            <Text style={s.primaryBtnText}>Open Notification Settings</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[s.secondaryBtn, { marginBottom: safeBottom + 8 }]}
-            onPress={() => void handleNotNow()}
-            disabled={requesting}
+            onPress={handleNotNow}
           >
             <Text style={[s.secondaryBtnText, { color: colors.mutedForeground }]}>Not Now</Text>
           </TouchableOpacity>
@@ -138,7 +133,13 @@ const s = StyleSheet.create({
     fontSize: rf(14),
     lineHeight: 21,
     textAlign: "center",
-    marginBottom: 8,
+    marginBottom: 4,
+  },
+  warning: {
+    fontSize: rf(13),
+    lineHeight: 19,
+    textAlign: "center",
+    fontWeight: "600",
   },
   primaryBtn: {
     width: "100%",

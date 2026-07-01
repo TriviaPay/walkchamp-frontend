@@ -2,9 +2,17 @@ const {
   withAndroidManifest,
   withInfoPlist,
   withDangerousMod,
+  withXcodeProject,
 } = require("@expo/config-plugins");
 const fs = require("fs");
 const path = require("path");
+
+const WIDGET_TARGET_NAME = "WalkChampWidget";
+const WIDGET_DEPLOYMENT_TARGET = "16.2";
+const WIDGET_BUNDLE_FILE = "WalkChampWidgetBundle.swift";
+const WIDGET_WALK_FILE = "WalkChampWalkLiveActivityWidget.swift";
+const WIDGET_RACE_FILE = "WalkChampRaceLiveActivityWidget.swift";
+const WIDGET_INFO_PLIST = `${WIDGET_TARGET_NAME}-Info.plist`;
 
 function ensureArray(value) {
   if (Array.isArray(value)) return value;
@@ -21,6 +29,188 @@ function copyNotificationIcons(projectRoot) {
   fs.mkdirSync(destDir, { recursive: true });
   fs.copyFileSync(src, path.join(destDir, "ic_walkchamp_notification.xml"));
   fs.copyFileSync(src, path.join(destDir, "ic_notification.xml"));
+}
+
+function widgetSourceDir(projectRoot) {
+  return path.join(
+    projectRoot,
+    "modules/walkchamp-race-progress/ios/WidgetExtension",
+  );
+}
+
+function widgetPodfileSnippet(targetName) {
+  return `
+target '${targetName}' do
+  pod 'WalkChampRaceProgress', :path => '../node_modules/walkchamp-race-progress/ios'
+  use_frameworks! :linkage => podfile_properties['ios.useFrameworks'].to_sym if podfile_properties['ios.useFrameworks']
+  use_frameworks! :linkage => ENV['USE_FRAMEWORKS'].to_sym if ENV['USE_FRAMEWORKS']
+end`;
+}
+
+function withEasWalkChampWidgetExtension(config) {
+  const bundleId = config.ios?.bundleIdentifier ?? "com.globalwalkerleague.app";
+  const existing =
+    config.extra?.eas?.build?.experimental?.ios?.appExtensions ?? [];
+  if (existing.some((entry) => entry.targetName === WIDGET_TARGET_NAME)) {
+    return config;
+  }
+
+  config.extra = {
+    ...config.extra,
+    eas: {
+      ...config.extra?.eas,
+      build: {
+        ...config.extra?.eas?.build,
+        experimental: {
+          ...config.extra?.eas?.build?.experimental,
+          ios: {
+            ...config.extra?.eas?.build?.experimental?.ios,
+            appExtensions: [
+              ...existing,
+              {
+                targetName: WIDGET_TARGET_NAME,
+                bundleIdentifier: `${bundleId}.${WIDGET_TARGET_NAME}`,
+                entitlements: {},
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+  return config;
+}
+
+function withWalkChampWidgetPodfile(config) {
+  return withDangerousMod(config, [
+    "ios",
+    async (cfg) => {
+      const podfilePath = path.join(cfg.modRequest.projectRoot, "ios", "Podfile");
+      if (!fs.existsSync(podfilePath)) return cfg;
+
+      const podfile = fs.readFileSync(podfilePath, "utf8");
+      const regex = new RegExp(`target '${WIDGET_TARGET_NAME}'`);
+      if (regex.test(podfile)) return cfg;
+
+      fs.appendFileSync(podfilePath, widgetPodfileSnippet(WIDGET_TARGET_NAME));
+      return cfg;
+    },
+  ]);
+}
+
+function withWalkChampWidgetFiles(config) {
+  return withDangerousMod(config, [
+    "ios",
+    async (cfg) => {
+      const projectRoot = cfg.modRequest.projectRoot;
+      const sourceDir = widgetSourceDir(projectRoot);
+      const targetDir = path.join(projectRoot, "ios", WIDGET_TARGET_NAME);
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const files = [
+        WIDGET_BUNDLE_FILE,
+        WIDGET_WALK_FILE,
+        WIDGET_RACE_FILE,
+        "WalkChampWidget-Info.plist",
+      ];
+      for (const file of files) {
+        const src = path.join(sourceDir, file);
+        const destName = file === "WalkChampWidget-Info.plist" ? WIDGET_INFO_PLIST : file;
+        const dest = path.join(targetDir, destName);
+        if (!fs.existsSync(src)) {
+          throw new Error(
+            `[withWalkChampRaceProgress] Missing widget file: ${src}`,
+          );
+        }
+        let contents = fs.readFileSync(src, "utf8");
+        if (file === "WalkChampWidget-Info.plist") {
+          contents = contents
+            .replace(/{{BUNDLE_VERSION}}/g, cfg.ios?.buildNumber ?? "1")
+            .replace(/{{BUNDLE_SHORT_VERSION}}/g, cfg.version ?? "1.0");
+        }
+        fs.writeFileSync(dest, contents);
+      }
+      return cfg;
+    },
+  ]);
+}
+
+function withWalkChampWidgetXcodeProject(config) {
+  return withXcodeProject(config, (cfg) => {
+    const xcodeProject = cfg.modResults;
+    if (xcodeProject.pbxTargetByName(WIDGET_TARGET_NAME)) return cfg;
+
+    const bundleId = `${cfg.ios?.bundleIdentifier ?? "com.globalwalkerleague.app"}.${WIDGET_TARGET_NAME}`;
+    const widgetFiles = [
+      WIDGET_BUNDLE_FILE,
+      WIDGET_WALK_FILE,
+      WIDGET_RACE_FILE,
+      WIDGET_INFO_PLIST,
+    ];
+
+    const extGroup = xcodeProject.addPbxGroup(
+      widgetFiles,
+      WIDGET_TARGET_NAME,
+      WIDGET_TARGET_NAME,
+    );
+    const groups = xcodeProject.hash.project.objects.PBXGroup;
+    Object.keys(groups).forEach((key) => {
+      if (
+        typeof groups[key] === "object" &&
+        groups[key].name === undefined &&
+        groups[key].path === undefined
+      ) {
+        xcodeProject.addToPbxGroup(extGroup.uuid, key);
+      }
+    });
+
+    const projObjects = xcodeProject.hash.project.objects;
+    projObjects.PBXTargetDependency = projObjects.PBXTargetDependency || {};
+    projObjects.PBXContainerItemProxy = projObjects.PBXContainerItemProxy || {};
+
+    const widgetTarget = xcodeProject.addTarget(
+      WIDGET_TARGET_NAME,
+      "app_extension",
+      WIDGET_TARGET_NAME,
+      bundleId,
+    );
+    xcodeProject.addBuildPhase(
+      [WIDGET_BUNDLE_FILE, WIDGET_WALK_FILE, WIDGET_RACE_FILE],
+      "PBXSourcesBuildPhase",
+      "Sources",
+      widgetTarget.uuid,
+    );
+    xcodeProject.addBuildPhase(
+      [],
+      "PBXResourcesBuildPhase",
+      "Resources",
+      widgetTarget.uuid,
+    );
+    xcodeProject.addBuildPhase(
+      [],
+      "PBXFrameworksBuildPhase",
+      "Frameworks",
+      widgetTarget.uuid,
+    );
+
+    const configurations = xcodeProject.pbxXCBuildConfigurationSection();
+    for (const key in configurations) {
+      const entry = configurations[key];
+      if (
+        typeof entry.buildSettings === "undefined" ||
+        entry.buildSettings.PRODUCT_NAME !== `"${WIDGET_TARGET_NAME}"`
+      ) {
+        continue;
+      }
+      entry.buildSettings.IPHONEOS_DEPLOYMENT_TARGET = WIDGET_DEPLOYMENT_TARGET;
+      entry.buildSettings.TARGETED_DEVICE_FAMILY = `"1,2"`;
+      entry.buildSettings.SWIFT_VERSION = "5.0";
+      entry.buildSettings.INFOPLIST_FILE = `${WIDGET_TARGET_NAME}/${WIDGET_INFO_PLIST}`;
+      entry.buildSettings.CODE_SIGN_STYLE = "Automatic";
+    }
+
+    return cfg;
+  });
 }
 
 /**
@@ -101,6 +291,11 @@ function withWalkChampRaceProgress(config) {
     cfg.modResults.UIBackgroundModes = modes;
     return cfg;
   });
+
+  config = withEasWalkChampWidgetExtension(config);
+  config = withWalkChampWidgetPodfile(config);
+  config = withWalkChampWidgetFiles(config);
+  config = withWalkChampWidgetXcodeProject(config);
 
   return config;
 }
