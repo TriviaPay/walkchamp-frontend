@@ -6,20 +6,32 @@ const IAP_STORE_STRATEGY = "missingDimensionStrategy 'store', 'play'";
 function withIapStoreFlavor(config) {
   return withAppBuildGradle(config, (cfg) => {
     if (cfg.modResults.language !== "groovy") return cfg;
-    if (cfg.modResults.contents.includes(IAP_STORE_STRATEGY)) return cfg;
 
-    const updated = cfg.modResults.contents.replace(
+    let contents = cfg.modResults.contents;
+    if (!contents.includes(IAP_STORE_STRATEGY)) {
+      const updated = contents.replace(
+        /defaultConfig\s*\{/,
+        `defaultConfig {\n        ${IAP_STORE_STRATEGY}`,
+      );
+      if (updated === contents) {
+        throw new Error(
+          "withIapStoreFlavor: could not find defaultConfig in android/app/build.gradle",
+        );
+      }
+      contents = updated;
+    }
+
+    // Remove duplicate missingDimensionStrategy lines from older prebuilds.
+    contents = contents.replace(
+      /missingDimensionStrategy ["']store["'], ["']play["']\s*\n/g,
+      "",
+    );
+    contents = contents.replace(
       /defaultConfig\s*\{/,
       `defaultConfig {\n        ${IAP_STORE_STRATEGY}`,
     );
 
-    if (updated === cfg.modResults.contents) {
-      throw new Error(
-        "withIapStoreFlavor: could not find defaultConfig in android/app/build.gradle",
-      );
-    }
-
-    cfg.modResults.contents = updated;
+    cfg.modResults.contents = contents;
     return cfg;
   });
 }

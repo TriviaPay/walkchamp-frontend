@@ -213,6 +213,57 @@ function withWalkChampWidgetXcodeProject(config) {
   });
 }
 
+function withWalkChampAndroidNativeModule(config) {
+  return withDangerousMod(config, [
+    "android",
+    async (cfg) => {
+      const projectRoot = cfg.modRequest.projectRoot;
+      copyNotificationIcons(projectRoot);
+
+      const moduleGradlePath = path.join(
+        projectRoot,
+        "modules/walkchamp-race-progress/android/build.gradle",
+      );
+      if (fs.existsSync(moduleGradlePath)) {
+        let gradle = fs.readFileSync(moduleGradlePath, "utf8");
+        if (!gradle.includes("missingDimensionStrategy 'store', 'play'")) {
+          gradle = gradle.replace(
+            /defaultConfig\s*\{/,
+            `defaultConfig {\n    missingDimensionStrategy 'store', 'play'`,
+          );
+          fs.writeFileSync(moduleGradlePath, gradle);
+        }
+      }
+
+      const settingsGradlePath = path.join(projectRoot, "android/settings.gradle");
+      if (fs.existsSync(settingsGradlePath)) {
+        let settings = fs.readFileSync(settingsGradlePath, "utf8");
+        if (!settings.includes("':walkchamp-race-progress'")) {
+          settings += `
+include ':walkchamp-race-progress'
+project(':walkchamp-race-progress').projectDir = new File(rootProject.projectDir, '../modules/walkchamp-race-progress/android')
+`;
+          fs.writeFileSync(settingsGradlePath, settings);
+        }
+      }
+
+      const appGradlePath = path.join(projectRoot, "android/app/build.gradle");
+      if (fs.existsSync(appGradlePath)) {
+        let appGradle = fs.readFileSync(appGradlePath, "utf8");
+        if (!appGradle.includes("project(':walkchamp-race-progress')")) {
+          appGradle = appGradle.replace(
+            /dependencies\s*\{/,
+            `dependencies {\n    implementation project(':walkchamp-race-progress')`,
+          );
+          fs.writeFileSync(appGradlePath, appGradle);
+        }
+      }
+
+      return cfg;
+    },
+  ]);
+}
+
 /**
  * Registers Walk Champ foreground service (Android) and Live Activities (iOS)
  * for persistent walk-step and live-race progress notifications.
@@ -271,13 +322,7 @@ function withWalkChampRaceProgress(config) {
     return cfg;
   });
 
-  config = withDangerousMod(config, [
-    "android",
-    async (cfg) => {
-      copyNotificationIcons(cfg.modRequest.projectRoot);
-      return cfg;
-    },
-  ]);
+  config = withWalkChampAndroidNativeModule(config);
 
   config = withInfoPlist(config, (cfg) => {
     cfg.modResults.NSSupportsLiveActivities = true;
