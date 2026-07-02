@@ -658,6 +658,12 @@ export const androidHCService = {
 
   // ── Reset ────────────────────────────────────────────────────────────────────
 
+  /** Clear in-memory today total after local midnight (HC range reads still authoritative). */
+  resetTodayStepCache(): void {
+    _cachedTodaySteps = 0;
+    hcLog("today cache reset for user/date scope change");
+  },
+
   reset(): void {
     _initialized = false;
     _permissionRequested = false;

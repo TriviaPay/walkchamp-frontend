@@ -4,7 +4,8 @@
  */
 
 import { Platform } from "react-native";
-import { storageGet, storageSet } from "@/utils/storage";
+import { storageGet, storageRemove, storageSet } from "@/utils/storage";
+import { stepScopedKeys } from "@/utils/stepScopedStorage";
 import { isExpoGo } from "../androidHealthConnectService";
 import {
   clearRaceBaseline,
@@ -51,6 +52,50 @@ let _dailyBaseline = 0;
 let _todaySteps = 0;
 let _watchCallback: ((result: StepReadResult) => void) | null = null;
 let _rawAtSubscription = 0;
+let _userId: string | null = null;
+
+function activeUserId(): string {
+  return _userId ?? "signed-out";
+}
+
+function scoped(localDate = getLocalDateKey()) {
+  return stepScopedKeys(activeUserId(), localDate);
+}
+
+export function setAndroidLegacySensorUserContext(userId: string | null): void {
+  if (_userId === userId) return;
+  if (__DEV__) {
+    console.log(`[AuthSwitch] legacy sensor user old=${_userId ?? "none"} new=${userId ?? "none"}`);
+  }
+  _userId = userId;
+  _dailyBaseline = 0;
+  _todaySteps = 0;
+  _rawAtSubscription = 0;
+  if (_sub) {
+    try {
+      _sub.remove();
+    } catch {}
+    _sub = null;
+  }
+}
+
+export async function clearAndroidLegacySensorScopedState(userId: string): Promise<void> {
+  const today = getLocalDateKey();
+  const keys = stepScopedKeys(userId, today);
+  await Promise.all([
+    storageRemove(keys.baseline),
+    storageRemove(keys.steps),
+    storageRemove(keys.stepSnapshot),
+    storageRemove(keys.currentLocalDate),
+    storageRemove(DAILY_BASELINE_KEY as never),
+    storageRemove(DAILY_BASELINE_DATE_KEY as never),
+    storageRemove(DAILY_TODAY_KEY as never),
+    storageRemove(RAW_COUNTER_AT_SUB_KEY as never),
+  ]);
+  if (_userId === userId) {
+    setAndroidLegacySensorUserContext(null);
+  }
+}
 
 function buildResult(steps: number, from: Date, to: Date): StepReadResult {
   return {
@@ -70,34 +115,52 @@ function buildResult(steps: number, from: Date, to: Date): StepReadResult {
 
 async function loadDailyState(): Promise<void> {
   const today = getLocalDateKey();
-  const storedDate = await storageGet<string>(DAILY_BASELINE_DATE_KEY as never);
+  const keys = scoped(today);
+  const storedDate = await storageGet<string>(keys.currentLocalDate);
   const storedBaseline =
-    (await storageGet<number>(DAILY_BASELINE_KEY as never)) ?? 0;
-  const storedToday = (await storageGet<number>(DAILY_TODAY_KEY as never)) ?? 0;
+    (await storageGet<number>(keys.baseline)) ?? 0;
+  const storedToday = (await storageGet<number>(keys.steps)) ?? 0;
 
   if (storedDate === today) {
     _todaySteps = Math.max(_todaySteps, storedToday);
     _dailyBaseline = storedBaseline;
+    if (__DEV__) {
+      console.log(
+        `[StepBaseline] loaded existing baseline userId=${activeUserId()} localDate=${today} baseline=${storedBaseline}`,
+      );
+    }
   } else {
     _dailyBaseline = 0;
     _todaySteps = 0;
-    await storageSet(DAILY_BASELINE_DATE_KEY as never, today);
-    await storageSet(DAILY_BASELINE_KEY as never, 0);
-    await storageSet(DAILY_TODAY_KEY as never, 0);
+    await storageSet(keys.currentLocalDate, today);
+    await storageSet(keys.baseline, 0);
+    await storageSet(keys.steps, 0);
+    if (__DEV__) {
+      console.log(
+        `[StepBaseline] created new baseline userId=${activeUserId()} localDate=${today} baseline=0`,
+      );
+    }
   }
 }
 
 async function persistDaily(steps: number): Promise<void> {
   const today = getLocalDateKey();
+  const keys = scoped(today);
   _todaySteps = steps;
-  await storageSet(DAILY_BASELINE_DATE_KEY as never, today);
-  await storageSet(DAILY_TODAY_KEY as never, steps);
+  await storageSet(keys.currentLocalDate, today);
+  await storageSet(keys.steps, steps);
 }
 
 /** Freeze today's count at subscribe — delta since subscribe adds on top. */
 function alignDailyBaselineForWatch(): void {
+  const keys = scoped();
   _dailyBaseline = _todaySteps;
-  void storageSet(DAILY_BASELINE_KEY as never, _dailyBaseline);
+  void storageSet(keys.baseline, _dailyBaseline);
+  if (__DEV__) {
+    console.log(
+      `[StepBaseline] userId=${activeUserId()} localDate=${getLocalDateKey()} baseline=${_dailyBaseline}`,
+    );
+  }
 }
 
 function ensureSubscription(): boolean {
@@ -262,7 +325,7 @@ export const androidLegacySensorProvider: StepProvider = {
     if (!_sub) return;
 
     _dailyBaseline = next;
-    await storageSet(DAILY_BASELINE_KEY as never, _dailyBaseline);
+    await storageSet(scoped().baseline, _dailyBaseline);
     try {
       _sub.remove();
     } catch {}
@@ -282,7 +345,7 @@ export const androidLegacySensorProvider: StepProvider = {
 
     _watchCallback = callback;
     _rawAtSubscription = _todaySteps;
-    await storageSet(RAW_COUNTER_AT_SUB_KEY as never, _rawAtSubscription);
+    await storageSet(scoped().stepSnapshot, _rawAtSubscription);
     if (_sub) {
       try {
         _sub.remove();
@@ -300,7 +363,7 @@ export const androidLegacySensorProvider: StepProvider = {
         } catch {}
         _sub = null;
       }
-      void storageSet(DAILY_BASELINE_KEY as never, _todaySteps);
+      void storageSet(scoped().baseline, _todaySteps);
     };
   },
 
@@ -317,13 +380,19 @@ export const androidLegacySensorProvider: StepProvider = {
   /** Reset in-memory + persisted daily counters at local midnight. */
   async resetForNewLocalDay(): Promise<void> {
     const today = getLocalDateKey();
+    const keys = scoped(today);
     _dailyBaseline = 0;
     _todaySteps = 0;
     _rawAtSubscription = 0;
-    await storageSet(DAILY_BASELINE_DATE_KEY as never, today);
-    await storageSet(DAILY_BASELINE_KEY as never, 0);
-    await storageSet(DAILY_TODAY_KEY as never, 0);
-    await storageSet(RAW_COUNTER_AT_SUB_KEY as never, 0);
+    await storageSet(keys.currentLocalDate, today);
+    await storageSet(keys.baseline, 0);
+    await storageSet(keys.steps, 0);
+    await storageSet(keys.stepSnapshot, 0);
+    if (__DEV__) {
+      console.log(
+        `[StepBaseline] created new baseline userId=${activeUserId()} localDate=${today} baseline=0`,
+      );
+    }
     if (_sub) {
       try {
         _sub.remove();

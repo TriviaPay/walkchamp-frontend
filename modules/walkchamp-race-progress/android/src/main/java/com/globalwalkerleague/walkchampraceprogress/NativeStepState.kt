@@ -111,6 +111,7 @@ data class NativeStepState(
       } ?: prefs.getString(KEY_JSON, null)
       return try {
         val json = JSONObject(raw ?: return null)
+        val savedLocalDate = json.optString("localDate", "")
         val state = NativeStepState(
           userId = json.optString("userId").ifBlank { null },
           sensorTotal = json.optDouble("sensorTotal", 0.0).toFloat(),
@@ -121,7 +122,7 @@ data class NativeStepState(
           activeRaceId = json.optString("activeRaceId").ifBlank { null },
           notificationMode = json.optString("notificationMode", "none"),
           stepSource = json.optString("stepSource", "android_step_counter"),
-          localDate = json.optString("localDate", localDateString()),
+          localDate = savedLocalDate.ifBlank { localDateString() },
           sensorSupported = json.optBoolean("sensorSupported", true),
           updatedAt = json.optLong("updatedAt", System.currentTimeMillis()),
           lastBackendSyncedAt = if (json.isNull("lastBackendSyncedAt")) null else json.optLong("lastBackendSyncedAt"),
@@ -136,7 +137,16 @@ data class NativeStepState(
           save(ctx, state)
         }
         val today = localDateString()
-        if (state.localDate != today) {
+        val updatedAt = json.optLong("updatedAt", 0L)
+        val startOfTodayMs = Calendar.getInstance().apply {
+          set(Calendar.HOUR_OF_DAY, 0)
+          set(Calendar.MINUTE, 0)
+          set(Calendar.SECOND, 0)
+          set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val staleByTimestamp =
+          state.todaySteps > 0 && updatedAt > 0L && updatedAt < startOfTodayMs
+        if (savedLocalDate.isBlank() || state.localDate != today || staleByTimestamp) {
           val total = state.sensorTotal.takeIf { it > 0f }
           val migrated = state.copy(
             localDate = today,

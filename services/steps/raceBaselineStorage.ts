@@ -3,10 +3,10 @@
  * Key: raceId + userId + providerId
  */
 
-import { storageGet, storageSet } from "@/utils/storage";
+import { storageGet, storageRemove, storageSet } from "@/utils/storage";
 import type { StepProviderId } from "./stepProviderTypes";
 
-const STORAGE_KEY = "race_step_baselines_v1";
+const LEGACY_STORAGE_KEY = "race_step_baselines_v1";
 
 interface StoredBaseline {
   raceId: string;
@@ -21,15 +21,11 @@ function baselineKey(
   userId: string,
   providerId: StepProviderId,
 ): string {
-  return `${raceId}:${userId}:${providerId}`;
+  return `raceSteps:${userId}:${raceId}:${providerId}`;
 }
 
-async function readAll(): Promise<Record<string, StoredBaseline>> {
-  return (await storageGet<Record<string, StoredBaseline>>(STORAGE_KEY as never)) ?? {};
-}
-
-async function writeAll(data: Record<string, StoredBaseline>): Promise<void> {
-  await storageSet(STORAGE_KEY as never, data);
+async function writeBaseline(key: string, baseline: StoredBaseline): Promise<void> {
+  await storageSet(key, baseline);
 }
 
 export async function setRaceBaseline(
@@ -38,15 +34,13 @@ export async function setRaceBaseline(
   providerId: StepProviderId,
   baselineSteps: number,
 ): Promise<void> {
-  const all = await readAll();
-  all[baselineKey(raceId, userId, providerId)] = {
+  await writeBaseline(baselineKey(raceId, userId, providerId), {
     raceId,
     userId,
     providerId,
     baselineSteps,
     createdAt: new Date().toISOString(),
-  };
-  await writeAll(all);
+  });
   if (__DEV__) {
     console.log(
       `[RaceSteps] race baseline created raceId=${raceId} provider=${providerId} baseline=${baselineSteps}`,
@@ -59,8 +53,18 @@ export async function getRaceBaseline(
   userId: string,
   providerId: StepProviderId,
 ): Promise<number | null> {
-  const all = await readAll();
-  const entry = all[baselineKey(raceId, userId, providerId)];
+  const entry = await storageGet<StoredBaseline>(baselineKey(raceId, userId, providerId));
+  if (entry?.baselineSteps !== undefined) return entry.baselineSteps;
+
+  const legacy =
+    (await storageGet<Record<string, StoredBaseline>>(LEGACY_STORAGE_KEY as never)) ?? {};
+  const legacyEntry = legacy[`${raceId}:${userId}:${providerId}`];
+  if (legacyEntry?.baselineSteps !== undefined) {
+    await setRaceBaseline(raceId, userId, providerId, legacyEntry.baselineSteps);
+    delete legacy[`${raceId}:${userId}:${providerId}`];
+    await storageSet(LEGACY_STORAGE_KEY as never, legacy);
+    return legacyEntry.baselineSteps;
+  }
   return entry?.baselineSteps ?? null;
 }
 
@@ -69,17 +73,13 @@ export async function clearRaceBaseline(
   userId: string,
   providerId?: StepProviderId,
 ): Promise<void> {
-  const all = await readAll();
   if (providerId) {
-    delete all[baselineKey(raceId, userId, providerId)];
+    await storageRemove(baselineKey(raceId, userId, providerId));
   } else {
-    for (const key of Object.keys(all)) {
-      if (all[key].raceId === raceId && all[key].userId === userId) {
-        delete all[key];
-      }
+    for (const id of ["ios_healthkit", "android_health_connect", "android_legacy_sensor"] as StepProviderId[]) {
+      await storageRemove(baselineKey(raceId, userId, id));
     }
   }
-  await writeAll(all);
   if (__DEV__) {
     console.log(`[RaceSteps] race baseline cleared raceId=${raceId}`);
   }

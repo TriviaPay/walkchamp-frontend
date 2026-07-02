@@ -278,6 +278,53 @@ const raceProgressSlice = createSlice({
         console.log(`[StepStore] resetDailyStepsForNewDay todaySteps=${state.todaySteps}`);
       }
     },
+
+    resetStepStateForLogout(state) {
+      Object.assign(state, initialState);
+    },
+
+    initializeStepsForUserDate(
+      state,
+      action: PayloadAction<{ userId: string; username?: string | null; localDate: string }>,
+    ) {
+      state.userId = action.payload.userId;
+      if (action.payload.username !== undefined) {
+        state.username = action.payload.username;
+      }
+      state.todaySteps = 0;
+      state.todayStepsLastUpdatedAt = new Date().toISOString();
+      if (__DEV__) {
+        console.log(
+          `[StepStore] initializeStepsForUserDate userId=${action.payload.userId} localDate=${action.payload.localDate}`,
+        );
+      }
+    },
+
+    setStepBaseline(
+      _state,
+      action: PayloadAction<{ userId: string; localDate: string; baseline: number }>,
+    ) {
+      if (__DEV__) {
+        console.log(
+          `[StepBaseline] userId=${action.payload.userId} localDate=${action.payload.localDate} baseline=${action.payload.baseline}`,
+        );
+      }
+    },
+
+    clearRaceStepStateForAccountSwitch(state) {
+      state.activeRaceId = null;
+      state.raceStartTime = null;
+      state.raceStatus = "idle";
+      state.raceSteps = 0;
+      state.raceStepsLastUpdatedAt = null;
+      state.rank = null;
+      state.totalParticipants = null;
+      state.goalSteps = null;
+      state.timeLeftSeconds = null;
+      state.walkRaceStepsDisplay = 0;
+      state.isSyncing = false;
+      state.syncError = null;
+    },
   },
 });
 

@@ -44,6 +44,22 @@ export function msUntilNextLocalMidnight(offsetMs = 1_000): number {
   return Math.max(500, next.getTime() - now.getTime() + offsetMs);
 }
 
+/** Local today at 00:00:00.000 — used to detect step snapshots from a prior calendar day. */
+export function startOfLocalTodayMs(): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** True when a non-zero step count was last updated before today's local midnight. */
+export function isStepSnapshotFromBeforeToday(
+  updatedAtMs: number | null | undefined,
+  steps: number,
+): boolean {
+  if (steps <= 0 || !updatedAtMs || updatedAtMs <= 0) return false;
+  return updatedAtMs < startOfLocalTodayMs();
+}
+
 /**
  * Returns YYYY-MM-DD for the start of the local calendar week (Monday).
  * Monday is used because that is what the server currently computes for "week".

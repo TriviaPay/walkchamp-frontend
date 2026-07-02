@@ -1431,6 +1431,25 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     if (safe > 0) setWalkRaceStepsDisplay(safe);
   }, []);
 
+  // Reset race UI when the signed-in user changes so Walk tab never shows stale race steps.
+  const prevAuthUserIdRef = useRef<string | null>(user?.id ?? null);
+  useEffect(() => {
+    const prev = prevAuthUserIdRef.current;
+    const next = user?.id ?? null;
+    if (prev !== next) {
+      if (__DEV__) {
+        console.log(
+          `[AuthSwitch] oldUserId=${prev ?? "none"} newUserId=${next ?? "none"} resetting race context`,
+        );
+      }
+      resetRace();
+      setWalkRaceStepsDisplay(0);
+      raceStepSyncService.cancelPending();
+      stepPollingService.stopPolling("account_switch");
+    }
+    prevAuthUserIdRef.current = next;
+  }, [user?.id, resetRace]);
+
   // ── AppState listener: flush steps on background + on foreground resume ───────
   // Background flush lets other participants see step progress when this user closes
   // the app mid-race. Foreground flush catches up after OS throttled sync intervals.

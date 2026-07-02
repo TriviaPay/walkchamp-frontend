@@ -5,7 +5,7 @@ import {
   Inter_700Bold,
   useFonts,
 } from "@expo-google-fonts/inter";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider as NavThemeProvider, DarkTheme, DefaultTheme } from "@react-navigation/native";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -48,6 +48,7 @@ import {
   logoutOneSignal,
   setupNotificationClickHandler,
 } from "@/services/notificationService";
+import { queryClient } from "@/services/queryClient";
 import { PushPermissionPrompt } from "@/components/PushPermissionPrompt";
 import { StepTrackingNotificationPrompt } from "@/components/StepTrackingNotificationPrompt";
 
@@ -135,8 +136,6 @@ LogBox.ignoreLogs([
   "'RNGoogleMobileAdsModule' could not be found",
   "Unable to activate keep awake",
 ]);
-
-const queryClient = new QueryClient();
 
 const BG = "#0A0B14";
 const ACCENT = "#00E676";

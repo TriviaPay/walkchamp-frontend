@@ -8,10 +8,11 @@
  */
 
 import { Platform } from "react-native";
+import { store } from "@/store";
 import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
 import { stepTrackingNotificationService } from "@/services/stepTrackingNotificationService";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
-import { getLocalDateStr } from "@/utils/timezone";
+import { getLocalDateStr, isStepSnapshotFromBeforeToday } from "@/utils/timezone";
 
 export function mergeMonotonic(current: number, incoming: number): number {
   return Math.max(Math.max(0, Math.floor(current)), Math.max(0, Math.floor(incoming)));
@@ -36,11 +37,34 @@ export async function mergeWalkStepsWithNative(providerSteps: number): Promise<n
   if (nativeSteps == null) return provider;
 
   const nativeState = await stepTrackingNotificationService.getNativeStepState();
+  const activeUserId = store.getState().raceProgress.userId;
+  if (
+    activeUserId &&
+    nativeState?.userId &&
+    nativeState.userId !== activeUserId
+  ) {
+    if (__DEV__) {
+      console.log(
+        `[StepStore] skipped native walk merge — user mismatch native=${nativeState.userId} active=${activeUserId}`,
+      );
+    }
+    return provider;
+  }
   const today = getLocalDateStr();
   if (nativeState?.localDate && nativeState.localDate !== today) {
     if (__DEV__) {
       console.log(
         `[StepStore] skipped native walk merge — stale localDate=${nativeState.localDate}`,
+      );
+    }
+    return provider;
+  }
+
+  const nativeUpdatedAt = nativeState?.updatedAt ?? nativeState?.lastUpdatedAt ?? 0;
+  if (isStepSnapshotFromBeforeToday(nativeUpdatedAt, nativeSteps)) {
+    if (__DEV__) {
+      console.log(
+        `[StepStore] skipped native walk merge — stale snapshot steps=${nativeSteps} updatedAt=${nativeUpdatedAt}`,
       );
     }
     return provider;

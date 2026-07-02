@@ -26,7 +26,7 @@ import { storageSet, storageRemove, STORAGE_KEYS } from "@/utils/storage";
 import { dynamicIconService } from "@/services/dynamicIconService";
 import { waitForAppStartupReady } from "@/services/appStartup";
 import { stepPollingService } from "@/services/StepPollingService";
-import { clearStepSessionForLogout } from "@/services/stepProgressCoordinator";
+import { clearStepSessionForLogout, bindStepSessionToUser } from "@/services/stepProgressCoordinator";
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
 
 export type { UserProfile };
@@ -84,6 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           refreshToken: refreshJwt,
         }),
       );
+      await bindStepSessionToUser(profile.id);
       // Give the caller's router.replace() time to be queued before
       // releasing the gate — prevents index.tsx from racing ahead.
       authTimerRef.current = setTimeout(() => setIsAuthenticating(false), 500);
@@ -104,7 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const userId = user?.id;
     cancelProactiveTokenRefresh();
     stepPollingService.stopPolling("logout");
-    void clearStepSessionForLogout(userId);
+    await clearStepSessionForLogout(userId);
     raceStepSyncService.cancelPending();
     // Clear in-memory screen cache so the next user never sees stale data.
     screenCache.clearAll();

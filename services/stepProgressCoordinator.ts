@@ -19,8 +19,16 @@ import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotifica
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { AppState, type AppStateStatus, Platform } from "react-native";
 import { waitForAppStartupReady } from "@/services/appStartup";
-import { getLocalDateStr, msUntilNextLocalMidnight } from "@/utils/timezone";
-import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
+import { getLocalDateStr, isStepSnapshotFromBeforeToday, msUntilNextLocalMidnight } from "@/utils/timezone";
+import { storageGet, storageRemove, storageSet, STORAGE_KEYS } from "@/utils/storage";
+import { clearWalkStepsOutbox } from "@/services/walkStepsOutbox";
+import { clearUserSessionQueryCache, queryClient } from "@/services/queryClient";
+import {
+  clearScopedStepStateForUser,
+  deleteLegacyUnscopedStepKeys,
+  stepScopedKeys,
+  writeDailyStepsForUserDate,
+} from "@/utils/stepScopedStorage";
 
 let notificationTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingNotification = false;
@@ -174,6 +182,7 @@ export async function pushWalkNotificationFromCanonicalStore(
       ? new Date(s.todayStepsLastUpdatedAt).getTime()
       : 0;
     if (
+      !force &&
       !nativeStale &&
       nativeSteps > steps &&
       nativeUpdatedAt > 0 &&
@@ -215,28 +224,23 @@ export async function pushWalkNotificationFromCanonicalStore(
   lastWalkNotificationPushMs = now;
 }
 
-type DailyStepsMap = Record<string, number>;
-
 /**
  * Detect local-midnight rollover and reset daily steps in Redux, storage, native FGS,
  * and the ongoing notification. Safe to call repeatedly (idempotent per calendar day).
  */
 export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   const today = getLocalDateStr();
-  const trackingDate = await storageGet<string>(STORAGE_KEYS.TRACKING_LOCAL_DATE);
-
-  if (trackingDate === today) {
+  const activeUserId =
+    store.getState().raceProgress.userId ??
+    (await storageGet<string>(STORAGE_KEYS.LAST_STEP_USER_ID));
+  if (!activeUserId) {
     lastKnownTrackingDate = today;
     return false;
   }
+  const scopedKeys = stepScopedKeys(activeUserId, today);
+  const trackingDate = await storageGet<string>(scopedKeys.currentLocalDate);
+  const syncedCount = await storageGet<number>(scopedKeys.lastSyncedStepsCount);
 
-  if (trackingDate == null) {
-    await storageSet(STORAGE_KEYS.TRACKING_LOCAL_DATE, today);
-    lastKnownTrackingDate = today;
-    return false;
-  }
-
-  const syncedDate = await storageGet<string>(STORAGE_KEYS.LAST_SYNCED_STEPS_DATE);
   let native: Awaited<ReturnType<typeof stepTrackingNotificationService.getNativeStepState>> = null;
   if (Platform.OS === "android") {
     try {
@@ -246,14 +250,52 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
     }
   }
 
+  const nativeMatchesUser =
+    !activeUserId || !native?.userId || native.userId === activeUserId;
+  const nativeDate = nativeMatchesUser ? native?.localDate ?? null : null;
+  const nativeSteps = nativeMatchesUser ? native?.todaySteps ?? 0 : 0;
+  const nativeUpdatedAt = native?.updatedAt ?? native?.lastUpdatedAt ?? 0;
+  const nativeStaleByTimestamp = isStepSnapshotFromBeforeToday(
+    nativeUpdatedAt,
+    nativeSteps,
+  );
+
+  const needsRollover =
+    (trackingDate != null && trackingDate !== today) ||
+    (nativeDate != null && nativeDate !== today) ||
+    (lastKnownTrackingDate != null && lastKnownTrackingDate !== today) ||
+    nativeStaleByTimestamp;
+
   if (__DEV__) {
     console.log(
-      `[StepStore] midnight rollover today=${today} trackingDate=${trackingDate} synced=${syncedDate ?? "n/a"} nativeDate=${native?.localDate ?? "n/a"}`,
+      `[StepReset] currentUserId=${activeUserId ?? "none"} localDate=${today} previousLocalDate=${trackingDate ?? "none"} dayChanged=${needsRollover}`,
+    );
+  }
+
+  if (!needsRollover) {
+    if (trackingDate == null) {
+      await storageSet(scopedKeys.currentLocalDate, today);
+    }
+    lastKnownTrackingDate = today;
+    return false;
+  }
+
+  if (__DEV__) {
+    console.log(
+      `[StepReset] resetting daily steps currentUserId=${activeUserId ?? "none"} localDate=${today} previousLocalDate=${trackingDate ?? "n/a"} nativeDate=${nativeDate ?? "n/a"} lastKnown=${lastKnownTrackingDate ?? "n/a"} syncedCount=${syncedCount ?? 0}`,
     );
   }
 
   if (Platform.OS === "android") {
     await stepTrackingNotificationService.resetDailyStepsForNewDay();
+    try {
+      const { androidHCService } = await import(
+        "@/services/steps/androidHealthConnectService"
+      );
+      androidHCService.resetTodayStepCache();
+    } catch {
+      // non-fatal
+    }
     try {
       const { androidLegacySensorProvider } = await import(
         "@/services/steps/providers/androidLegacySensorProvider"
@@ -274,13 +316,10 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
 
   lastWalkNotificationSteps = -1;
 
-  const daily =
-    (await storageGet<DailyStepsMap>(STORAGE_KEYS.DAILY_STEPS)) ?? {};
-  daily[today] = 0;
-  await storageSet(STORAGE_KEYS.DAILY_STEPS, daily);
-  await storageSet(STORAGE_KEYS.LAST_SYNCED_STEPS_DATE, today);
-  await storageSet(STORAGE_KEYS.LAST_SYNCED_STEPS_COUNT, 0);
-  await storageSet(STORAGE_KEYS.TRACKING_LOCAL_DATE, today);
+  await writeDailyStepsForUserDate(activeUserId, today, 0);
+  await storageSet(stepScopedKeys(activeUserId, today).lastSyncedStepsCount, 0);
+  await storageSet(stepScopedKeys(activeUserId, today).currentLocalDate, today);
+  await deleteLegacyUnscopedStepKeys();
 
   lastKnownTrackingDate = today;
   await pushWalkNotificationFromCanonicalStore(true);
@@ -468,10 +507,15 @@ export function initStepProgressCoordinator(): void {
     }
   });
 
-  void waitForAppStartupReady().then(() => {
+  void waitForAppStartupReady().then(async () => {
     try {
+      const userId = await storageGet<string>(STORAGE_KEYS.LAST_STEP_USER_ID);
+      lastKnownTrackingDate = userId
+        ? (await storageGet<string>(stepScopedKeys(userId).currentLocalDate)) ?? null
+        : null;
       initNativeStepEventListener();
       scheduleNextMidnightCheck();
+      await handleMidnightRolloverIfNeeded();
     } catch (err) {
       console.log("[Startup] step coordinator native listener failed", err);
     }
@@ -534,6 +578,16 @@ function initNativeStepEventListener(): void {
         }
         return;
       }
+      const nativeUpdatedAt = state.updatedAt ?? state.lastUpdatedAt ?? 0;
+      if (
+        !raceActive &&
+        isStepSnapshotFromBeforeToday(nativeUpdatedAt, state.todaySteps ?? 0)
+      ) {
+        if (__DEV__) {
+          console.log("[StepStore] ignored native update — stale snapshot");
+        }
+        return;
+      }
       updateStepProgressFromRealSource({
         todaySteps: state.todaySteps,
         raceSteps: typeof state.raceSteps === "number" ? state.raceSteps : undefined,
@@ -560,6 +614,13 @@ async function hydrateFromNativeStepState(): Promise<void> {
   if (native.localDate && native.localDate !== today) {
     if (__DEV__) {
       console.log("[StepStore] skip native hydrate — stale localDate");
+    }
+    return;
+  }
+  const nativeUpdatedAtMs = native.updatedAt ?? native.lastUpdatedAt ?? 0;
+  if (isStepSnapshotFromBeforeToday(nativeUpdatedAtMs, native.todaySteps ?? 0)) {
+    if (__DEV__) {
+      console.log("[StepStore] skip native hydrate — stale snapshot");
     }
     return;
   }
@@ -1028,15 +1089,144 @@ export function handleBackendProgressSynced(result: {
   });
 }
 
+/** Wipe step cache so another account cannot inherit counts. */
+export async function clearLocalStepStorageForAccountSwitch(userId?: string): Promise<void> {
+  lastKnownTrackingDate = null;
+  lastWalkNotificationSteps = -1;
+  lastWalkNotificationPushMs = 0;
+
+  if (__DEV__) {
+    console.log(`[AuthSwitch] clearing step state userId=${userId ?? "unknown"}`);
+  }
+
+  await Promise.all([
+    userId ? clearScopedStepStateForUser(userId) : Promise.resolve(),
+    deleteLegacyUnscopedStepKeys(),
+    storageRemove(STORAGE_KEYS.PENDING_RACE),
+    storageRemove(STORAGE_KEYS.LAST_STEP_USER_ID),
+    clearWalkStepsOutbox(),
+  ]);
+
+  store.dispatch(raceProgressActions.resetStepStateForLogout());
+  store.dispatch(raceProgressActions.clearRaceStepStateForAccountSwitch());
+  store.dispatch(walkActions.setTodaySteps(0));
+  store.dispatch(walkActions.setWeeklySteps(0));
+  store.dispatch(walkActions.setAllTimeSteps(0));
+  store.dispatch(walkActions.setCurrentStreak(0));
+
+  if (Platform.OS === "android") {
+    try {
+      const {
+        clearAndroidLegacySensorScopedState,
+        setAndroidLegacySensorUserContext,
+      } = await import("@/services/steps/providers/androidLegacySensorProvider");
+      if (userId) await clearAndroidLegacySensorScopedState(userId);
+      setAndroidLegacySensorUserContext(null);
+    } catch {
+      // non-fatal
+    }
+    try {
+      const { androidHCService } = await import(
+        "@/services/steps/androidHealthConnectService"
+      );
+      androidHCService.resetTodayStepCache();
+    } catch {
+      // non-fatal
+    }
+  }
+}
+
+/**
+ * Centralized cleanup when logging out or switching accounts.
+ * Stops native services, cancels in-flight requests, clears caches for the old user.
+ */
+export async function clearUserSessionStepState(
+  oldUserId: string | undefined,
+  reason: "logout" | "account_switch" = "account_switch",
+): Promise<void> {
+  if (__DEV__) {
+    console.log(
+      `[AuthSwitch] clearing old step state oldUserId=${oldUserId ?? "unknown"} reason=${reason}`,
+    );
+  }
+
+  try {
+    const { stepPollingService } = await import("@/services/StepPollingService");
+    stepPollingService.stopPolling(reason);
+  } catch {
+    // non-fatal
+  }
+
+  try {
+    const { raceStepSyncService } = await import("@/services/RaceStepSyncService");
+    raceStepSyncService.cancelPending();
+  } catch {
+    // non-fatal
+  }
+
+  await queryClient.cancelQueries();
+  clearUserSessionQueryCache(oldUserId);
+
+  if (reason === "logout") {
+    await raceProgressNotificationService.stopAll(0, "logout");
+    if (Platform.OS === "android" && oldUserId) {
+      if (__DEV__) console.log("[StepService] stopped for old user");
+      await stepTrackingNotificationService.clearNativeStepStateForUser(oldUserId);
+      await stepTrackingNotificationService.stop();
+    }
+  } else if (oldUserId) {
+    await raceProgressNotificationService.stopAll(0, "account_switch");
+    if (Platform.OS === "android") {
+      if (__DEV__) console.log("[StepService] stopped for old user");
+      await stepTrackingNotificationService.clearNativeStepStateForUser(oldUserId);
+      await stepTrackingNotificationService.stop();
+    }
+  }
+
+  await clearLocalStepStorageForAccountSwitch(oldUserId);
+}
+
+/**
+ * Bind the local step cache to the signed-in user. Clears stale data when the
+ * account changes (logout/login or direct account switch).
+ */
+export async function bindStepSessionToUser(userId: string): Promise<boolean> {
+  const lastUserId = await storageGet<string>(STORAGE_KEYS.LAST_STEP_USER_ID);
+  const switched = !!lastUserId && lastUserId !== userId;
+  if (switched) {
+    if (__DEV__) {
+      console.log(
+        `[AuthSwitch] oldUserId=${lastUserId} newUserId=${userId}`,
+      );
+    }
+    await clearUserSessionStepState(lastUserId, "account_switch");
+  }
+  await deleteLegacyUnscopedStepKeys();
+  try {
+    const { setAndroidLegacySensorUserContext } = await import(
+      "@/services/steps/providers/androidLegacySensorProvider"
+    );
+    setAndroidLegacySensorUserContext(userId);
+  } catch {
+    // non-fatal
+  }
+  await storageSet(STORAGE_KEYS.LAST_STEP_USER_ID, userId);
+  if (__DEV__) {
+    console.log(`[StepService] started for new user userId=${userId}`);
+  }
+  store.dispatch(
+    raceProgressActions.initializeStepsForUserDate({
+      userId,
+      localDate: getLocalDateStr(),
+    }),
+  );
+  return switched;
+}
+
 /** Clear native + notification step session on logout so the next user cannot inherit counts. */
 export async function clearStepSessionForLogout(userId: string | undefined): Promise<void> {
-  if (!userId) return;
   if (__DEV__) {
-    console.log(`[Logout] clearing active step session userId=${userId}`);
+    console.log(`[Logout] clearing step session userId=${userId ?? "unknown"}`);
   }
-  await raceProgressNotificationService.stopAll(0, "logout");
-  if (Platform.OS === "android") {
-    await stepTrackingNotificationService.clearNativeStepStateForUser(userId);
-    await stepTrackingNotificationService.stop();
-  }
+  await clearUserSessionStepState(userId, "logout");
 }

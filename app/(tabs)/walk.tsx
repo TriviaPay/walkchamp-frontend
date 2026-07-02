@@ -82,12 +82,16 @@ import CoinsBattleModal from "@/components/CoinsBattleModal";
 import { screenCache } from "@/utils/screenCache";
 import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows";
 import { subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
+import { useTodayWalkSteps } from "@/hooks/useTodayWalkSteps";
+import { getTodayKey } from "@/utils/format";
 
 /** Set to true to re-enable the floating draggable shop icon on the Walk tab. */
 const SHOP_ON_WALK_TAB = true;
 
-/** screenCache key for challenge/race card statuses (stale-while-revalidate). */
-const WALK_CACHE_KEY = "screen_walk_challenges";
+/** User-scoped screenCache key for challenge/race card statuses. */
+function walkChallengeCacheKey(userId: string): string {
+  return `screen_walk_challenges:${userId}`;
+}
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -1671,10 +1675,32 @@ export default function WalkScreen() {
   const colors = useColors();
   const { isDark } = useTheme();
   const { insets, safeTop, safeBottom } = useSafeLayout();
-  const { trackingStatus, session, todaySteps, allTimeSteps, currentStreak, togglePause, milestoneReached, clearMilestone, usingRealTracking, stepPermissionStatus, hcAvailability, requestStepPermission, todayActiveMinutes, todayDailyRank, todayDailyGoal, refreshTodayRank, resumeStepWatching, refreshTodaySteps } = useWalkContext();
+  const {
+    trackingStatus,
+    session,
+    todaySteps: contextTodaySteps,
+    allTimeSteps,
+    currentStreak,
+    togglePause,
+    milestoneReached,
+    clearMilestone,
+    usingRealTracking,
+    stepPermissionStatus,
+    hcAvailability,
+    requestStepPermission,
+    todayActiveMinutes,
+    todayDailyRank,
+    todayDailyGoal: contextDailyGoal,
+    refreshTodayRank,
+    resumeStepWatching,
+    refreshTodaySteps,
+    stepsHydrated,
+    authReady,
+  } = useWalkContext();
   const { guardRewardAction, canJoinRewardRaces, verificationLevel } = useStepSourceGuard();
   const { userRank, walletBalance } = useApp();
-  const { user, logout } = useAuth();
+  const { user, logout, loading: authLoading, sessionToken } = useAuth();
+  const dbWalk = useTodayWalkSteps(user?.id);
   const tabBarHeight = useTabBarHeight();
   const modalScrollPad = { paddingBottom: safeBottom + rs(40) };
   const { joinRace, setActiveRace, setRaceTargetSteps, racePhase, userRaceSteps, walkRaceStepsDisplay, raceId: activeRaceId } = useRace();
@@ -1770,11 +1796,46 @@ export default function WalkScreen() {
   const [confirmChecks, setConfirmChecks] = useState<boolean[]>([false, false, false]);
   const [showCreateConfirm, setShowCreateConfirm] = useState(false);
   const [createConfirmChecks, setCreateConfirmChecks] = useState<boolean[]>([false, false, false]);
-  const [challengeStatuses, setChallengeStatuses] = useState<Record<string, ChallengeStatus>>(
-    () => screenCache.getSync<Record<string, ChallengeStatus>>(WALK_CACHE_KEY) ?? {}
-  );
-  const walkCacheReadyRef = useRef(screenCache.getSync(WALK_CACHE_KEY) !== null);
-  const [walkCacheReady, setWalkCacheReady] = useState(walkCacheReadyRef.current);
+  const [challengeStatuses, setChallengeStatuses] = useState<Record<string, ChallengeStatus>>({});
+  const walkCacheReadyRef = useRef(false);
+  const [walkCacheReady, setWalkCacheReady] = useState(false);
+
+  const userReady = authReady && !!sessionToken && !!user?.id && stepsHydrated;
+  const safeTodaySteps = Number.isFinite(contextTodaySteps)
+    ? Math.max(0, contextTodaySteps)
+    : (dbWalk.todaySteps ?? 0);
+  const goalSteps =
+    (contextDailyGoal > 0 ? contextDailyGoal : dbWalk.goalSteps) > 0
+      ? (contextDailyGoal > 0 ? contextDailyGoal : dbWalk.goalSteps)
+      : 10_000;
+  const goalProgress =
+    goalSteps > 0 ? Math.min(safeTodaySteps / goalSteps, 1) : 0;
+  const goalPercent = Math.round(goalProgress * 100);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setChallengeStatuses({});
+      walkCacheReadyRef.current = false;
+      setWalkCacheReady(false);
+      return;
+    }
+    const cacheKey = walkChallengeCacheKey(user.id);
+    const cached = screenCache.getSync<Record<string, ChallengeStatus>>(cacheKey);
+    if (cached) {
+      setChallengeStatuses(cached);
+      walkCacheReadyRef.current = true;
+      setWalkCacheReady(true);
+    } else {
+      setChallengeStatuses({});
+      walkCacheReadyRef.current = false;
+      setWalkCacheReady(false);
+    }
+    if (__DEV__) {
+      console.log(
+        `[WalkScreen] mounted userId=${user.id} localDate=${getTodayKey()} authReady=${authReady} tokenExists=${!!sessionToken}`,
+      );
+    }
+  }, [user?.id, authReady, sessionToken]);
 
 
   useEffect(() => {
@@ -1803,10 +1864,11 @@ export default function WalkScreen() {
       return () => clearTimeout(t); } }, [milestoneReached, clearMilestone]);
 
   const loadChallengeStatuses = useCallback(async () => {
+    if (!user?.id || !sessionToken) return;
+    const cacheKey = walkChallengeCacheKey(user.id);
     try {
-      // Warm disk cache on first call; mem cache initialised in useState above.
       if (!walkCacheReadyRef.current) {
-        const cached = await screenCache.get<Record<string, ChallengeStatus>>(WALK_CACHE_KEY);
+        const cached = await screenCache.get<Record<string, ChallengeStatus>>(cacheKey);
         if (cached) {
           setChallengeStatuses(cached);
           walkCacheReadyRef.current = true;
@@ -1825,9 +1887,9 @@ export default function WalkScreen() {
         walkCacheReadyRef.current = true;
         setWalkCacheReady(true);
       }
-      void screenCache.set(WALK_CACHE_KEY, map);
+      void screenCache.set(cacheKey, map);
     } catch { /* silent */ }
-  }, []);
+  }, [sessionToken, user?.id]);
 
   // Initial load handled by useFocusEffect below (avoids duplicate fetch on mount + focus).
 
@@ -1840,7 +1902,7 @@ export default function WalkScreen() {
     prevRacePhaseRef.current = racePhase;
     if (
       racePhase === "idle" &&
-      (prev === "finished" || prev === "in_progress" || prev === "waiting")
+      (prev === "finished" || prev === "in_race" || prev === "waiting")
     ) {
       setChallengeStatuses({});
       loadChallengeStatuses();
@@ -1858,12 +1920,25 @@ export default function WalkScreen() {
   // 5-second background-refresh interval while the Walk tab is focused.
   // The interval is cancelled automatically on blur, preventing background
   // network traffic when the user is on a different tab.
+  const refetchDbWalk = dbWalk.refetch;
+
   useFocusEffect(useCallback(() => {
-    refreshTodayRank().catch(() => {});
-    if (usingRealTracking) {
-      void refreshTodaySteps();
-      void resumeStepWatching();
+    if (!userReady) {
+      if (__DEV__) {
+        console.log(
+          `[WalkScreen] skipped fetch reason=missing userId/token/authReady authReady=${authReady} tokenExists=${!!sessionToken} userId=${user?.id ?? "none"}`,
+        );
+      }
+      return;
     }
+    void (async () => {
+      await refreshTodayRank();
+      void refetchDbWalk();
+      if (usingRealTracking) {
+        await refreshTodaySteps();
+        await resumeStepWatching();
+      }
+    })();
     if (!showCoinStoreRef.current) {
       dispatch(fetchTrackThemes());
       dispatch(fetchCoinBalance());
@@ -1871,7 +1946,19 @@ export default function WalkScreen() {
     loadChallengeStatuses();
     const pollInterval = setInterval(loadChallengeStatuses, STEP_SYNC_CONFIG.WALK_CHALLENGE_POLL_MS);
     return () => clearInterval(pollInterval);
-  }, [dispatch, refreshTodayRank, loadChallengeStatuses, usingRealTracking, refreshTodaySteps, resumeStepWatching]));
+  }, [
+    authReady,
+    dispatch,
+    loadChallengeStatuses,
+    refetchDbWalk,
+    refreshTodayRank,
+    refreshTodaySteps,
+    resumeStepWatching,
+    sessionToken,
+    user?.id,
+    userReady,
+    usingRealTracking,
+  ]));
 
   // Animate picker sheet in/out
   useEffect(() => {
@@ -2000,11 +2087,11 @@ export default function WalkScreen() {
     return () => { cancelled = true; clearInterval(interval); };
   }, []));
 
-  const distance = stepsToDistance(todaySteps);
+  const distance = stepsToDistance(safeTodaySteps);
   // Use backend-confirmed active minutes; derive from steps as a live estimate when not yet available
   const activeMins = todayActiveMinutes > 0
     ? todayActiveMinutes
-    : (todaySteps > 0 ? Math.max(1, Math.ceil(todaySteps / 120)) : 0);
+    : (safeTodaySteps > 0 ? Math.max(1, Math.ceil(safeTodaySteps / 120)) : 0);
 
   const computedPool = (setupModal?.fee ?? 1) * playerCount;
   const computedFee = Math.round(computedPool * 0.2 * 100) / 100;
@@ -2492,6 +2579,16 @@ export default function WalkScreen() {
     }
   };
 
+  if (authLoading) {
+    return (
+      <View style={[styles.container, { backgroundColor: colors.background, paddingTop: safeTop, paddingBottom: tabBarHeight }]}>
+        <View style={{ padding: 24 }}>
+          <SkeletonList count={5} />
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background, paddingTop: safeTop, paddingBottom: tabBarHeight }]}>
       {/* Auto-detected banner */}
@@ -2647,7 +2744,7 @@ export default function WalkScreen() {
             </View>
 
             <View style={styles.stepsHero}>
-              <Text style={[styles.stepsHeroValue, { color: colors.foreground }]}>{todaySteps.toLocaleString()}</Text>
+              <Text style={[styles.stepsHeroValue, { color: colors.foreground }]}>{safeTodaySteps.toLocaleString()}</Text>
               <Text style={[styles.stepsHeroLabel, { color: colors.mutedForeground }]}>steps today</Text>
             </View>
 
@@ -2664,13 +2761,13 @@ export default function WalkScreen() {
             ) : null}
 
             <View style={styles.goalRow}>
-              <Text style={[styles.goalText, { color: colors.mutedForeground }]}>Goal: {todayDailyGoal.toLocaleString()} steps</Text>
-              <Text style={[styles.goalPercent, { color: colors.primary }]}>{Math.round(Math.min(todaySteps / todayDailyGoal, 1) * 100)}%</Text>
+              <Text style={[styles.goalText, { color: colors.mutedForeground }]}>Goal: {goalSteps.toLocaleString()} steps</Text>
+              <Text style={[styles.goalPercent, { color: colors.primary }]}>{goalPercent}%</Text>
             </View>
             <View style={[styles.goalBar, { backgroundColor: colors.border }]}>
               <LinearGradient
                 colors={[colors.primary, colors.accent]}
-                style={[styles.goalFill, { width: `${Math.min(todaySteps / todayDailyGoal, 1) * 100}%` }]}
+                style={[styles.goalFill, { width: `${goalPercent}%` }]}
                 start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
               />
             </View>
@@ -2681,7 +2778,7 @@ export default function WalkScreen() {
         <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>Today</Text>
         <View style={styles.statsGrid}>
           <StatCard icon="map-pin" value={formatDistance(distance)} label="Distance" color={colors.accent} bg={colors.accent + "18"} />
-          <StatCard icon="zap" value={formatCalories(todaySteps * 0.04)} label="Calories" color={colors.gold} bg={colors.gold + "18"} />
+          <StatCard icon="zap" value={formatCalories(safeTodaySteps * 0.04)} label="Calories" color={colors.gold} bg={colors.gold + "18"} />
           <StatCard icon="clock" value={`${activeMins}m`} label="Active min" color={colors.primary} bg={colors.primary + "18"} />
           <StatCard icon="bar-chart-2" value={todayDailyRank !== null ? `#${todayDailyRank}` : "–"} label="Daily rank" color={colors.accent} bg={colors.accent + "18"} />
         </View>
@@ -4465,7 +4562,7 @@ export default function WalkScreen() {
         user={user}
         walletBalance={walletBalance}
         userRank={userRank}
-        todaySteps={todaySteps}
+        todaySteps={safeTodaySteps}
         allTimeSteps={allTimeSteps}
         currentStreak={currentStreak}
         logout={logout}

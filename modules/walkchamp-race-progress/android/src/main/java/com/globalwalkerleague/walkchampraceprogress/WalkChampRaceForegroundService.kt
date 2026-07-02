@@ -794,22 +794,24 @@ class WalkChampRaceForegroundService : Service() {
       }
     }
 
-    if (!isTrackingActive()) return rolled
-
     val p = prefs()
     val walkDate = p.getString("walk_local_date", null)
     val raceActive = raceState != null && isActiveRace(raceState!!)
-    if (walkRunning && !raceActive) {
-      val needsWalkReset = (walkDate != null && walkDate != today) || rolled
-      if (needsWalkReset) {
-        val native = sensorEngine?.currentState() ?: NativeStepState.load(this)
-        val steps = native?.takeIf { it.localDate == today }?.todaySteps ?: 0
-        updateWalkNotificationToSteps(steps)
-        p.edit().putString("walk_local_date", today).apply()
-        rolled = true
-        Log.d(TAG, "[StepFGS] midnight rollover walk notification reset steps=$steps")
-      }
+    val walkNotificationActive =
+      walkRunning || p.getBoolean("walk_active", false) || lastWalkNotification != null
+    val needsWalkReset =
+      rolled || (walkDate != null && walkDate != today)
+
+    if (walkNotificationActive && !raceActive && needsWalkReset) {
+      val native = sensorEngine?.currentState() ?: NativeStepState.load(this)
+      val steps = native?.takeIf { it.localDate == today }?.todaySteps ?: 0
+      updateWalkNotificationToSteps(steps)
+      p.edit().putString("walk_local_date", today).apply()
+      rolled = true
+      Log.d(TAG, "[StepFGS] midnight rollover walk notification reset steps=$steps")
     }
+
+    if (!isTrackingActive()) return rolled
     return rolled
   }
 

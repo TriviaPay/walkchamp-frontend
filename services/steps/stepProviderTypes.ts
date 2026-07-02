@@ -67,6 +67,8 @@ export interface StepProvider {
     callback: (result: StepReadResult) => void,
   ): Promise<() => void>;
   stopWatchingSteps?(): void;
+  resetForNewLocalDay?(): Promise<void>;
+  reconcileTodaySteps?(steps: number): Promise<void>;
 }
 
 export function getLocalDateKey(d = new Date()): string {

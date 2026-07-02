@@ -4,10 +4,10 @@
  */
 
 import { storageGet, storageSet, storageRemove } from "@/utils/storage";
-
-const OUTBOX_KEY = "walk_steps_outbox" as const;
+import { stepScopedKeys } from "@/utils/stepScopedStorage";
 
 export type WalkStepsOutboxEntry = {
+  userId: string;
   totalSteps: number;
   stepSource: string;
   localDate: string;
@@ -15,16 +15,28 @@ export type WalkStepsOutboxEntry = {
 };
 
 export async function saveWalkStepsOutbox(entry: WalkStepsOutboxEntry): Promise<void> {
-  await storageSet(OUTBOX_KEY as never, entry);
+  await storageSet(stepScopedKeys(entry.userId, entry.localDate).outbox, entry);
   if (__DEV__) {
-    console.log(`[BackendSync] walk outbox saved totalSteps=${entry.totalSteps}`);
+    console.log(
+      `[BackendSync] walk outbox saved userId=${entry.userId} localDate=${entry.localDate} totalSteps=${entry.totalSteps}`,
+    );
   }
 }
 
-export async function loadWalkStepsOutbox(): Promise<WalkStepsOutboxEntry | null> {
-  return (await storageGet<WalkStepsOutboxEntry>(OUTBOX_KEY as never)) ?? null;
+export async function loadWalkStepsOutbox(
+  userId: string,
+  localDate: string,
+): Promise<WalkStepsOutboxEntry | null> {
+  return (await storageGet<WalkStepsOutboxEntry>(stepScopedKeys(userId, localDate).outbox)) ?? null;
 }
 
-export async function clearWalkStepsOutbox(): Promise<void> {
-  await storageRemove(OUTBOX_KEY as never);
+export async function clearWalkStepsOutbox(
+  userId?: string,
+  localDate?: string,
+): Promise<void> {
+  if (!userId || !localDate) {
+    await storageRemove("walk_steps_outbox" as never);
+    return;
+  }
+  await storageRemove(stepScopedKeys(userId, localDate).outbox);
 }

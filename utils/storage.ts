@@ -36,6 +36,8 @@ export const STORAGE_KEYS = {
   LAST_SYNCED_STEPS_COUNT: "walkchamp_last_synced_steps_count",
   /** Local calendar date (YYYY-MM-DD) for which daily steps were last persisted. */
   TRACKING_LOCAL_DATE: "walkchamp_tracking_local_date",
+  /** Last user id that owned the local step cache — used to detect account switches. */
+  LAST_STEP_USER_ID: "walkchamp_last_step_user_id",
   /**
    * Pending race state persisted across app close/kill.
    * Shape: { raceId: string, raceStartTimeUTC: string, raceEndTimeUTC?: string, status: 'in_progress'|'completed' }
