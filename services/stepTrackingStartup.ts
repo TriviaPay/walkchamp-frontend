@@ -43,7 +43,7 @@ export async function activateStepTracking(options: {
     return activateInFlight;
   }
 
-  activateInFlight = (async () => {
+  const pending = (async (): Promise<StepTrackingEnableResult> => {
     const {
       userId,
       username,
@@ -200,5 +200,6 @@ export async function activateStepTracking(options: {
     activateInFlight = null;
   });
 
-  return activateInFlight;
+  activateInFlight = pending;
+  return pending;
 }

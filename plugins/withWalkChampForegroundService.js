@@ -6,14 +6,16 @@ const {
 } = require("@expo/config-plugins");
 const fs = require("fs");
 const path = require("path");
+const {
+  MODULE_NAME,
+  resolveModuleManifestPath,
+  settingsGradleProjectDirLine,
+} = require("./walkchampModulePaths");
 
-const MODULE_NAME = "walkchamp-race-progress";
 const SERVICE_NAME =
   "com.globalwalkerleague.walkchampraceprogress.WalkChampRaceForegroundService";
 const SERVICE_XML = `    <service android:name="${SERVICE_NAME}" android:enabled="true" android:exported="false" android:foregroundServiceType="health" android:stopWithTask="false"/>`;
-const MODULE_MANIFEST_REL = `modules/${MODULE_NAME}/android/src/main/AndroidManifest.xml`;
 const SETTINGS_INCLUDE = `include ':${MODULE_NAME}'`;
-const SETTINGS_PROJECT_DIR = `project(':${MODULE_NAME}').projectDir = new File(rootProject.projectDir, '../modules/${MODULE_NAME}/android')`;
 
 function ensureArray(value) {
   if (Array.isArray(value)) return value;
@@ -50,7 +52,7 @@ function patchMainAndroidManifest(manifestPath) {
 }
 
 function ensureModuleManifest(projectRoot) {
-  const moduleManifestPath = path.join(projectRoot, MODULE_MANIFEST_REL);
+  const moduleManifestPath = resolveModuleManifestPath(projectRoot);
   if (!fs.existsSync(moduleManifestPath)) {
     console.warn(
       `[withWalkChampForegroundService] module manifest missing: ${moduleManifestPath}`,
@@ -155,13 +157,15 @@ function withWalkChampForegroundService(config) {
   });
 
   config = withSettingsGradle(config, (cfg) => {
+    const projectRoot = cfg.modRequest.projectRoot;
+    const settingsProjectDir = settingsGradleProjectDirLine(projectRoot);
     let contents = cfg.modResults.contents;
     if (!contents.includes(SETTINGS_INCLUDE)) {
-      contents = `${contents.trim()}\n${SETTINGS_INCLUDE}\n${SETTINGS_PROJECT_DIR}\n`;
-    } else if (!contents.includes("../modules/walkchamp-race-progress/android")) {
+      contents = `${contents.trim()}\n${SETTINGS_INCLUDE}\n${settingsProjectDir}\n`;
+    } else {
       contents = contents.replace(
         /project\(':walkchamp-race-progress'\)\.projectDir\s*=\s*new File\([^\n]+\)/,
-        SETTINGS_PROJECT_DIR,
+        settingsProjectDir,
       );
     }
     cfg.modResults.contents = contents;

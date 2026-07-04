@@ -36,8 +36,10 @@ export async function mergeWalkStepsWithNative(providerSteps: number): Promise<n
   const nativeSteps = await stepTrackingNotificationService.getNativeWalkSteps();
   if (nativeSteps == null) return provider;
 
-  const nativeState = await stepTrackingNotificationService.getNativeStepState();
   const activeUserId = store.getState().raceProgress.userId;
+  const nativeState = await stepTrackingNotificationService.getNativeStepState(
+    activeUserId ?? undefined,
+  );
   if (
     activeUserId &&
     nativeState?.userId &&

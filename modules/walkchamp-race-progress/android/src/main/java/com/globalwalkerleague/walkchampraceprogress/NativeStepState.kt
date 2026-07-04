@@ -107,8 +107,8 @@ data class NativeStepState(
       val uid = userId?.takeIf { it.isNotBlank() } ?: getCurrentUserId(ctx)
       val raw = when {
         uid != null -> prefs.getString(stateKey(uid), null)
-        else -> null
-      } ?: prefs.getString(KEY_JSON, null)
+        else -> prefs.getString(KEY_JSON, null)
+      }
       return try {
         val json = JSONObject(raw ?: return null)
         val savedLocalDate = json.optString("localDate", "")

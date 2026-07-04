@@ -28,7 +28,11 @@ type NativeModule = {
   stopRaceProgressNotification: (payload: { raceId: string; reason?: string }) => Promise<void>;
   startRaceBackgroundService?: (payload: Record<string, unknown>) => Promise<void>;
   updateRaceBackgroundService?: (payload: Record<string, unknown>) => Promise<void>;
-  stopRaceBackgroundService?: (payload: { raceId: string; reason?: string }) => Promise<void>;
+  stopRaceBackgroundService?: (payload: {
+    raceId: string;
+    reason?: string;
+    todaySteps?: number;
+  }) => Promise<void>;
   getRaceBackgroundState?: () => Promise<string | null>;
   startRaceLiveActivity: (
     payload: Record<string, unknown>,

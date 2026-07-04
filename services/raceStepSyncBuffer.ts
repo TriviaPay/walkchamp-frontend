@@ -100,8 +100,17 @@ class RaceStepSyncBuffer {
     source: RaceProgressSource,
     options: RaceSyncBufferOptions = {},
   ): void {
-    // Native foreground service owns background race sync on Android.
+    // Native FGS owns HTTP sync in background; queue locally and flush on resume.
     if (Platform.OS === "android" && AppState.currentState !== "active") {
+      this.pendingRaceId = raceId;
+      this.pendingRaceSteps = Math.max(this.pendingRaceSteps, raceSteps);
+      this.pendingSource = source;
+      if (deviceTotalSteps !== undefined) {
+        this.pendingDeviceTotal = deviceTotalSteps;
+      }
+      console.log(
+        `[RaceStepSync] queued raceId=${raceId} steps=${raceSteps} (background)`,
+      );
       return;
     }
     const { force = false, atTarget = false, deviceTotalSteps } = options;
@@ -327,6 +336,10 @@ class RaceStepSyncBuffer {
 export const raceStepSyncBuffer = new RaceStepSyncBuffer();
 
 AppState.addEventListener("change", (next: AppStateStatus) => {
+  if (next === "active") {
+    void raceStepSyncBuffer.flushRaceSteps({ force: true, reason: "resume" });
+    return;
+  }
   if (
     (next === "background" || next === "inactive") &&
     LIVE_RACE_SYNC_CONFIG.flushOnAppBackground

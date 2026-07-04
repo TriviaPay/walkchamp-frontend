@@ -1,4 +1,5 @@
 import { Platform } from "react-native";
+import { requireOptionalExpoNativeModule } from "@/utils/expoNativeModule";
 
 export const ANDROID_NOTIFICATION_CHANNELS = {
   STEPS_ONGOING: "walkchamp_steps_ongoing",
@@ -17,18 +18,10 @@ let cachedNative: AndroidNotificationNative | null | undefined;
 
 function getNativeModule(): AndroidNotificationNative | null {
   if (cachedNative !== undefined) return cachedNative;
-  try {
-    const ExpoModulesCore = require("expo-modules-core") as typeof import("expo-modules-core");
-    if (typeof ExpoModulesCore.ensureNativeModulesAreInstalled === "function") {
-      ExpoModulesCore.ensureNativeModulesAreInstalled();
-    }
-    cachedNative =
-      ExpoModulesCore.requireOptionalNativeModule<AndroidNotificationNative>(
-        "WalkChampRaceProgress",
-      ) ?? null;
-  } catch {
-    cachedNative = null;
-  }
+  cachedNative =
+    requireOptionalExpoNativeModule<AndroidNotificationNative>(
+      "WalkChampRaceProgress",
+    ) ?? null;
   return cachedNative;
 }
 

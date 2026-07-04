@@ -5,17 +5,30 @@ out-tsc/
 # TypeScript incremental artifacts
 **/*.tsbuildinfo
 
-# Expo / React Native
+# Expo / React Native caches
 .expo/
 .expo-shared/
-android/
-ios/
 __tests__/
 
 # Build outputs
 dist/
 static-build/
 web-build/
+
+# Android/iOS build cache only — upload native source (verified local Gradle build)
+android/app/build/
+android/app/.cxx/
+android/build/
+android/.gradle/
+android/.kotlin/
+ios/build/
+ios/Pods/
+
+# Always include local Expo module native sources (gitignore may exclude android/)
+!modules/walkchamp-race-progress/android/
+!modules/walkchamp-race-progress/android/**
+!modules/walkchamp-race-progress/ios/
+!modules/walkchamp-race-progress/ios/**
 
 # Secrets / local-only
 *.orig.*

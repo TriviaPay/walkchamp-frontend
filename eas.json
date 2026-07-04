@@ -15,7 +15,7 @@
         "distribution": "internal"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://walkchamp-backend-sooty.vercel.app",
+        "EXPO_PUBLIC_API_URL": "https://api.walkchamp.miragaming.com",
         "EXPO_PUBLIC_WEB_URL": "https://walkchamp.app",
         "EXPO_PUBLIC_DESCOPE_PROJECT_ID": "P3E9mQAxf0N6l75csydDy6kGeOPR",
         "EXPO_PUBLIC_PUSHER_KEY": "93ca011c5a4b0c5ebb96",
@@ -33,7 +33,7 @@
         "resourceClass": "m-medium"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://walkchamp-backend-sooty.vercel.app",
+        "EXPO_PUBLIC_API_URL": "https://api.walkchamp.miragaming.com",
         "EXPO_PUBLIC_WEB_URL": "https://walkchamp.app",
         "EXPO_PUBLIC_DESCOPE_PROJECT_ID": "P3E9mQAxf0N6l75csydDy6kGeOPR",
         "EXPO_PUBLIC_PUSHER_KEY": "93ca011c5a4b0c5ebb96",

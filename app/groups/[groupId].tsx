@@ -16,6 +16,7 @@ import { getApiBase } from "@/utils/apiUrl";
 import { getStoredSession } from "@/services/authService";
 import { subscribeToChannel } from "@/services/realtimeService";
 import { SkeletonGroupDetailScreen } from "@/components/SkeletonRows";
+import { useWalk } from "@/context/WalkContext";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 
 const { width: SCREEN_W } = Dimensions.get("window");

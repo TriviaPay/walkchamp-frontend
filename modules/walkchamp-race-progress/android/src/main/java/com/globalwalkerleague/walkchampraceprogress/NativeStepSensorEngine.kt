@@ -50,7 +50,7 @@ class NativeStepSensorEngine(
     override fun onSensorChanged(event: SensorEvent?) {
       if (event?.sensor?.type != Sensor.TYPE_STEP_COUNTER) return
       val sensorTotal = event.values[0]
-      Log.d(TAG, "[StepFGS] sensor event total=$sensorTotal")
+      Log.d(TAG, "[WalkChampFGS] sensor step event total=$sensorTotal")
       handleSensorTotal(sensorTotal)
     }
 
@@ -137,8 +137,30 @@ class NativeStepSensorEngine(
   }
 
   /** Seed daily baseline from JS-known today steps at tracking start. */
-  fun seedDailyBaselineFromKnownSteps(knownTodaySteps: Int, sensorTotal: Float? = null) {
+  fun seedDailyBaselineFromKnownSteps(
+    knownTodaySteps: Int,
+    sensorTotal: Float? = null,
+    stepSource: String? = null,
+  ) {
     val total = sensorTotal ?: lastSensorTotal.takeIf { it >= 0f }
+    val source = stepSource ?: state.stepSource
+    val verified = !isDeviceSensorSource(source)
+    if (verified) {
+      state = state.copy(
+        todaySteps = knownTodaySteps.coerceAtLeast(0),
+        localDate = NativeStepState.localDateString(),
+        stepSource = source,
+        sensorSupported = true,
+        updatedAt = System.currentTimeMillis(),
+      )
+      if (total != null && total >= 0f) {
+        lastSensorTotal = total
+        state = state.copy(sensorTotal = total)
+      }
+      Log.d(TAG, "[WalkChampFGS] verified source todaySteps=${state.todaySteps} source=$source")
+      persistAndEmit(state, force = true)
+      return
+    }
     if (total == null || total < 0f) {
       setPendingKnownTodaySteps(knownTodaySteps)
       return
@@ -238,24 +260,18 @@ class NativeStepSensorEngine(
   }
 
   fun mergeJsWalkUpdate(todaySteps: Int, stepSource: String) {
-  // Health Connect / HealthKit from JS — reconcile only when JS value is ahead.
-  // Never regress native sensor notification counts while backgrounded.
+    // Health Connect / HealthKit from JS — reconcile only when JS value is ahead.
+    // Never regress native notification counts while backgrounded.
     if (!isDeviceSensorSource(stepSource)) {
       val next = todaySteps.coerceAtLeast(0)
       if (next > state.todaySteps) {
-        val total = lastSensorTotal.takeIf { it >= 0f }
-        if (total != null && total >= 0f) {
-          seedDailyBaselineFromKnownSteps(next, total)
-        } else {
-          setPendingKnownTodaySteps(next)
-          state = state.copy(
-            todaySteps = next,
-            stepSource = stepSource,
-            notificationMode = if (state.activeRaceId != null) "race_live" else "daily_steps",
-            updatedAt = System.currentTimeMillis(),
-          )
-          NativeStepState.save(context, state)
-        }
+        state = state.copy(
+          todaySteps = next,
+          stepSource = stepSource,
+          notificationMode = if (state.activeRaceId != null) "race_live" else "daily_steps",
+          updatedAt = System.currentTimeMillis(),
+        )
+        persistAndEmit(state, force = true)
       } else {
         state = state.copy(
           stepSource = stepSource,
@@ -346,6 +362,18 @@ class NativeStepSensorEngine(
     }
     lastSensorTotal = sensorTotal
 
+    // Health Connect / HealthKit owns daily steps — sensor must not inflate the notification.
+    if (!isDeviceSensorSource(state.stepSource)) {
+      if (state.sensorTotal == sensorTotal) return
+      state = state.copy(
+        sensorTotal = sensorTotal,
+        sensorSupported = true,
+        updatedAt = System.currentTimeMillis(),
+      )
+      NativeStepState.save(context, state)
+      return
+    }
+
     var dailyBaseline = state.dailyBaseline
     if (dailyBaseline == null) {
       val known = pendingKnownTodaySteps
@@ -394,7 +422,7 @@ class NativeStepSensorEngine(
     persistAndEmit(state, force = false)
     Log.d(
       TAG,
-      "[StepFGS] notification update todaySteps=$todaySteps raceSteps=$raceSteps sensorTotal=$sensorTotal",
+      "[WalkChampFGS] todaySteps=$todaySteps raceSteps=$raceSteps sensorTotal=$sensorTotal",
     )
   }
 

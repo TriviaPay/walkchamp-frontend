@@ -3,19 +3,33 @@ const {
   requireNativeModule,
 } = require("expo-modules-core");
 
+let cachedModule = undefined;
+let loadAttempted = false;
+
 /**
- * Never throw at import time — release APK/EAS builds must survive if the
- * native module is momentarily unavailable during bridge startup.
+ * Lazy load — never touch the native bridge at require() time (bridgeless RN 0.81).
  */
-function loadWalkChampRaceProgress() {
+function getWalkChampRaceProgress() {
+  if (loadAttempted) return cachedModule ?? null;
+  loadAttempted = true;
   try {
-    return (
+    cachedModule =
       requireOptionalNativeModule("WalkChampRaceProgress") ??
-      requireNativeModule("WalkChampRaceProgress")
-    );
+      requireNativeModule("WalkChampRaceProgress");
   } catch {
-    return null;
+    cachedModule = null;
   }
+  return cachedModule;
 }
 
-module.exports = loadWalkChampRaceProgress();
+module.exports = new Proxy(
+  {},
+  {
+    get(_target, prop) {
+      const mod = getWalkChampRaceProgress();
+      if (!mod || prop === "then") return undefined;
+      const value = mod[prop];
+      return typeof value === "function" ? value.bind(mod) : value;
+    },
+  },
+);

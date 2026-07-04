@@ -337,7 +337,7 @@ class WalkChampRaceForegroundService : Service() {
     engine.updateMetadata(userId, "daily_steps", stepSource)
     engine.setPendingKnownTodaySteps(parsedSteps.coerceAtLeast(0))
     if (isStart) {
-      engine.seedDailyBaselineFromKnownSteps(parsedSteps.coerceAtLeast(0))
+      engine.seedDailyBaselineFromKnownSteps(parsedSteps.coerceAtLeast(0), stepSource = stepSource)
     } else {
       engine.mergeJsWalkUpdate(parsedSteps.coerceAtLeast(0), stepSource)
     }
@@ -744,7 +744,8 @@ class WalkChampRaceForegroundService : Service() {
   }
 
   private fun applyWalkNotificationFromNativeState(state: NativeStepState) {
-    if (!state.sensorSupported) {
+    val verified = RaceNotificationState.isVerifiedStepSource(state.stepSource)
+    if (!verified && !state.sensorSupported) {
       Log.w(TAG, "[UnsupportedDevice] step sensor unavailable — keeping last known value")
       return
     }
@@ -762,7 +763,8 @@ class WalkChampRaceForegroundService : Service() {
     val nm = notificationManager()
     safeStartForeground(NOTIFICATION_ID_WALK, lastWalkNotification!!)
     nm.notify(NOTIFICATION_ID_WALK, lastWalkNotification!!)
-    Log.d(TAG, "[StepFGS] notification update todaySteps=$safeSteps")
+    Log.d(TAG, "[WalkChampFGS] notification update todaySteps=$safeSteps")
+    Log.d(TAG, "[WalkChampFGS] notificationManager.notify id=$NOTIFICATION_ID_WALK")
     persistWalkState(body, deepLink, title, safeSteps, null, source)
   }
 

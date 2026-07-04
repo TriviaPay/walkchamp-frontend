@@ -6,6 +6,10 @@ const {
 } = require("@expo/config-plugins");
 const fs = require("fs");
 const path = require("path");
+const {
+  resolveModuleAndroidDir,
+  settingsGradleProjectDirLine,
+} = require("./walkchampModulePaths");
 
 const WIDGET_TARGET_NAME = "WalkChampWidget";
 const WIDGET_DEPLOYMENT_TARGET = "16.2";
@@ -221,8 +225,8 @@ function withWalkChampAndroidNativeModule(config) {
       copyNotificationIcons(projectRoot);
 
       const moduleGradlePath = path.join(
-        projectRoot,
-        "modules/walkchamp-race-progress/android/build.gradle",
+        resolveModuleAndroidDir(projectRoot),
+        "build.gradle",
       );
       if (fs.existsSync(moduleGradlePath)) {
         let gradle = fs.readFileSync(moduleGradlePath, "utf8");
@@ -238,11 +242,18 @@ function withWalkChampAndroidNativeModule(config) {
       const settingsGradlePath = path.join(projectRoot, "android/settings.gradle");
       if (fs.existsSync(settingsGradlePath)) {
         let settings = fs.readFileSync(settingsGradlePath, "utf8");
+        const settingsProjectDir = settingsGradleProjectDirLine(projectRoot);
         if (!settings.includes("':walkchamp-race-progress'")) {
           settings += `
 include ':walkchamp-race-progress'
-project(':walkchamp-race-progress').projectDir = new File(rootProject.projectDir, '../modules/walkchamp-race-progress/android')
+${settingsProjectDir}
 `;
+          fs.writeFileSync(settingsGradlePath, settings);
+        } else {
+          settings = settings.replace(
+            /project\(':walkchamp-race-progress'\)\.projectDir\s*=\s*new File\([^\n]+\)/,
+            settingsProjectDir,
+          );
           fs.writeFileSync(settingsGradlePath, settings);
         }
       }

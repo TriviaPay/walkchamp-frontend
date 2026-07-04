@@ -1,4 +1,5 @@
 import { PermissionsAndroid, Platform } from "react-native";
+import { requireOptionalExpoNativeModule } from "@/utils/expoNativeModule";
 import Constants from "expo-constants";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotificationConfig";
@@ -63,11 +64,7 @@ let lastPermissionDeniedMessageAt = 0;
 
 function resolveNativeModule(): NativeModule | null {
   try {
-    const ExpoModulesCore = require("expo-modules-core") as typeof import("expo-modules-core");
-    if (typeof ExpoModulesCore.ensureNativeModulesAreInstalled === "function") {
-      ExpoModulesCore.ensureNativeModulesAreInstalled();
-    }
-    const direct = ExpoModulesCore.requireOptionalNativeModule<NativeModule>(
+    const direct = requireOptionalExpoNativeModule<NativeModule>(
       "WalkChampRaceProgress",
     );
     if (direct) return direct;
@@ -313,7 +310,7 @@ class StepTrackingNotificationService {
     return active;
   }
 
-  async getNativeStepState(): Promise<NativeWalkStepState | null> {
+  async getNativeStepState(expectedUserId?: string | null): Promise<NativeWalkStepState | null> {
     if (Platform.OS !== "android") return null;
     const native = getNativeModule();
     if (!native) return null;
@@ -322,6 +319,18 @@ class StepTrackingNotificationService {
       if (!reader) return null;
       const state = await reader();
       if (!state || typeof state.todaySteps !== "number") return null;
+      if (
+        expectedUserId &&
+        state.userId &&
+        state.userId !== expectedUserId
+      ) {
+        if (__DEV__) {
+          console.log(
+            `[OngoingNotification] ignored native state — user mismatch native=${state.userId} expected=${expectedUserId}`,
+          );
+        }
+        return null;
+      }
       return state;
     } catch {
       return null;

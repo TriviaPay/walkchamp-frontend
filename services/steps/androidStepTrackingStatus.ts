@@ -116,7 +116,7 @@ export async function getAndroidStepTrackingStatus(
     _cachedStatusAt = Date.now();
     return result;
   } catch (e) {
-    const result = {
+    const result: AndroidStepTrackingStatusResult = {
       status: "error",
       uiState: "error",
       sdkStatus: null,

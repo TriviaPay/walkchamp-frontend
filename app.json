@@ -177,9 +177,6 @@
         "projectId": "90d7e556-85e1-44db-8cd5-2f2e6bc0ed7b"
       }
     },
-    "owner": "miragamings-organization",
-    "autolinking": {
-      "nativeModulesDir": "./modules"
-    }
+    "owner": "miragamings-organization"
   }
 }

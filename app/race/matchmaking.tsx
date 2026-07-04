@@ -445,7 +445,6 @@ export default function MatchmakingScreen() {
         setStart("idle");
         return;
       }
-      if (startPhaseRef.current === "navigating") return;
       setStart("navigating");
       if (countdownIntervalRef.current) {
         clearInterval(countdownIntervalRef.current);

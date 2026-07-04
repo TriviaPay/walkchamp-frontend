@@ -70,7 +70,7 @@ export async function requestNotificationPermissionOnce(
 ): Promise<NotificationPermissionRequestResult> {
   if (inFlightRequest) return inFlightRequest;
 
-  inFlightRequest = (async () => {
+  const pending = (async (): Promise<NotificationPermissionRequestResult> => {
     try {
       const current = await getNotificationPermissionStatus();
       permLog(`status checked reason=${reason} status=${current}`);
@@ -136,7 +136,8 @@ export async function requestNotificationPermissionOnce(
     inFlightRequest = null;
   });
 
-  return inFlightRequest;
+  inFlightRequest = pending;
+  return pending;
 }
 
 /** Check only — never shows a system prompt. */

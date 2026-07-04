@@ -78,6 +78,9 @@ import {
   type ChallengeStatus,
 } from "@/components/ChallengeCategoryCard";
 import JoinWithCodeModal, { type JoinWithCodeResult } from "@/components/JoinWithCodeModal";
+import { WalkProgressIcon } from "@/components/WalkProgressIcon";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { clampDailyProgress } from "@/utils/stepProgress";
 import CoinsBattleModal from "@/components/CoinsBattleModal";
 import { screenCache } from "@/utils/screenCache";
 import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows";
@@ -1672,6 +1675,14 @@ const pmStyles = StyleSheet.create({
   historyRowMeta:  { fontSize: 12, marginTop: 1 }, });
 
 export default function WalkScreen() {
+  return (
+    <ErrorBoundary>
+      <WalkScreenContent />
+    </ErrorBoundary>
+  );
+}
+
+function WalkScreenContent() {
   const colors = useColors();
   const { isDark } = useTheme();
   const { insets, safeTop, safeBottom } = useSafeLayout();
@@ -1801,16 +1812,11 @@ export default function WalkScreen() {
   const [walkCacheReady, setWalkCacheReady] = useState(false);
 
   const userReady = authReady && !!sessionToken && !!user?.id && stepsHydrated;
-  const safeTodaySteps = Number.isFinite(contextTodaySteps)
-    ? Math.max(0, contextTodaySteps)
-    : (dbWalk.todaySteps ?? 0);
-  const goalSteps =
-    (contextDailyGoal > 0 ? contextDailyGoal : dbWalk.goalSteps) > 0
-      ? (contextDailyGoal > 0 ? contextDailyGoal : dbWalk.goalSteps)
-      : 10_000;
-  const goalProgress =
-    goalSteps > 0 ? Math.min(safeTodaySteps / goalSteps, 1) : 0;
-  const goalPercent = Math.round(goalProgress * 100);
+  const { safeSteps: safeTodaySteps, safeGoal: goalSteps, progress: goalProgress, percent: goalPercent } =
+    clampDailyProgress(
+      userReady && Number.isFinite(contextTodaySteps) ? contextTodaySteps : 0,
+      contextDailyGoal > 0 ? contextDailyGoal : dbWalk.goalSteps,
+    );
 
   useEffect(() => {
     if (!user?.id) {
@@ -2579,7 +2585,7 @@ export default function WalkScreen() {
     }
   };
 
-  if (authLoading) {
+  if (authLoading || !userReady) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background, paddingTop: safeTop, paddingBottom: tabBarHeight }]}>
         <View style={{ padding: 24 }}>
@@ -2722,7 +2728,7 @@ export default function WalkScreen() {
                   onPress={(e) => {
                     e.stopPropagation();
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                    if (Platform.OS === "android" && stepPermissionStatus !== "granted") {
+                    if (Platform.OS === "android") {
                       setShowStepSetup(true);
                       return;
                     }
@@ -2744,8 +2750,11 @@ export default function WalkScreen() {
             </View>
 
             <View style={styles.stepsHero}>
-              <Text style={[styles.stepsHeroValue, { color: colors.foreground }]}>{safeTodaySteps.toLocaleString()}</Text>
-              <Text style={[styles.stepsHeroLabel, { color: colors.mutedForeground }]}>steps today</Text>
+              <WalkProgressIcon steps={safeTodaySteps} goal={goalSteps} size={56} style={styles.stepsHeroIcon} />
+              <View style={styles.stepsHeroText}>
+                <Text style={[styles.stepsHeroValue, { color: colors.foreground }]}>{safeTodaySteps.toLocaleString()}</Text>
+                <Text style={[styles.stepsHeroLabel, { color: colors.mutedForeground }]}>steps today</Text>
+              </View>
             </View>
 
             {showRaceStepsOnWalk ? (
@@ -2767,7 +2776,7 @@ export default function WalkScreen() {
             <View style={[styles.goalBar, { backgroundColor: colors.border }]}>
               <LinearGradient
                 colors={[colors.primary, colors.accent]}
-                style={[styles.goalFill, { width: `${goalPercent}%` }]}
+                style={[styles.goalFill, { width: `${Math.min(100, Math.max(0, goalPercent))}%` }]}
                 start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
               />
             </View>
@@ -4762,7 +4771,9 @@ const styles = StyleSheet.create({
   autoTrackingLabel: { fontSize: rf(14), fontWeight: "700", marginTop: 2 },
   trackingSub: { fontSize: rf(11) },
   pauseBtn: { width: rs(36), height: rs(36), borderRadius: 10, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  stepsHero: { alignItems: "flex-start" },
+  stepsHero: { flexDirection: "row", alignItems: "center", gap: 14 },
+  stepsHeroIcon: { flexShrink: 0 },
+  stepsHeroText: { flex: 1, alignItems: "flex-start" },
   stepsHeroValue: { fontSize: rf(44), fontWeight: "800", letterSpacing: -2, fontVariant: ["tabular-nums"] },
   stepsHeroLabel: { fontSize: rf(13), marginTop: -2 },
   raceStepsRow: {

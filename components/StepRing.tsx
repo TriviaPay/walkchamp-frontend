@@ -16,7 +16,9 @@ export function StepRing({ steps, goal = 10000, size = 200, strokeWidth = 14, la
   const colors = useColors();
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
-  const rawProgress = Math.min(steps / goal, 1);
+  const safeSteps = Math.max(0, Math.floor(Number.isFinite(steps) ? steps : 0));
+  const safeGoal = goal > 0 ? goal : 10_000;
+  const rawProgress = Math.min(safeSteps / safeGoal, 1);
   const animProgress = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -73,7 +75,7 @@ export function StepRing({ steps, goal = 10000, size = 200, strokeWidth = 14, la
       </Svg>
       <View style={styles.center}>
         <Text style={[styles.steps, { color: colors.foreground }]}>
-          {steps.toLocaleString()}
+          {safeSteps.toLocaleString()}
         </Text>
         <Text style={[styles.label, { color: colors.mutedForeground }]}>
           {label ?? "steps"}

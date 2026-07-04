@@ -14,6 +14,7 @@ import * as WebBrowser from "expo-web-browser";
 import * as AppleAuthentication from "expo-apple-authentication";
 import { Platform } from "react-native";
 import { authEvents } from "@/utils/authEvents";
+import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
 
 export { getUserIdFromJwt, DescopeRestError as DescopeError };
 
@@ -122,6 +123,7 @@ export async function signInWithEmail(
 ): Promise<JwtResponse> {
   const res = await fetch(`${API_BASE}/api/auth/password/signin`, {
     method: "POST",
+    signal: timeoutSignal(API_TIMEOUT_MS),
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ loginId: email.trim().toLowerCase(), password }),
   });
@@ -266,12 +268,12 @@ function normalizeJwtResponse(data: JwtResponse): JwtResponse {
 
   const sessionJwt =
     pickJwt(data.sessionJwt) ??
-    pickJwt((data as Record<string, unknown>).sessionToken) ??
+    pickJwt((data as unknown as Record<string, unknown>).sessionToken) ??
     "";
   const refreshJwt =
     pickJwt(data.refreshJwt) ??
-    pickJwt((data as Record<string, unknown>).refreshSessionJwt) ??
-    pickJwt((data as Record<string, unknown>).refreshToken);
+    pickJwt((data as unknown as Record<string, unknown>).refreshSessionJwt) ??
+    pickJwt((data as unknown as Record<string, unknown>).refreshToken);
 
   return { ...data, sessionJwt, refreshJwt };
 }
@@ -697,6 +699,7 @@ export async function createProfile(
 // GET /api/me — returns profile for the JWT owner, or null if no profile
 export async function fetchMe(sessionJwt: string): Promise<DbProfile | null> {
   const res = await fetch(`${API_BASE}/api/me`, {
+    signal: timeoutSignal(API_TIMEOUT_MS),
     headers: { Authorization: `Bearer ${sessionJwt}` },
   });
   if (res.status === 404) return null;

@@ -280,7 +280,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
   const hostModeRef = useRef(false);
   const usingRealStepsRef = useRef(false);
   const racePollingConfigRef = useRef<RacePollingConfig | null>(null);
-  const raceStepApplyRef = useRef<((steps: number) => void) | null>(null);
+  const raceStepApplyRef = useRef<((steps: number, deviceTotalSteps?: number) => void) | null>(null);
   /** Server-synced floor — never show fewer steps than backend already recorded. */
   const raceStepFloorRef = useRef(0);
   const raceDeviceBaselineRef = useRef(0);
@@ -465,6 +465,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       const raceId = raceIdRef.current;
       const raceStart = raceStartTimeRef.current;
       const userId = userProfileRef.current.userId;
+      console.log(`[LiveRace] re-enter raceId=${raceId} userId=${userId}`);
       const safeServer = Math.max(0, Math.floor(serverSteps));
       const optimistic = Math.max(safeServer, userStepsRef.current);
       if (optimistic > 0) {
@@ -497,6 +498,9 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       // (legacy sensor only — HC uses time-range reads and doesn't need this).
       const nativeMerged = await mergeRaceStepsWithNative(Math.max(deviceSteps, safeServer));
       let merged = Math.max(deviceSteps, safeServer, nativeMerged);
+      console.log(
+        `[LiveRace] localComputedRaceSteps=${deviceSteps} server=${safeServer} native=${nativeMerged} reconciled=${merged}`,
+      );
 
       // Reject single-step phantom bumps on refresh/catch-up when using verified sources.
       if (
@@ -515,6 +519,13 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (merged <= userStepsRef.current) {
+        if (userStepsRef.current > 0) {
+          feedRaceStepsToStore({
+            raceSteps: userStepsRef.current,
+            stepSource: stepProviderManager.toRaceProgressSource(),
+          });
+        }
+        await resumeRaceStepTracking(false);
         return;
       }
 

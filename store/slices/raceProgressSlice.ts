@@ -46,6 +46,8 @@ export interface RaceProgressState {
 
   /** Last race steps shown on Walk tab after race ends */
   walkRaceStepsDisplay: number;
+  /** User's daily step goal for notifications / progress UI */
+  dailyGoal: number;
 }
 
 const initialState: RaceProgressState = {
@@ -68,6 +70,7 @@ const initialState: RaceProgressState = {
   isSyncing: false,
   syncError: null,
   walkRaceStepsDisplay: 0,
+  dailyGoal: 10_000,
 };
 
 function isStale(incoming: string | undefined, current: string | null): boolean {
@@ -232,6 +235,11 @@ const raceProgressSlice = createSlice({
     setWalkRaceStepsDisplay(state, action: PayloadAction<number>) {
       const safe = Math.max(0, Math.floor(action.payload));
       if (safe > 0) state.walkRaceStepsDisplay = safe;
+    },
+
+    setDailyGoal(state, action: PayloadAction<number>) {
+      const goal = Math.floor(action.payload);
+      state.dailyGoal = goal > 0 ? goal : 10_000;
     },
 
     setSyncing(state, action: PayloadAction<boolean>) {

@@ -18,7 +18,7 @@ import { RACE_PROGRESS_NOTIFICATION_CONFIG } from "@/config/raceProgressNotifica
 import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotificationConfig";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { AppState, type AppStateStatus, Platform } from "react-native";
-import { waitForAppStartupReady } from "@/services/appStartup";
+import { waitForAppStartupReady, isAppStartupReady } from "@/services/appStartup";
 import { getLocalDateStr, isStepSnapshotFromBeforeToday, msUntilNextLocalMidnight } from "@/utils/timezone";
 import { storageGet, storageRemove, storageSet, STORAGE_KEYS } from "@/utils/storage";
 import { clearWalkStepsOutbox } from "@/services/walkStepsOutbox";
@@ -139,6 +139,7 @@ function isVerifiedSource(source: StepProgressSource | string | undefined): bool
 }
 
 function scheduleWalkNotificationUpdate(force = false): void {
+  if (!isAppStartupReady()) return;
   if (pendingWalkNotification && !force) return;
   pendingWalkNotification = true;
 
@@ -160,6 +161,10 @@ export async function pushWalkNotificationFromCanonicalStore(
   force = false,
   userIdOverride?: string | null,
 ): Promise<void> {
+  if (!isAppStartupReady()) {
+    if (__DEV__) console.log("[OngoingNotification] push deferred — startup not ready");
+    return;
+  }
   const s = store.getState().raceProgress;
   const userId = userIdOverride ?? s.userId;
   if (!userId) {
@@ -171,18 +176,39 @@ export async function pushWalkNotificationFromCanonicalStore(
   const now = Date.now();
   const cfg = STEP_TRACKING_NOTIFICATION_CONFIG;
 
-  // Never push stale JS/Redux values over a higher native FGS sensor count.
+  // Never push stale JS/Redux values over a higher native FGS sensor count for the same user.
   if (Platform.OS === "android") {
-    const native = await stepTrackingNotificationService.getNativeStepState();
+    const native = await stepTrackingNotificationService.getNativeStepState(userId);
     const today = getLocalDateStr();
-    const nativeStale = !!(native?.localDate && native.localDate !== today);
-    const nativeSteps = native?.todaySteps ?? 0;
+    const nativeMatchesUser =
+      !native?.userId || native.userId === userId;
+    const nativeStale = !!(
+      native?.localDate && native.localDate !== today
+    );
+    const nativeSteps = nativeMatchesUser ? native?.todaySteps ?? 0 : 0;
     const nativeUpdatedAt = native?.updatedAt ?? native?.lastUpdatedAt ?? 0;
     const jsUpdatedAt = s.todayStepsLastUpdatedAt
       ? new Date(s.todayStepsLastUpdatedAt).getTime()
       : 0;
     if (
+      nativeMatchesUser &&
+      !nativeStale &&
+      nativeSteps > steps &&
+      nativeUpdatedAt > 0
+    ) {
+      console.log(
+        `[StepEngine] adopting native ahead steps native=${nativeSteps} canonical=${steps}`,
+      );
+      updateStepProgressFromRealSource({
+        todaySteps: nativeSteps,
+        stepSource: mapNativeStepSource(native.stepSource ?? "sensor"),
+        updatedAt: new Date(nativeUpdatedAt).toISOString(),
+      });
+      return;
+    }
+    if (
       !force &&
+      nativeMatchesUser &&
       !nativeStale &&
       nativeSteps > steps &&
       nativeUpdatedAt > 0 &&
@@ -194,6 +220,11 @@ export async function pushWalkNotificationFromCanonicalStore(
         );
       }
       return;
+    }
+    if (!nativeMatchesUser && native?.userId && __DEV__) {
+      console.log(
+        `[OngoingNotification] native user mismatch native=${native.userId} active=${userId} — pushing canonical steps=${steps}`,
+      );
     }
   }
 
@@ -217,7 +248,7 @@ export async function pushWalkNotificationFromCanonicalStore(
   await stepTrackingNotificationService.mirrorWalkScreen({
     userId,
     todaySteps: steps,
-    dailyGoal: 10_000,
+    dailyGoal: s.dailyGoal > 0 ? s.dailyGoal : 10_000,
   });
 
   lastWalkNotificationSteps = steps;
@@ -421,6 +452,16 @@ export function updateStepProgressFromRealSource(input: {
     }),
   );
 
+  const after = store.getState().raceProgress;
+  if (input.todaySteps !== undefined) {
+    console.log(`[StepEngine] step update todaySteps=${after.todaySteps}`);
+  }
+  if (input.raceSteps !== undefined) {
+    console.log(
+      `[StepEngine] race update raceId=${after.raceId ?? "none"} raceSteps=${after.raceSteps}`,
+    );
+  }
+
   if (input.todaySteps !== undefined) {
     const s = store.getState().raceProgress;
     store.dispatch(walkActions.setTodaySteps(s.todaySteps));
@@ -478,19 +519,23 @@ async function pushNotificationFromStore(): Promise<void> {
   store.dispatch(raceProgressActions.markNotificationUpdated());
 }
 
-/** Called on app resume — hydrates native sensor state before HC/backend/AsyncStorage. */
+/** Called on app resume — native hydrate + race outbox; WalkContext handles provider refresh. */
 export async function hydrateOnAppResume(): Promise<void> {
   try {
     await handleMidnightRolloverIfNeeded();
     if (Platform.OS === "android") {
       await stepTrackingNotificationService.flushRaceSyncOutbox();
-      await hydrateFromNativeStepState();
-      await hydrateFromNativeRaceService();
+      const raceActive = store.getState().raceProgress.raceStatus === "active";
+      if (raceActive) {
+        await hydrateFromNativeRaceService();
+      } else if (stepTrackingNotificationService.isActive()) {
+        await hydrateFromNativeStepState();
+      }
     }
     if (__DEV__) {
       const s = store.getState().raceProgress;
       console.log(
-        `[AppResume] hydrated canonical todaySteps=${s.todaySteps} raceSteps=${s.raceSteps} source=${s.stepSource}`,
+        `[AppResume] coordinator resume todaySteps=${s.todaySteps} raceSteps=${s.raceSteps} source=${s.stepSource}`,
       );
     }
   } catch (err) {
@@ -599,11 +644,13 @@ function initNativeStepEventListener(): void {
 }
 
 async function hydrateFromNativeStepState(): Promise<void> {
-  const native = await stepTrackingNotificationService.getNativeStepState();
+  const current = store.getState().raceProgress;
+  const native = await stepTrackingNotificationService.getNativeStepState(
+    current.userId ?? undefined,
+  );
   if (!native) return;
 
   const stepSource = native.stepSource ?? "";
-  const current = store.getState().raceProgress;
   if (native.userId && current.userId && native.userId !== current.userId) {
     if (__DEV__) {
       console.log("[StepStore] ignored update for previous user");
@@ -1220,6 +1267,9 @@ export async function bindStepSessionToUser(userId: string): Promise<boolean> {
       localDate: getLocalDateStr(),
     }),
   );
+  if (switched) {
+    void pushWalkNotificationFromCanonicalStore(true, userId);
+  }
   return switched;
 }
 

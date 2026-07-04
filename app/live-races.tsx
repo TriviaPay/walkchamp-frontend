@@ -9,6 +9,7 @@ import {
   StyleSheet,
   Text,
   View} from "react-native";
+import { useColors } from "@/hooks/useColors";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { Feather } from "@expo/vector-icons";
 import { SkeletonList } from "@/components/SkeletonRows";

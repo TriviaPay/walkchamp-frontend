@@ -38,6 +38,7 @@ import { TopBannerProvider } from "@/context/TopBannerContext";
 import TitleUnlockModal from "@/components/TitleUnlockModal";
 import { useAuth } from "@/context/AuthContext";
 import { connectPusher, subscribeToChannel, unsubscribeFromChannel, CHANNELS } from "@/services/realtimeService";
+import { initDynamicIconService } from "@/services/dynamicIconService";
 import { initStepProgressCoordinator } from "@/services/stepProgressCoordinator";
 import {
   scheduleAppStartupReady,
@@ -115,8 +116,8 @@ if (typeof globalThis !== "undefined" && "addEventListener" in globalThis) {
 SplashScreen.preventAutoHideAsync();
 
 // Harmless on some Android builds — expo-router / keep-awake when no window focus.
-if (Platform.OS === "android" && typeof (global as { ErrorUtils?: { setGlobalHandler?: (h: (e: Error, f?: boolean) => void) => void; getGlobalHandler?: () => (e: Error, f?: boolean) => void } }).ErrorUtils?.setGlobalHandler === "function") {
-  const { ErrorUtils } = global as { ErrorUtils: { setGlobalHandler: (h: (e: Error, f?: boolean) => void) => void; getGlobalHandler: () => (e: Error, f?: boolean) => void } };
+if (Platform.OS === "android" && typeof (global as unknown as { ErrorUtils?: { setGlobalHandler?: (h: (e: Error, f?: boolean) => void) => void; getGlobalHandler?: () => (e: Error, f?: boolean) => void } }).ErrorUtils?.setGlobalHandler === "function") {
+  const { ErrorUtils } = global as unknown as { ErrorUtils: { setGlobalHandler: (h: (e: Error, f?: boolean) => void) => void; getGlobalHandler: () => (e: Error, f?: boolean) => void } };
   const prev = ErrorUtils.getGlobalHandler();
   ErrorUtils.setGlobalHandler((error, isFatal) => {
     const msg = String(error?.message ?? "");
@@ -153,6 +154,7 @@ function RootLayoutNav() {
       try {
         console.log("[Startup] begin");
         initStepProgressCoordinator();
+        void initDynamicIconService().catch(() => {});
       } catch (err) {
         console.log("[Startup] step coordinator failed", err);
       }
