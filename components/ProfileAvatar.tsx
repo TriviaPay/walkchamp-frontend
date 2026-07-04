@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View, ViewStyle } from "react-native";
 import { Image } from "expo-image";
-import { getApiBase } from "@/utils/apiUrl";
+import { profileAvatarImageUri } from "@/services/mediaApi";
 import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 
 interface ProfileAvatarProps {
@@ -40,7 +40,7 @@ export function ProfileAvatar({
   const effectiveVersion = userId ? getAvatarVersion(userId, avatarVersion ?? 0) : (avatarVersion ?? 0);
   const tryImage = !!userId && !loadFailed;
   const imageUri = tryImage
-    ? `${getApiBase()}/api/profile/avatar/${userId}?v=${effectiveVersion}`
+    ? profileAvatarImageUri(userId, effectiveVersion)
     : null;
 
   useEffect(() => {

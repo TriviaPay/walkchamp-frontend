@@ -13,10 +13,9 @@ import * as Haptics from "expo-haptics";
 import { authFetch } from "@/utils/authFetch";
 import { getLocalDateStr } from "@/utils/timezone";
 import { getApiBase } from "@/utils/apiUrl";
-import { getStoredSession } from "@/services/authService";
+import { uploadGroupImage, groupImageUri } from "@/services/mediaApi";
 import { subscribeToChannel } from "@/services/realtimeService";
 import { SkeletonGroupDetailScreen } from "@/components/SkeletonRows";
-import { useWalk } from "@/context/WalkContext";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -1398,36 +1397,12 @@ function EditGroupModal({ group, theme, onClose, onUpdated, onDeleted }: {
     const asset = result.assets[0];
     const uri = asset.uri;
     const mimeType = asset.mimeType ?? "image/jpeg";
-    const ext = mimeType.split("/")[1] ?? "jpg";
 
     setUploading(true);
     try {
-      const { session } = await getStoredSession();
-      if (!session) return;
-
-      const formData = new FormData();
-      if (Platform.OS === "web") {
-        const blobRes = await fetch(uri);
-        const blob = await blobRes.blob();
-        formData.append("image", blob, `group-image.${ext}`);
-      } else {
-        formData.append("image", { uri, name: `group-image.${ext}`, type: mimeType } as unknown as Blob);
-      }
-
-      const url = `${getApiBase()}/api/groups/${group.id}/image`;
-      const json: Record<string, unknown> = await (Platform.OS === "web"
-        ? fetch(url, { method: "POST", headers: { Authorization: `Bearer ${session}` }, body: formData }).then((r) => r.json())
-        : new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open("POST", url);
-            xhr.setRequestHeader("Authorization", `Bearer ${session}`);
-            xhr.onload = () => { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error("Bad response")); } };
-            xhr.onerror = () => reject(new Error("Network error"));
-            xhr.send(formData);
-          }));
-
-      if (json.success) {
-        setImageUri(`${getApiBase()}${json.displayUrl as string}?t=${Date.now()}`);
+      const result = await uploadGroupImage(group.id, uri, mimeType);
+      if (result) {
+        setImageUri(result.imageUri);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } else {
         Alert.alert("Upload Failed", "Could not save the group photo. Please try again.");

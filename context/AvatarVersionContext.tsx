@@ -18,7 +18,7 @@ export function AvatarVersionProvider({ children }: { children: React.ReactNode 
 
     const handler = (data: { userId?: string; avatarVersion?: number }) => {
       if (!data?.userId) return;
-      setOverrides((prev) => ({ ...prev, [data.userId!]: data.avatarVersion ?? Date.now() }));
+      setOverrides((prev) => ({ ...prev, [data.userId!]: data.avatarVersion ?? 0 }));
     };
 
     channel.bind("avatar:updated", handler);

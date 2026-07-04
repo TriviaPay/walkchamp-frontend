@@ -849,6 +849,23 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
       const current = todayStepsRef.current;
       const delta = safeReal - current;
+      const backendFloor = backendTodayStepsRef.current;
+
+      // Provider reads are often +1 ahead of backend on tab focus/reload — not real steps.
+      if (
+        !fromWatch &&
+        delta > 0 &&
+        delta <= STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP &&
+        current === backendFloor &&
+        safeReal === backendFloor + delta
+      ) {
+        if (__DEV__) {
+          console.log(
+            `[WalkContext] ignored provider-only +${delta} on refresh backend=${backendFloor} incoming=${safeReal}`,
+          );
+        }
+        return;
+      }
 
       if (
         fromWatch &&
@@ -894,14 +911,18 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     const needsBind = stepBindUserIdRef.current !== user.id;
     if (rehydrateBackend || needsBind) {
       await hydrateTodayStepsFromBackend();
+      // Tab focus / reload: backend is authoritative; live steps come from watch/poll.
+      return;
     }
     const data = await stepProviderManager.getTodaySteps();
     if (!data) return;
 
     const display = computeAccountAwareDisplaySteps(data.steps);
-    console.log(
-      `[WalkScreen] refreshed from provider todaySteps=${display} provider=${data.providerId}`,
-    );
+    if (__DEV__) {
+      console.log(
+        `[WalkScreen] refreshed from provider todaySteps=${display} provider=${data.providerId}`,
+      );
+    }
 
     await applyTodayStepCount(display, false);
   }, [
@@ -1466,13 +1487,10 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!stepsHydrated || !user?.id || !authReady || !sessionToken) return;
-    void hydrateTodayStepsFromBackend().then(() =>
-      refreshRealSteps({ rehydrateBackend: false }),
-    );
+    void hydrateTodayStepsFromBackend();
   }, [
     authReady,
     hydrateTodayStepsFromBackend,
-    refreshRealSteps,
     sessionToken,
     stepsHydrated,
     user?.id,

@@ -87,6 +87,11 @@ import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows"
 import { subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
 import { useTodayWalkSteps } from "@/hooks/useTodayWalkSteps";
 import { getTodayKey } from "@/utils/format";
+import {
+  deleteProfileAvatar,
+  profileAvatarImageUri,
+  uploadProfileAvatar,
+} from "@/services/mediaApi";
 
 /** Set to true to re-enable the floating draggable shop icon on the Walk tab. */
 const SHOP_ON_WALK_TAB = true;
@@ -586,8 +591,8 @@ async function fetchProfileStats(): Promise<ServerProfileStats | null> {
     const profileId = json.data?.profile?.id ?? null;
     // Always use the proxy endpoint — OCI URL requires private bucket access
     const avatarVersion: number = json.data?.profile?.avatarVersion ?? 0;
-    const avatarUrl = profileId && json.data?.profile?.avatarUrl
-      ? `${getApiBase()}/api/profile/avatar/${profileId}?v=${avatarVersion}`
+    const avatarUrl = profileId
+      ? profileAvatarImageUri(profileId, avatarVersion)
       : null;
     const activeTitle: ActiveTitle | null = json.data?.active_title ?? null;
     return stats ? { ...stats, avatarUrl, activeTitle } : null;
@@ -621,50 +626,8 @@ async function updateProfileData(updates: { fullName?: string; username?: string
   }
 }
 
-async function uploadAvatar(uri: string, session: string, mimeType = "image/jpeg"): Promise<{ displayUrl: string; rawUrl: string } | null> {
-  try {
-    const form = new FormData();
-    const ext = mimeType.split("/")[1] ?? "jpg";
-    if (Platform.OS === "web") {
-      const blobRes = await fetch(uri);
-      const blob = await blobRes.blob();
-      form.append("avatar", blob, `avatar.${ext}`);
-    } else {
-      form.append("avatar", { uri, type: mimeType, name: `avatar.${ext}` } as unknown as Blob);
-    }
 
-    const url = `${API_BASE}/api/profile/me/avatar`;
-    // Use XMLHttpRequest for native platforms — fetch+FormData silently drops
-    // file bytes on iOS (file:// URI reading goes through a different bridge
-    // path). XHR uses the native file system APIs and works on both platforms.
-    const json: Record<string, unknown> = await (Platform.OS === "web"
-      ? fetch(url, { method: "POST", headers: { Authorization: `Bearer ${session}` }, body: form }).then((r) => r.json())
-      : new Promise((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open("POST", url);
-          xhr.setRequestHeader("Authorization", `Bearer ${session}`);
-          xhr.onload = () => { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error("Bad response")); } };
-          xhr.onerror = () => reject(new Error("Network error"));
-          xhr.send(form);
-        }));
-
-    if (!json.displayUrl) return null;
-    return {
-      displayUrl: `${getApiBase()}${json.displayUrl}?t=${Date.now()}`,
-      rawUrl:     String(json.avatarUrl ?? json.displayUrl),
-    };
-  } catch {
-    return null;
-  }
-}
-async function removeAvatar(): Promise<boolean> {
-  try {
-    const res = await authFetch(`/api/profile/me/avatar`, { method: "DELETE" });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
+// Profile avatar upload — @/services/mediaApi
 
 // ── Inline profile sub-pages ─────────────────────────────────────────────────
 // Rendered inside ProfileModal so navigation never touches the root router.
@@ -961,8 +924,9 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
       if (stats) {
         const profileId = json.data?.profile?.id ?? null;
         const avatarVersion: number = json.data?.profile?.avatarVersion ?? 0;
-        const url = profileId && json.data?.profile?.avatarUrl
-          ? `${getApiBase()}/api/profile/avatar/${profileId}?v=${avatarVersion}` : null;
+        const url = profileId
+          ? profileAvatarImageUri(profileId, avatarVersion)
+          : null;
         const title: ActiveTitle | null = json.data?.active_title ?? null;
         setProfileStats({ ...stats, avatarUrl: url, activeTitle: title });
         setAvatarUrl(url);
@@ -1000,7 +964,8 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
   useEffect(() => {
     if (uploadingAvatar) return;
     if (user?.id && user?.profileImageUrl) {
-      setAvatarUrl(`${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}`); } else if (!user?.profileImageUrl) {
+      setAvatarUrl(profileAvatarImageUri(user.id, user?.avatarVersion ?? 0));
+    } else if (!user?.profileImageUrl) {
       setAvatarUrl(null); } }, [user?.id, user?.profileImageUrl, user?.avatarVersion, uploadingAvatar]);
 
   // Load editable fields when edit panel opens
@@ -1033,17 +998,19 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
   const handlePickAndUpload = async (uri: string, mimeType?: string) => {
     setAvatarUrl(uri);
     setUploadingAvatar(true);
-    const { session } = await getStoredSession();
-    if (!session) { setUploadingAvatar(false); return; }
-    const result = await uploadAvatar(uri, session, mimeType);
+    const result = await uploadProfileAvatar(uri, mimeType);
     if (result) {
-      setAvatarUrl(result.displayUrl);
-      // Immediately update Redux so leaderboard, live race, and other screens
-      // show the avatar without needing a full profile re-fetch.
-      updateUser({ profileImageUrl: result.rawUrl, avatarVersion: Date.now() });
-      refreshUserProfile().catch(() => {}); } else {
-      AppAlert.alert("Error", "Could not upload photo. Please try again."); }
-    setUploadingAvatar(false); };
+      setAvatarUrl(result.imageUri);
+      updateUser({
+        profileImageUrl: result.avatarUrl || result.displayUrl,
+        avatarVersion: result.avatarVersion,
+      });
+      refreshUserProfile().catch(() => {});
+    } else {
+      AppAlert.alert("Error", "Could not upload photo. Please try again.");
+    }
+    setUploadingAvatar(false);
+  };
 
   // AvatarPickerSheet dismisses with a 450 ms delay on iOS (200 ms slide-out
   // animation + 250 ms buffer) before invoking these handlers, ensuring the
@@ -1101,12 +1068,15 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
 
   const handleRemovePhoto = async () => {
     setUploadingAvatar(true);
-    await removeAvatar();
+    const result = await deleteProfileAvatar();
     setAvatarUrl(null);
-    // Bump avatarVersion so every screen immediately stops showing the old cached image
-    updateUser({ profileImageUrl: null, avatarVersion: Date.now() });
+    updateUser({
+      profileImageUrl: null,
+      avatarVersion: result.avatarVersion ?? 0,
+    });
     refreshUserProfile().catch(() => {});
-    setUploadingAvatar(false); };
+    setUploadingAvatar(false);
+  };
 
   const handleAvatarPress = () => {
     setShowAvatarPicker(true); };
@@ -1941,7 +1911,7 @@ function WalkScreenContent() {
       await refreshTodayRank();
       void refetchDbWalk();
       if (usingRealTracking) {
-        await refreshTodaySteps();
+        await refreshTodaySteps({ rehydrateBackend: true });
         await resumeStepWatching();
       }
     })();
@@ -2645,7 +2615,7 @@ function WalkScreenContent() {
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
             {user?.id && user?.profileImageUrl ? (
-              <Image source={{ uri: `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` }} style={styles.profileAvatarImg} />
+              <Image source={{ uri: profileAvatarImageUri(user.id, user?.avatarVersion ?? 0) }} style={styles.profileAvatarImg} />
             ) : (
               <Text style={[styles.profileAvatarText, { color: user?.avatarColor ?? colors.primary }]}>
                 {(user?.fullName ?? "W").charAt(0).toUpperCase()}

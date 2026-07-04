@@ -50,8 +50,11 @@ import { rf, rs } from "@/utils/responsive";
 import MyTitlesModal, { type ActiveTitle, difficultyColor } from "@/components/MyTitlesModal";
 import WearableSetupModal from "@/components/WearableSetupModal";
 import { useTitleUnlock } from "@/context/TitleUnlockContext";
-
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
+import {
+  deleteProfileAvatar,
+  profileAvatarImageUri,
+  uploadProfileAvatar,
+} from "@/services/mediaApi";
 
 // iOS can report HEIC as the mimeType even when quality<1 converts data to JPEG.
 // Normalize it so the server always receives a recognised image type.
@@ -380,43 +383,16 @@ export default function ProfileScreen() {
   const uploadAvatarToServer = useCallback(async (uri: string, mimeType: string) => {
     try {
       setUploadingAvatar(true);
-      const { session } = await getStoredSession();
-      if (!session) return;
-
-      const formData = new FormData();
-      const ext = mimeType.split("/")[1] ?? "jpg";
-      if (Platform.OS === "web") {
-        const blobRes = await fetch(uri);
-        const blob = await blobRes.blob();
-        formData.append("avatar", blob, `avatar.${ext}`);
-      } else {
-        formData.append("avatar", { uri, name: `avatar.${ext}`, type: mimeType } as unknown as Blob);
-      }
-
-      // Use XMLHttpRequest instead of fetch for native platforms.
-      // fetch+FormData silently drops file bytes on iOS (file:// URI reading
-      // goes through a different bridge path), while XHR uses the native
-      // file system APIs and works correctly on both iOS and Android.
-      const url = `${API_BASE}/api/profile/me/avatar`;
-      const json = await (Platform.OS === "web"
-        ? fetch(url, { method: "POST", headers: { Authorization: `Bearer ${session}` }, body: formData }).then((r) => r.json())
-        : new Promise<Record<string, unknown>>((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open("POST", url);
-            xhr.setRequestHeader("Authorization", `Bearer ${session}`);
-            xhr.onload = () => { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error("Bad response")); } };
-            xhr.onerror = () => reject(new Error("Network error"));
-            xhr.send(formData);
-          }));
-      if (json.success && (json.displayUrl || json.avatarUrl)) {
-        if (__DEV__ && Platform.OS === "ios") console.log("[iOS Avatar] Upload success:", json.displayUrl ?? json.avatarUrl);
-        // Cache-bust so React Native Image re-fetches the new photo
-        const newUrl = `${getApiBase()}${json.displayUrl ?? json.avatarUrl}?t=${Date.now()}`;
-        if (__DEV__ && Platform.OS === "ios") console.log("[iOS Avatar] Updated profile image URL:", newUrl);
-        setAvatarUri(newUrl);
-        // Immediately sync Redux so every other screen (leaderboard, race, walk tab)
-        // knows the user now has an avatar without waiting for a full profile refresh.
-        updateUser({ profileImageUrl: json.avatarUrl ?? json.displayUrl, avatarVersion: Date.now() });
+      const result = await uploadProfileAvatar(uri, mimeType);
+      if (result) {
+        if (__DEV__ && Platform.OS === "ios") {
+          console.log("[iOS Avatar] Upload success:", result.imageUri);
+        }
+        setAvatarUri(result.imageUri);
+        updateUser({
+          profileImageUrl: result.avatarUrl || result.displayUrl,
+          avatarVersion: result.avatarVersion,
+        });
         refreshUserProfile()
           .then(() => { if (__DEV__ && Platform.OS === "ios") console.log("[iOS Avatar] Profile refetch success"); })
           .catch(() => {});
@@ -430,16 +406,16 @@ export default function ProfileScreen() {
     }
   }, [refreshUserProfile, updateUser]);
 
-  // ── Remove avatar from server ────────────────────────────────────────────────
   const handleRemoveAvatar = useCallback(async () => {
     try {
       setUploadingAvatar(true);
-      const res = await authFetch(`/api/profile/me/avatar`, { method: "DELETE" });
-      const json = await res.json();
-      if (json.success) {
+      const result = await deleteProfileAvatar();
+      if (result.success) {
         setAvatarUri(null);
-        // Bump avatarVersion so every cached avatar URL instantly becomes stale
-        updateUser({ profileImageUrl: null, avatarVersion: json.avatarVersion ?? Date.now() });
+        updateUser({
+          profileImageUrl: null,
+          avatarVersion: result.avatarVersion ?? 0,
+        });
         refreshUserProfile().catch(() => {});
       } else {
         AppAlert.alert("Error", "Could not remove photo. Please try again.");
@@ -553,8 +529,8 @@ export default function ProfileScreen() {
   useEffect(() => {
     if (uploadingAvatar) return;
     setAvatarUri(
-      user?.id
-        ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user.avatarVersion ?? ""}`
+      user?.id && user?.profileImageUrl
+        ? profileAvatarImageUri(user.id, user.avatarVersion ?? 0)
         : null,
     );
   }, [user?.id, user?.profileImageUrl, user?.avatarVersion, uploadingAvatar]);
