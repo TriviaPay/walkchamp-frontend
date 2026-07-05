@@ -30,7 +30,6 @@ import {
   writeDailyStepsForUserDate,
 } from "@/utils/stepScopedStorage";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
-import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { mergeWalkStepsWithNative } from "@/services/stepDisplayMerge";
 import { shouldIgnoreLegacyPhantomBump, sanitizeLegacyProviderSteps, stepEngineLog, resolveTodayDisplaySteps } from "@/utils/stepAccuracy";
 
