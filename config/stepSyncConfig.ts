@@ -7,6 +7,9 @@ export const STEP_SYNC_CONFIG = {
   /** Walk screen — push step delta to /api/walk/steps */
   WALK_BACKEND_SYNC_MS: 3_000,
 
+  /** Walk — provider reconciliation poll (backup when watch callbacks are slow) */
+  WALK_LOCAL_RECONCILE_POLL_MS: 3_000,
+
   /** Race — read device steps locally for UI (sensor / HealthKit / Health Connect) */
   RACE_LOCAL_POLL_MS: 1_000,
 

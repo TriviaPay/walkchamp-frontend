@@ -13,7 +13,7 @@ class WalkChampRaceProgressModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("WalkChampRaceProgress")
 
-    Events("WalkChampStepStateUpdated")
+    Events("WalkChampStepStateUpdated", "WalkChampWalkStepRefreshRequested")
 
     OnCreate {
       android.util.Log.i(
@@ -23,10 +23,17 @@ class WalkChampRaceProgressModule : Module() {
       WalkChampStepStateEmitter.onStepStateUpdated = { payload ->
         sendEvent("WalkChampStepStateUpdated", payload)
       }
+      WalkChampStepStateEmitter.onWalkStepRefreshRequested = {
+        sendEvent(
+          "WalkChampWalkStepRefreshRequested",
+          mapOf("requestedAt" to System.currentTimeMillis()),
+        )
+      }
     }
 
     OnDestroy {
       WalkChampStepStateEmitter.onStepStateUpdated = null
+      WalkChampStepStateEmitter.onWalkStepRefreshRequested = null
     }
 
     AsyncFunction("startRaceProgressNotification") { payload: Map<String, Any?> ->

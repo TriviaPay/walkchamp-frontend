@@ -28,7 +28,7 @@ export function useParticipantStepAnimator() {
   }, []);
 
   const setConfirmedSteps = useCallback(
-    (userId: string, steps: number, options?: { allowRollback?: boolean }) => {
+    (userId: string, steps: number, options?: { allowRollback?: boolean; instant?: boolean }) => {
       if (!userId) return;
       const safe = Math.max(0, Math.floor(steps));
       const prev = statesRef.current.get(userId);
@@ -38,9 +38,10 @@ export function useParticipantStepAnimator() {
         : Math.max(prev?.confirmed ?? 0, safe);
 
       let display: number;
-      if (!prev) {
-        // First snapshot: show small values instantly; large values animate in.
-        display = confirmed <= MAX_INSTANT_FIRST ? confirmed : 0;
+      if (!prev || options?.instant) {
+        display = confirmed;
+      } else if (confirmed <= MAX_INSTANT_FIRST) {
+        display = confirmed;
       } else {
         display = Math.max(prev.display, Math.min(prev.display, confirmed));
       }

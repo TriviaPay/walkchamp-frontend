@@ -194,10 +194,6 @@ export function hydrateStepDisplayFromSources(params: {
     return local;
   }
 
-  if (provider === 0 && backend > 0 && local > backend) {
-    return local;
-  }
-
   return display;
 }
 

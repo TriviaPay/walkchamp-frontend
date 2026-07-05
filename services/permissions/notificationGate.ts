@@ -1,5 +1,5 @@
 /**
- * Central Android notification gate for step-tracking foreground service.
+ * Central Android notification gate for step-tracking foreground service and push.
  *
  * Android ≤12: no POST_NOTIFICATIONS — only NotificationManagerCompat.areNotificationsEnabled().
  * Android 13+: request POST_NOTIFICATIONS once, then verify app-level toggle.
@@ -16,6 +16,7 @@ import {
   hasActivityRecognitionPermission,
 } from "@/services/permissions/activityRecognitionPermissionService";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import { pushLog } from "@/services/pushLog";
 
 export const NOTIFICATION_STILL_DISABLED_MESSAGE =
   "Notifications are still turned off. Please enable them to use ongoing step tracking.";
@@ -25,6 +26,11 @@ export type NotificationGateResult = {
   requestedNow: boolean;
   blockedBySettings: boolean;
   message?: string;
+};
+
+export type PushNotificationGateResult = {
+  granted: boolean;
+  requestedNow: boolean;
 };
 
 type ModalHost = {
@@ -93,11 +99,61 @@ async function requestPostNotificationsOnApi33(): Promise<boolean> {
   try {
     const permission = PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS;
     const alreadyGranted = await PermissionsAndroid.check(permission);
-    if (alreadyGranted) return false;
-    await PermissionsAndroid.request(permission);
+    if (alreadyGranted) {
+      pushLog("Android 13+ POST_NOTIFICATIONS already granted");
+      return false;
+    }
+    const result = await PermissionsAndroid.request(permission);
+    pushLog(`Android 13+ POST_NOTIFICATIONS result=${result}`);
     return true;
   } catch (error) {
-    console.log("[NotificationGate] POST_NOTIFICATIONS request failed", error);
+    pushLog("Android 13+ POST_NOTIFICATIONS request failed", error);
+    return false;
+  }
+}
+
+/**
+ * Push permission gate — same rules as step-tracking notifications:
+ * Android ≤12: no runtime prompt; enabled when app notifications are on.
+ * Android 13+: request POST_NOTIFICATIONS once, then verify app toggle.
+ */
+export async function ensureNotificationsForPush(): Promise<PushNotificationGateResult> {
+  if (Platform.OS !== "android") {
+    return { granted: true, requestedNow: false };
+  }
+
+  const sdk = typeof Platform.Version === "number" ? Platform.Version : 0;
+  let requestedNow = false;
+
+  if (sdk >= 33) {
+    requestedNow = await requestPostNotificationsOnApi33();
+  } else {
+    pushLog(`Android≤12 — no POST_NOTIFICATIONS prompt (SDK=${sdk})`);
+  }
+
+  const enabled = await areAppNotificationsEnabled();
+  pushLog(
+    `push gate SDK=${sdk} appNotificationsEnabled=${enabled} requestedPostNoti=${requestedNow}`,
+  );
+
+  return { granted: enabled, requestedNow };
+}
+
+/**
+ * Check-only — never shows a system prompt.
+ */
+export async function isPushNotificationAccessGranted(): Promise<boolean> {
+  if (Platform.OS !== "android") return true;
+  if (typeof Platform.Version === "number" && Platform.Version < 33) {
+    return areAppNotificationsEnabled();
+  }
+  try {
+    const postGranted = await PermissionsAndroid.check(
+      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+    );
+    if (!postGranted) return false;
+    return areAppNotificationsEnabled();
+  } catch {
     return false;
   }
 }
@@ -119,7 +175,7 @@ export async function ensureNotificationsForStepTracking(): Promise<Notification
     if (asked) requestedNow = true;
   }
 
-  let enabled = await areAppNotificationsEnabled();
+  const enabled = await areAppNotificationsEnabled();
   console.log(
     `[NotificationGate] SDK=${Platform.Version} appNotificationsEnabled=${enabled} requestedPostNoti=${requestedNow}`,
   );

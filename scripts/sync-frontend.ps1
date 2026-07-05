@@ -23,6 +23,7 @@ $files = @(
     "app\rooms\upcoming\[date].tsx",
     "app\groups\index.tsx",
     "app\groups\[groupId].tsx",
+    "utils\sponsoredEventRegistration.ts",
     "app\sponsored-events\index.tsx",
     "app\sponsored-events\waiting-room.tsx",
     "app\+not-found.tsx",
@@ -58,6 +59,15 @@ $files = @(
     "context\WalkContext.tsx",
     "utils\stepAccuracy.ts",
     "services\stepDisplayMerge.ts",
+    "services\stepProgressCoordinator.ts",
+    "services\stepTrackingNotificationService.ts",
+    "services\liveRaceParticipantState.ts",
+    "services\stepEngine.ts",
+    "config\stepTrackingNotificationConfig.ts",
+    "config\raceProgressNotificationConfig.ts",
+    "modules\walkchamp-race-progress\android\src\main\java\com\globalwalkerleague\walkchampraceprogress\WalkChampRaceForegroundService.kt",
+    "modules\walkchamp-race-progress\android\src\main\java\com\globalwalkerleague\walkchampraceprogress\WalkChampStepStateEmitter.kt",
+    "modules\walkchamp-race-progress\android\src\main\java\com\globalwalkerleague\walkchampraceprogress\WalkChampRaceProgressModule.kt",
     "services\steps\providers\androidLegacySensorProvider.ts",
     "components\WearableSetupModal.tsx",
     "components\RoomInvitationModal.tsx",
@@ -72,7 +82,16 @@ $files = @(
     "app\race\room.tsx",
     "app\race\index.tsx",
     "app\race\result.tsx",
-    "app\spectator\[id].tsx"
+    "app\spectator\[id].tsx",
+    # Push notifications + OneSignal (Android permission gate)
+    "services\pushLog.ts",
+    "services\notificationService.ts",
+    "services\permissions\notificationGate.ts",
+    "services\permissions\notificationPermissionService.ts",
+    "components\PushPermissionPrompt.tsx",
+    "utils\deepLinkUtils.ts",
+    "app\_layout.tsx",
+    "app\public-profile\[userId].tsx"
 )
 
 function Sync-OneWay([string]$from, [string]$to) {

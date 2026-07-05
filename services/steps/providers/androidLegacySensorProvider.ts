@@ -343,33 +343,6 @@ export const androidLegacySensorProvider: StepProvider = {
     }
     await loadDailyState();
     let steps = _todaySteps;
-    if (Platform.OS === "android") {
-      try {
-        const { stepTrackingNotificationService } = await import(
-          "@/services/stepTrackingNotificationService"
-        );
-        const native = await stepTrackingNotificationService.getNativeStepState(
-          _userId,
-        );
-        const today = getLocalDateKey();
-        if (
-          native?.userId === _userId &&
-          native.localDate === today &&
-          (native.todaySteps ?? 0) > steps
-        ) {
-          steps = native.todaySteps ?? steps;
-          _todaySteps = steps;
-          await persistDaily(steps);
-          if (__DEV__) {
-            console.log(
-              `[StepEngine] legacy sensor adopted native todaySteps=${steps}`,
-            );
-          }
-        }
-      } catch {
-        // non-fatal
-      }
-    }
     if (!_sub && steps === 0) {
       ensureSubscription();
     }

@@ -7,6 +7,11 @@ import {
   hasNotificationPermissionGranted,
   requestNotificationPermissionOnce,
 } from "@/services/permissions/notificationPermissionService";
+import {
+  ensureNotificationsForPush,
+  isPushNotificationAccessGranted,
+} from "@/services/permissions/notificationGate";
+import { pushLog } from "@/services/pushLog";
 
 /**
  * In Expo Go, TurboModuleRegistry.getEnforcing() throws an Invariant Violation
@@ -85,14 +90,6 @@ let _initialized = false;
 let _initPromise: Promise<OneSignalV5 | null> | null = null;
 let _foregroundHandlerCleanup: (() => void) | null = null;
 let _subscriptionListenerCleanup: (() => void) | null = null;
-
-function pushLog(msg: string, extra?: unknown): void {
-  if (extra !== undefined) {
-    console.log(`[Push] ${msg}`, extra);
-  } else {
-    console.log(`[Push] ${msg}`);
-  }
-}
 
 export async function ensureOneSignalInitialized(): Promise<OneSignalV5 | null> {
   if (_initPromise) return _initPromise;
@@ -190,8 +187,9 @@ export async function requestIOSNotificationPermission(): Promise<boolean> {
 }
 
 /**
- * Android push permission — POST_NOTIFICATIONS on API 33+, then OneSignal registration.
- * Never requests POST_NOTIFICATIONS on Android 12 and below.
+ * Android push permission — same gate as step tracking:
+ * Android ≤12: no system prompt; enabled when app notifications are on.
+ * Android 13+: POST_NOTIFICATIONS system dialog, then OneSignal opt-in.
  */
 export async function requestAndroidPushNotificationPermission(): Promise<boolean> {
   if (Platform.OS !== "android") return false;
@@ -205,24 +203,23 @@ export async function requestAndroidPushNotificationPermission(): Promise<boolea
   try {
     await new Promise((resolve) => setTimeout(resolve, 250));
 
-    if (typeof Platform.Version === "number" && Platform.Version >= 33) {
-      const { PermissionsAndroid } = await import("react-native");
-      const postPerm = PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS;
-      const alreadyGranted = await PermissionsAndroid.check(postPerm);
-      if (!alreadyGranted) {
-        const result = await PermissionsAndroid.request(postPerm);
-        pushLog(`Android POST_NOTIFICATIONS result=${result}`);
-        if (result !== PermissionsAndroid.RESULTS.GRANTED) {
-          return false;
-        }
-      }
+    const gate = await ensureNotificationsForPush();
+    if (!gate.granted) {
+      pushLog("Android push denied — app notifications off or POST_NOTIFICATIONS denied");
+      return false;
+    }
+
+    const sdk = typeof Platform.Version === "number" ? Platform.Version : 0;
+    if (sdk < 33) {
+      pushLog("Android≤12 push enabled — skipping OneSignal requestPermission");
+      return true;
     }
 
     const existing = await OneSignal.Notifications.getPermissionAsync();
     if (existing) return true;
 
     const granted = await OneSignal.Notifications.requestPermission(false);
-    pushLog(`Android OneSignal requestPermission result=${granted}`);
+    pushLog(`Android 13+ OneSignal requestPermission result=${granted}`);
     return granted;
   } catch (error) {
     pushLog("Android push permission request failed", error);
@@ -241,12 +238,10 @@ export async function registerPushAfterPermissionGranted(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     if (Platform.OS === "android") {
-      if (typeof Platform.Version === "number" && Platform.Version >= 33) {
-        const permitted = await OneSignal.Notifications.getPermissionAsync();
-        if (!permitted) {
-          pushLog("Android push opt-in skipped — notification permission not granted");
-          return;
-        }
+      const permitted = await isPushNotificationAccessGranted();
+      if (!permitted) {
+        pushLog("Android push opt-in skipped — notification access not granted");
+        return;
       }
     } else if (Platform.OS === "ios") {
       const permitted = await OneSignal.Notifications.getPermissionAsync();
@@ -326,10 +321,27 @@ export async function runPostLoginPushSetup(userId: string): Promise<{
   pushLog("post-login setup started");
   await initOneSignal(userId);
 
-  const granted = await hasNotificationPermissionGranted();
+  const sdk =
+    Platform.OS === "android" && typeof Platform.Version === "number"
+      ? Platform.Version
+      : 0;
+  if (Platform.OS === "android") {
+    pushLog(`post-login Android SDK=${sdk}`);
+  }
+
+  let granted = await hasNotificationPermissionGranted();
   const alreadyPrompted =
     (await storageGet<boolean>(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED)) ||
     (await storageGet<boolean>(STORAGE_KEYS.NOTIFICATION_PERMISSION_ASKED));
+
+  // Android 13+: show system POST_NOTIFICATIONS dialog on first login (no in-app modal first).
+  if (!granted && Platform.OS === "android" && sdk >= 33 && !alreadyPrompted) {
+    pushLog("Android 13+ — requesting POST_NOTIFICATIONS on login");
+    await storageSet(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED, true);
+    await storageSet(STORAGE_KEYS.NOTIFICATION_PERMISSION_ASKED, true);
+    granted = await requestAndroidPushNotificationPermission();
+    pushLog(`Android 13+ permission result=${granted}`);
+  }
 
   if (granted) {
     try {
@@ -396,7 +408,10 @@ export async function registerDeviceWithBackend(): Promise<void> {
 
   try {
     const subscriptionId = OneSignal.User.pushSubscription.id;
-    if (!subscriptionId) return;
+    if (!subscriptionId) {
+      pushLog("device register skipped — no subscription id yet");
+      return;
+    }
 
     const session = await getValidSession();
     if (!session) return;
@@ -415,9 +430,11 @@ export async function registerDeviceWithBackend(): Promise<void> {
     });
     if (res.ok) {
       pushLog("device registered with backend");
+    } else {
+      pushLog(`device register failed status=${res.status}`);
     }
-  } catch {
-    // Best-effort registration
+  } catch (error) {
+    pushLog("device register error", error);
   }
 }
 

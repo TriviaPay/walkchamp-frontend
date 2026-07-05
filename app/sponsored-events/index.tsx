@@ -18,7 +18,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { authFetch } from "@/utils/authFetch";
+import { isSponsoredRegistrationOpen, canOpenSponsoredWaitingRoom } from "@/utils/sponsoredEventRegistration";
 import { useAppDispatch } from "@/store/hooks";
 import { fetchCoinBalance } from "@/store/slices/coinsSlice";
 import { rf, rs } from "@/utils/responsive";
@@ -125,7 +125,9 @@ function statusConfig(ev: SponsoredEvent) {
   if (ev.status === "cancelled")   return { text: "✕ CANCELLED",  color: "#FF5555", bg: "#FF555520" };
   if (ev.isFull)                   return { text: "⚡ FULL",       color: "#FF9800", bg: "#FF980020" };
   if (ev.isRegistered)             return { text: "✓ REGISTERED", color: "#A78BFA", bg: "#A78BFA25" };
-  return                                  { text: "OPEN",          color: "#00E5FF", bg: "#00E5FF20" };
+  if (isSponsoredRegistrationOpen(ev)) return { text: "OPEN",      color: "#00E5FF", bg: "#00E5FF20" };
+  if (ev.status === "scheduled")   return { text: "CLOSED",       color: "#888",    bg: "#88888820" };
+  return                                  { text: "CLOSED",       color: "#888",    bg: "#88888820" };
 }
 
 // ── Prize info banner (collapsible) ───────────────────────────────────────────
@@ -557,13 +559,8 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
   const sc           = statusConfig(ev);
   const slotPct    = ev.maxSlots > 0 ? ev.registeredCount / ev.maxSlots : 0;
   const almostFull = slotPct >= 0.8 && slotPct < 1;
-  const registrationOpen =
-    ev.canRegister ||
-    (ev.status === "scheduled" &&
-      !!ev.scheduledStartAt &&
-      new Date(ev.scheduledStartAt).getTime() > Date.now() &&
-      !ev.isRegistered &&
-      !ev.isFull);
+  const registrationOpen = isSponsoredRegistrationOpen(ev);
+  const waitingRoomOpen = canOpenSponsoredWaitingRoom(ev);
   const noCoins    = registrationOpen && coinBalance < ev.entryCoinFee;
 
   const startDate = ev.scheduledStartAt ? new Date(ev.scheduledStartAt) : null;
@@ -742,7 +739,7 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
           ) : ev.isRegistered ? (
             <View style={{ gap: rs(10) }}>
               {/* Join Waiting Room — PRIMARY action when window is open; else show registered banner */}
-              {ev.joinWindowOpen ? (
+              {waitingRoomOpen ? (
                 <>
                   <TouchableOpacity
                     style={[card.registerBtn, { marginBottom: 0 }]}

@@ -29,7 +29,10 @@ import {
   stepScopedKeys,
   writeDailyStepsForUserDate,
 } from "@/utils/stepScopedStorage";
-import { shouldIgnoreLegacyPhantomBump, sanitizeLegacyProviderSteps, stepEngineLog } from "@/utils/stepAccuracy";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import { mergeWalkStepsWithNative } from "@/services/stepDisplayMerge";
+import { shouldIgnoreLegacyPhantomBump, sanitizeLegacyProviderSteps, stepEngineLog, resolveTodayDisplaySteps } from "@/utils/stepAccuracy";
 
 let notificationTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingNotification = false;
@@ -146,7 +149,7 @@ function scheduleWalkNotificationUpdate(force = false): void {
 
   if (walkNotificationTimer) clearTimeout(walkNotificationTimer);
 
-  const delay = force ? 0 : STEP_TRACKING_NOTIFICATION_CONFIG.LOCAL_UPDATE_MS;
+  const delay = force ? 0 : STEP_TRACKING_NOTIFICATION_CONFIG.DEBOUNCE_MS;
   walkNotificationTimer = setTimeout(() => {
     pendingWalkNotification = false;
     walkNotificationTimer = null;
@@ -194,23 +197,6 @@ export async function pushWalkNotificationFromCanonicalStore(
       : 0;
     // Verified HC/HealthKit: native TYPE_STEP_COUNTER must never override provider reads.
     if (
-      !verifiedActive &&
-      nativeMatchesUser &&
-      !nativeStale &&
-      nativeSteps > steps &&
-      nativeUpdatedAt > 0
-    ) {
-      console.log(
-        `[StepEngine] adopting native ahead steps native=${nativeSteps} canonical=${steps}`,
-      );
-      updateStepProgressFromRealSource({
-        todaySteps: nativeSteps,
-        stepSource: mapNativeStepSource(native.stepSource ?? "sensor"),
-        updatedAt: new Date(nativeUpdatedAt).toISOString(),
-      });
-      return;
-    }
-    if (
       verifiedActive &&
       nativeMatchesUser &&
       nativeSteps > steps
@@ -218,21 +204,6 @@ export async function pushWalkNotificationFromCanonicalStore(
       console.log(
         `[StepSource] skipped native adopt verified=true native=${nativeSteps} canonical=${steps}`,
       );
-    }
-    if (
-      !force &&
-      nativeMatchesUser &&
-      !nativeStale &&
-      nativeSteps > steps &&
-      nativeUpdatedAt > 0 &&
-      (jsUpdatedAt === 0 || nativeUpdatedAt >= jsUpdatedAt)
-    ) {
-      if (__DEV__) {
-        console.log(
-          `[AppResume] ignored stale JS/database state js=${steps} native=${nativeSteps}`,
-        );
-      }
-      return;
     }
     if (!nativeMatchesUser && native?.userId && __DEV__) {
       console.log(
@@ -246,17 +217,16 @@ export async function pushWalkNotificationFromCanonicalStore(
     now - lastWalkNotificationPushMs < cfg.LOCAL_UPDATE_MS &&
     Math.abs(steps - lastWalkNotificationSteps) < cfg.MIN_STEP_DELTA_FOR_UPDATE
   ) {
-    if (__DEV__) {
-      console.log(`[Notification] skipped stale overwrite todaySteps=${steps}`);
-    }
+    console.log(
+      `[Notification] skipped throttle todaySteps=${steps} last=${lastWalkNotificationSteps}`,
+    );
     return;
   }
 
-  if (__DEV__) {
-    console.log(
-      `[Notification] update source=canonical todaySteps=${steps} stepSource=${s.stepSource}`,
-    );
-  }
+  console.log(
+    `[Notification] notifyUpdated id=91002 steps=${steps} source=${s.stepSource}`,
+  );
+  console.log(`[Notification] receivedTodaySteps=${steps}`);
 
   await stepTrackingNotificationService.mirrorWalkScreen({
     userId,
@@ -488,7 +458,9 @@ export function updateStepProgressFromRealSource(input: {
 
   const after = store.getState().raceProgress;
   if (resolvedTodaySteps !== undefined) {
-    console.log(`[StepEngine] step update todaySteps=${after.todaySteps}`);
+    console.log(
+      `[StepEngine] todaySteps=${after.todaySteps} emittedUpdateAt=${updatedAt}`,
+    );
   }
   if (input.raceSteps !== undefined) {
     console.log(
@@ -564,6 +536,8 @@ export async function hydrateOnAppResume(): Promise<void> {
         await hydrateFromNativeRaceService();
       } else if (stepTrackingNotificationService.isActive()) {
         await hydrateFromNativeStepState();
+        startWalkBackgroundStepPoll();
+        await tickWalkBackgroundStepPoll("resume");
       }
     }
     if (__DEV__) {
@@ -603,6 +577,100 @@ export function initStepProgressCoordinator(): void {
 }
 
 let nativeStepUnsubscribe: (() => void) | null = null;
+let nativeWalkRefreshUnsubscribe: (() => void) | null = null;
+let walkBackgroundPollTimer: ReturnType<typeof setInterval> | null = null;
+
+function notificationBgLog(message: string): void {
+  console.log(`[NotificationBG] ${message}`);
+}
+
+/**
+ * Refresh daily steps from provider and push notification 91002.
+ * Does NOT adopt raw native ahead of provider (anti-inflation preserved).
+ */
+export async function tickWalkBackgroundStepPoll(
+  reason: "fgs_tick" | "interval" | "resume" | "background" = "interval",
+): Promise<void> {
+  if (!isAppStartupReady()) {
+    notificationBgLog("skippedReason=startup_not_ready");
+    return;
+  }
+  const s = store.getState().raceProgress;
+  if (!s.userId) {
+    notificationBgLog("skippedReason=no_userId");
+    return;
+  }
+  if (s.raceStatus === "active" && s.activeRaceId) {
+    notificationBgLog("skippedReason=active_race");
+    return;
+  }
+
+  const appState = AppState.currentState;
+  notificationBgLog(
+    `serviceRunning=true source=${stepProviderManager.getActiveProviderId() ?? "none"} appState=${appState}`,
+  );
+
+  try {
+    await stepProviderManager.initialize();
+    const data = await stepProviderManager.getTodaySteps();
+    if (!data) {
+      notificationBgLog("skippedReason=no_provider_data");
+      return;
+    }
+
+    let providerSteps = Math.max(0, data.steps);
+    const current = s.todaySteps;
+
+    if (
+      reason === "fgs_tick" &&
+      Platform.OS === "android" &&
+      !stepProviderManager.usesVerifiedStepSource()
+    ) {
+      providerSteps = await mergeWalkStepsWithNative(providerSteps);
+    }
+
+    const display = resolveTodayDisplaySteps({
+      providerSteps,
+      backendSteps: current,
+      previousProviderSteps: current,
+    });
+
+    stepEngineLog(
+      "StepEngine",
+      `providerSteps=${providerSteps} sanitizedSteps=${display} skippedNativeAdoptAhead=true`,
+    );
+    notificationBgLog(`canonicalTodaySteps=${current} sanitizedTodaySteps=${display}`);
+
+    if (display > current) {
+      updateStepProgressFromRealSource({
+        todaySteps: display,
+        stepSource: mapProviderSource(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    await pushWalkNotificationFromCanonicalStore(true, s.userId);
+    notificationBgLog(`notifyUpdated id=91002 steps=${Math.max(current, display)} reason=${reason}`);
+  } catch (err) {
+    notificationBgLog(`skippedReason=error err=${String(err)}`);
+  }
+}
+
+export function startWalkBackgroundStepPoll(): void {
+  if (walkBackgroundPollTimer) return;
+  walkBackgroundPollTimer = setInterval(() => {
+    void tickWalkBackgroundStepPoll("interval");
+  }, STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_POLL_MS);
+  notificationBgLog("backgroundPollStarted=true");
+}
+
+export function stopWalkBackgroundStepPoll(): void {
+  if (walkBackgroundPollTimer) {
+    clearInterval(walkBackgroundPollTimer);
+    walkBackgroundPollTimer = null;
+    notificationBgLog("backgroundPollStopped=true");
+  }
+}
 
 function initNativeStepEventListener(): void {
   if (Platform.OS !== "android") return;
@@ -667,14 +735,39 @@ function initNativeStepEventListener(): void {
         }
         return;
       }
+      if (stepProviderManager.usesVerifiedStepSource() && isDeviceSensorSource(source)) {
+        return;
+      }
+      const currentToday = s.todaySteps;
+      const incomingToday = Math.max(0, Math.floor(state.todaySteps ?? 0));
+      if (incomingToday <= currentToday) return;
+      if (shouldIgnoreLegacyPhantomBump(currentToday, incomingToday)) {
+        stepEngineLog(
+          "StepEngine",
+          `rejected native phantom todaySteps incoming=${incomingToday} current=${currentToday}`,
+        );
+        return;
+      }
+      const sanitized = sanitizeLegacyProviderSteps(
+        incomingToday,
+        currentToday,
+        currentToday,
+      );
+      if (sanitized <= currentToday) return;
       updateStepProgressFromRealSource({
-        todaySteps: state.todaySteps,
+        todaySteps: sanitized,
         raceSteps: typeof state.raceSteps === "number" ? state.raceSteps : undefined,
         stepSource: mapNativeStepSource(source),
         updatedAt,
       });
     },
   );
+
+  nativeWalkRefreshUnsubscribe?.();
+  nativeWalkRefreshUnsubscribe =
+    stepTrackingNotificationService.subscribeWalkStepRefreshRequests(() => {
+      void tickWalkBackgroundStepPoll("fgs_tick");
+    });
 }
 
 async function hydrateFromNativeStepState(): Promise<void> {
@@ -755,8 +848,13 @@ async function hydrateFromNativeStepState(): Promise<void> {
     }
   }
 
+  const nativeToday = Math.max(0, Math.floor(native.todaySteps ?? 0));
+  const sanitizedToday = stepProviderManager.usesVerifiedStepSource()
+    ? current.todaySteps
+    : sanitizeLegacyProviderSteps(nativeToday, current.todaySteps, current.todaySteps);
+
   updateStepProgressFromRealSource({
-    todaySteps: raceActive ? current.todaySteps : native.todaySteps,
+    todaySteps: raceActive ? current.todaySteps : sanitizedToday,
     raceSteps:
       raceActive && typeof native.raceSteps === "number"
         ? native.raceSteps
@@ -973,19 +1071,31 @@ export function clearActiveRaceProgress(
   status: RaceProgressStatus,
   options?: { preserveWalkDisplay?: number; raceId?: string },
 ): void {
-  const todaySteps = store.getState().raceProgress.todaySteps;
+  const s = store.getState().raceProgress;
+  const todaySteps = s.todaySteps;
+  const raceIdToStop = options?.raceId ?? s.activeRaceId;
+
   store.dispatch(
     raceProgressActions.clearActiveRace({
       status,
       preserveWalkDisplay: options?.preserveWalkDisplay,
     }),
   );
-  if (!options?.raceId) return;
 
   void (async () => {
-    await raceProgressNotificationService.stop(options.raceId!, status, todaySteps);
-    if (todaySteps > 0) {
-      await switchDailyStepsNotification(todaySteps);
+    if (raceIdToStop) {
+      await raceProgressNotificationService.stop(raceIdToStop, status, todaySteps);
+      stepEngineLog(
+        "RaceComplete",
+        `dismissedNotification=true raceId=${raceIdToStop} status=${status}`,
+      );
+    }
+    const walkSteps = Math.max(
+      todaySteps,
+      options?.preserveWalkDisplay ?? 0,
+    );
+    if (s.userId) {
+      await switchDailyStepsNotification(walkSteps);
     }
   })();
 }
@@ -1225,6 +1335,9 @@ export function handleBackendProgressSynced(result: {
 
 /** Wipe step cache so another account cannot inherit counts. */
 export async function clearLocalStepStorageForAccountSwitch(userId?: string): Promise<void> {
+  stopWalkBackgroundStepPoll();
+  nativeWalkRefreshUnsubscribe?.();
+  nativeWalkRefreshUnsubscribe = null;
   lastKnownTrackingDate = null;
   lastWalkNotificationSteps = -1;
   lastWalkNotificationPushMs = 0;

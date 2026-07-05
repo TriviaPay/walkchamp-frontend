@@ -240,6 +240,7 @@ class StepTrackingNotificationService {
       }
       lastUpdateMs = Date.now();
       lastSteps = steps;
+      logOngoing(`notifyUpdated id=91002 steps=${steps}`);
     } catch (err) {
       logOngoing(`update failed error=${String(err)}`);
       if (__DEV__) console.warn("[StepTrackingNotif] update failed", err);
@@ -352,6 +353,13 @@ class StepTrackingNotificationService {
     const native = getNativeModule();
     if (!native?.addListener) return null;
     const sub = native.addListener("WalkChampStepStateUpdated", handler);
+    return () => sub.remove();
+  }
+
+  subscribeWalkStepRefreshRequests(handler: () => void): (() => void) | null {
+    const native = getNativeModule();
+    if (!native?.addListener) return null;
+    const sub = native.addListener("WalkChampWalkStepRefreshRequested", handler);
     return () => sub.remove();
   }
 }

@@ -34,3 +34,14 @@ export const ENABLE_MIC_PASS        = true;
 export const ENABLE_RACE_VOICE_CHAT = true;
 export const ENABLE_VOICE_SDK       = true;
 export const VOICE_PROVIDER         = "livekit" as const;
+
+/** Paid cash challenges ($1 / $3 / $5 host + join). Requires API server cash flag enabled. */
+export const ENABLE_CASH_CHALLENGES =
+  process.env.EXPO_PUBLIC_ENABLE_CASH_CHALLENGES !== "false";
+
+/**
+ * Legacy $1 / $3 / $5 cards in the main Join section (off by default).
+ * Cash Prize Challenge in Premium uses ENABLE_CASH_CHALLENGES instead.
+ */
+export const ENABLE_LEGACY_CASH_RACE_CARDS =
+  process.env.EXPO_PUBLIC_ENABLE_LEGACY_CASH_RACE_CARDS === "true";

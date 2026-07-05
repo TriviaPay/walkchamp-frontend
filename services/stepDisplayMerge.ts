@@ -13,6 +13,7 @@ import { raceProgressNotificationService } from "@/services/raceProgressNotifica
 import { stepTrackingNotificationService } from "@/services/stepTrackingNotificationService";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { getLocalDateStr, isStepSnapshotFromBeforeToday } from "@/utils/timezone";
+import { sanitizeLegacyProviderSteps } from "@/utils/stepAccuracy";
 
 export function mergeMonotonic(current: number, incoming: number): number {
   return Math.max(Math.max(0, Math.floor(current)), Math.max(0, Math.floor(incoming)));
@@ -73,12 +74,13 @@ export async function mergeWalkStepsWithNative(providerSteps: number): Promise<n
   }
 
   const merged = Math.max(provider, nativeSteps);
-  if (__DEV__ && merged > provider) {
+  const sanitized = sanitizeLegacyProviderSteps(merged, provider, provider);
+  if (sanitized < merged) {
     console.log(
-      `[StepStore] merged walk source=native_service provider=${provider} native=${nativeSteps} merged=${merged}`,
+      `[StepStore] sanitized native walk merge provider=${provider} native=${nativeSteps} merged=${merged} final=${sanitized}`,
     );
   }
-  return merged;
+  return sanitized;
 }
 
 /** One-shot merge after background for live race. */

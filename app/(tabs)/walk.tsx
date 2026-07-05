@@ -36,7 +36,7 @@ import { useSound } from "@/context/SoundContext";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
 import { useWalkContext, TrackingStatus } from "@/context/WalkContext";
 import { useStepSourceGuard } from "@/hooks/useStepSourceGuard";
-import { ENABLE_CASH_CHALLENGES } from "@/config/featureFlags";
+import { ENABLE_CASH_CHALLENGES, ENABLE_LEGACY_CASH_RACE_CARDS } from "@/config/featureFlags";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import { useRace } from "@/context/RaceContext";
@@ -50,6 +50,7 @@ import { usePresence } from "@/context/PresenceContext";
 import { useUnread } from "@/context/UnreadContext";
 import { getStoredSession } from "@/services/authService";
 import { authFetch } from "@/utils/authFetch";
+import { isSponsoredRegistrationOpen, canOpenSponsoredWaitingRoom } from "@/utils/sponsoredEventRegistration";
 import { STORAGE_KEYS, storageGet, storageSet } from "@/utils/storage";
 import {
   getNotificationPreferences,
@@ -171,8 +172,14 @@ const RACE_OPTIONS = [
 
 
 // ── Challenge Entry Options ───────────────────────────────────────────────────
-/** $3 Premium card — only when paid cash challenges are enabled (see featureFlags). */
+/** Cash Prize Challenge premium card — gated by cash challenges flag. */
 const ENABLE_THREE_DOLLAR_CHALLENGE = ENABLE_CASH_CHALLENGES;
+
+/** Main Join section: Free + Coins Battle; legacy $1/$3/$5 only when explicitly enabled. */
+function showRaceOptionInJoinSection(fee: number): boolean {
+  if (fee === 0 || fee === -1) return true;
+  return fee > 0 && ENABLE_LEGACY_CASH_RACE_CARDS && ENABLE_CASH_CHALLENGES;
+}
 
 function isPaidCashFee(fee: number): boolean {
   return fee > 0;
@@ -2049,7 +2056,7 @@ function WalkScreenContent() {
         }
         if (!next) {
           for (const ev of evs) {
-            if (ev.status === "scheduled" && ev.isRegistered && ev.joinWindowOpen) {
+            if (canOpenSponsoredWaitingRoom(ev) && ev.joinWindowOpen) {
               next = { kind: "join_window", eventId: ev.id, registeredCount: ev.registeredCount, maxSlots: ev.maxSlots };
               break;
             }
@@ -2057,15 +2064,15 @@ function WalkScreenContent() {
         }
         if (!next) {
           for (const ev of evs) {
-            if (ev.status === "scheduled" && ev.isRegistered && ev.scheduledStartAt) {
-              next = { kind: "registered", eventId: ev.id, scheduledStartAt: ev.scheduledStartAt, registeredCount: ev.registeredCount, maxSlots: ev.maxSlots };
+            if (canOpenSponsoredWaitingRoom(ev)) {
+              next = { kind: "registered", eventId: ev.id, scheduledStartAt: ev.scheduledStartAt!, registeredCount: ev.registeredCount, maxSlots: ev.maxSlots };
               break;
             }
           }
         }
         if (!next) {
           for (const ev of evs) {
-            if (ev.status === "scheduled" && ev.canRegister) {
+            if (isSponsoredRegistrationOpen(ev)) {
               next = { kind: "available", eventId: ev.id, registeredCount: ev.registeredCount, maxSlots: ev.maxSlots };
               break;
             }
@@ -2933,7 +2940,7 @@ function WalkScreenContent() {
         )}
 
         {!walkCacheReady && <SkeletonList count={4} variant="walk" />}
-        {RACE_OPTIONS.filter((opt) => ENABLE_CASH_CHALLENGES || opt.fee <= 0).map((opt) => {
+        {RACE_OPTIONS.filter((opt) => showRaceOptionInJoinSection(opt.fee)).map((opt) => {
           const entryKey = feeToEntryType(opt.fee);
           const cs = challengeStatuses[entryKey];
 
