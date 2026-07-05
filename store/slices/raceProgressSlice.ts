@@ -293,17 +293,23 @@ const raceProgressSlice = createSlice({
 
     initializeStepsForUserDate(
       state,
-      action: PayloadAction<{ userId: string; username?: string | null; localDate: string }>,
+      action: PayloadAction<{
+        userId: string;
+        username?: string | null;
+        localDate: string;
+        bootTodaySteps?: number;
+      }>,
     ) {
       state.userId = action.payload.userId;
       if (action.payload.username !== undefined) {
         state.username = action.payload.username;
       }
-      state.todaySteps = 0;
+      const boot = Math.max(0, Math.floor(action.payload.bootTodaySteps ?? 0));
+      state.todaySteps = Math.max(state.todaySteps, boot);
       state.todayStepsLastUpdatedAt = new Date().toISOString();
       if (__DEV__) {
         console.log(
-          `[StepStore] initializeStepsForUserDate userId=${action.payload.userId} localDate=${action.payload.localDate}`,
+          `[StepStore] initializeStepsForUserDate userId=${action.payload.userId} localDate=${action.payload.localDate} bootTodaySteps=${boot}`,
         );
       }
     },
