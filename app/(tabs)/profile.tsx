@@ -41,7 +41,7 @@ import {
   requestNotificationPermission,
   optInNotifications,
   optOutNotifications,
-  registerDeviceWithBackend,
+  ensurePushRegistration,
 } from "@/services/notificationService";
 import { useAppSelector, useAppDispatch } from "@/store/hooks";
 import { fetchCoinBalance } from "@/store/slices/coinsSlice";
@@ -349,7 +349,7 @@ export default function ProfileScreen() {
         }
         await optInNotifications();
         await setNotificationPreferences(true);
-        await registerDeviceWithBackend();
+        await ensurePushRegistration();
         setPushEnabled(true);
       } else {
         await optOutNotifications();

@@ -2434,13 +2434,8 @@ function WalkScreenContent() {
     }
   }, [setActiveRace, joinRace, loadChallengeStatuses]);
 
-  // Gate paid direct-joins through the consent modal; free joins go straight through
+  // Paid joins use the same confirm → join flow as host create (no pre-join step-source gate).
   const handleDirectJoin = useCallback(async (raceId: string, fee: number, maxPlayers: number, entryKey: string): Promise<void> => {
-    // Reward races (fee > 0) require verified tracking
-    if (fee > 0 && !canJoinRewardRaces) {
-      guardRewardAction(() => { /* guarded */ });
-      return;
-    }
     if (fee > 0) {
       const opt = RACE_OPTIONS.find((o) => o.fee === fee);
       confirmEntryJoinCallbackRef.current = () => void doDirectJoin(raceId, fee, maxPlayers, entryKey);
@@ -2453,7 +2448,7 @@ function WalkScreenContent() {
       return;
     }
     await doDirectJoin(raceId, fee, maxPlayers, entryKey);
-  }, [doDirectJoin, canJoinRewardRaces, guardRewardAction]);
+  }, [doDirectJoin]);
 
   const handleCoinsBattleJoin = useCallback(async (raceId: string) => {
     // Coins battles require verified tracking

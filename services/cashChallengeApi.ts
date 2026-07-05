@@ -50,10 +50,46 @@ export async function fetchCashChallengePaymentQuote(params: {
   return res.json() as Promise<CashChallengePaymentQuote>;
 }
 
-export function formatUsd(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
+export function formatUsd(cents: number | null | undefined): string {
+  const n = typeof cents === "number" && Number.isFinite(cents) ? cents : 0;
+  return `$${(n / 100).toFixed(2)}`;
 }
 
-export function formatUsdFromDollars(dollars: number): string {
-  return `$${dollars.toFixed(2)}`;
+export function formatUsdFromDollars(dollars: number | null | undefined): string {
+  const n = typeof dollars === "number" && Number.isFinite(dollars) ? dollars : 0;
+  return `$${n.toFixed(2)}`;
+}
+
+/** Refund modal breakdown — API may omit walletRefundAmount; entry fee is refunded to wallet. */
+export function refundBreakdownFromQuote(quote: CashChallengePaymentQuote) {
+  const entryFee =
+    typeof quote.entryFee === "number"
+      ? quote.entryFee
+      : (quote.entryFeeCents ?? 0) / 100;
+  const paymentProcessingFee =
+    typeof quote.paymentProcessingFee === "number"
+      ? quote.paymentProcessingFee
+      : (quote.paymentProcessingFeeCents ?? 0) / 100;
+  const platformServiceFee =
+    typeof quote.platformServiceFee === "number"
+      ? quote.platformServiceFee
+      : (quote.platformServiceFeeCents ?? 0) / 100;
+  const totalPayable =
+    typeof quote.totalPayable === "number"
+      ? quote.totalPayable
+      : (quote.totalPayableCents ?? 0) / 100;
+  const walletRefundAmount =
+    typeof quote.walletRefundAmount === "number"
+      ? quote.walletRefundAmount
+      : typeof quote.walletRefundAmountCents === "number"
+        ? quote.walletRefundAmountCents / 100
+        : entryFee;
+
+  return {
+    amountPaid: totalPayable > 0 ? totalPayable : entryFee,
+    entryFee,
+    paymentProcessingFee,
+    platformServiceFee,
+    walletRefundAmount,
+  };
 }

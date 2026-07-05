@@ -1,4 +1,4 @@
-import { Platform } from "react-native";
+import { PermissionsAndroid, Platform } from "react-native";
 import Constants from "expo-constants";
 import { getValidSession } from "./authService";
 import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
@@ -29,6 +29,8 @@ interface PushSubscription {
   optedIn: boolean;
   optIn: () => Promise<void>;
   optOut: () => Promise<void>;
+  getIdAsync?: () => Promise<string | null>;
+  getOptedInAsync?: () => Promise<boolean>;
   addEventListener: (event: "change", handler: (event: { current: PushSubscription }) => void) => void;
   removeEventListener: (event: "change", handler: (event: { current: PushSubscription }) => void) => void;
 }
@@ -90,6 +92,52 @@ let _initialized = false;
 let _initPromise: Promise<OneSignalV5 | null> | null = null;
 let _foregroundHandlerCleanup: (() => void) | null = null;
 let _subscriptionListenerCleanup: (() => void) | null = null;
+let _registrationRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let _loggedInUserId: string | null = null;
+
+/** Resolve subscription id via async native API (sync `.id` is often stale). */
+async function resolvePushSubscriptionId(
+  OneSignal: OneSignalV5,
+): Promise<string | null> {
+  try {
+    const sub = OneSignal.User.pushSubscription;
+    if (typeof sub.getIdAsync === "function") {
+      const id = await sub.getIdAsync();
+      if (id) return id;
+    }
+    return sub.id ?? null;
+  } catch (error) {
+    pushLog("resolvePushSubscriptionId failed", error);
+    return null;
+  }
+}
+
+/** Poll until OneSignal assigns a push subscription id (FCM/APNS can lag). */
+async function waitForPushSubscriptionId(
+  OneSignal: OneSignalV5,
+  maxMs = 15000,
+): Promise<string | null> {
+  const started = Date.now();
+  while (Date.now() - started < maxMs) {
+    const id = await resolvePushSubscriptionId(OneSignal);
+    if (id) {
+      pushLog(`subscription id ready id=${id}`);
+      return id;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  pushLog(`subscription id pending after ${maxMs}ms`);
+  return null;
+}
+
+function schedulePushRegistrationRetry(): void {
+  if (_registrationRetryTimer) return;
+  _registrationRetryTimer = setTimeout(() => {
+    _registrationRetryTimer = null;
+    pushLog("retrying device registration");
+    void ensurePushRegistration();
+  }, 3000);
+}
 
 export async function ensureOneSignalInitialized(): Promise<OneSignalV5 | null> {
   if (_initPromise) return _initPromise;
@@ -151,10 +199,10 @@ export async function initOneSignal(userId: string): Promise<void> {
 
   try {
     await OneSignal.login(userId);
+    _loggedInUserId = userId;
     pushLog(`OneSignal login userId=${userId}`);
-    const subId = OneSignal.User.pushSubscription.id;
+    const subId = await resolvePushSubscriptionId(OneSignal);
     pushLog(`push subscription id=${subId ?? "pending"}`);
-    void registerDeviceWithBackend();
   } catch (error) {
     pushLog("login failed", error);
   }
@@ -250,6 +298,10 @@ export async function registerPushAfterPermissionGranted(): Promise<void> {
 
     await OneSignal.User.pushSubscription.optIn();
     pushLog("push subscription opted in");
+    const subId = await waitForPushSubscriptionId(OneSignal, 8000);
+    if (!subId) {
+      schedulePushRegistrationRetry();
+    }
   } catch (error) {
     pushLog("registerPushAfterPermissionGranted failed", error);
   }
@@ -294,12 +346,16 @@ export async function getPushRegistrationDebugInfo(): Promise<{
   if (!OneSignal) return null;
   try {
     const permissionGranted = await OneSignal.Notifications.getPermissionAsync();
-    const sub = OneSignal.User.pushSubscription;
+    const subId = await resolvePushSubscriptionId(OneSignal);
+    let optedIn = OneSignal.User.pushSubscription.optedIn;
+    if (typeof OneSignal.User.pushSubscription.getOptedInAsync === "function") {
+      optedIn = await OneSignal.User.pushSubscription.getOptedInAsync();
+    }
     return {
       permissionGranted,
-      pushSubscriptionId: sub.id ?? null,
-      optedIn: sub.optedIn,
-      externalIdSet: !!sub.id,
+      pushSubscriptionId: subId,
+      optedIn,
+      externalIdSet: !!_loggedInUserId,
     };
   } catch {
     return null;
@@ -319,6 +375,7 @@ export async function runPostLoginPushSetup(userId: string): Promise<{
   }
 
   pushLog("post-login setup started");
+  pushLog(`platform=${Platform.OS}`);
   await initOneSignal(userId);
 
   const sdk =
@@ -326,21 +383,36 @@ export async function runPostLoginPushSetup(userId: string): Promise<{
       ? Platform.Version
       : 0;
   if (Platform.OS === "android") {
-    pushLog(`post-login Android SDK=${sdk}`);
+    pushLog(`androidApiLevel=${sdk}`);
   }
 
   let granted = await hasNotificationPermissionGranted();
-  const alreadyPrompted =
-    (await storageGet<boolean>(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED)) ||
-    (await storageGet<boolean>(STORAGE_KEYS.NOTIFICATION_PERMISSION_ASKED));
+  pushLog(`permissionStatus=${granted ? "granted" : "denied"}`);
+  const pushPromptDismissed = await storageGet<boolean>(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED);
 
-  // Android 13+: show system POST_NOTIFICATIONS dialog on first login (no in-app modal first).
-  if (!granted && Platform.OS === "android" && sdk >= 33 && !alreadyPrompted) {
-    pushLog("Android 13+ — requesting POST_NOTIFICATIONS on login");
-    await storageSet(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED, true);
-    await storageSet(STORAGE_KEYS.NOTIFICATION_PERMISSION_ASKED, true);
-    granted = await requestAndroidPushNotificationPermission();
-    pushLog(`Android 13+ permission result=${granted}`);
+  // Android 13+: always request POST_NOTIFICATIONS when not granted (independent of step-tracking flags).
+  if (Platform.OS === "android" && sdk >= 33) {
+    try {
+      const postGranted = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+      );
+      pushLog(`POST_NOTIFICATIONS granted=${postGranted}`);
+      if (!postGranted) {
+        pushLog("shouldRequestPermission=true (Android 13+ POST_NOTIFICATIONS)");
+        granted = await requestAndroidPushNotificationPermission();
+        pushLog(`requestPermission result=${granted}`);
+        if (granted) {
+          await storageSet(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED, true);
+        }
+      } else {
+        granted = true;
+      }
+    } catch (error) {
+      pushLog("POST_NOTIFICATIONS check failed", error);
+    }
+  } else if (Platform.OS === "android" && sdk < 33) {
+    granted = await isPushNotificationAccessGranted();
+    pushLog(`appNotificationsEnabled=${granted}`);
   }
 
   if (granted) {
@@ -350,7 +422,8 @@ export async function runPostLoginPushSetup(userId: string): Promise<{
       } else {
         await optInNotifications();
       }
-      await registerDeviceWithBackend();
+      const registered = await ensurePushRegistration();
+      pushLog(`token registration success=${registered}`);
       void setupForegroundHandlerDeferred();
       if (__DEV__) {
         const debug = await getPushRegistrationDebugInfo();
@@ -362,7 +435,7 @@ export async function runPostLoginPushSetup(userId: string): Promise<{
     return { permissionGranted: true, shouldShowPrompt: false };
   }
 
-  if (!alreadyPrompted) {
+  if (!pushPromptDismissed) {
     pushLog("permission not granted — will show prompt");
     return { permissionGranted: false, shouldShowPrompt: true };
   }
@@ -373,8 +446,9 @@ export async function runPostLoginPushSetup(userId: string): Promise<{
 
 /** Called when user accepts the in-app push permission prompt. */
 export async function completePushPermissionPrompt(): Promise<boolean> {
-  const result = await requestNotificationPermissionOnce("onboarding");
+  const result = await requestNotificationPermissionOnce("onboarding", { forceRetry: true });
   const granted = result.status === "granted";
+  await storageSet(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED, true);
   if (granted) {
     try {
       if (Platform.OS === "android") {
@@ -382,7 +456,8 @@ export async function completePushPermissionPrompt(): Promise<boolean> {
       } else {
         await optInNotifications();
       }
-      await registerDeviceWithBackend();
+      const registered = await ensurePushRegistration();
+      pushLog(`token registration success=${registered}`);
       void setupForegroundHandlerDeferred();
     } catch (error) {
       pushLog("register after prompt failed", error);
@@ -400,16 +475,42 @@ export async function dismissPushPermissionPrompt(): Promise<void> {
   pushLog("permission prompt dismissed");
 }
 
+/** Wait for subscription id then register with backend. Returns true when registered. */
+export async function ensurePushRegistration(): Promise<boolean> {
+  if (Platform.OS === "web") return false;
+  const OneSignal = await ensureOneSignalInitialized();
+  if (!OneSignal) {
+    pushLog("skipped reason=OneSignal unavailable");
+    return false;
+  }
+
+  const subscriptionId =
+    (await resolvePushSubscriptionId(OneSignal)) ??
+    (await waitForPushSubscriptionId(OneSignal, 12000));
+
+  if (!subscriptionId) {
+    pushLog("token registration skipped — subscription id pending");
+    schedulePushRegistrationRetry();
+    return false;
+  }
+
+  pushLog(`registering token userId=${_loggedInUserId ?? "unknown"} subscriptionId=${subscriptionId}`);
+  await registerDeviceWithBackend(subscriptionId);
+  return true;
+}
+
 // ── Register this device with our backend ─────────────────────────────────────
-export async function registerDeviceWithBackend(): Promise<void> {
+export async function registerDeviceWithBackend(subscriptionId?: string): Promise<void> {
   if (Platform.OS === "web") return;
   const OneSignal = await ensureOneSignalInitialized();
   if (!OneSignal) return;
 
   try {
-    const subscriptionId = OneSignal.User.pushSubscription.id;
-    if (!subscriptionId) {
+    const resolvedId =
+      subscriptionId ?? (await resolvePushSubscriptionId(OneSignal));
+    if (!resolvedId) {
       pushLog("device register skipped — no subscription id yet");
+      schedulePushRegistrationRetry();
       return;
     }
 
@@ -423,7 +524,7 @@ export async function registerDeviceWithBackend(): Promise<void> {
         Authorization: `Bearer ${session}`,
       },
       body: JSON.stringify({
-        onesignalSubscriptionId: subscriptionId,
+        onesignalSubscriptionId: resolvedId,
         devicePlatform: Platform.OS,
         appVersion: "1.0.0",
       }),
@@ -469,6 +570,7 @@ export async function logoutOneSignal(): Promise<void> {
   if (!OneSignal) return;
   try {
     await OneSignal.logout();
+    _loggedInUserId = null;
     pushLog("logged out");
   } catch (error) {
     pushLog("logout failed", error);
@@ -558,10 +660,13 @@ export async function setupForegroundHandler(): Promise<() => void> {
   if (!OneSignal) return () => {};
 
   const handleForeground: NotifEventHandler = (event) => {
+    const fgEvent = event as ForegroundWillDisplayEvent;
+    const data = fgEvent.notification.additionalData ?? {};
+    pushLog(`foreground received type=${String((data as Record<string, unknown>).type ?? "unknown")}`);
     // Show the banner even in foreground — Pusher handles live race UI updates
     // but push is still useful for out-of-context messages (e.g. friend request
     // while user is on the Leaderboard screen)
-    (event as ForegroundWillDisplayEvent).notification.display();
+    fgEvent.notification.display();
   };
 
   OneSignal.Notifications.addEventListener("foregroundWillDisplay", handleForeground);

@@ -62,7 +62,7 @@ import {
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf, rs } from "@/utils/responsive";
 import { CashChallengeRefundBreakdown } from "@/components/CashChallengePaymentBreakdown";
-import { fetchCashChallengePaymentQuote, type CashChallengePaymentQuote } from "@/services/cashChallengeApi";
+import { fetchCashChallengePaymentQuote, formatUsdFromDollars, refundBreakdownFromQuote, type CashChallengePaymentQuote } from "@/services/cashChallengeApi";
 import {
   refundMessageFromCancelBody,
   refundMessageFromLeaveBody,
@@ -1436,13 +1436,7 @@ export default function MatchmakingScreen() {
             </Text>
             {refundQuote && (
               <CashChallengeRefundBreakdown
-                breakdown={{
-                  amountPaid: refundQuote.totalPayable,
-                  entryFee: refundQuote.entryFee,
-                  paymentProcessingFee: refundQuote.paymentProcessingFee,
-                  platformServiceFee: refundQuote.platformServiceFee,
-                  walletRefundAmount: refundQuote.walletRefundAmount,
-                }}
+                quote={refundQuote}
                 colors={{ ...colors, success: colors.success }}
               />
             )}
@@ -1463,7 +1457,7 @@ export default function MatchmakingScreen() {
                 <Text style={{ fontWeight: "800", color: "#000", fontSize: rf(15) }}>
                   {refundConfirming
                     ? "Processing…"
-                    : `Confirm Refund — Add $${(refundQuote?.walletRefundAmount ?? 0).toFixed(2)} to Wallet`}
+                    : `Confirm Refund — Add ${formatUsdFromDollars(refundQuote ? refundBreakdownFromQuote(refundQuote).walletRefundAmount : 0)} to Wallet`}
                 </Text>
               </LinearGradient>
             </TouchableOpacity>

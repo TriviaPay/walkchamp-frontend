@@ -8,6 +8,11 @@ import { PermissionsAndroid, Platform } from "react-native";
 import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
 import { areAppNotificationsEnabled } from "@/services/permissions/androidNotificationAccess";
 import { ensureNotificationsForStepTracking } from "@/services/permissions/notificationGate";
+import { pushLog } from "@/services/pushLog";
+
+function isPushFlow(reason: string): boolean {
+  return reason !== "step_tracking" && reason !== "ongoing_fgs";
+}
 
 export type NotificationPermissionStatus =
   | "granted"
@@ -74,22 +79,32 @@ export async function requestNotificationPermissionOnce(
   const pending = (async (): Promise<NotificationPermissionRequestResult> => {
     try {
       const current = await getNotificationPermissionStatus();
-      permLog(`status checked reason=${reason} status=${current}`);
+      const log = isPushFlow(reason) ? pushLog : permLog;
+      log(`status checked reason=${reason} status=${current}`);
 
       if (current === "granted") {
         return { status: "granted", requestedNow: false, reason };
       }
 
-      const alreadyAsked = await storageGet<boolean>(
-        STORAGE_KEYS.NOTIFICATION_PERMISSION_ASKED,
-      );
-      if (alreadyAsked && !options?.forceRetry) {
-        permLog(`already asked — skip prompt reason=${reason}`);
-        return { status: current, requestedNow: false, reason };
+      // Step-tracking uses NOTIFICATION_PERMISSION_ASKED; push uses PUSH_PERMISSION_PROMPTED only.
+      if (isPushFlow(reason)) {
+        const pushPromptDismissed = await storageGet<boolean>(
+          STORAGE_KEYS.PUSH_PERMISSION_PROMPTED,
+        );
+        if (pushPromptDismissed && !options?.forceRetry) {
+          log(`push prompt dismissed — skip reason=${reason}`);
+          return { status: current, requestedNow: false, reason };
+        }
+      } else {
+        const alreadyAsked = await storageGet<boolean>(
+          STORAGE_KEYS.NOTIFICATION_PERMISSION_ASKED,
+        );
+        if (alreadyAsked && !options?.forceRetry) {
+          permLog(`already asked — skip prompt reason=${reason}`);
+          return { status: current, requestedNow: false, reason };
+        }
+        await storageSet(STORAGE_KEYS.NOTIFICATION_PERMISSION_ASKED, true);
       }
-
-      await storageSet(STORAGE_KEYS.NOTIFICATION_PERMISSION_ASKED, true);
-      await storageSet(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED, true);
 
       let granted = false;
 
@@ -117,7 +132,7 @@ export async function requestNotificationPermissionOnce(
             "@/services/notificationService"
           );
           granted = await requestAndroidPushNotificationPermission();
-          permLog(`Android push permission granted=${granted}`);
+          pushLog(`Android push permission granted=${granted}`);
         }
       } else if (Platform.OS === "ios") {
         const { requestIOSNotificationPermission } = await import(
@@ -127,7 +142,7 @@ export async function requestNotificationPermissionOnce(
       }
 
       const status: NotificationPermissionStatus = granted ? "granted" : "denied";
-      permLog(`request complete reason=${reason} status=${status}`);
+      log(`request complete reason=${reason} status=${status}`);
       return { status, requestedNow: true, reason };
     } catch (error) {
       permLog("request failed", error);

@@ -11,7 +11,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, InteractionManager, LogBox, Platform, View } from "react-native";
+import { ActivityIndicator, AppState, InteractionManager, LogBox, Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -46,6 +46,7 @@ import {
 } from "@/services/appStartup";
 import {
   ensureOneSignalInitialized,
+  ensurePushRegistration,
   logoutOneSignal,
   setupNotificationClickHandler,
 } from "@/services/notificationService";
@@ -255,6 +256,17 @@ function PushNotificationSetup() {
       prevUserIdRef.current = null;
       void logoutOneSignal().catch(() => {});
     }
+  }, [user?.id]);
+
+  // Re-register push token when app returns to foreground (subscription may arrive late).
+  useEffect(() => {
+    if (!user?.id) return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        void ensurePushRegistration().catch(() => {});
+      }
+    });
+    return () => sub.remove();
   }, [user?.id]);
 
   return (

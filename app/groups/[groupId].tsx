@@ -17,6 +17,7 @@ import { uploadGroupImage, groupImageUri } from "@/services/mediaApi";
 import { subscribeToChannel } from "@/services/realtimeService";
 import { SkeletonGroupDetailScreen } from "@/components/SkeletonRows";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
+import { useWalk } from "@/context/WalkContext";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 

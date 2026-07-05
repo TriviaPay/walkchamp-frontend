@@ -53,6 +53,7 @@ export async function saveSession(sessionToken: string, refreshToken: string) {
   if (__DEV__) {
     const mins = Math.round(getJwtSecsUntilExpiry(sessionToken) / 60);
     console.log(`[Auth] session saved — access token ~${mins} min remaining`);
+    console.log("[Auth] access token", sessionToken);
     if (refreshToken?.trim()) {
       const refreshDays = getJwtSecsUntilExpiry(refreshToken) / 86400;
       console.log(

@@ -1,7 +1,7 @@
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import type { CashChallengePaymentQuote } from "@/services/cashChallengeApi";
-import { formatUsdFromDollars } from "@/services/cashChallengeApi";
+import { formatUsdFromDollars, refundBreakdownFromQuote } from "@/services/cashChallengeApi";
 
 type Props = {
   quote: CashChallengePaymentQuote | null;
@@ -111,15 +111,17 @@ export function CashChallengeRewardSplit({
 
 export function CashChallengeRefundBreakdown({
   breakdown,
+  quote,
   colors,
 }: {
-  breakdown: {
-    amountPaid: number;
-    entryFee: number;
-    paymentProcessingFee: number;
-    platformServiceFee: number;
-    walletRefundAmount: number;
+  breakdown?: {
+    amountPaid?: number;
+    entryFee?: number;
+    paymentProcessingFee?: number;
+    platformServiceFee?: number;
+    walletRefundAmount?: number;
   };
+  quote?: CashChallengePaymentQuote | null;
   colors: {
     foreground: string;
     mutedForeground: string;
@@ -129,12 +131,22 @@ export function CashChallengeRefundBreakdown({
     success?: string;
   };
 }) {
+  const resolved = quote
+    ? refundBreakdownFromQuote(quote)
+    : {
+        amountPaid: breakdown?.amountPaid ?? 0,
+        entryFee: breakdown?.entryFee ?? 0,
+        paymentProcessingFee: breakdown?.paymentProcessingFee ?? 0,
+        platformServiceFee: breakdown?.platformServiceFee ?? 0,
+        walletRefundAmount: breakdown?.walletRefundAmount ?? breakdown?.entryFee ?? 0,
+      };
+
   const rows = [
-    { label: "Amount Paid", value: formatUsdFromDollars(breakdown.amountPaid), accent: false },
-    { label: "Entry Fee", value: formatUsdFromDollars(breakdown.entryFee), accent: false },
-    { label: "Tax / Payment Processing Fee", value: formatUsdFromDollars(breakdown.paymentProcessingFee), accent: false },
-    { label: "Platform Service Fee", value: formatUsdFromDollars(breakdown.platformServiceFee), accent: false },
-    { label: "Refund to Wallet", value: formatUsdFromDollars(breakdown.walletRefundAmount), accent: true },
+    { label: "Amount Paid", value: formatUsdFromDollars(resolved.amountPaid), accent: false },
+    { label: "Entry Fee", value: formatUsdFromDollars(resolved.entryFee), accent: false },
+    { label: "Tax / Payment Processing Fee", value: formatUsdFromDollars(resolved.paymentProcessingFee), accent: false },
+    { label: "Platform Service Fee", value: formatUsdFromDollars(resolved.platformServiceFee), accent: false },
+    { label: "Refund to Wallet", value: formatUsdFromDollars(resolved.walletRefundAmount), accent: true },
   ];
 
   return (
