@@ -32,6 +32,14 @@ import JoinWithCodeModal, { type JoinWithCodeResult } from "@/components/JoinWit
 import { PublicProfileModal, type PublicProfileInitialData } from "@/components/PublicProfileModal";
 import { TRACK_LAYOUT_OPTIONS } from "@/constants/trackLayouts";
 import CoinIcon from "@/components/CoinIcon";
+import {
+  CashChallengePaymentBreakdown,
+} from "@/components/CashChallengePaymentBreakdown";
+import {
+  fetchCashChallengePaymentQuote,
+  type CashChallengePaymentQuote,
+} from "@/services/cashChallengeApi";
+import { useApp } from "@/context/AppContext";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const BG = "#080B14";
@@ -1008,8 +1016,8 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const trackSource = (TRACK_LAYOUT_OPTIONS.find((t) => t.id === room.selected_track_theme_id)?.source ?? require("@/assets/images/bg.png")) as any;
 
-  // Prize pool — 80% of cash entry fees; coins pool from all registered players
-  const prizePoolDollars = isCash ? Math.round(room.entry_fee * room.registered_count * 0.80) : 0;
+  // Prize pool — full entry fees collected (no platform deduction from pool)
+  const prizePoolDollars = isCash ? Math.round(room.entry_fee * room.registered_count) : 0;
   const prizePoolCoins   = isCoins ? room.coin_entry_amount * room.registered_count : 0;
 
   const gradColors = isSponsored
@@ -1341,6 +1349,8 @@ export default function AvailableRoomsScreen() {
   const [consentRoom, setConsentRoom] = useState<Room | null>(null);
   const [consentUpcomingRoom, setConsentUpcomingRoom] = useState<UpcomingRoom | null>(null);
   const [consentChecks, setConsentChecks] = useState([false, false, false, false]);
+  const [consentPaymentQuote, setConsentPaymentQuote] = useState<CashChallengePaymentQuote | null>(null);
+  const { walletBalance } = useApp();
 
   // ── Upcoming rooms state ──────────────────────────────────────────────────
   const [upcomingRooms, setUpcomingRooms] = useState<UpcomingRoom[]>([]);
@@ -1589,6 +1599,29 @@ export default function AvailableRoomsScreen() {
     });
     return () => { unsubscribeFromChannel("public-presence"); };
   }, []);
+
+  useEffect(() => {
+    const fee = consentRoom?.entry_fee ?? consentUpcomingRoom?.entry_fee ?? 0;
+    const maxPlayers = consentRoom?.max_players ?? consentUpcomingRoom?.max_players ?? 10;
+    if (fee <= 0 || (!consentRoom && !consentUpcomingRoom)) {
+      setConsentPaymentQuote(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchCashChallengePaymentQuote({
+      entryFeeCents: Math.round(fee * 100),
+      numberOfPlayers: maxPlayers,
+    })
+      .then((q) => {
+        if (!cancelled) setConsentPaymentQuote(q);
+      })
+      .catch(() => {
+        if (!cancelled) setConsentPaymentQuote(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [consentRoom, consentUpcomingRoom]);
 
   // ── Join public room ───────────────────────────────────────────────────────
   const doJoin = useCallback(async (room: Room) => {
@@ -1999,8 +2032,8 @@ export default function AvailableRoomsScreen() {
                   "I am 18 years of age or older and legally eligible to participate in paid challenges in my jurisdiction.",
                   "I understand this is a skill-based walking challenge. My result depends entirely on my step performance — outcomes are not based on chance.",
                   isUpcoming
-                    ? "I understand that entry fees are charged when the race begins at its scheduled time. If I cancel my registration before the race starts, no fee is charged."
-                    : "I understand that entry fees are charged when the race begins. If I leave the lobby before the race starts, no fee is charged.",
+                    ? "I understand that entry fees are charged when the race begins at its scheduled time. If I cancel my registration before the race starts, my entry fee is refunded to my wallet."
+                    : "I understand that the total payable amount (entry fee + tax/processing + platform service fee) is charged when I confirm. If I leave before the race starts, my entry fee is refunded to my wallet.",
                   "I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
                 ].map((text, i) => (
                   <TouchableOpacity
@@ -2020,12 +2053,29 @@ export default function AvailableRoomsScreen() {
                   </TouchableOpacity>
                 ))}
 
+                {!isUpcoming && consentPaymentQuote && (
+                  <CashChallengePaymentBreakdown quote={consentPaymentQuote} colors={{
+                    foreground: "#EAEFF8",
+                    mutedForeground: "#8892A8",
+                    primary: "#60A5FA",
+                    border: "#2A3550",
+                    card: "#0D1122",
+                  }} />
+                )}
+
                 <TouchableOpacity
-                  style={{ opacity: consentChecks.every(Boolean) ? 1 : 0.4, borderRadius: 14, overflow: "hidden", marginTop: 8 }}
-                  disabled={!consentChecks.every(Boolean)}
+                  style={{ opacity: consentChecks.every(Boolean) && (isUpcoming || (consentPaymentQuote?.canAfford ?? walletBalance >= (consentPaymentQuote?.totalPayable ?? activeFee))) ? 1 : 0.4, borderRadius: 14, overflow: "hidden", marginTop: 8 }}
+                  disabled={!consentChecks.every(Boolean) || (!isUpcoming && consentPaymentQuote != null && !consentPaymentQuote.canAfford && walletBalance < consentPaymentQuote.totalPayable)}
                   onPress={() => {
                     const room = consentRoom;
                     const uroom = consentUpcomingRoom;
+                    if (!isUpcoming && consentPaymentQuote && walletBalance < consentPaymentQuote.totalPayable) {
+                      AppAlert.alert(
+                        "Insufficient Balance",
+                        `You need $${consentPaymentQuote.totalPayable.toFixed(2)} to join this challenge.`,
+                      );
+                      return;
+                    }
                     dismissConsent();
                     if (room) void doJoin(room);
                     else if (uroom) void doRegister(uroom);
@@ -2039,7 +2089,13 @@ export default function AvailableRoomsScreen() {
                     end={{ x: 1, y: 0 }}
                   >
                     <Feather name="check-circle" size={20} color="#FFF" />
-                    <Text style={s.confirmBtnText}>{isUpcoming ? "Confirm & Register" : "Confirm & Join"}</Text>
+                    <Text style={s.confirmBtnText}>
+                      {isUpcoming
+                        ? "Confirm & Register"
+                        : consentPaymentQuote
+                          ? `Join & Pay $${consentPaymentQuote.totalPayable.toFixed(2)}`
+                          : "Confirm & Join"}
+                    </Text>
                   </LinearGradient>
                 </TouchableOpacity>
 

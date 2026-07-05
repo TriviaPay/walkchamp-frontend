@@ -409,13 +409,12 @@ export default function SpectatorScreen() {
   const entryColor: Record<string, string> = { Free: colors.accent, "$1": colors.primary, "$3": colors.accent, "$5": colors.gold };
   const ec = entryColor[race.entryType] ?? colors.primary;
   const isPaid = race.entryAmountCents > 0;
-  const pool = race.prizePool; // total pool in dollars
-  const winnersPool = pool * 0.7; // 70% to winners
-  // Dynamic prize tiers based on player count
+  const pool = race.prizePool;
+  const prizePool = pool;
   const playerCount = race.playerCount;
-  const nWinners = playerCount <= 3 ? 1 : playerCount === 4 ? 2 : 3;
+  const nWinners = playerCount <= 2 ? 1 : playerCount === 3 ? 2 : 3;
   const rawSplits = nWinners === 1 ? [1.0] : nWinners === 2 ? [0.6, 0.4] : [0.5, 0.3, 0.2];
-  const prizeByRank = rawSplits.map((s) => parseFloat((winnersPool * s).toFixed(2)));
+  const prizeByRank = rawSplits.map((s) => parseFloat((prizePool * s).toFixed(2)));
   const prizeCardDefs = [
     { medal: "🥇", label: "1st Place" },
     { medal: "🥈", label: "2nd Place" },
@@ -686,7 +685,7 @@ export default function SpectatorScreen() {
             <Text style={[styles.winnersTitleText, { color: colors.foreground }]}>Race Finished!</Text>
             {isPaid && (
               <Text style={[styles.winnersSubText, { color: colors.gold }]}>
-                Total Pool: ${pool.toFixed(2)} · Winners get ${winnersPool.toFixed(2)}
+                Total Pool: ${pool.toFixed(2)} · Prize Pool: ${prizePool.toFixed(2)}
               </Text>
             )}
             <View style={styles.winnersList}>

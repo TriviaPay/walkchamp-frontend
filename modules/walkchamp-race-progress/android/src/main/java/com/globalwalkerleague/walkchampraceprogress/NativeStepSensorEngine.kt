@@ -470,7 +470,7 @@ class NativeStepSensorEngine(
     raceSteps = 0,
     activeRaceId = null,
     notificationMode = "none",
-    stepSource = "android_step_counter",
+    stepSource = "health_connect",
     localDate = NativeStepState.localDateString(),
     sensorSupported = true,
     updatedAt = System.currentTimeMillis(),

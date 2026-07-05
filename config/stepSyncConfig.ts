@@ -54,6 +54,9 @@ export const STEP_SYNC_CONFIG = {
 
   /** Ignore single-step HC spikes without a confirming read (phantom on app open) */
   WALK_PHANTOM_STEP_BUMP: 1,
+
+  /** Ignore a single tick jump larger than this (vehicle/shake/duplicate event guard) */
+  WALK_MAX_STEP_SPIKE: 500,
 } as const;
 
 /** Live race backend sync buffer — used by raceStepSyncBuffer.ts */

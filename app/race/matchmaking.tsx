@@ -61,6 +61,9 @@ import {
 } from "@/services/realtimeService";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf, rs } from "@/utils/responsive";
+import { CashChallengeRefundBreakdown } from "@/components/CashChallengePaymentBreakdown";
+import { fetchCashChallengePaymentQuote, type CashChallengePaymentQuote } from "@/services/cashChallengeApi";
+import { useApp } from "@/context/AppContext";
 
 const SCREEN_W = Dimensions.get("window").width;
 
@@ -304,6 +307,11 @@ export default function MatchmakingScreen() {
     setActiveRace,
     setRaceTargetSteps,
   } = useRace();
+
+  const { refreshWallet } = useApp();
+  const [refundModalVisible, setRefundModalVisible] = useState(false);
+  const [refundQuote, setRefundQuote] = useState<CashChallengePaymentQuote | null>(null);
+  const [refundConfirming, setRefundConfirming] = useState(false);
 
   const backendRaceId = params.raceId ?? contextRaceId;
   const isHostMode = params.isHost === "true";
@@ -740,6 +748,43 @@ export default function MatchmakingScreen() {
   }, [backendRaceId, cancelRace]);
 
   // ── Cancel / leave ────────────────────────────────────────────────────────
+  const entryFeeCents = liveRoom?.entryAmountCents ?? (raceEntryFee > 0 ? Math.round(raceEntryFee * 100) : 0);
+  const isPaidCashRoom =
+    entryFeeCents > 0 &&
+    liveRoom?.entryType !== "coins_battle" &&
+    liveRoom?.entryType !== "free";
+
+  const executeLeave = useCallback(async () => {
+    if (!backendRaceId) {
+      cancelRace();
+      router.replace("/(tabs)/walk");
+      return;
+    }
+    setLeaving(true);
+    try {
+      const res = await authFetch(`/api/races/${backendRaceId}/leave`, { method: "POST" });
+      const body = await res.json().catch(() => ({})) as {
+        refundBreakdown?: {
+          walletRefundAmount: number;
+          entryFee: number;
+        };
+      };
+      await refreshWallet();
+      cancelRace();
+      if (body.refundBreakdown?.walletRefundAmount) {
+        AppAlert.alert(
+          "Refund Complete",
+          `$${body.refundBreakdown.walletRefundAmount.toFixed(2)} has been added to your wallet.`,
+        );
+      }
+      router.replace("/(tabs)/walk");
+    } finally {
+      setLeaving(false);
+      setRefundModalVisible(false);
+      setRefundQuote(null);
+    }
+  }, [backendRaceId, cancelRace, refreshWallet]);
+
   const handleCancel = useCallback(() => {
     if (isHostMode && backendRaceId) {
       AppAlert.alert(
@@ -753,6 +798,7 @@ export default function MatchmakingScreen() {
             onPress: async () => {
               if (backendRaceId) {
                 await authFetch(`/api/races/${backendRaceId}/cancel`, { method: "POST" }).catch(() => {});
+                await refreshWallet();
               }
               cancelRace();
               router.replace("/(tabs)/walk");
@@ -760,6 +806,25 @@ export default function MatchmakingScreen() {
           },
         ],
       );
+    } else if (!isHostMode && backendRaceId && isPaidCashRoom) {
+      void fetchCashChallengePaymentQuote({
+        entryFeeCents,
+        numberOfPlayers: liveRoom?.maxPlayers ?? raceMaxPlayers,
+      })
+        .then((q) => {
+          setRefundQuote(q);
+          setRefundModalVisible(true);
+        })
+        .catch(() => {
+          AppAlert.alert(
+            "Leave Room?",
+            "Your entry fee will be refunded to your wallet if you leave before the race starts.",
+            [
+              { text: "Stay", style: "cancel" },
+              { text: "Leave", style: "destructive", onPress: () => void executeLeave() },
+            ],
+          );
+        });
     } else if (!isHostMode && backendRaceId) {
       AppAlert.alert(
         "Leave Room?",
@@ -769,12 +834,7 @@ export default function MatchmakingScreen() {
           {
             text: "Leave",
             style: "destructive",
-            onPress: async () => {
-              setLeaving(true);
-              authFetch(`/api/races/${backendRaceId}/leave`, { method: "POST" }).catch(() => {});
-              cancelRace();
-              router.replace("/(tabs)/walk");
-            },
+            onPress: () => void executeLeave(),
           },
         ],
       );
@@ -782,7 +842,7 @@ export default function MatchmakingScreen() {
       cancelRace();
       router.replace("/(tabs)/walk");
     }
-  }, [isHostMode, backendRaceId, cancelRace]);
+  }, [isHostMode, backendRaceId, cancelRace, isPaidCashRoom, entryFeeCents, liveRoom?.maxPlayers, raceMaxPlayers, executeLeave, refreshWallet]);
 
   // ── Host: start race ──────────────────────────────────────────────────────
   const startingRef = useRef(false);
@@ -1357,6 +1417,61 @@ export default function MatchmakingScreen() {
           },
         } : undefined}
       />
+
+      {/* ── Refund confirmation (paid cash leave) ── */}
+      <Modal
+        visible={refundModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setRefundModalVisible(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" }}>
+          <View style={{ backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: safeBottom + 20, borderWidth: 1, borderColor: colors.border }}>
+            <Text style={{ fontSize: rf(18), fontWeight: "800", color: colors.foreground, marginBottom: 12 }}>
+              Cancel & Refund
+            </Text>
+            {refundQuote && (
+              <CashChallengeRefundBreakdown
+                breakdown={{
+                  amountPaid: refundQuote.totalPayable,
+                  entryFee: refundQuote.entryFee,
+                  paymentProcessingFee: refundQuote.paymentProcessingFee,
+                  platformServiceFee: refundQuote.platformServiceFee,
+                  walletRefundAmount: refundQuote.walletRefundAmount,
+                }}
+                colors={{ ...colors, success: colors.success }}
+              />
+            )}
+            <TouchableOpacity
+              style={{ borderRadius: 14, overflow: "hidden", marginTop: 12, opacity: refundConfirming ? 0.6 : 1 }}
+              disabled={refundConfirming}
+              onPress={() => {
+                setRefundConfirming(true);
+                void executeLeave().finally(() => setRefundConfirming(false));
+              }}
+            >
+              <LinearGradient colors={[colors.primary, colors.accent]} style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14 }}>
+                {refundConfirming ? (
+                  <ActivityIndicator size="small" color="#000" />
+                ) : (
+                  <Feather name="rotate-ccw" size={18} color="#000" />
+                )}
+                <Text style={{ fontWeight: "800", color: "#000", fontSize: rf(15) }}>
+                  {refundConfirming
+                    ? "Processing…"
+                    : `Confirm Refund — Add $${(refundQuote?.walletRefundAmount ?? 0).toFixed(2)} to Wallet`}
+                </Text>
+              </LinearGradient>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{ marginTop: 12, paddingVertical: 12, alignItems: "center" }}
+              onPress={() => setRefundModalVisible(false)}
+            >
+              <Text style={{ color: colors.mutedForeground, fontWeight: "600" }}>Keep Waiting</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

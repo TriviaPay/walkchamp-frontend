@@ -586,7 +586,7 @@ function RaceCard({
     ? `$${(race.prizePoolCents / 100).toFixed(0)} pool`
     : isCoinsBattle && race.coinEntryAmount > 0
     ? `${(race.coinEntryAmount * race.playerCount).toLocaleString()} coins`
-    : race.prizePool > 0 ? `$${(race.prizePool * 0.7).toFixed(2)}` : null;
+    : race.prizePool > 0 ? `$${race.prizePool.toFixed(2)}` : null;
   const elapsedLabel = isFinished ? "Duration" : "Elapsed";
 
   // Mirror backend numWinners: 2 players→1 winner, 3→2, 4+→3
@@ -729,7 +729,7 @@ function RaceCard({
                 <Text style={{ fontSize: 11 }}>🏆</Text>
                 <Text style={[st.statValue, { color: colors.gold }]}>{prizePoolDisplay}</Text>
               </View>
-              <Text style={[st.statLabel, { color: colors.gold + "AA" }]}>Reward Pool</Text>
+                <Text style={[st.statLabel, { color: colors.gold + "AA" }]}>Prize Pool</Text>
             </View>
           </>
         )}
@@ -887,7 +887,7 @@ function RaceCard({
             ))}
           </View>
           {prizePoolDisplay && (
-            <Text style={[st.footerPrize, { color: colors.gold }]}>🏆 Reward Pool {prizePoolDisplay}</Text>
+            <Text style={[st.footerPrize, { color: colors.gold }]}>🏆 Prize Pool {prizePoolDisplay}</Text>
           )}
         </View>
       )}

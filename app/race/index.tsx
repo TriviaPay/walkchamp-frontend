@@ -106,11 +106,7 @@ export default function JoinRaceScreen() {
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
           <InfoRow label="Players Required" value={`${MAX_PLAYERS} players`} />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
-          <InfoRow label="Total Prize Pool" value={`$${totalPool.toFixed(2)}`} valueColor={colors.gold} />
-          <View style={[styles.divider, { backgroundColor: colors.border }]} />
-          <InfoRow label="Winners Pool (70%)" value={`$${winnersPool.toFixed(2)}`} valueColor={colors.primary} />
-          <View style={[styles.divider, { backgroundColor: colors.border }]} />
-          <InfoRow label="Platform Fee (30%)" value={`$${platformFee.toFixed(2)}`} valueColor={colors.mutedForeground} />
+          <InfoRow label="Entry Pool / Prize Pool" value={`$${totalPool.toFixed(2)}`} valueColor={colors.gold} />
         </View>
 
         {/* Prize Split */}

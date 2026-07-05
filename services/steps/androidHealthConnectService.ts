@@ -89,6 +89,11 @@ const READ_STEPS_PERMISSION: Permission = {
   recordType: "Steps",
 };
 
+interface HCAggregateStepsResult {
+  COUNT_TOTAL?: number;
+  dataOrigins?: string[];
+}
+
 interface HCModule {
   initialize: (providerPackageName?: string) => Promise<boolean>;
   getSdkStatus: (providerPackageName?: string) => Promise<number>;
@@ -98,6 +103,14 @@ interface HCModule {
     recordType: string,
     options: unknown,
   ) => Promise<{ records: HCStepRecord[] }>;
+  aggregateRecord?: (request: {
+    recordType: "Steps";
+    timeRangeFilter: {
+      operator: "between";
+      startTime: string;
+      endTime: string;
+    };
+  }) => Promise<HCAggregateStepsResult>;
   openHealthConnectSettings: () => Promise<void>;
   openHealthConnectDataManagement?: (providerPackageName?: string) => Promise<void>;
 }
@@ -527,28 +540,46 @@ export const androidHCService = {
     if (!hc) return fallback;
 
     try {
-      const res = await hc.readRecords("Steps", {
-        timeRangeFilter: {
-          operator: "between",
-          startTime: start.toISOString(),
-          endTime: end.toISOString(),
-        },
-      });
+      const timeRangeFilter = {
+        operator: "between" as const,
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+      };
 
-      const total = (res.records ?? []).reduce(
-        (sum, r) => sum + (r.count ?? 0),
-        0,
-      );
-      const steps = Math.max(0, total);
+      let steps = 0;
+      let readMethod: "aggregate" | "readRecords" = "readRecords";
+      let recordCount = 0;
+      let dataOrigins: string[] | undefined;
+
+      if (typeof hc.aggregateRecord === "function") {
+        try {
+          const agg = await hc.aggregateRecord({
+            recordType: "Steps",
+            timeRangeFilter,
+          });
+          steps = Math.max(0, agg?.COUNT_TOTAL ?? 0);
+          dataOrigins = agg?.dataOrigins;
+          readMethod = "aggregate";
+        } catch (aggErr) {
+          hcLog("aggregateRecord failed — falling back to readRecords", aggErr);
+        }
+      }
+
+      if (readMethod !== "aggregate") {
+        const res = await hc.readRecords("Steps", { timeRangeFilter });
+        recordCount = res.records?.length ?? 0;
+        const total = (res.records ?? []).reduce(
+          (sum, r) => sum + (r.count ?? 0),
+          0,
+        );
+        steps = Math.max(0, total);
+      }
 
       hcLog(
-        `readStepsForRange ${start.toISOString()} → ${end.toISOString()} = ${steps} (${res.records?.length ?? 0} records)`,
+        `readStepsForRange ${start.toISOString()} → ${end.toISOString()} = ${steps} method=${readMethod} records=${recordCount} origins=${dataOrigins?.length ?? 0}`,
       );
 
-      // Monotonic cache update — never decrease the cached value
-      if (steps > _cachedTodaySteps) {
-        _cachedTodaySteps = steps;
-      }
+      _cachedTodaySteps = steps;
 
       return {
         steps,

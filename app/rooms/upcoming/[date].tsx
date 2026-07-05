@@ -109,8 +109,7 @@ function DetailCard({
   const entryLabel = isSponsored ? "Sponsored" : isCash ? `$${room.entry_fee.toFixed(2)}` : isCoins ? `${room.coin_entry_amount.toLocaleString()} coins` : "Free";
   const entryColor = isSponsored ? "#C47BFF" : isCash ? GOLD : isCoins ? GOLD : GREEN;
 
-  // Prize pool — 20% platform fee for cash, 0% for coins
-  const prizePoolDollars = isCash ? Math.round(room.entry_fee * room.registered_count * 0.80) : 0;
+  const prizePoolDollars = isCash ? Math.round(room.entry_fee * room.registered_count) : 0;
   const prizePoolCoins   = isCoins ? room.coin_entry_amount * room.registered_count : 0;
   const hasPrizePool     = (isCash && prizePoolDollars > 0) || (isCoins && prizePoolCoins > 0);
 

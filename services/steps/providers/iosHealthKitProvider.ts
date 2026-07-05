@@ -84,12 +84,7 @@ export const iosHealthKitProvider: StepProvider = {
     _userId: string,
   ): Promise<StepReadResult> {
     const to = new Date();
-    const range = await this.getStepsForRange(raceStartAt, to);
-    const live = stepTracker.readLatestLiveSteps();
-    if (live > range.steps) {
-      return buildResult(live, raceStartAt, to);
-    }
-    return range;
+    return this.getStepsForRange(raceStartAt, to);
   },
 
   async startWatchingSteps(

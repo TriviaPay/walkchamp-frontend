@@ -178,6 +178,7 @@ export async function pushWalkNotificationFromCanonicalStore(
 
   // Never push stale JS/Redux values over a higher native FGS sensor count for the same user.
   if (Platform.OS === "android") {
+    const verifiedActive = stepProviderManager.usesVerifiedStepSource();
     const native = await stepTrackingNotificationService.getNativeStepState(userId);
     const today = getLocalDateStr();
     const nativeMatchesUser =
@@ -190,7 +191,9 @@ export async function pushWalkNotificationFromCanonicalStore(
     const jsUpdatedAt = s.todayStepsLastUpdatedAt
       ? new Date(s.todayStepsLastUpdatedAt).getTime()
       : 0;
+    // Verified HC/HealthKit: native TYPE_STEP_COUNTER must never override provider reads.
     if (
+      !verifiedActive &&
       nativeMatchesUser &&
       !nativeStale &&
       nativeSteps > steps &&
@@ -205,6 +208,15 @@ export async function pushWalkNotificationFromCanonicalStore(
         updatedAt: new Date(nativeUpdatedAt).toISOString(),
       });
       return;
+    }
+    if (
+      verifiedActive &&
+      nativeMatchesUser &&
+      nativeSteps > steps
+    ) {
+      console.log(
+        `[StepSource] skipped native adopt verified=true native=${nativeSteps} canonical=${steps}`,
+      );
     }
     if (
       !force &&

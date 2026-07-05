@@ -1027,7 +1027,7 @@ function PrizePanel({ race, participants, colors }: { race: RaceData; participan
       <View style={pzStyles.header}>
         <Text style={{ fontSize: 18 }}>🏆</Text>
         <Text style={[pzStyles.title, { color: colors.gold }]}>Prize Pool</Text>
-        <Text style={[pzStyles.pool, { color: colors.foreground }]}>${((race.prizePool ?? 0) * 0.7).toFixed(2)}</Text>
+        <Text style={[pzStyles.pool, { color: colors.foreground }]}>${(race.prizePool ?? 0).toFixed(2)}</Text>
       </View>
       <View style={[pzStyles.divider, { backgroundColor: colors.border }]} />
       {isCompleted && completedRows.length > 0

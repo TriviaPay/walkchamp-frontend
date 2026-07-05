@@ -77,6 +77,13 @@ import { queryClient, stepsKeys } from "@/services/queryClient";
 import { fetchTodayWalkFromApi } from "@/services/walkTodayApi";
 import { raceProgressActions } from "@/store/slices/raceProgressSlice";
 import { store } from "@/store";
+import {
+  capWalkStepsForSync,
+  logStepAccuracyAudit,
+  mergeLegacyStepUpdate,
+  resolveTodayDisplaySteps,
+  stepEngineLog,
+} from "@/utils/stepAccuracy";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -455,18 +462,32 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       if (stepBindUserIdRef.current !== user.id) {
         return backendTodayStepsRef.current;
       }
-      // Provider returns today's absolute count (HC/HealthKit range read or sensor daily total).
-      // Never add backend on top — reconcile with max only to recover missed sync.
-      const reconciled = Math.max(backendTodayStepsRef.current, provider);
-      if (__DEV__) {
-        console.log(
-          `[StepBind] reconcile backend=${backendTodayStepsRef.current} provider=${provider} display=${reconciled}`,
-        );
-      }
-      return reconciled;
+      const display = resolveTodayDisplaySteps({
+        providerSteps: provider,
+        backendSteps: backendTodayStepsRef.current,
+        allowBackendCatchUp:
+          stepProviderManager.getActiveProviderId() === "android_legacy_sensor",
+      });
+      logStepAccuracyAudit({
+        surface: "walk",
+        providerSteps: provider,
+        backendSteps: backendTodayStepsRef.current,
+        displaySteps: display,
+        providerId: stepProviderManager.getActiveProviderId(),
+      });
+      return display;
     },
     [user?.id],
   );
+
+  const readProviderTodaySteps = useCallback(async (): Promise<number> => {
+    try {
+      const data = await stepProviderManager.getTodaySteps();
+      return Math.max(0, data?.steps ?? 0);
+    } catch {
+      return 0;
+    }
+  }, []);
 
   useEffect(() => {
     return subscribeMidnightRollover(() => {
@@ -545,8 +566,15 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             if (parsed.goalSteps > 0) setTodayDailyGoal(parsed.goalSteps);
             displaySteps = parsed.todaySteps;
             backendTodayStepsRef.current = displaySteps;
-            lastSyncedStepsRef.current = displaySteps;
-            await storageSet(keys.lastSyncedStepsCount, displaySteps);
+            const providerSteps = await readProviderTodaySteps();
+            displaySteps = resolveTodayDisplaySteps({
+              providerSteps,
+              backendSteps: displaySteps,
+              allowBackendCatchUp:
+                stepProviderManager.getActiveProviderId() === "android_legacy_sensor",
+            });
+            lastSyncedStepsRef.current = Math.min(parsed.todaySteps, displaySteps);
+            await storageSet(keys.lastSyncedStepsCount, lastSyncedStepsRef.current);
             await storageSet(keys.currentLocalDate, today);
             if (__DEV__) {
               console.log(
@@ -623,7 +651,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     }
     };
     void load();
-  }, [checkDayChange, captureProviderBindSnapshot, resetWalkUiForAccountSwitch, user?.id]);
+  }, [checkDayChange, captureProviderBindSnapshot, readProviderTodaySteps, resetWalkUiForAccountSwitch, user?.id]);
 
   // ── Milestone helper ─────────────────────────────────────────────────────────
 
@@ -708,16 +736,29 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
       const backendSteps = parsed.todaySteps;
       backendTodayStepsRef.current = backendSteps;
-      lastSyncedStepsRef.current = backendSteps;
-      await storageSet(keys.lastSyncedStepsCount, backendSteps);
+      const providerSteps = await readProviderTodaySteps();
+      const displaySteps = resolveTodayDisplaySteps({
+        providerSteps,
+        backendSteps,
+        allowBackendCatchUp:
+          stepProviderManager.getActiveProviderId() === "android_legacy_sensor",
+      });
+      lastSyncedStepsRef.current = Math.min(backendSteps, displaySteps);
+      await storageSet(keys.lastSyncedStepsCount, lastSyncedStepsRef.current);
       await storageSet(keys.currentLocalDate, todayKey);
-      await forceSetTodayStepDisplay(backendSteps);
+      await forceSetTodayStepDisplay(displaySteps);
       await captureProviderBindSnapshot();
-      if (__DEV__) {
-        console.log(
-          `[WalkContext] backend hydrate userId=${user.id} localDate=${todayKey} steps=${backendSteps}`,
-        );
-      }
+      stepEngineLog(
+        "WalkScreen",
+        `renderedTodaySteps=${displaySteps} backend=${backendSteps} provider=${providerSteps}`,
+      );
+      logStepAccuracyAudit({
+        surface: "hydrate",
+        providerSteps,
+        backendSteps,
+        displaySteps,
+        lastSynced: lastSyncedStepsRef.current,
+      });
       if (iconSyncReadyRef.current) {
         dynamicIconService.notifyStepsChanged(
           todayStepsRef.current,
@@ -735,6 +776,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     authReady,
     captureProviderBindSnapshot,
     forceSetTodayStepDisplay,
+    readProviderTodaySteps,
     sessionToken,
     user?.id,
   ]);
@@ -744,7 +786,17 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   const syncDeltaToBackend = useCallback(async () => {
     if (!user?.id) return;
     if (isWalkBackendSyncPaused()) return;
-    const current = todayStepsRef.current;
+    const rawCurrent = todayStepsRef.current;
+    const providerSteps = await readProviderTodaySteps();
+    const current = capWalkStepsForSync(rawCurrent, providerSteps);
+    if (current !== rawCurrent) {
+      stepEngineLog(
+        "StepSync",
+        `capped ui=${rawCurrent} provider=${providerSteps ?? "n/a"} sync=${current}`,
+      );
+      todayStepsRef.current = current;
+      setTodaySteps(current);
+    }
     const lastSynced = lastSyncedStepsRef.current;
     const delta = current - lastSynced;
     if (delta <= 0) return;
@@ -754,6 +806,11 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     const activeMinutes = Math.ceil(current / 120);
 
     const source = stepProviderManager.toWalkSyncSource() ?? "unknown";
+
+    stepEngineLog(
+      "StepSync",
+      `payload steps=${delta} totalSteps=${current} source=${source} localDate=${getTodayKey()}`,
+    );
 
     const result = await submitStepsToBackend(
       delta,
@@ -773,9 +830,11 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         localDate: getTodayKey(),
         updatedAt: new Date().toISOString(),
       });
-      if (__DEV__) console.log("[BackendSync] walk retry queued — network failed");
+      stepEngineLog("StepSync", "serverResponse=queued_offline");
       return;
     }
+
+    stepEngineLog("StepSync", `serverResponse=ok todaySteps=${current}`);
 
     const today = getTodayKey();
     await clearWalkStepsOutbox(user.id, today);
@@ -785,6 +844,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       setTodayActiveMinutes(result.activeMinutes);
     }
 
+    backendTodayStepsRef.current = Math.max(backendTodayStepsRef.current, current);
     lastSyncedStepsRef.current = current;
     await storageSet(stepScopedKeys(user.id, today).lastSyncedStepsCount, current);
 
@@ -792,9 +852,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       current,
       todayDailyGoalRef.current > 0 ? todayDailyGoalRef.current : 10_000,
     );
-
-    if (__DEV__) console.log(`[BackendSync] daily sent steps=${current} source=${source}`);
-  }, [user?.id]);
+  }, [readProviderTodaySteps, user?.id]);
 
   const flushWalkStepsOutbox = useCallback(async () => {
     if (!user?.id) return;
@@ -882,7 +940,11 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const displaySteps = fromWatch ? Math.max(current, safeReal) : safeReal;
+      const displaySteps = fromWatch
+        ? stepProviderManager.usesVerifiedStepSource()
+          ? safeReal
+          : mergeLegacyStepUpdate(current, safeReal)
+        : safeReal;
       if (displaySteps === current) return;
 
       if (!fromWatch) {
@@ -911,18 +973,15 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     const needsBind = stepBindUserIdRef.current !== user.id;
     if (rehydrateBackend || needsBind) {
       await hydrateTodayStepsFromBackend();
-      // Tab focus / reload: backend is authoritative; live steps come from watch/poll.
-      return;
     }
     const data = await stepProviderManager.getTodaySteps();
     if (!data) return;
 
     const display = computeAccountAwareDisplaySteps(data.steps);
-    if (__DEV__) {
-      console.log(
-        `[WalkScreen] refreshed from provider todaySteps=${display} provider=${data.providerId}`,
-      );
-    }
+    stepEngineLog(
+      "WalkScreen",
+      `renderedTodaySteps=${display} provider=${data.providerId} poll=true`,
+    );
 
     await applyTodayStepCount(display, false);
   }, [
@@ -944,7 +1003,38 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       if (rp.todaySteps === lastReduxSteps) return;
       lastReduxSteps = rp.todaySteps;
       if (rp.todaySteps <= todayStepsRef.current) return;
-      console.log(`[WalkScreen] received step update todaySteps=${rp.todaySteps}`);
+
+      // Verified HC/HealthKit: never adopt a higher Redux/native count over provider.
+      if (stepProviderManager.usesVerifiedStepSource()) {
+        void readProviderTodaySteps().then((providerSteps) => {
+          const display = resolveTodayDisplaySteps({
+            providerSteps,
+            backendSteps: backendTodayStepsRef.current,
+          });
+          if (display <= todayStepsRef.current) return;
+          stepEngineLog(
+            "WalkScreen",
+            `reduxBridge provider=${providerSteps} redux=${rp.todaySteps} display=${display}`,
+          );
+          syncingFromReduxRef.current = true;
+          setTodaySteps(display);
+          todayStepsRef.current = display;
+          savedDailyStepsRef.current = display;
+          void persistDailySteps(display).finally(() => {
+            syncingFromReduxRef.current = false;
+          });
+          checkMilestone(display);
+          dynamicIconService.notifyStepsChanged(
+            display,
+            todayDailyGoalRef.current > 0 ? todayDailyGoalRef.current : 10_000,
+            user.id,
+          );
+          syncDeltaToBackend().catch(() => {});
+        });
+        return;
+      }
+
+      stepEngineLog("WalkScreen", `received step update todaySteps=${rp.todaySteps}`);
       syncingFromReduxRef.current = true;
       setTodaySteps(rp.todaySteps);
       todayStepsRef.current = rp.todaySteps;
@@ -960,7 +1050,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       );
       syncDeltaToBackend().catch(() => {});
     });
-  }, [user?.id, checkMilestone, persistDailySteps, syncDeltaToBackend]);
+  }, [user?.id, checkMilestone, persistDailySteps, readProviderTodaySteps, syncDeltaToBackend]);
 
   const startProviderWatching = useCallback(async () => {
     try {

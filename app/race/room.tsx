@@ -42,14 +42,12 @@ function getRaceConfig(entryFee: number, playersJoined: number, maxPlayers: numb
     : Math.round(150 + players * 180);
 
   const totalPool = parseFloat((entryFee * players).toFixed(2));
-  const winnersPool = parseFloat((totalPool * 0.7).toFixed(2));
-  const platformFee = parseFloat((totalPool * 0.3).toFixed(2));
-  // Winner count: 2-3 players → 1 winner; 4 players → 2 winners; 5+ → 3 winners
-  const nW = playersJoined <= 3 ? 1 : playersJoined === 4 ? 2 : 3;
+  const prizePool = totalPool;
+  const nW = playersJoined <= 2 ? 1 : playersJoined === 3 ? 2 : 3;
   const splits = nW === 1 ? [1.0] : nW === 2 ? [0.6, 0.4] : [0.5, 0.3, 0.2];
-  const prizes = splits.map((s) => parseFloat((winnersPool * s).toFixed(2)));
+  const prizes = splits.map((s) => parseFloat((prizePool * s).toFixed(2)));
 
-  return { title, icon, fullTitle: `${icon} ${title}`, isFree, spectators, totalPool, winnersPool, platformFee, prizes, nWinners: nW }; }
+  return { title, icon, fullTitle: `${icon} ${title}`, isFree, spectators, totalPool, winnersPool: prizePool, platformFee: 0, prizes, nWinners: nW }; }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -177,9 +175,7 @@ function PrizeBreakdownModal({ visible, onClose, colors, isFree, entryFee, playe
                 <BreakdownRow label="Entry Fee" value={`$${entryFee.toFixed(2)}`} valueColor={colors.foreground} colors={colors} />
                 <BreakdownRow label="Players Joined" value={`${players}`} valueColor={colors.foreground} colors={colors} />
                 <View style={[styles.modalDivider, { backgroundColor: colors.border }]} />
-                <BreakdownRow label="Total Pool" value={`$${totalPool.toFixed(2)}`} valueColor={colors.foreground} colors={colors} bold />
-                <BreakdownRow label="Winners Pool (70%)" value={`$${winnersPool.toFixed(2)}`} valueColor={colors.success} colors={colors} />
-                <BreakdownRow label="Platform Fee (30%)" value={`$${platformFee.toFixed(2)}`} valueColor={colors.mutedForeground} colors={colors} />
+                <BreakdownRow label="Entry Pool / Prize Pool" value={`$${totalPool.toFixed(2)}`} valueColor={colors.gold} colors={colors} bold />
                 <View style={[styles.modalDivider, { backgroundColor: colors.border }]} />
                 {prizes[0] !== undefined && <BreakdownRow label={`🥇 1st Place (${prizes.length === 1 ? "100" : prizes.length === 2 ? "60" : "50"}%)`} value={`$${prizes[0].toFixed(2)}`} valueColor={colors.gold} colors={colors} bold />}
                 {prizes[1] !== undefined && <BreakdownRow label={`🥈 2nd Place (${prizes.length === 2 ? "40" : "30"}%)`} value={`$${prizes[1].toFixed(2)}`} valueColor={colors.silver} colors={colors} />}
@@ -227,8 +223,8 @@ export default function RaceRoomScreen() {
   const activePrizes = prizeTiers.length > 0 ? prizeTiers : config.prizes;
   const players = Math.max(playersJoined, 2);
   const totalPool = parseFloat((raceEntryFee * players).toFixed(2));
-  const winnersPool = parseFloat((totalPool * 0.7).toFixed(2));
-  const platformFeeAmt = parseFloat((totalPool * 0.3).toFixed(2));
+  const winnersPool = totalPool;
+  const platformFeeAmt = 0;
 
   useEffect(() => {
     if (racePhase === "finished") {

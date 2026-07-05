@@ -91,8 +91,8 @@ export const RACE_DEFAULTS = {
   RACE_TARGET: 1000,
   // RACE_DURATION_SECONDS removed — races end by backend events only (goal
   // completion, all forfeit, scheduled end time). No client-side hard cutoff.
-  WINNERS_POOL_RATIO: 0.7,
-  PLATFORM_FEE_RATIO: 0.3,
+  WINNERS_POOL_RATIO: 1.0,
+  PLATFORM_FEE_RATIO: 0,
   WINNER_SPLITS: [0.5, 0.3, 0.2],
   COUNTDOWN_SECONDS: 10,
 };
@@ -148,7 +148,7 @@ function numWinnersForCount(playerCount: number): number {
 function prizeSplitsForCount(playerCount: number): number[] {
   const w = numWinnersForCount(playerCount);
   if (w === 1) return [1.0];
-  if (w === 2) return [0.7, 0.3];
+  if (w === 2) return [0.6, 0.4];
   return [0.5, 0.3, 0.2];
 }
 

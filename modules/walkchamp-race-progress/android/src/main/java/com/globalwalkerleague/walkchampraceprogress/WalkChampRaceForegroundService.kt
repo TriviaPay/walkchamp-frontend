@@ -906,20 +906,29 @@ class WalkChampRaceForegroundService : Service() {
     if (userId.isNullOrBlank() || apiBaseUrl.isNullOrBlank() || authToken.isNullOrBlank()) return
 
     val nativeState = sensorEngine?.currentState() ?: NativeStepState.load(this)
-    val todaySteps = nativeState?.todaySteps
-      ?: parseStepsFromWalkBody(p.getString("walk_body", "") ?: "")
     val stepSource = nativeState?.stepSource
       ?: p.getString("walk_step_source", "health_connect")
       ?: "health_connect"
 
     if (stepSource == "unsupported" || (nativeState != null && !nativeState.sensorSupported)) return
 
+    // Verified HC/HealthKit: sync JS-mirrored walk body only — never sensor-inflated native counts.
+    val verified = RaceNotificationState.isVerifiedStepSource(stepSource)
+    val todaySteps = if (verified) {
+      val fromJs = parseStepsFromWalkBody(p.getString("walk_body", "") ?: "")
+      if (fromJs > 0) fromJs else (nativeState?.todaySteps ?: 0)
+    } else {
+      nativeState?.todaySteps
+        ?: parseStepsFromWalkBody(p.getString("walk_body", "") ?: "")
+    }
+    if (todaySteps <= 0) return
+
     val now = System.currentTimeMillis()
     if (now - lastWalkBackendSyncMs < WALK_BACKEND_SYNC_MS - 1_000L) return
     lastWalkBackendSyncMs = now
 
     val localDate = WalkStepBackgroundSync.localDateString()
-    Log.d(TAG, "[StepFGS] backendSync walk attempt todaySteps=$todaySteps date=$localDate")
+    Log.d(TAG, "[StepFGS] backendSync walk attempt todaySteps=$todaySteps date=$localDate verified=$verified")
     val result = WalkStepBackgroundSync.syncDailySteps(
       userId = userId,
       todaySteps = todaySteps,
@@ -974,7 +983,15 @@ class WalkChampRaceForegroundService : Service() {
     val engineState = sensorEngine?.currentState()
     val existing = NativeStepState.load(this)
     val engineMatchesRace = engineState?.activeRaceId == state.raceId
-    val raceStepSource = if (isActiveRace(state)) "android_step_counter" else state.stepSource
+    // Preserve verified step source (HC/HealthKit) — never downgrade to sensor during race.
+    val preservedSource =
+      if (RaceNotificationState.isVerifiedStepSource(state.stepSource)) {
+        state.stepSource
+      } else if (usesDeviceSensor(state.stepSource)) {
+        "android_step_counter"
+      } else {
+        state.stepSource
+      }
     NativeStepState.save(
       this,
       NativeStepState(
@@ -988,11 +1005,7 @@ class WalkChampRaceForegroundService : Service() {
         raceSteps = if (engineMatchesRace) engineState?.raceSteps ?: 0 else state.raceSteps.coerceAtLeast(0),
         activeRaceId = state.raceId,
         notificationMode = "race_live",
-        stepSource = if (usesDeviceSensor(raceStepSource) || isActiveRace(state)) {
-          "android_step_counter"
-        } else {
-          raceStepSource
-        },
+        stepSource = preservedSource,
         localDate = existing?.localDate ?: NativeStepState.localDateString(),
         sensorSupported = existing?.sensorSupported ?: true,
         updatedAt = System.currentTimeMillis(),
@@ -1005,7 +1018,7 @@ class WalkChampRaceForegroundService : Service() {
         raceStatus = state.raceStatus,
       ),
     )
-    Log.d(TAG, "[StepFGS] persisted native state updatedAt=${System.currentTimeMillis()} mode=race_live")
+    Log.d(TAG, "[StepFGS] persisted native state updatedAt=${System.currentTimeMillis()} mode=race_live source=$preservedSource")
   }
 
   private fun tickRace(state: RaceNotificationState, syncBackend: Boolean) {

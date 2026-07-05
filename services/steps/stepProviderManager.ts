@@ -70,6 +70,7 @@ async function trySelectAndroidProvider(
         devLog(`Health Connect status: usable=true permission=${hcPerm}`);
         if (hcPerm === "granted") {
           devLog("selected android_health_connect");
+          console.log("[StepSource] selected=health_connect healthConnectAvailable=true");
           return androidHealthConnectProvider;
         }
         // HC not granted — use legacy when available (unsupported / no manifest).
@@ -94,6 +95,7 @@ async function trySelectAndroidProvider(
 
   if (legacyAvailable) {
     devLog("selected android_legacy_sensor");
+    console.log("[StepSource] selected=sensor healthConnectAvailable=false sensorAvailable=true");
     return androidLegacySensorProvider;
   }
 
@@ -109,6 +111,7 @@ async function selectProvider(forceReselect = false): Promise<StepProvider | nul
     const ok = await iosHealthKitProvider.isAvailable();
     _activeProvider = ok ? iosHealthKitProvider : null;
     if (_activeProvider) devLog("selected ios_healthkit");
+    if (_activeProvider) console.log("[StepSource] selected=healthkit");
     return _activeProvider;
   }
 
@@ -320,7 +323,25 @@ export const stepProviderManager = {
       const hcBlocked = androidHCService.isRangeReadBlocked();
       const legacyAvail = await androidLegacySensorProvider.isAvailable();
 
-      // Safe path first — legacy sensor never calls Health Connect native UI.
+      // Prefer Health Connect — OS-aggregated steps match Samsung Health / Google Fit.
+      if (!hcBlocked) {
+        try {
+          const init = await androidHCService.initialize();
+          const hcUsable =
+            init.initialized && init.availability === "available";
+          if (hcUsable) {
+            const hcResult = await androidHealthConnectProvider.requestPermission();
+            if (hcResult.status === "granted") {
+              _activeProvider = androidHealthConnectProvider;
+              return { ...hcResult, message: "Step tracking is ready." };
+            }
+            devLog("Health Connect permission not granted — trying legacy fallback");
+          }
+        } catch (e) {
+          devLog("Health Connect permission request failed — using legacy", e);
+        }
+      }
+
       if (legacyAvail) {
         const activityGranted = await ensureActivityRecognitionPermission();
         if (!activityGranted) {
@@ -340,24 +361,6 @@ export const stepProviderManager = {
         }
         if (hcBlocked) {
           return legacyResult;
-        }
-      }
-
-      if (!hcBlocked) {
-        try {
-          const init = await androidHCService.initialize();
-          const hcUsable =
-            init.initialized && init.availability === "available";
-          if (hcUsable) {
-            const hcResult = await androidHealthConnectProvider.requestPermission();
-            if (hcResult.status === "granted") {
-              _activeProvider = androidHealthConnectProvider;
-              return { ...hcResult, message: "Step tracking is ready." };
-            }
-            devLog("Health Connect permission not granted — trying legacy fallback");
-          }
-        } catch (e) {
-          devLog("Health Connect permission request failed — using legacy", e);
         }
       }
 

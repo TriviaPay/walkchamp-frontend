@@ -78,6 +78,14 @@ import {
   type ChallengeStatus,
 } from "@/components/ChallengeCategoryCard";
 import JoinWithCodeModal, { type JoinWithCodeResult } from "@/components/JoinWithCodeModal";
+import {
+  fetchCashChallengePaymentQuote,
+  type CashChallengePaymentQuote,
+} from "@/services/cashChallengeApi";
+import {
+  CashChallengePaymentBreakdown,
+  CashChallengeRewardSplit,
+} from "@/components/CashChallengePaymentBreakdown";
 import { WalkProgressIcon } from "@/components/WalkProgressIcon";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { clampDailyProgress } from "@/utils/stepProgress";
@@ -1737,6 +1745,9 @@ function WalkScreenContent() {
   const [activePicker, setActivePicker] = useState<"entryFee" | "coinAmount" | "usdAmount" | "goalType" | "steps" | "players" | "startTime" | null>(null);
   const [challengeEntryMode, setChallengeEntryMode] = useState<"free" | "coins" | "usd">("free");
   const [challengeUsdAmount, setChallengeUsdAmount] = useState(3);
+  const [setupPaymentQuote, setSetupPaymentQuote] = useState<CashChallengePaymentQuote | null>(null);
+  const [createPaymentQuote, setCreatePaymentQuote] = useState<CashChallengePaymentQuote | null>(null);
+  const [confirmPaymentQuote, setConfirmPaymentQuote] = useState<CashChallengePaymentQuote | null>(null);
   const [challengeGoalType, setChallengeGoalType] = useState<GoalPeriodType>("daily");
   const [challengeStartDate, setChallengeStartDate] = useState<Date>(() => new Date());
   const [challengeEndDate, setChallengeEndDate] = useState<Date | null>(null);
@@ -2069,14 +2080,18 @@ function WalkScreenContent() {
     ? todayActiveMinutes
     : (safeTodaySteps > 0 ? Math.max(1, Math.ceil(safeTodaySteps / 120)) : 0);
 
-  const computedPool = (setupModal?.fee ?? 1) * playerCount;
-  const computedFee = Math.round(computedPool * 0.2 * 100) / 100;
-  const computedWinners = parseFloat((computedPool - computedFee).toFixed(2));
+  const computedPool = setupPaymentQuote?.prizePool ?? (setupModal?.fee ?? 1) * playerCount;
   const computedWinnerCount = playerCount <= 2 ? 1 : playerCount === 3 ? 2 : 3;
-  const computedSplits = computedWinnerCount === 1 ? [1.0] : computedWinnerCount === 2 ? [0.6, 0.4] : [0.5, 0.3, 0.2];
-  const computedPrizes = computedSplits.map((s) => parseFloat((computedWinners * s).toFixed(2)));
+  const computedPrizes =
+    setupPaymentQuote?.rewardSplit.map((s) => s.amount) ??
+    (() => {
+      const splits =
+        computedWinnerCount === 1 ? [1.0] : computedWinnerCount === 2 ? [0.6, 0.4] : [0.5, 0.3, 0.2];
+      return splits.map((s) => parseFloat((computedPool * s).toFixed(2)));
+    })();
   const isFreeRace = (setupModal?.fee ?? -1) === 0;
-  const canAfford = isFreeRace || walletBalance >= (setupModal?.fee ?? 1);
+  const setupTotalPayable = setupPaymentQuote?.totalPayable ?? setupModal?.fee ?? 1;
+  const canAfford = isFreeRace || walletBalance >= setupTotalPayable;
   const selectedEntry: ChallengeEntryOption = ENTRY_OPTIONS[challengeEntryIdx] ?? ENTRY_OPTIONS[0]!;
   const isCoinsBattleEntry = challengeEntryMode === "coins";
   const isUsdEntry = challengeEntryMode === "usd";
@@ -2086,6 +2101,69 @@ function WalkScreenContent() {
   const targetStepsForCreate = goalStepOptions[clampedTargetIdx]!;
   const durationDays = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
   const durationDaysLabel = challengeGoalType === "daily" ? "1 day" : challengeGoalType === "weekly" ? "7 days" : "30 days";
+
+  useEffect(() => {
+    if (!setupModal || setupModal.fee <= 0) {
+      setSetupPaymentQuote(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchCashChallengePaymentQuote({
+      entryFeeCents: Math.round(setupModal.fee * 100),
+      numberOfPlayers: playerCount,
+    })
+      .then((q) => {
+        if (!cancelled) setSetupPaymentQuote(q);
+      })
+      .catch(() => {
+        if (!cancelled) setSetupPaymentQuote(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [setupModal?.fee, playerCount, setupModal]);
+
+  useEffect(() => {
+    if (challengeEntryMode !== "usd") {
+      setCreatePaymentQuote(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchCashChallengePaymentQuote({
+      entryFeeCents: challengeUsdAmount * 100,
+      numberOfPlayers: challengeMaxPlayers,
+    })
+      .then((q) => {
+        if (!cancelled) setCreatePaymentQuote(q);
+      })
+      .catch(() => {
+        if (!cancelled) setCreatePaymentQuote(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [challengeEntryMode, challengeUsdAmount, challengeMaxPlayers]);
+
+  useEffect(() => {
+    if (!confirmEntry || confirmEntry.fee <= 0) {
+      setConfirmPaymentQuote(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchCashChallengePaymentQuote({
+      entryFeeCents: Math.round(confirmEntry.fee * 100),
+      numberOfPlayers: 10,
+    })
+      .then((q) => {
+        if (!cancelled) setConfirmPaymentQuote(q);
+      })
+      .catch(() => {
+        if (!cancelled) setConfirmPaymentQuote(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [confirmEntry?.fee, confirmEntry]);
 
   const [freeJoining, setFreeJoining] = useState(false);
   const [joiningEntryKey, setJoiningEntryKey] = useState<string | null>(null);
@@ -2198,7 +2276,10 @@ function WalkScreenContent() {
     const status = challengeStatuses[entryKey];
 
     if (setupModal.fee !== 0 && !canAfford) {
-      AppAlert.alert("Insufficient Balance", `You need $${setupModal.fee.toFixed(2)} to join. Add funds to your wallet.`);
+      AppAlert.alert(
+        "Insufficient Balance",
+        `You need $${setupTotalPayable.toFixed(2)} to join. Add funds to your wallet.`,
+      );
       return;
     }
 
@@ -2438,11 +2519,16 @@ function WalkScreenContent() {
         return;
       }
 
-      // For USD entry, check wallet balance
-      if (challengeEntryMode === "usd" && walletBalance < challengeUsdAmount) {
-        AppAlert.alert("Insufficient Balance", `You need $${challengeUsdAmount.toFixed(2)} to create this challenge. Add funds to your wallet first.`);
-        setChallengeCreating(false);
-        return;
+      if (challengeEntryMode === "usd") {
+        const required = createPaymentQuote?.totalPayable ?? challengeUsdAmount;
+        if (walletBalance < required) {
+          AppAlert.alert(
+            "Insufficient Balance",
+            `You need $${required.toFixed(2)} to create this challenge. Add funds to your wallet first.`,
+          );
+          setChallengeCreating(false);
+          return;
+        }
       }
 
       const timezone = getUserTimezone();
@@ -3412,31 +3498,27 @@ function WalkScreenContent() {
                   </View>
                 </>
               ) : (
-                [
-                  { label: "Entry Fee", value: `$${(setupModal?.fee ?? 1).toFixed(2)} per player`, color: colors.accent },
-                  { label: "Total Pool", value: `$${computedPool.toFixed(2)}`, color: colors.gold },
-                  { label: "Reward Pool (80%)", value: `$${computedWinners.toFixed(2)}`, color: colors.primary },
-                  { label: "Platform Fee (20%)", value: `$${computedFee.toFixed(2)}`, color: colors.mutedForeground },
-                ].map((row, i) => (
-                  <View key={i}>
-                    {i > 0 && <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />}
-                    <View style={styles.detailRow}>
-                      <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>{row.label}</Text>
-                      <Text style={[styles.detailValue, { color: row.color }]}>{row.value}</Text>
+                <>
+                  {[
+                    { label: "Entry Fee", value: `$${(setupModal?.fee ?? 1).toFixed(2)} per player`, color: colors.accent },
+                    { label: "Players", value: String(playerCount), color: colors.foreground },
+                    { label: "Entry Pool / Prize Pool", value: `$${computedPool.toFixed(2)}`, color: colors.gold },
+                  ].map((row, i) => (
+                    <View key={i}>
+                      {i > 0 && <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />}
+                      <View style={styles.detailRow}>
+                        <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>{row.label}</Text>
+                        <Text style={[styles.detailValue, { color: row.color }]}>{row.value}</Text>
+                      </View>
                     </View>
-                  </View>
-                ))
+                  ))}
+                </>
               )}
             </View>
-
-            {/* Reward split — paid only */}
             {!isFreeRace && (
               <>
-                <Text style={[styles.modalSectionLabel, { color: colors.mutedForeground }]}>Reward Split</Text>
-                {computedPrizes.map((amt, i) => {
-                  const splitPct = computedWinnerCount === 1 ? "100%" : computedWinnerCount === 2 ? (i === 0 ? "60%" : "40%") : (["50%", "30%", "20%"][i]);
-                  return <PrizeRow key={i} rank={i + 1} amount={amt} split={splitPct} colors={colors} />;
-                })}
+                <CashChallengeRewardSplit quote={setupPaymentQuote} colors={colors} />
+                <CashChallengePaymentBreakdown quote={setupPaymentQuote} colors={colors} />
               </>
             )}
 
@@ -3551,7 +3633,7 @@ function WalkScreenContent() {
             <Text style={[styles.finePrint, { color: colors.mutedForeground }]}>
               {isFreeRace
                 ? "Free challenges award coins and badges. No cash prizes. Open to all eligible registered users."
-                : "This is a skill-based walking challenge. Entry fee is deducted immediately upon joining. Results depend on your verified step performance. No refunds once the challenge starts. Rewards are subject to activity verification and challenge rules."}
+                : "Entry fee and separate service fees are charged when you confirm. $3 goes to the prize pool; tax/processing and platform fees are additional. Refunds return the entry fee to your wallet if you leave before the race starts."}
             </Text>
           </ScrollView>
 
@@ -3659,6 +3741,7 @@ function WalkScreenContent() {
                 <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Entry Fee</Text>
                 <Text style={[styles.detailValue, { color: colors.accent }]}>${confirmEntry?.fee.toFixed(2)}</Text>
               </View>
+              <CashChallengePaymentBreakdown quote={confirmPaymentQuote} colors={colors} title="Payment Breakdown" />
               <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />
               <View style={styles.detailRow}>
                 <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Type</Text>
@@ -3671,7 +3754,7 @@ function WalkScreenContent() {
 
             {[
               "I understand this is a skill-based race. My result depends entirely on my activity performance — outcomes are not based on chance.",
-              "I understand that entry fees are charged when the race begins. If I leave the lobby before the race starts, no fee is charged.",
+              "I understand that the total payable amount (entry fee + tax/processing + platform service fee) is charged when I confirm. If I leave before the race starts, my entry fee is refunded to my wallet.",
               "I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
             ].map((text, i) => (
               <TouchableOpacity
@@ -3719,7 +3802,11 @@ function WalkScreenContent() {
                 start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
               >
                 <Feather name="check-circle" size={20} color="#FFF" />
-                <Text style={styles.joinBtnText}>Confirm &amp; Continue</Text>
+                <Text style={styles.joinBtnText}>
+                  {confirmPaymentQuote
+                    ? `Join & Pay $${confirmPaymentQuote.totalPayable.toFixed(2)}`
+                    : "Confirm & Continue"}
+                </Text>
               </LinearGradient>
             </TouchableOpacity>
 
@@ -3767,6 +3854,22 @@ function WalkScreenContent() {
               const entryLabel = challengeEntryMode === "free" ? "Free" : challengeEntryMode === "coins" ? `${coinEntryAmount.toLocaleString()} coins` : `$${challengeUsdAmount}`;
               const label = `${entryLabel} ${roomType === "public" ? "Public" : "Private"} Challenge`;
               const gradients: [string, string] = roomType === "public" ? [colors.accent, colors.primary] : ["#A855F7", "#7C3AED"];
+              const isUsdConfirm = challengeEntryMode === "usd";
+              const confirmChecks = isUsdConfirm ? createConfirmChecks : createConfirmChecks;
+              const confirmItems = isUsdConfirm
+                ? [
+                    "I understand this is a skill-based race. My result depends entirely on my activity performance — outcomes are not based on chance.",
+                    "I understand that the total payable amount (entry fee + tax/processing + platform service fee) is charged when I confirm. If I leave before the race starts, my entry fee is refunded to my wallet.",
+                    "I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
+                  ]
+                : [
+                    "I understand this is a skill-based race. My result depends entirely on my activity performance — outcomes are not based on chance.",
+                    "I understand that coins are deducted when the race begins. If I leave the lobby before the race starts, no coins are deducted.",
+                    "I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
+                  ];
+              const canConfirmHost =
+                confirmChecks.every(Boolean) &&
+                (!isUsdConfirm || (createPaymentQuote?.canAfford ?? walletBalance >= (createPaymentQuote?.totalPayable ?? challengeUsdAmount)));
               return (
                 <>
                   {/* Summary card */}
@@ -3787,13 +3890,31 @@ function WalkScreenContent() {
                     </View>
                   </View>
 
+                  {isUsdConfirm && createPaymentQuote && (
+                    <>
+                      <View style={[styles.detailCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                        {[
+                          { label: "Entry Fee", value: `$${challengeUsdAmount} per player`, color: colors.accent },
+                          { label: "Players", value: String(challengeMaxPlayers), color: colors.foreground },
+                          { label: "Entry Pool / Prize Pool", value: `$${createPaymentQuote.prizePool.toFixed(2)}`, color: colors.gold },
+                        ].map((row, i) => (
+                          <View key={i}>
+                            {i > 0 && <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />}
+                            <View style={styles.detailRow}>
+                              <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>{row.label}</Text>
+                              <Text style={[styles.detailValue, { color: row.color }]}>{row.value}</Text>
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                      <CashChallengeRewardSplit quote={createPaymentQuote} colors={colors} />
+                      <CashChallengePaymentBreakdown quote={createPaymentQuote} colors={colors} />
+                    </>
+                  )}
+
                   <Text style={[styles.modalSectionLabel, { color: colors.mutedForeground }]}>Please confirm all of the following:</Text>
 
-                  {[
-                    "I understand this is a skill-based race. My result depends entirely on my activity performance — outcomes are not based on chance.",
-                    "I understand that coins are deducted when the race begins. If I leave the lobby before the race starts, no coins are deducted.",
-                    "I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
-                  ].map((text, i) => (
+                  {confirmItems.map((text, i) => (
                     <TouchableOpacity
                       key={i}
                       style={[styles.confirmCheckRow, { backgroundColor: colors.card, borderColor: createConfirmChecks[i] ? colors.primary + "60" : colors.border }]}
@@ -3812,8 +3933,8 @@ function WalkScreenContent() {
                   ))}
 
                   <TouchableOpacity
-                    style={[styles.joinBtn, { opacity: createConfirmChecks.every(Boolean) ? 1 : 0.4, marginTop: 8 }]}
-                    disabled={!createConfirmChecks.every(Boolean) || challengeCreating}
+                    style={[styles.joinBtn, { opacity: canConfirmHost ? 1 : 0.4, marginTop: 8 }]}
+                    disabled={!canConfirmHost || challengeCreating}
                     onPress={handleCreateChallenge}
                     activeOpacity={0.85}
                   >
@@ -3835,7 +3956,11 @@ function WalkScreenContent() {
                         ? <ActivityIndicator size="small" color="#FFF" />
                         : <Feather name="check-circle" size={20} color="#FFF" />}
                       <Text style={styles.joinBtnText}>
-                        {(challengeCreating || !challengeModalAnimated) ? "Creating room…" : "Confirm & Create Room"}
+                        {(challengeCreating || !challengeModalAnimated)
+                          ? "Creating room…"
+                          : isUsdConfirm && createPaymentQuote
+                            ? `Confirm Payment — $${createPaymentQuote.totalPayable.toFixed(2)}`
+                            : "Confirm & Create Room"}
                       </Text>
                     </LinearGradient>
                   </TouchableOpacity>
@@ -4104,7 +4229,7 @@ function WalkScreenContent() {
                 {challengeEntryMode === "coins" && (() => {
                   const totalCoins = coinEntryAmount * challengeMaxPlayers;
                   const winnerCount = challengeMaxPlayers <= 2 ? 1 : challengeMaxPlayers === 3 ? 2 : 3;
-                  const splits = winnerCount === 1 ? [1.0] : winnerCount === 2 ? [0.7, 0.3] : [0.5, 0.3, 0.2];
+                  const splits = winnerCount === 1 ? [1.0] : winnerCount === 2 ? [0.6, 0.4] : [0.5, 0.3, 0.2];
                   const prizes = splits.map((s) => Math.floor(totalCoins * s));
                   const accentCol = roomType === "public" ? colors.accent : "#A855F7";
                   const rankEmojis = ["🥇", "🥈", "🥉"];
@@ -4148,62 +4273,33 @@ function WalkScreenContent() {
                 })()}
 
                 {/* Prize preview — USD */}
-                {challengeEntryMode === "usd" && (() => {
-                  const totalCents = challengeUsdAmount * 100 * challengeMaxPlayers;
-                  const platformFeeCents = Math.round(totalCents * 0.2);
-                  const winnersCents = totalCents - platformFeeCents;
-                  const winnerCount = challengeMaxPlayers <= 2 ? 1 : challengeMaxPlayers === 3 ? 2 : 3;
-                  const splits = winnerCount === 1 ? [1.0] : winnerCount === 2 ? [0.6, 0.4] : [0.5, 0.3, 0.2];
-                  const prizes = splits.map((s) => (winnersCents * s / 100).toFixed(2));
+                {challengeEntryMode === "usd" && createPaymentQuote && (() => {
                   const accentCol = roomType === "public" ? colors.accent : "#A855F7";
-                  const rankEmojis = ["🥇", "🥈", "🥉"];
-                  const rankLabels = ["1st Place", "2nd Place", "3rd Place"];
-                  const splitPcts = winnerCount === 1 ? ["100%"] : winnerCount === 2 ? ["60%", "40%"] : ["50%", "30%", "20%"];
-                  const totalDollars = (totalCents / 100).toFixed(2);
-                  const feeDollars = (platformFeeCents / 100).toFixed(2);
-                  const rewardDollars = (winnersCents / 100).toFixed(2);
                   return (
-                    <>
-                      <View style={[styles.detailCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                        <View style={styles.detailRow}>
-                          <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Entry Amount</Text>
-                          <Text style={[styles.detailValue, { color: accentCol }]}>${challengeUsdAmount} / player</Text>
-                        </View>
-                        <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />
-                        <View style={styles.detailRow}>
-                          <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Total Pool</Text>
-                          <Text style={[styles.detailValue, { color: colors.foreground }]}>${totalDollars}</Text>
-                        </View>
-                        <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />
-                        <View style={styles.detailRow}>
-                          <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Platform Fee (20%)</Text>
-                          <Text style={[styles.detailValue, { color: colors.mutedForeground }]}>−${feeDollars}</Text>
-                        </View>
-                        <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />
-                        <View style={styles.detailRow}>
-                          <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Reward Pool</Text>
-                          <Text style={[styles.detailValue, { color: "#22C55E", fontWeight: "800" }]}>${rewardDollars}</Text>
-                        </View>
-                        <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />
-                        <View style={styles.detailRow}>
-                          <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Winners</Text>
-                          <Text style={[styles.detailValue, { color: colors.mutedForeground }]}>{winnerCount === 1 ? "Top 1 player" : `Top ${winnerCount} players`}</Text>
-                        </View>
-                      </View>
-                      <Text style={[styles.modalSectionLabel, { color: colors.mutedForeground }]}>Prize Rewards</Text>
-                      {prizes.map((amt, i) => (
-                        <View key={i} style={[styles.detailCard, { backgroundColor: colors.card, borderColor: colors.border, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12 }]}>
-                          <Text style={{ fontSize: rf(22) }}>{rankEmojis[i]}</Text>
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.foreground }}>{rankLabels[i]}</Text>
-                            <Text style={{ fontSize: rf(11), color: colors.mutedForeground }}>{splitPcts[i]} of reward pool</Text>
+                  <>
+                    <View style={[styles.detailCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                      {[
+                        { label: "Entry Fee", value: `$${challengeUsdAmount} / player`, color: accentCol },
+                        { label: "Players", value: String(challengeMaxPlayers), color: colors.foreground },
+                        { label: "Entry Pool / Prize Pool", value: `$${createPaymentQuote.prizePool.toFixed(2)}`, color: "#22C55E" },
+                      ].map((row, i) => (
+                        <View key={i}>
+                          {i > 0 && <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />}
+                          <View style={styles.detailRow}>
+                            <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>{row.label}</Text>
+                            <Text style={[styles.detailValue, { color: row.color }]}>{row.value}</Text>
                           </View>
-                          <Text style={{ fontSize: rf(15), fontWeight: "900", color: "#22C55E" }}>${amt}</Text>
                         </View>
                       ))}
-                    </>
+                    </View>
+                    <CashChallengeRewardSplit quote={createPaymentQuote} colors={colors} />
+                    <CashChallengePaymentBreakdown quote={createPaymentQuote} colors={colors} />
+                  </>
                   );
                 })()}
+                {challengeEntryMode === "usd" && !createPaymentQuote && (
+                  <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />
+                )}
 
                 {/* Track Background */}
                 <View style={styles.trackBgHeader}>
@@ -4253,7 +4349,7 @@ function WalkScreenContent() {
 
                 {challengeEntryMode === "usd" && (
                   <Text style={[styles.paidAckText, { color: colors.mutedForeground }]}>
-                    ⓘ Entry fee is charged when the race starts. No charge if you leave the lobby before it begins.
+                    ⓘ Total payable (entry + tax/processing + platform service fee) is charged when you confirm. Entry fee is refunded to your wallet if you leave before the race starts.
                   </Text>
                 )}
 

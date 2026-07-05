@@ -172,12 +172,8 @@ export default function RaceResultScreen() {
         <View style={[styles.breakdownCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Text style={[styles.breakdownTitle, { color: colors.foreground }]}>Prize Breakdown</Text>
           <View style={styles.breakdownRow}>
-            <Text style={[styles.breakdownLabel, { color: colors.mutedForeground }]}>Winners Pool (70%)</Text>
-            <Text style={[styles.breakdownValue, { color: colors.primary }]}>${winnersPool.toFixed(2)}</Text>
-          </View>
-          <View style={styles.breakdownRow}>
-            <Text style={[styles.breakdownLabel, { color: colors.mutedForeground }]}>Platform Fee (30%)</Text>
-            <Text style={[styles.breakdownValue, { color: colors.mutedForeground }]}>${platformFee.toFixed(2)}</Text>
+            <Text style={[styles.breakdownLabel, { color: colors.mutedForeground }]}>Entry Pool / Prize Pool</Text>
+            <Text style={[styles.breakdownValue, { color: colors.gold }]}>${totalPool.toFixed(2)}</Text>
           </View>
         </View>
 

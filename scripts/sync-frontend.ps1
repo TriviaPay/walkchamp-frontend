@@ -62,7 +62,14 @@ $files = @(
     "components\MyTitlesModal.tsx",
     "components\CoinRewardToast.tsx",
     "components\CoinsBattleModal.tsx",
-    "services\voiceService.ts"
+    "services\voiceService.ts",
+    # Cash challenge payment / prize pool UI
+    "services\cashChallengeApi.ts",
+    "components\CashChallengePaymentBreakdown.tsx",
+    "app\race\room.tsx",
+    "app\race\index.tsx",
+    "app\race\result.tsx",
+    "app\spectator\[id].tsx"
 )
 
 function Sync-OneWay([string]$from, [string]$to) {
