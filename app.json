@@ -5,7 +5,7 @@
     "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icons/WalkChampProgress0.png",
-    "scheme": "globalwalkerleague",
+    "scheme": ["globalwalkerleague", "walkchamp"],
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
@@ -66,6 +66,12 @@
     },
     "plugins": [
       "expo-dev-client",
+      [
+        "onesignal-expo-plugin",
+        {
+          "mode": "production"
+        }
+      ],
       [
         "expo-build-properties",
         {

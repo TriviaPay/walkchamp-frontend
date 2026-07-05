@@ -53,13 +53,43 @@ let _todaySteps = 0;
 let _watchCallback: ((result: StepReadResult) => void) | null = null;
 let _rawAtSubscription = 0;
 let _userId: string | null = null;
+let _watchStartedAtMs = 0;
+let _ignoredInitialPhantom = false;
 
-function activeUserId(): string {
-  return _userId ?? "signed-out";
+function activeUserId(): string | null {
+  return _userId;
+}
+
+function requireBoundUser(): boolean {
+  if (_userId) return true;
+  if (__DEV__) {
+    console.log("[StepProvider] legacy sensor skipped — no signed-in user");
+  }
+  return false;
 }
 
 function scoped(localDate = getLocalDateKey()) {
-  return stepScopedKeys(activeUserId(), localDate);
+  const userId = activeUserId();
+  if (!userId) {
+    throw new Error("legacy_sensor_unbound");
+  }
+  return stepScopedKeys(userId, localDate);
+}
+
+export function isAndroidLegacySensorUserBound(): boolean {
+  return _userId != null;
+}
+
+/** Remove polluted pre-login storage from earlier sessions. */
+export async function clearSignedOutLegacySensorState(): Promise<void> {
+  const today = getLocalDateKey();
+  const keys = stepScopedKeys("signed-out", today);
+  await Promise.all([
+    storageRemove(keys.baseline),
+    storageRemove(keys.steps),
+    storageRemove(keys.stepSnapshot),
+    storageRemove(keys.currentLocalDate),
+  ]);
 }
 
 export function setAndroidLegacySensorUserContext(userId: string | null): void {
@@ -114,6 +144,11 @@ function buildResult(steps: number, from: Date, to: Date): StepReadResult {
 }
 
 async function loadDailyState(): Promise<void> {
+  if (!requireBoundUser()) {
+    _dailyBaseline = 0;
+    _todaySteps = 0;
+    return;
+  }
   const today = getLocalDateKey();
   const keys = scoped(today);
   const storedDate = await storageGet<string>(keys.currentLocalDate);
@@ -126,7 +161,7 @@ async function loadDailyState(): Promise<void> {
     _dailyBaseline = storedBaseline;
     if (__DEV__) {
       console.log(
-        `[StepBaseline] loaded existing baseline userId=${activeUserId()} localDate=${today} baseline=${storedBaseline}`,
+        `[StepBaseline] loaded existing baseline userId=${_userId} localDate=${today} baseline=${storedBaseline}`,
       );
     }
   } else {
@@ -137,13 +172,14 @@ async function loadDailyState(): Promise<void> {
     await storageSet(keys.steps, 0);
     if (__DEV__) {
       console.log(
-        `[StepBaseline] created new baseline userId=${activeUserId()} localDate=${today} baseline=0`,
+        `[StepBaseline] created new baseline userId=${_userId} localDate=${today} baseline=0`,
       );
     }
   }
 }
 
 async function persistDaily(steps: number): Promise<void> {
+  if (!requireBoundUser()) return;
   const today = getLocalDateKey();
   const keys = scoped(today);
   _todaySteps = steps;
@@ -151,14 +187,14 @@ async function persistDaily(steps: number): Promise<void> {
   await storageSet(keys.steps, steps);
 }
 
-/** Freeze today's count at subscribe — delta since subscribe adds on top. */
 function alignDailyBaselineForWatch(): void {
+  if (!requireBoundUser()) return;
   const keys = scoped();
   _dailyBaseline = _todaySteps;
   void storageSet(keys.baseline, _dailyBaseline);
   if (__DEV__) {
     console.log(
-      `[StepBaseline] userId=${activeUserId()} localDate=${getLocalDateKey()} baseline=${_dailyBaseline}`,
+      `[StepBaseline] userId=${_userId} localDate=${getLocalDateKey()} baseline=${_dailyBaseline}`,
     );
   }
 }
@@ -169,10 +205,46 @@ function ensureSubscription(): boolean {
   if (!ped) return false;
 
   alignDailyBaselineForWatch();
+  _watchStartedAtMs = Date.now();
+  _ignoredInitialPhantom = false;
 
   _sub = ped.watchStepCount((result) => {
+    if (!requireBoundUser()) return;
     const delta = Math.max(0, Math.floor(result.steps));
     if (delta <= 0) return;
+
+    const sinceSubscribeMs = Date.now() - _watchStartedAtMs;
+  // First ticks after subscribe are often phantom (Android reports a burst).
+    if (!_ignoredInitialPhantom && sinceSubscribeMs < 5_000) {
+      if (
+        delta > 1 ||
+        (delta === 1 && _todaySteps === 0 && _dailyBaseline === 0)
+      ) {
+        _ignoredInitialPhantom = true;
+        alignDailyBaselineForWatch();
+        if (__DEV__) {
+          console.log(
+            `[StepProvider] ignored initial phantom delta=${delta} after subscribe`,
+          );
+        }
+        return;
+      }
+    }
+
+    // Single +1 phantom within a few seconds of subscribe.
+    if (
+      !_ignoredInitialPhantom &&
+      delta === 1 &&
+      sinceSubscribeMs < 4_000
+    ) {
+      _ignoredInitialPhantom = true;
+      alignDailyBaselineForWatch();
+      if (__DEV__) {
+        console.log("[StepProvider] ignored initial phantom delta=1 after subscribe");
+      }
+      return;
+    }
+
     const todayTotal = _dailyBaseline + delta;
     if (todayTotal <= _todaySteps) return;
 
@@ -266,8 +338,42 @@ export const androidLegacySensorProvider: StepProvider = {
     const from = new Date();
     from.setHours(0, 0, 0, 0);
     const to = new Date();
+    if (!requireBoundUser()) {
+      return buildResult(0, from, to);
+    }
     await loadDailyState();
-    return buildResult(_todaySteps, from, to);
+    let steps = _todaySteps;
+    if (Platform.OS === "android") {
+      try {
+        const { stepTrackingNotificationService } = await import(
+          "@/services/stepTrackingNotificationService"
+        );
+        const native = await stepTrackingNotificationService.getNativeStepState(
+          _userId,
+        );
+        const today = getLocalDateKey();
+        if (
+          native?.userId === _userId &&
+          native.localDate === today &&
+          (native.todaySteps ?? 0) > steps
+        ) {
+          steps = native.todaySteps ?? steps;
+          _todaySteps = steps;
+          await persistDaily(steps);
+          if (__DEV__) {
+            console.log(
+              `[StepEngine] legacy sensor adopted native todaySteps=${steps}`,
+            );
+          }
+        }
+      } catch {
+        // non-fatal
+      }
+    }
+    if (!_sub && steps === 0) {
+      ensureSubscription();
+    }
+    return buildResult(steps, from, to);
   },
 
   async getStepsForRange(start: Date, end: Date): Promise<StepReadResult> {
@@ -315,6 +421,7 @@ export const androidLegacySensorProvider: StepProvider = {
   },
 
   async reconcileTodaySteps(steps: number): Promise<void> {
+    if (!requireBoundUser()) return;
     await loadDailyState();
     const next = Math.max(_todaySteps, Math.floor(steps));
     if (next <= _todaySteps) return;
@@ -336,6 +443,7 @@ export const androidLegacySensorProvider: StepProvider = {
   async startWatchingSteps(
     callback: (result: StepReadResult) => void,
   ): Promise<() => void> {
+    if (!requireBoundUser()) return () => {};
     await loadDailyState();
     const perm = await this.getPermissionStatus();
     if (perm !== "granted") {
@@ -379,6 +487,7 @@ export const androidLegacySensorProvider: StepProvider = {
 
   /** Reset in-memory + persisted daily counters at local midnight. */
   async resetForNewLocalDay(): Promise<void> {
+    if (!requireBoundUser()) return;
     const today = getLocalDateKey();
     const keys = scoped(today);
     _dailyBaseline = 0;
@@ -388,11 +497,11 @@ export const androidLegacySensorProvider: StepProvider = {
     await storageSet(keys.baseline, 0);
     await storageSet(keys.steps, 0);
     await storageSet(keys.stepSnapshot, 0);
-    if (__DEV__) {
-      console.log(
-        `[StepBaseline] created new baseline userId=${activeUserId()} localDate=${today} baseline=0`,
-      );
-    }
+    const { stepEngineLog } = await import("@/utils/stepAccuracy");
+    stepEngineLog(
+      "StepBaseline",
+      `userId=${_userId} localDate=${today} baseline=0 created=true`,
+    );
     if (_sub) {
       try {
         _sub.remove();

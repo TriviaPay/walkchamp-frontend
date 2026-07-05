@@ -24,6 +24,13 @@ import { AppAlert } from "@/components/AppAlert";
 import { TRACK_LAYOUT_OPTIONS } from "@/constants/trackLayouts";
 import { PublicProfileModal, type PublicProfileInitialData } from "@/components/PublicProfileModal";
 import CoinIcon from "@/components/CoinIcon";
+import { useApp } from "@/context/AppContext";
+import {
+  refundMessageFromCancelBody,
+  refundMessageFromLeaveBody,
+  type RaceCancelResponse,
+  type RaceLeaveResponse,
+} from "@/services/refundApi";
 
 const BG = "#080B14";
 const GREEN = "#00E676";
@@ -377,6 +384,7 @@ const dc = StyleSheet.create({
 export default function UpcomingRoomsByDateScreen() {
   const { safeTop, safeBottom } = useSafeLayout();
   const { user } = useAuth();
+  const { refreshWallet } = useApp();
   const params = useLocalSearchParams<{ date: string; dateLabel: string }>();
   const targetDate = params.date ?? "";
   const dateLabel  = params.dateLabel ?? targetDate;
@@ -444,8 +452,20 @@ export default function UpcomingRoomsByDateScreen() {
     if (registeringId) return;
     setRegId(room.room_id);
     try {
-      const res = await authFetch(`/api/rooms/${room.room_id}/cancel-registration`, { method: "POST" });
-      if (!res.ok) { const b = await res.json().catch(() => ({})) as Record<string, unknown>; AppAlert.alert("Error", (b.error as string) ?? "Try again."); return; }
+      const useLeave = room.status === "open" || room.status === "full";
+      const res = await authFetch(
+        useLeave
+          ? `/api/races/${room.room_id}/leave`
+          : `/api/rooms/${room.room_id}/cancel-registration`,
+        { method: "POST", ...(useLeave ? { body: JSON.stringify({ reason: "cancel_registration" }) } : {}) },
+      );
+      const body = await res.json().catch(() => ({})) as RaceLeaveResponse & Record<string, unknown>;
+      if (!res.ok) { AppAlert.alert("Error", (body.error as string) ?? "Try again."); return; }
+      if (useLeave) {
+        await refreshWallet();
+        const refundMsg = refundMessageFromLeaveBody(body);
+        if (refundMsg) AppAlert.alert("Refund", refundMsg);
+      }
       setRooms((prev) => prev.map((r) =>
         r.room_id === room.room_id
           ? { ...r, current_user_registered: false, registered_count: Math.max(0, r.registered_count - 1) }
@@ -453,7 +473,7 @@ export default function UpcomingRoomsByDateScreen() {
       ));
     } catch { AppAlert.alert("Error", "Network error."); }
     finally { setRegId(null); }
-  }, [registeringId]);
+  }, [registeringId, refreshWallet]);
 
   const handleViewHost = useCallback((room: UpcomingRoom) => {
     if (room.challenge_type === "sponsored") return;
@@ -475,13 +495,17 @@ export default function UpcomingRoomsByDateScreen() {
         setRegId(room.room_id);
         try {
           const res = await authFetch(`/api/races/${room.room_id}/cancel`, { method: "POST" });
-          if (!res.ok) { const b = await res.json().catch(() => ({})) as Record<string, unknown>; AppAlert.alert("Error", (b.error as string) ?? "Try again."); return; }
+          const body = await res.json().catch(() => ({})) as RaceCancelResponse & Record<string, unknown>;
+          if (!res.ok) { AppAlert.alert("Error", (body.error as string) ?? "Try again."); return; }
+          await refreshWallet();
+          const refundMsg = refundMessageFromCancelBody(body);
+          if (refundMsg) AppAlert.alert("Room Cancelled", refundMsg);
           setRooms((prev) => prev.filter((r) => r.room_id !== room.room_id));
         } catch { AppAlert.alert("Error", "Network error."); }
         finally { setRegId(null); }
       }},
     ]);
-  }, []);
+  }, [refreshWallet]);
 
   return (
     <View style={[s.container, { paddingTop: safeTop, paddingBottom: safeBottom }]}>

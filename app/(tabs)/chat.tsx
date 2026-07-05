@@ -917,12 +917,13 @@ function GlobalChatTab({ colors, insets, user, headerHeight }: {
 
 // ── Private Chat Tab ──────────────────────────────────────────────────────────
 
-function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = null, onUnreadCountChange, unfriendedConv = null, onUnfriendHandled, onUnfriend }: {
+function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = null, initialConversationId = null, onUnreadCountChange, unfriendedConv = null, onUnfriendHandled, onUnfriend }: {
   colors: ReturnType<typeof useColors>;
   insets: EdgeInsets;
   user: ReturnType<typeof useAuth>["user"];
   headerHeight: number;
   pendingFriend?: FriendItem | null;
+  initialConversationId?: string | null;
   onUnreadCountChange?: (count: number) => void;
   unfriendedConv?: { friendId: string; conversationId: string | null } | null;
   onUnfriendHandled?: () => void;
@@ -1018,6 +1019,17 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
         // Refresh conversation list so the unread badge for this conversation resets to 0
         void loadConversations(); } } catch {}
     setLoadingMsgs(false); };
+
+  // Open a specific conversation when arriving from a push notification deep link
+  const initialConversationIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialConversationId || initialConversationIdRef.current === initialConversationId) return;
+    const conv = conversations.find((c) => c.conversationId === initialConversationId);
+    if (!conv) return;
+    initialConversationIdRef.current = initialConversationId;
+    void openChat(conv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialConversationId, conversations]);
 
   // Pusher for private messages
   useEffect(() => {
@@ -1899,11 +1911,18 @@ export default function ChatScreen() {
     tab?: string | string[];
     senderUserId?: string | string[];
     friendId?: string | string[];
+    conversationId?: string | string[];
   }>();
   const paramTab = Array.isArray(searchParams.tab) ? searchParams.tab[0] : searchParams.tab;
   const paramSenderUserId = Array.isArray(searchParams.senderUserId)
     ? searchParams.senderUserId[0]
     : searchParams.senderUserId;
+  const paramFriendId = Array.isArray(searchParams.friendId)
+    ? searchParams.friendId[0]
+    : searchParams.friendId;
+  const paramConversationId = Array.isArray(searchParams.conversationId)
+    ? searchParams.conversationId[0]
+    : searchParams.conversationId;
   const tabBarHeight = useTabBarHeight();
   const { getAvatarVersion } = useAvatarVersionContext();
   const { markRequestsSeen, clearPrivateUnread } = useUnread();
@@ -1920,6 +1939,36 @@ export default function ChatScreen() {
     const tab = normalizeChatTab(paramTab);
     if (tab) setActiveTab(tab);
   }, [paramTab]);
+
+  // Deep link: open a friend's private chat after friend request accepted
+  useEffect(() => {
+    if (!paramFriendId || !user?.id) return;
+    setActiveTab("private");
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await authFetch("/api/friends");
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const match = (data.friends ?? []).find(
+          (f: { id: string; username: string; flag?: string; avatarColor?: string; avatarUrl?: string | null; avatarVersion?: number | null }) =>
+            f.id === paramFriendId,
+        );
+        if (!match || cancelled) return;
+        setPendingPrivateFriend({
+          id: match.id,
+          username: match.username,
+          flag: match.flag ?? "🌍",
+          avatarColor: match.avatarColor ?? "#00E676",
+          avatarUrl: match.avatarUrl ?? null,
+          avatarVersion: match.avatarVersion ?? null,
+        });
+      } catch {
+        // Ignore — user lands on private tab
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [paramFriendId, user?.id]);
 
   // Seed badge counts from DB on screen mount
   useEffect(() => {
@@ -2065,6 +2114,7 @@ export default function ChatScreen() {
             user={user}
             headerHeight={headerHeight}
             pendingFriend={pendingPrivateFriend}
+            initialConversationId={paramConversationId ?? null}
             onUnreadCountChange={setPrivateUnread}
             unfriendedConv={unfriendedConv}
             onUnfriendHandled={() => setUnfriendedConv(null)}

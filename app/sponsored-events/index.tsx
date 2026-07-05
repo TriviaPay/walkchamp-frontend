@@ -557,7 +557,14 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
   const sc           = statusConfig(ev);
   const slotPct    = ev.maxSlots > 0 ? ev.registeredCount / ev.maxSlots : 0;
   const almostFull = slotPct >= 0.8 && slotPct < 1;
-  const noCoins    = ev.canRegister && coinBalance < ev.entryCoinFee;
+  const registrationOpen =
+    ev.canRegister ||
+    (ev.status === "scheduled" &&
+      !!ev.scheduledStartAt &&
+      new Date(ev.scheduledStartAt).getTime() > Date.now() &&
+      !ev.isRegistered &&
+      !ev.isFull);
+  const noCoins    = registrationOpen && coinBalance < ev.entryCoinFee;
 
   const startDate = ev.scheduledStartAt ? new Date(ev.scheduledStartAt) : null;
   const dayStr    = startDate
@@ -834,7 +841,7 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
               <Text style={[card.staticBtnText, { color: "#FF9800" }]}>Event Full</Text>
             </View>
 
-          ) : ev.canRegister ? (
+          ) : registrationOpen ? (
             <TouchableOpacity
               style={card.registerBtn}
               onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); onRegister(ev.id); }}

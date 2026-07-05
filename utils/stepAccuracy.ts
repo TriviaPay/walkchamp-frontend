@@ -9,6 +9,59 @@ import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { getTodayKey } from "@/utils/format";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 
+let legacyBumpIgnoreUntilMs = Date.now() + 5_000;
+
+/** Suppress +1 legacy-sensor ticks after subscribe / tab focus (phantom steps). */
+export function suppressLegacyStepBumps(durationMs = 5_000): void {
+  legacyBumpIgnoreUntilMs = Math.max(
+    legacyBumpIgnoreUntilMs,
+    Date.now() + durationMs,
+  );
+}
+
+export function isLegacyStepBumpSuppressed(): boolean {
+  return Date.now() < legacyBumpIgnoreUntilMs;
+}
+
+/** Reject unconfirmed +1 bumps from legacy Android pedometer / native FGS. */
+export function shouldIgnoreLegacyPhantomBump(
+  previousSteps: number,
+  incomingSteps: number,
+  options?: { backendSteps?: number; inStartupWindow?: boolean },
+): boolean {
+  if (stepProviderManager.usesVerifiedStepSource()) return false;
+
+  const current = Math.max(0, Math.floor(previousSteps));
+  const incoming = Math.max(0, Math.floor(incomingSteps));
+  const delta = incoming - current;
+  if (delta <= 0 || delta > STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP) return false;
+
+  const inStartup =
+    options?.inStartupWindow ?? isLegacyStepBumpSuppressed();
+  if (inStartup) {
+    stepEngineLog(
+      "StepEngine",
+      `ignoredPhantomBump=true delta=${delta} reason=startup_window`,
+    );
+    return true;
+  }
+
+  const backend = Math.max(0, Math.floor(options?.backendSteps ?? 0));
+  if (
+    incoming > backend &&
+    incoming - backend <= STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP &&
+    current <= backend
+  ) {
+    stepEngineLog(
+      "StepEngine",
+      `ignoredPhantomBump=true delta=${delta} reason=unconfirmed_backend backend=${backend}`,
+    );
+    return true;
+  }
+
+  return false;
+}
+
 /** Release-safe step pipeline logging (always on). */
 export function stepEngineLog(tag: string, message: string): void {
   console.log(`[${tag}] ${message}`);
@@ -36,17 +89,59 @@ export type StepAccuracyAuditContext = {
   extra?: Record<string, unknown>;
 };
 
+/**
+ * Reject legacy-sensor glitches (e.g. first pedometer tick = 67) while allowing
+ * gradual real walking between polls.
+ */
+export function sanitizeLegacyProviderSteps(
+  providerSteps: number,
+  backendSteps: number,
+  previousProviderSteps?: number,
+): number {
+  const provider = Math.max(0, Math.floor(providerSteps));
+  const backend = Math.max(0, Math.floor(backendSteps));
+  const previous =
+    previousProviderSteps != null
+      ? Math.max(0, Math.floor(previousProviderSteps))
+      : backend;
+  const tickJump = provider - previous;
+  const aheadOfBackend = provider - backend;
+
+  if (
+    tickJump > STEP_SYNC_CONFIG.LEGACY_MAX_TICK_JUMP &&
+    aheadOfBackend > STEP_SYNC_CONFIG.LEGACY_MAX_UNCONFIRMED_AHEAD
+  ) {
+    const capped = Math.max(backend, previous);
+    stepEngineLog(
+      "StepEngine",
+      `sanitizedLegacyProvider provider=${provider} backend=${backend} previous=${previous} capped=${capped}`,
+    );
+    return capped;
+  }
+
+  return provider;
+}
+
 /** Today's walk steps for UI — never inflate verified counts from stale backend. */
 export function resolveTodayDisplaySteps(params: {
   providerSteps: number;
   backendSteps: number;
   allowBackendCatchUp?: boolean;
   verifiedSource?: boolean;
+  previousProviderSteps?: number;
 }): number {
-  const provider = Math.max(0, Math.floor(params.providerSteps));
   const backend = Math.max(0, Math.floor(params.backendSteps));
   const verified =
     params.verifiedSource ?? stepProviderManager.usesVerifiedStepSource();
+
+  let provider = Math.max(0, Math.floor(params.providerSteps));
+  if (!verified) {
+    provider = sanitizeLegacyProviderSteps(
+      provider,
+      backend,
+      params.previousProviderSteps,
+    );
+  }
 
   if (verified) {
     stepEngineLog(
@@ -62,6 +157,47 @@ export function resolveTodayDisplaySteps(params: {
     "StepEngine",
     `calculatedTodaySteps=${display} provider=${provider} backend=${backend} verified=false`,
   );
+  return display;
+}
+
+/**
+ * Hydrate today's display steps without regressing to 0 when backend is empty
+ * but local cache or provider has valid data.
+ */
+export function hydrateStepDisplayFromSources(params: {
+  providerSteps: number;
+  backendSteps: number;
+  localCachedSteps: number;
+  allowBackendCatchUp?: boolean;
+  previousProviderSteps?: number;
+  verifiedSource?: boolean;
+}): number {
+  const display = resolveTodayDisplaySteps({
+    providerSteps: params.providerSteps,
+    backendSteps: params.backendSteps,
+    allowBackendCatchUp: params.allowBackendCatchUp,
+    previousProviderSteps: params.previousProviderSteps,
+    verifiedSource: params.verifiedSource,
+  });
+
+  if (display > 0) return display;
+
+  const provider = Math.max(0, Math.floor(params.providerSteps));
+  const backend = Math.max(0, Math.floor(params.backendSteps));
+  const local = Math.max(0, Math.floor(params.localCachedSteps));
+
+  if (provider === 0 && backend === 0 && local > 0) {
+    stepEngineLog(
+      "StepEngine",
+      `hydrate kept localCache=${local} pendingProvider=true`,
+    );
+    return local;
+  }
+
+  if (provider === 0 && backend > 0 && local > backend) {
+    return local;
+  }
+
   return display;
 }
 
@@ -126,13 +262,21 @@ export function capWalkStepsForSync(
   uiSteps: number,
   providerSteps: number | null | undefined,
   verifiedSource?: boolean,
+  backendSteps?: number,
 ): number {
   const ui = Math.max(0, Math.floor(uiSteps));
   const verified =
     verifiedSource ?? stepProviderManager.usesVerifiedStepSource();
-  if (!verified || providerSteps == null) return ui;
-  const provider = Math.max(0, Math.floor(providerSteps));
-  return Math.min(ui, provider);
+  if (verified && providerSteps != null) {
+    const provider = Math.max(0, Math.floor(providerSteps));
+    return Math.min(ui, provider);
+  }
+  if (!verified && backendSteps != null) {
+    const backend = Math.max(0, Math.floor(backendSteps));
+    const sanitized = sanitizeLegacyProviderSteps(ui, backend, backend);
+    return Math.min(ui, sanitized);
+  }
+  return ui;
 }
 
 export function logStepAccuracyAudit(ctx: StepAccuracyAuditContext): void {

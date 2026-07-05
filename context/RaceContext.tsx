@@ -28,6 +28,7 @@ import { raceProgressNotificationService } from "@/services/raceProgressNotifica
 import {
   clearActiveRaceProgress,
   deactivateRaceInStore,
+  ensureActiveRaceInStore,
   feedRaceStepsToStore,
   handleBackendProgressSynced,
   resetRaceStepBuffer,
@@ -466,6 +467,15 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       const raceStart = raceStartTimeRef.current;
       const userId = userProfileRef.current.userId;
       console.log(`[LiveRace] re-enter raceId=${raceId} userId=${userId}`);
+      ensureActiveRaceInStore({
+        raceId,
+        raceStartTime: raceStart.toISOString(),
+        userId,
+        username: userProfileRef.current.username,
+        goalSteps: raceTargetStepsRef.current,
+        totalParticipants: Math.max(1, participantsRef.current.length),
+        bootSteps: userStepsRef.current,
+      });
       const safeServer = Math.max(0, Math.floor(serverSteps));
       const optimistic = Math.max(safeServer, userStepsRef.current);
       if (optimistic > 0) {
@@ -536,6 +546,10 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       } else if (merged > 0) {
         userStepsRef.current = merged;
         setUserRaceSteps(merged);
+        feedRaceStepsToStore({
+          raceSteps: merged,
+          stepSource: stepProviderManager.toRaceProgressSource(),
+        });
         raceStepSyncService.seedSyncedSteps(merged);
         raceStepSyncService.notifyStepsUpdated(
           raceId,
@@ -1347,6 +1361,25 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         userStepsRef.current = floor;
         setUserRaceSteps(floor);
       }
+
+      ensureActiveRaceInStore({
+        raceId: raceIdRef.current,
+        raceStartTime: startedAt.toISOString(),
+        userId: userProfileRef.current.userId,
+        username: userProfileRef.current.username,
+        goalSteps: raceTargetStepsRef.current,
+        totalParticipants: realPlayerCount,
+        bootSteps: floor,
+      });
+
+      if (
+        !raceStepApplyRef.current ||
+        !stepPollingService.isRacePolling(raceIdRef.current)
+      ) {
+        startRace([userParticipant, ...bots], { isRejoin: true });
+        return;
+      }
+
       void catchUpLiveRaceSteps(steps, true);
       return;
     }

@@ -100,7 +100,7 @@ class RaceStepSyncBuffer {
     source: RaceProgressSource,
     options: RaceSyncBufferOptions = {},
   ): void {
-    // Native FGS owns HTTP sync in background; queue locally and flush on resume.
+    const { force = false, atTarget = false, deviceTotalSteps } = options;
     if (Platform.OS === "android" && AppState.currentState !== "active") {
       this.pendingRaceId = raceId;
       this.pendingRaceSteps = Math.max(this.pendingRaceSteps, raceSteps);
@@ -113,7 +113,6 @@ class RaceStepSyncBuffer {
       );
       return;
     }
-    const { force = false, atTarget = false, deviceTotalSteps } = options;
     const cfg = LIVE_RACE_SYNC_CONFIG;
     const now = Date.now();
 
@@ -142,6 +141,7 @@ class RaceStepSyncBuffer {
     }
 
     if (delta <= 0) {
+      console.log(`[Sync] skippedDuplicate=true raceId=${raceId} steps=${raceSteps}`);
       return;
     }
 

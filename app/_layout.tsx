@@ -49,6 +49,8 @@ import {
   logoutOneSignal,
   setupNotificationClickHandler,
 } from "@/services/notificationService";
+import { resolveDeepLink } from "@/utils/deepLinkUtils";
+import * as Linking from "expo-linking";
 import { queryClient } from "@/services/queryClient";
 import { PushPermissionPrompt } from "@/components/PushPermissionPrompt";
 import { StepTrackingNotificationPrompt } from "@/components/StepTrackingNotificationPrompt";
@@ -199,38 +201,61 @@ function PushNotificationSetup() {
   const { user } = useAuth();
   const prevUserIdRef = useRef<string | null>(null);
 
+  const navigateFromRoute = useRef((route: string) => {
+    try {
+      const { router } = require("expo-router") as { router: { push: (r: string) => void } };
+      InteractionManager.runAfterInteractions(() => {
+        try {
+          router.push(route as never);
+        } catch {
+          // Ignore routing errors
+        }
+      });
+    } catch {
+      // Ignore routing errors
+    }
+  }).current;
+
   useEffect(() => {
-    let cleanup: (() => void) | undefined;
+    let cleanupClick: (() => void) | undefined;
+    let linkingSub: { remove: () => void } | undefined;
+
     void waitForAppStartupReady().then(async () => {
       try {
         await ensureOneSignalInitialized();
-        cleanup = await setupNotificationClickHandler((route) => {
-          try {
-            const { router } = require("expo-router") as { router: { push: (r: string) => void } };
-            InteractionManager.runAfterInteractions(() => {
-              try {
-                router.push(route as never);
-              } catch {
-                // Ignore routing errors
-              }
-            });
-          } catch {
-            // Ignore routing errors
-          }
-        });
+        cleanupClick = await setupNotificationClickHandler(navigateFromRoute);
+
+        const handleDeepLink = (url: string | null) => {
+          if (!url) return;
+          const route = resolveDeepLink(url);
+          if (route) navigateFromRoute(route);
+        };
+
+        const initialUrl = await Linking.getInitialURL();
+        handleDeepLink(initialUrl);
+        linkingSub = Linking.addEventListener("url", ({ url }) => handleDeepLink(url));
       } catch (err) {
         console.log("[Startup] push setup failed", err);
       }
     });
-    return () => { cleanup?.(); };
-  }, []);
+
+    return () => {
+      cleanupClick?.();
+      linkingSub?.remove();
+    };
+  }, [navigateFromRoute]);
 
   useEffect(() => {
-    if (user?.id) return;
-    if (!prevUserIdRef.current) return;
-    prevUserIdRef.current = null;
-    void logoutOneSignal().catch(() => {});
-  }, [user]);
+    const nextId = user?.id ?? null;
+    if (nextId) {
+      prevUserIdRef.current = nextId;
+      return;
+    }
+    if (prevUserIdRef.current) {
+      prevUserIdRef.current = null;
+      void logoutOneSignal().catch(() => {});
+    }
+  }, [user?.id]);
 
   return (
     <>

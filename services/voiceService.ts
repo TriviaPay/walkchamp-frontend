@@ -212,6 +212,22 @@ function findRemoteParticipant(userId: string): any | null {
   return null;
 }
 
+function waitForRoomConnected(timeoutMs = 8_000): Promise<boolean> {
+  const sdk = loadSDK();
+  if (!activeRoom || !sdk) return Promise.resolve(false);
+  if (activeRoom.state === sdk.ConnectionState?.Connected) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const tick = () => {
+      if (!activeRoom) { resolve(false); return; }
+      if (activeRoom.state === sdk.ConnectionState?.Connected) { resolve(true); return; }
+      if (Date.now() >= deadline) { resolve(false); return; }
+      setTimeout(tick, 150);
+    };
+    tick();
+  });
+}
+
 function applyVolumeToParticipant(userId: string, volume: number): void {
   const participant = findRemoteParticipant(userId);
   if (!participant) return;
@@ -547,8 +563,12 @@ export const voiceService = {
   async publishMicrophone(): Promise<boolean> {
     if (!activeRoom) return false;
     try {
+      const sdk = loadSDK();
+      if (sdk && activeRoom.state !== sdk.ConnectionState?.Connected) {
+        const ok = await waitForRoomConnected(8_000);
+        if (!ok) return false;
+      }
       if (__DEV__) console.log("[Voice] local audio track created: pending");
-
       await activeRoom.localParticipant.setMicrophoneEnabled(true);
 
       const micEnabled: boolean = activeRoom.localParticipant.isMicrophoneEnabled ?? false;
@@ -576,7 +596,12 @@ export const voiceService = {
 
       return true;
     } catch (e) {
-      if (__DEV__) console.log("[VoiceError] publish:", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.toLowerCase().includes("negotiation")) {
+        console.log("[VoiceError] publish: negotiation failed — room may not be ready");
+      } else if (__DEV__) {
+        console.log("[VoiceError] publish:", e);
+      }
       return false;
     }
   },
@@ -611,6 +636,7 @@ export const voiceService = {
    */
   async startPublishing(): Promise<boolean> {
     if (!activeRoom?.localParticipant) return false;
+    if (!(await waitForRoomConnected(8_000))) return false;
     return voiceService.publishMicrophone();
   },
 

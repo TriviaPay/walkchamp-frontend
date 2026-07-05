@@ -324,7 +324,8 @@ function GroupImageCircle({ groupId, hasImage, g1, g2, size = 52, onPress }: {
 export default function GroupDetailScreen() {
   const router = useRouter();
   const { safeBottom } = useSafeLayout();
-  const { groupId } = useLocalSearchParams<{ groupId: string }>();
+  const { groupId, section } = useLocalSearchParams<{ groupId: string; section?: string | string[] }>();
+  const paramSection = Array.isArray(section) ? section[0] : section;
   const { todaySteps: liveSteps } = useWalk();
 
   const [group, setGroup] = useState<Group | null>(null);
@@ -338,6 +339,12 @@ export default function GroupDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const hasSyncedRef = useRef(false);
   const [activeTab, setActiveTab] = useState<TabKey>("today");
+
+  useEffect(() => {
+    if (paramSection === "requests" || paramSection === "members") {
+      setActiveTab("members");
+    }
+  }, [paramSection]);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);

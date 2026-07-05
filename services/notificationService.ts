@@ -2,6 +2,7 @@ import { Platform } from "react-native";
 import Constants from "expo-constants";
 import { getValidSession } from "./authService";
 import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
+import { resolveNotificationRoute } from "@/utils/deepLinkUtils";
 import {
   hasNotificationPermissionGranted,
   requestNotificationPermissionOnce,
@@ -23,6 +24,8 @@ interface PushSubscription {
   optedIn: boolean;
   optIn: () => Promise<void>;
   optOut: () => Promise<void>;
+  addEventListener: (event: "change", handler: (event: { current: PushSubscription }) => void) => void;
+  removeEventListener: (event: "change", handler: (event: { current: PushSubscription }) => void) => void;
 }
 
 interface NotificationClickEvent {
@@ -30,6 +33,8 @@ interface NotificationClickEvent {
     additionalData?: Record<string, unknown>;
     title?: string;
     body?: string;
+    launchURL?: string;
+    launchUrl?: string;
   };
 }
 
@@ -44,6 +49,7 @@ interface ForegroundWillDisplayEvent {
 }
 
 type NotifEventHandler = (e: NotificationClickEvent | ForegroundWillDisplayEvent) => void;
+type SubscriptionChangeHandler = (event: { current: PushSubscription }) => void;
 
 interface OneSignalV5 {
   initialize: (appId: string) => void;
@@ -78,6 +84,7 @@ async function getOneSignal(): Promise<OneSignalV5 | null> {
 let _initialized = false;
 let _initPromise: Promise<OneSignalV5 | null> | null = null;
 let _foregroundHandlerCleanup: (() => void) | null = null;
+let _subscriptionListenerCleanup: (() => void) | null = null;
 
 function pushLog(msg: string, extra?: unknown): void {
   if (extra !== undefined) {
@@ -104,6 +111,7 @@ export async function ensureOneSignalInitialized(): Promise<OneSignalV5 | null> 
         pushLog("OneSignal initialized");
         // Native initWithContext completes asynchronously after the JS call returns.
         await new Promise((resolve) => setTimeout(resolve, 100));
+        void setupPushSubscriptionListener();
       } catch (error) {
         pushLog("initialize failed", error);
         return null;
@@ -113,6 +121,30 @@ export async function ensureOneSignalInitialized(): Promise<OneSignalV5 | null> 
   })();
 
   return _initPromise;
+}
+
+/** Re-register device when OneSignal subscription id becomes available or changes. */
+async function setupPushSubscriptionListener(): Promise<void> {
+  if (_subscriptionListenerCleanup || Platform.OS === "web") return;
+
+  const OneSignal = await getOneSignal();
+  if (!OneSignal?.User?.pushSubscription?.addEventListener) return;
+
+  const onChange: SubscriptionChangeHandler = (event) => {
+    const subId = event.current?.id;
+    if (!subId) return;
+    pushLog(`push subscription changed id=${subId}`);
+    void registerDeviceWithBackend();
+  };
+
+  try {
+    OneSignal.User.pushSubscription.addEventListener("change", onChange);
+    _subscriptionListenerCleanup = () => {
+      OneSignal.User.pushSubscription.removeEventListener("change", onChange);
+    };
+  } catch (error) {
+    pushLog("subscription listener setup failed", error);
+  }
 }
 
 // ── Initialize OneSignal and associate authenticated user ─────────────────────
@@ -125,6 +157,7 @@ export async function initOneSignal(userId: string): Promise<void> {
     pushLog(`OneSignal login userId=${userId}`);
     const subId = OneSignal.User.pushSubscription.id;
     pushLog(`push subscription id=${subId ?? "pending"}`);
+    void registerDeviceWithBackend();
   } catch (error) {
     pushLog("login failed", error);
   }
@@ -368,7 +401,7 @@ export async function registerDeviceWithBackend(): Promise<void> {
     const session = await getValidSession();
     if (!session) return;
 
-    await fetch(`${API_BASE}/api/push/register-device`, {
+    const res = await fetch(`${API_BASE}/api/push/register-device`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -380,6 +413,9 @@ export async function registerDeviceWithBackend(): Promise<void> {
         appVersion: "1.0.0",
       }),
     });
+    if (res.ok) {
+      pushLog("device registered with backend");
+    }
   } catch {
     // Best-effort registration
   }
@@ -455,6 +491,14 @@ export async function setNotificationPreferences(enabled: boolean): Promise<bool
   }
 }
 
+/** Resolve push/deep-link payload to an expo-router path. */
+export function routeFromPushPayload(
+  data: Record<string, unknown>,
+  launchUrl?: string,
+): string | null {
+  return resolveNotificationRoute(data, launchUrl);
+}
+
 // ── Set up notification click handler (routes taps to correct screen) ─────────
 export async function setupNotificationClickHandler(
   navigate: (route: string) => void,
@@ -464,40 +508,26 @@ export async function setupNotificationClickHandler(
   if (!OneSignal) return () => {};
 
   const handleClick: NotifEventHandler = (event) => {
-    const data = (event as NotificationClickEvent).notification.additionalData as
-      | Record<string, string>
-      | undefined;
-    if (!data?.type) return;
-
-    const { type, room_id, event_id } = data;
-
-    switch (type) {
-      case "race_invite":
-      case "race_starting":
-      case "race_joined":
-      case "coins_battle_joined":
-        navigate(room_id ? `/race/${room_id}` : "/(tabs)/walk");
-        break;
-      case "race_finished":
-        navigate(room_id ? `/race/${room_id}` : "/(tabs)/walk");
-        break;
-      case "reward_ready":
-      case "withdrawal_approved":
-        navigate("/(tabs)/wallet");
-        break;
-      case "friend_request":
-      case "friend_request_accepted":
-        navigate("/(tabs)/chat");
-        break;
-      case "group_invite":
-        navigate("/(tabs)/walk");
-        break;
-      case "sponsored_event_reminder":
-        navigate(event_id ? `/sponsored-event/${event_id}` : "/(tabs)/walk");
-        break;
-      default:
-        navigate("/(tabs)/walk");
+    const clickEvent = event as NotificationClickEvent;
+    const notif = clickEvent.notification;
+    const rawData = notif.additionalData ?? {};
+    // OneSignal v5 may nest custom data; flatten one level if needed
+    const data = (
+      typeof rawData === "object" &&
+      rawData !== null &&
+      "custom" in rawData &&
+      typeof (rawData as { custom?: unknown }).custom === "object"
+        ? { ...(rawData as Record<string, unknown>), ...((rawData as { custom: Record<string, unknown> }).custom) }
+        : rawData
+    ) as Record<string, unknown>;
+    const launchUrl = notif.launchURL ?? notif.launchUrl;
+    const route = resolveNotificationRoute(data, launchUrl);
+    if (route) {
+      pushLog(`notification click route=${route} type=${String(data.type ?? "unknown")}`);
+      navigate(route);
+      return;
     }
+    pushLog("notification click — no route resolved", data);
   };
 
   OneSignal.Notifications.addEventListener("click", handleClick);

@@ -57,6 +57,12 @@ export const STEP_SYNC_CONFIG = {
 
   /** Ignore a single tick jump larger than this (vehicle/shake/duplicate event guard) */
   WALK_MAX_STEP_SPIKE: 500,
+
+  /** Legacy sensor — max steps ahead of backend without a gradual confirming tick */
+  LEGACY_MAX_UNCONFIRMED_AHEAD: 12,
+
+  /** Legacy sensor — max single poll jump while walking (faster walks still OK) */
+  LEGACY_MAX_TICK_JUMP: 8,
 } as const;
 
 /** Live race backend sync buffer — used by raceStepSyncBuffer.ts */

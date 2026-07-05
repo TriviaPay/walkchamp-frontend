@@ -7,6 +7,7 @@ import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 import { Alert,
+  AppState,
   Image,
   ImageBackground,
   Pressable,
@@ -38,7 +39,8 @@ import { useAuth } from "@/context/AuthContext";
 import { useRace } from "@/context/RaceContext";
 import { useWalkContext } from "@/context/WalkContext";
 import { useRaceProgress } from "@/hooks/useRaceProgress";
-import { updateRankFromBackend } from "@/services/stepProgressCoordinator";
+import { updateRankFromBackend, ensureActiveRaceInStore, clearActiveRaceProgress } from "@/services/stepProgressCoordinator";
+import { stepEngineLog } from "@/utils/stepAccuracy";
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import {
@@ -1212,14 +1214,34 @@ export default function LiveRaceDetailScreen() {
   );
 
   const { user, sessionToken }                     = useAuth();
-  const { setRaceTargetSteps, resumeLiveRace, setActiveRace, catchUpLiveRaceSteps, recordFinishedRaceStepsForWalk } = useRace();
+  const { setRaceTargetSteps, resumeLiveRace, setActiveRace, catchUpLiveRaceSteps, recordFinishedRaceStepsForWalk, userRaceSteps, stopRaceStepTracking } = useRace();
   const { resumeStepWatching, refreshTodaySteps } = useWalkContext();
   const raceProgress = useRaceProgress();
   const canonicalRaceSteps = raceProgress.raceSteps;
+  const liveRaceSteps = Math.max(0, Math.max(canonicalRaceSteps, userRaceSteps ?? 0));
   const canonicalRank = raceProgress.rank;
-  const localStepsRef = useRef(canonicalRaceSteps);
-  localStepsRef.current = canonicalRaceSteps;
+  const localStepsRef = useRef(liveRaceSteps);
+  localStepsRef.current = liveRaceSteps;
   const raceResumedRef = useRef(false);
+  const raceCompletedRef = useRef(false);
+  const finalizeLiveRace = useCallback((backendSteps?: number) => {
+    if (raceCompletedRef.current) return;
+    raceCompletedRef.current = true;
+    const target = race?.targetSteps ?? 10_000;
+    const finalSteps = Math.min(target, Math.max(0, Math.floor(backendSteps ?? localStepsRef.current)));
+    stepEngineLog("LiveRace", `raceCompleted=true finalSteps=${finalSteps} raceId=${raceId ?? "none"}`);
+    stopRaceStepTracking("race_completed");
+    clearActiveRaceProgress("finished", {
+      preserveWalkDisplay: finalSteps > 0 ? finalSteps : undefined,
+      raceId: raceId ?? undefined,
+    });
+    recordFinishedRaceStepsForWalk(finalSteps);
+    if (finalSteps > 0 && user?.id) {
+      setParticipants((prev) =>
+        prev.map((p) => (p.userId === user.id ? { ...p, currentSteps: finalSteps, rank: p.rank ?? 1 } : p)),
+      );
+    }
+  }, [race?.targetSteps, raceId, stopRaceStepTracking, recordFinishedRaceStepsForWalk, user?.id]);
   const sessionTokenRef = useRef(sessionToken);
   const setRaceTargetStepsRef = useRef(setRaceTargetSteps);
   sessionTokenRef.current = sessionToken;
@@ -1466,11 +1488,11 @@ export default function LiveRaceDetailScreen() {
         p.userId === user?.id ||
         (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase());
       const confirmed = isMe && isActive
-        ? canonicalRaceSteps
+        ? liveRaceSteps
         : p.currentSteps;
       setConfirmedSteps(p.userId, confirmed);
     }
-  }, [participants, canonicalRaceSteps, isActive, user?.id, user?.username, setConfirmedSteps]);
+  }, [participants, liveRaceSteps, isActive, user?.id, user?.username, setConfirmedSteps]);
 
   const sortedPlayers = useMemo(() => {
     // Deduplicate by both participant id AND userId — same user can appear
@@ -1490,7 +1512,7 @@ export default function LiveRaceDetailScreen() {
       const isMe = p.userId === user?.id ||
         (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase());
       const effectiveSteps = isMe && isActive
-        ? canonicalRaceSteps
+        ? liveRaceSteps
         : p.currentSteps;
       const displaySteps = getDisplaySteps(p.userId, effectiveSteps);
       return { p, isMe, effectiveSteps: displaySteps };
@@ -1518,7 +1540,7 @@ export default function LiveRaceDetailScreen() {
         avatarVersion: p.avatarVersion ?? null,
       };
     }).sort((a, b) => a.rank - b.rank);
-  }, [participants, user?.id, user?.username, isActive, canonicalRaceSteps, canonicalRank, getDisplaySteps]);
+  }, [participants, user?.id, user?.username, isActive, liveRaceSteps, canonicalRank, getDisplaySteps]);
 
   const myPlayer = useMemo(
     () => sortedPlayers.find((p) => p.isMe) ?? sortedPlayers[0] ?? null,
@@ -1568,11 +1590,11 @@ export default function LiveRaceDetailScreen() {
   // pedometer via RaceContext) over the Pusher-delayed backend value. This
   // gives instant feedback without waiting for the server round-trip.
   const mySteps = myPlayer?.isMe && isActive
-    ? canonicalRaceSteps
+    ? liveRaceSteps
     : (myPlayer?.steps ?? 0);
   const myProgress = Math.min(mySteps / Math.max(race?.targetSteps ?? 1, 1), 1);
   const trackPositionText = myPlayer
-    ? `#${canonicalRank ?? myPlayer.rank} of ${raceProgress.totalParticipants ?? Math.max(sortedPlayers.length, participants.length || 1)}`
+    ? `#${canonicalRank ?? myPlayer.rank} of ${race?.currentPlayers ?? participants.length ?? raceProgress.totalParticipants ?? Math.max(sortedPlayers.length, 1)}`
     : "Waiting";
   const trackStatusText = isCompleted ? "FINISHED" : isActive ? "LIVE" : "WAITING";
 
@@ -1604,6 +1626,15 @@ export default function LiveRaceDetailScreen() {
         p.userId === user.id ||
         (!!user.username && p.username.toLowerCase() === user.username.toLowerCase()),
     );
+    ensureActiveRaceInStore({
+      raceId,
+      raceStartTime: new Date(raceData.startedAt ?? Date.now()).toISOString(),
+      userId: user.id,
+      username: user.username ?? "Runner",
+      goalSteps: typeof raceData.targetSteps === "number" ? raceData.targetSteps : 10_000,
+      totalParticipants: raceData.currentPlayers ?? parts.length,
+      bootSteps: me?.currentSteps ?? 0,
+    });
     if (!raceResumedRef.current) {
       raceResumedRef.current = true;
       resumeLiveRace(
@@ -1676,20 +1707,59 @@ export default function LiveRaceDetailScreen() {
   participantsOnFocusRef.current = participants;
 
   useFocusEffect(useCallback(() => {
-    if (!raceId || race?.status !== "in_progress") return;
+    if (!raceId || race?.status !== "in_progress" || raceCompletedRef.current || !user?.id) return;
 
     const me = participantsOnFocusRef.current.find(
       (p) =>
-        p.userId === user?.id ||
-        (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase()),
+        p.userId === user.id ||
+        (!!user.username && p.username.toLowerCase() === user.username.toLowerCase()),
     );
-    void catchUpStepsRef.current(me?.currentSteps ?? 0, false);
+    ensureActiveRaceInStore({
+      raceId,
+      raceStartTime: new Date(race?.startedAt ?? Date.now()).toISOString(),
+      userId: user.id,
+      username: user.username ?? "Runner",
+      goalSteps: typeof race?.targetSteps === "number" ? race.targetSteps : 10_000,
+      totalParticipants: race?.currentPlayers ?? participantsOnFocusRef.current.length,
+      bootSteps: Math.max(me?.currentSteps ?? 0, localStepsRef.current),
+    });
+    stepEngineLog(
+      "LiveScreen",
+      `focus raceId=${raceId} userId=${user.id} renderedSteps=${localStepsRef.current}`,
+    );
+    void catchUpStepsRef.current(me?.currentSteps ?? 0, true);
     void fetchDetailsOnFocusRef.current(false);
+    void refreshTodaySteps();
 
     return () => {
       void resumeStepWatching();
     };
-  }, [raceId, race?.status, user?.id, user?.username, resumeStepWatching]));
+  }, [raceId, race?.status, race?.startedAt, race?.targetSteps, race?.currentPlayers, user?.id, user?.username, resumeStepWatching, refreshTodaySteps]));
+
+  useEffect(() => {
+    if (!raceId || !user?.id) return;
+    stepEngineLog(
+      "LiveScreen",
+      `receivedStepUpdate raceId=${raceId} canonical=${canonicalRaceSteps} context=${userRaceSteps ?? 0} rendered=${liveRaceSteps}`,
+    );
+  }, [raceId, user?.id, canonicalRaceSteps, userRaceSteps, liveRaceSteps]);
+
+  useEffect(() => {
+    if (!raceId) return;
+    const sub = AppState.addEventListener("change", (nextState) => {
+      if (nextState !== "active") return;
+      if (race?.status !== "in_progress" || !user?.id) return;
+      const me = participantsOnFocusRef.current.find(
+        (p) =>
+          p.userId === user.id ||
+          (!!user.username && p.username.toLowerCase() === user.username.toLowerCase()),
+      );
+      stepEngineLog("Lifecycle", "appState=active live-detail catchUp");
+      void catchUpStepsRef.current(me?.currentSteps ?? 0, true);
+      void refreshTodaySteps();
+    });
+    return () => sub.remove();
+  }, [raceId, race?.status, user?.id, user?.username, refreshTodaySteps]);
 
   // ── Full fetch (initial load — race first, comments/reactions in background) ─
   const fetchRace = useCallback(async () => {
@@ -1707,6 +1777,14 @@ export default function LiveRaceDetailScreen() {
         }
         setParticipants(parts);
         hydrateInProgressRace(data.race, parts);
+        if (data.race?.status === "completed") {
+          const me = parts.find(
+            (p) =>
+              p.userId === user?.id ||
+              (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase()),
+          );
+          finalizeLiveRace(me?.currentSteps);
+        }
         if (typeof data.race?.targetSteps === "number" && data.race.targetSteps > 0) {
           setRaceTargetStepsRef.current(data.race.targetSteps);
         }
@@ -1750,6 +1828,7 @@ export default function LiveRaceDetailScreen() {
       resetForRace(raceId);
       raceAlreadyStartedRef.current = false;
       raceResumedRef.current = false;
+      raceCompletedRef.current = false;
 
       const cached = screenCache.getSync<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId));
       if (cached?.race) {
@@ -1883,10 +1962,11 @@ export default function LiveRaceDetailScreen() {
     const onCompleted = (data?: {
       endedReason?: string;
       challengeType?: string;
-      results?: Array<{ userId?: string; prizeCoins?: number }>;
+      results?: Array<{ userId?: string; prizeCoins?: number; currentSteps?: number }>;
     }) => {
       flushFinalSteps();
-      recordFinishedRaceStepsForWalk(localStepsRef.current);
+      const meResult = currentUserId ? data?.results?.find((r) => r.userId === currentUserId) : undefined;
+      finalizeLiveRace(meResult?.currentSteps ?? localStepsRef.current);
       if (data?.endedReason) setForfeitReason(data.endedReason);
       setRace((prev) => prev ? { ...prev, status: "completed", completedAt: prev.completedAt ?? new Date().toISOString() } : prev);
       if (data?.challengeType === "coins_battle" && Array.isArray(data.results)) {
@@ -1904,16 +1984,19 @@ export default function LiveRaceDetailScreen() {
       }
       refresh(true); };
     const onProgress = (data: { participantId?: string; userId?: string; steps?: number; rank?: number }) => {
+      if (raceCompletedRef.current || race?.status === "completed") return;
       if (countdownActiveRef.current) return;
       if (typeof data.steps !== "number") return;
       const newSteps = data.steps;
       const uid = data.userId ?? data.participantId ?? "";
 
       if (uid === currentUserId) {
+        const target = race?.targetSteps ?? 10_000;
+        const cappedSteps = Math.min(target, Math.max(0, newSteps));
         updateRankFromBackend({
-          raceSteps: newSteps,
+          raceSteps: cappedSteps,
           rank: data.rank,
-          totalParticipants: raceProgress.totalParticipants ?? undefined,
+          totalParticipants: race?.currentPlayers ?? participants.length ?? raceProgress.totalParticipants ?? undefined,
           goalSteps: race?.targetSteps,
         });
       }
@@ -1939,10 +2022,12 @@ export default function LiveRaceDetailScreen() {
           const match = (data.participantId && p.id === data.participantId) || (data.userId && p.userId === data.userId);
           if (!match) return p;
           if (p.userId === currentUserId) {
+            const target = race?.targetSteps ?? 10_000;
+            const capped = Math.min(target, Math.max(p.currentSteps, newSteps));
             const newRank = data.rank ?? p.rank;
-            if (newRank === p.rank) return p;
+            if (capped === p.currentSteps && newRank === p.rank) return p;
             changed = true;
-            return { ...p, rank: newRank };
+            return { ...p, currentSteps: capped, rank: newRank };
           }
           const capped = Math.max(p.currentSteps, newSteps);
           const newRank = data.rank ?? p.rank;
@@ -2518,7 +2603,7 @@ export default function LiveRaceDetailScreen() {
               participants={isActive && currentUserId
                 ? participants.map((p) =>
                     p.userId === currentUserId
-                      ? { ...p, currentSteps: canonicalRaceSteps }
+                      ? { ...p, currentSteps: liveRaceSteps }
                       : p,
                   ).map((p) => ({
                     ...p,

@@ -63,6 +63,12 @@ import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf, rs } from "@/utils/responsive";
 import { CashChallengeRefundBreakdown } from "@/components/CashChallengePaymentBreakdown";
 import { fetchCashChallengePaymentQuote, type CashChallengePaymentQuote } from "@/services/cashChallengeApi";
+import {
+  refundMessageFromCancelBody,
+  refundMessageFromLeaveBody,
+  type RaceCancelResponse,
+  type RaceLeaveResponse,
+} from "@/services/refundApi";
 import { useApp } from "@/context/AppContext";
 
 const SCREEN_W = Dimensions.get("window").width;
@@ -763,19 +769,12 @@ export default function MatchmakingScreen() {
     setLeaving(true);
     try {
       const res = await authFetch(`/api/races/${backendRaceId}/leave`, { method: "POST" });
-      const body = await res.json().catch(() => ({})) as {
-        refundBreakdown?: {
-          walletRefundAmount: number;
-          entryFee: number;
-        };
-      };
+      const body = await res.json().catch(() => ({})) as RaceLeaveResponse;
       await refreshWallet();
       cancelRace();
-      if (body.refundBreakdown?.walletRefundAmount) {
-        AppAlert.alert(
-          "Refund Complete",
-          `$${body.refundBreakdown.walletRefundAmount.toFixed(2)} has been added to your wallet.`,
-        );
+      const refundMsg = refundMessageFromLeaveBody(body);
+      if (refundMsg) {
+        AppAlert.alert("Refund Complete", refundMsg);
       }
       router.replace("/(tabs)/walk");
     } finally {
@@ -797,8 +796,13 @@ export default function MatchmakingScreen() {
             style: "destructive",
             onPress: async () => {
               if (backendRaceId) {
-                await authFetch(`/api/races/${backendRaceId}/cancel`, { method: "POST" }).catch(() => {});
-                await refreshWallet();
+                const res = await authFetch(`/api/races/${backendRaceId}/cancel`, { method: "POST" }).catch(() => null);
+                if (res?.ok) {
+                  const body = await res.json().catch(() => ({})) as RaceCancelResponse;
+                  await refreshWallet();
+                  const refundMsg = refundMessageFromCancelBody(body);
+                  if (refundMsg) AppAlert.alert("Room Cancelled", refundMsg);
+                }
               }
               cancelRace();
               router.replace("/(tabs)/walk");

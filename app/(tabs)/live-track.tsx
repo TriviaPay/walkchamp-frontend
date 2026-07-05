@@ -2,7 +2,8 @@ import { AnimatedTrackOverlay } from "@/components/race/AnimatedTrackOverlay";
 import { getTrackCalibration, type TrackCalibration } from "@/components/race/trackCalibrations";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ImageBackground,
+import { AppState,
+  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -23,8 +24,11 @@ import Animated, {
   withSequence,
   cancelAnimation, } from "react-native-reanimated";
 import { useAuth } from "@/context/AuthContext";
+import { useFocusEffect } from "expo-router";
 import { useRace } from "@/context/RaceContext";
 import { useRaceProgress } from "@/hooks/useRaceProgress";
+import { ensureActiveRaceInStore } from "@/services/stepProgressCoordinator";
+import { stepEngineLog } from "@/utils/stepAccuracy";
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import {
@@ -401,9 +405,11 @@ export default function LiveTrackTab() {
     setActiveRace,
     resumeLiveRace,
     catchUpLiveRaceSteps,
+    userRaceSteps,
   } = useRace();
   const raceProgress = useRaceProgress();
   const canonicalRaceSteps = raceProgress.raceSteps;
+  const liveRaceSteps = Math.max(0, Math.max(canonicalRaceSteps, userRaceSteps ?? 0));
   const canonicalRank = raceProgress.rank;
   const { width: screenW } = useWindowDimensions();
   const isTablet = screenW >= 768;
@@ -482,6 +488,15 @@ export default function LiveTrackTab() {
             p.userId === user.id ||
             (!!user.username && p.username.toLowerCase() === user.username.toLowerCase()),
         );
+        ensureActiveRaceInStore({
+          raceId,
+          raceStartTime: new Date(detail.race.startedAt ?? Date.now()).toISOString(),
+          userId: user.id,
+          username: user.username ?? "Runner",
+          goalSteps: typeof detail.race.targetSteps === "number" ? detail.race.targetSteps : DEFAULT_TARGET_STEPS,
+          totalParticipants: detail.race.currentPlayers ?? parts.length,
+          bootSteps: me?.currentSteps ?? 0,
+        });
         if (!raceResumedRef.current) {
           raceResumedRef.current = true;
           resumeLiveRace(
@@ -537,6 +552,52 @@ export default function LiveTrackTab() {
 
   useEffect(() => {
     loadActiveRace(); }, [loadActiveRace]);
+
+  useFocusEffect(useCallback(() => {
+    if (!activeRaceId || !isActive || !user?.id) return;
+    const me = participants.find(
+      (p) =>
+        p.userId === user.id ||
+        (!!user.username && p.username.toLowerCase() === user.username.toLowerCase()),
+    );
+    ensureActiveRaceInStore({
+      raceId: activeRaceId,
+      raceStartTime: new Date(race?.startedAt ?? Date.now()).toISOString(),
+      userId: user.id,
+      username: user.username ?? "Runner",
+      goalSteps: targetSteps,
+      totalParticipants: race?.currentPlayers ?? participants.length,
+      bootSteps: Math.max(me?.currentSteps ?? 0, liveRaceSteps),
+    });
+    stepEngineLog(
+      "LiveScreen",
+      `live-track focus raceId=${activeRaceId} renderedSteps=${liveRaceSteps}`,
+    );
+    void catchUpLiveRaceSteps(me?.currentSteps ?? 0, true);
+  }, [activeRaceId, isActive, user?.id, user?.username, participants, race?.startedAt, race?.currentPlayers, targetSteps, liveRaceSteps, catchUpLiveRaceSteps]));
+
+  useEffect(() => {
+    if (!activeRaceId || !user?.id) return;
+    stepEngineLog(
+      "LiveScreen",
+      `live-track update canonical=${canonicalRaceSteps} context=${userRaceSteps ?? 0} rendered=${liveRaceSteps}`,
+    );
+  }, [activeRaceId, user?.id, canonicalRaceSteps, userRaceSteps, liveRaceSteps]);
+
+  useEffect(() => {
+    if (!activeRaceId) return;
+    const sub = AppState.addEventListener("change", (nextState) => {
+      if (nextState !== "active" || !isActive || !user?.id) return;
+      const me = participants.find(
+        (p) =>
+          p.userId === user.id ||
+          (!!user.username && p.username.toLowerCase() === user.username.toLowerCase()),
+      );
+      stepEngineLog("Lifecycle", "appState=active live-track catchUp");
+      void catchUpLiveRaceSteps(me?.currentSteps ?? 0, true);
+    });
+    return () => sub.remove();
+  }, [activeRaceId, isActive, user?.id, user?.username, participants, catchUpLiveRaceSteps]);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -661,12 +722,12 @@ export default function LiveTrackTab() {
         userId: p.userId,
         rank,
         name: isMe ? "You" : username,
-        steps: isMe && isActive ? canonicalRaceSteps : p.currentSteps,
+        steps: isMe && isActive ? liveRaceSteps : p.currentSteps,
         isMe,
         rankColor: p.avatarColor ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length],
         initial: (isMe ? "Y" : username.slice(0, 1).toUpperCase()) || "R",
         country: p.countryFlag ?? undefined,
-        isHost: p.isHost, }; }).sort((a, b) => a.rank - b.rank); }, [participants, user?.id, user?.username, isActive, canonicalRaceSteps, canonicalRank]);
+        isHost: p.isHost, }; }).sort((a, b) => a.rank - b.rank); }, [participants, user?.id, user?.username, isActive, liveRaceSteps, canonicalRank]);
 
   const myPlayer = useMemo(
     () => sortedPlayers.find((p) => p.isMe) ?? sortedPlayers[0] ?? null,
@@ -689,10 +750,10 @@ export default function LiveTrackTab() {
   const canLeaveRace = showLeaveButton && !currentParticipant.isHost;
   const mySteps = useMemo(() => {
     if (isActive && myPlayer?.isMe) {
-      return canonicalRaceSteps;
+      return liveRaceSteps;
     }
     return myPlayer?.steps ?? 0;
-  }, [myPlayer, isActive, canonicalRaceSteps]);
+  }, [myPlayer, isActive, liveRaceSteps]);
   const myProgress = Math.min(mySteps / Math.max(targetSteps, 1), 1);
 
   useEffect(() => {

@@ -36,6 +36,7 @@ import { useSound } from "@/context/SoundContext";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
 import { useWalkContext, TrackingStatus } from "@/context/WalkContext";
 import { useStepSourceGuard } from "@/hooks/useStepSourceGuard";
+import { ENABLE_CASH_CHALLENGES } from "@/config/featureFlags";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import { useRace } from "@/context/RaceContext";
@@ -170,10 +171,19 @@ const RACE_OPTIONS = [
 
 
 // ── Challenge Entry Options ───────────────────────────────────────────────────
-/** Set to true to re-enable $1/$3/$5 paid cash challenge creation in the UI. */
-const ENABLE_CASH_CHALLENGES = false;
-/** Re-enables the $3 Premium Challenge card in its own section below Create Challenge. */
-const ENABLE_THREE_DOLLAR_CHALLENGE = true;
+/** $3 Premium card — only when paid cash challenges are enabled (see featureFlags). */
+const ENABLE_THREE_DOLLAR_CHALLENGE = ENABLE_CASH_CHALLENGES;
+
+function isPaidCashFee(fee: number): boolean {
+  return fee > 0;
+}
+
+function cashChallengeBlockedMessage(serverError?: string): string {
+  if (serverError?.includes("disabled for this build")) {
+    return "Cash challenges are turned off on the API server. The app is using your OVH URL — enable cash challenges on the backend deployment (ENABLE_CASH_CHALLENGES).";
+  }
+  return serverError ?? "Please try again.";
+}
 
 type ChallengeEntryCategory = "free" | "coins_battle" | "paid_cash";
 interface ChallengeEntryOption { label: string; type: ChallengeEntryCategory; value: number }
@@ -1684,6 +1694,7 @@ function WalkScreenContent() {
     resumeStepWatching,
     refreshTodaySteps,
     stepsHydrated,
+    stepsSourceReady,
     authReady,
   } = useWalkContext();
   const { guardRewardAction, canJoinRewardRaces, verificationLevel } = useStepSourceGuard();
@@ -1793,9 +1804,15 @@ function WalkScreenContent() {
   const [walkCacheReady, setWalkCacheReady] = useState(false);
 
   const userReady = authReady && !!sessionToken && !!user?.id && stepsHydrated;
+  const stepsInitializing =
+    stepsHydrated &&
+    !stepsSourceReady &&
+    (stepPermissionStatus === "granted" || usingRealTracking);
   const { safeSteps: safeTodaySteps, safeGoal: goalSteps, progress: goalProgress, percent: goalPercent } =
     clampDailyProgress(
-      userReady && Number.isFinite(contextTodaySteps) ? contextTodaySteps : 0,
+      userReady && !stepsInitializing && Number.isFinite(contextTodaySteps)
+        ? contextTodaySteps
+        : 0,
       contextDailyGoal > 0 ? contextDailyGoal : dbWalk.goalSteps,
     );
 
@@ -2275,6 +2292,14 @@ function WalkScreenContent() {
     const entryKey = feeToEntryType(setupModal.fee);
     const status = challengeStatuses[entryKey];
 
+    if (isPaidCashFee(setupModal.fee) && !ENABLE_CASH_CHALLENGES) {
+      AppAlert.alert(
+        "Cash challenges unavailable",
+        "Paid cash challenges are disabled in this app build. Set EXPO_PUBLIC_ENABLE_CASH_CHALLENGES=true and rebuild.",
+      );
+      return;
+    }
+
     if (setupModal.fee !== 0 && !canAfford) {
       AppAlert.alert(
         "Insufficient Balance",
@@ -2313,7 +2338,7 @@ function WalkScreenContent() {
               setActiveRaceModal(body2.active_race as ActiveRaceInfo);
               return;
             }
-            AppAlert.alert("Could not join", (body2.error as string) ?? "Please try again.");
+            AppAlert.alert("Could not join", cashChallengeBlockedMessage(body2.error as string | undefined));
             return;
           }
           const data2 = await res2.json();
@@ -2333,7 +2358,7 @@ function WalkScreenContent() {
             setActiveRaceModal(body.active_race as ActiveRaceInfo);
             return;
           }
-          AppAlert.alert("Could not create room", (body.error as string) ?? "Please try again.");
+          AppAlert.alert("Could not create room", cashChallengeBlockedMessage(body.error as string | undefined));
           return;
         }
         const data = await res.json();
@@ -2520,6 +2545,14 @@ function WalkScreenContent() {
       }
 
       if (challengeEntryMode === "usd") {
+        if (!ENABLE_CASH_CHALLENGES) {
+          AppAlert.alert(
+            "Cash challenges unavailable",
+            "Paid cash challenges are disabled in this app build. Set EXPO_PUBLIC_ENABLE_CASH_CHALLENGES=true and rebuild.",
+          );
+          setChallengeCreating(false);
+          return;
+        }
         const required = createPaymentQuote?.totalPayable ?? challengeUsdAmount;
         if (walletBalance < required) {
           AppAlert.alert(
@@ -2579,7 +2612,7 @@ function WalkScreenContent() {
           });
           return;
         }
-        AppAlert.alert("Error", data.error ?? "Failed to create room. Please try again.");
+        AppAlert.alert("Error", cashChallengeBlockedMessage(data.error));
         return;
       }
 
@@ -2808,8 +2841,17 @@ function WalkScreenContent() {
             <View style={styles.stepsHero}>
               <WalkProgressIcon steps={safeTodaySteps} goal={goalSteps} size={56} style={styles.stepsHeroIcon} />
               <View style={styles.stepsHeroText}>
-                <Text style={[styles.stepsHeroValue, { color: colors.foreground }]}>{safeTodaySteps.toLocaleString()}</Text>
-                <Text style={[styles.stepsHeroLabel, { color: colors.mutedForeground }]}>steps today</Text>
+                {stepsInitializing ? (
+                  <>
+                    <ActivityIndicator size="small" color={colors.primary} style={{ marginBottom: 6 }} />
+                    <Text style={[styles.stepsHeroLabel, { color: colors.mutedForeground }]}>Loading steps…</Text>
+                  </>
+                ) : (
+                  <>
+                    <Text style={[styles.stepsHeroValue, { color: colors.foreground }]}>{safeTodaySteps.toLocaleString()}</Text>
+                    <Text style={[styles.stepsHeroLabel, { color: colors.mutedForeground }]}>steps today</Text>
+                  </>
+                )}
               </View>
             </View>
 

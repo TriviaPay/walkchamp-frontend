@@ -105,18 +105,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const userId = user?.id;
     cancelProactiveTokenRefresh();
     stepPollingService.stopPolling("logout");
-    await clearStepSessionForLogout(userId);
     raceStepSyncService.cancelPending();
     // Clear in-memory screen cache so the next user never sees stale data.
     screenCache.clearAll();
-    // Remove cached profile so a transient-offline restore does not display
-    // a previous user's data after a deliberate logout.
-    void storageRemove(STORAGE_KEYS.USER);
-    dynamicIconService.onLogout().catch(() => {});
     // Optimistic logout: wipe Redux immediately so the TabLayout Redirect fires
     // right away — the user sees the login screen without any intermediate flash.
-    // Session cleanup (Descope API + SecureStore) continues in the background.
+    // Native step cleanup + Descope API continue in the background.
     dispatch(authActions.localLogout());
+    void clearStepSessionForLogout(userId).catch(() => {});
+    void storageRemove(STORAGE_KEYS.USER);
+    dynamicIconService.onLogout().catch(() => {});
     getStoredSession()
       .then(({ refresh }) => (refresh ? authLogout(refresh) : clearSession()))
       .catch(() => clearSession())

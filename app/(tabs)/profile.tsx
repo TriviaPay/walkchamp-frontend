@@ -1,6 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { getApiBase } from "@/utils/apiUrl";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import {
@@ -280,6 +280,10 @@ function AchievementCard({ icon, label, value, color }: { icon: string; label: s
 export default function ProfileScreen() {
   const colors = useColors();
   const { insets, safeTop, safeBottom } = useSafeLayout();
+  const searchParams = useLocalSearchParams<{ openTitles?: string | string[] }>();
+  const openTitlesParam = Array.isArray(searchParams.openTitles)
+    ? searchParams.openTitles[0]
+    : searchParams.openTitles;
   const { user, logout, refreshUserProfile, updateUser } = useAuth();
   const { allTimeSteps, currentStreak, weeklySteps, requestStepPermission } = useWalk();
   const { userRank } = useApp();
@@ -287,6 +291,13 @@ export default function ProfileScreen() {
   // Profile view state
   const [serverStats,       setServerStats]       = useState<ServerStats | null>(null);
   const [showTitlesModal,   setShowTitlesModal]   = useState(false);
+
+  useEffect(() => {
+    if (openTitlesParam === "1" || openTitlesParam === "true") {
+      setShowTitlesModal(true);
+    }
+  }, [openTitlesParam]);
+
   const [activeTitle,       setActiveTitle]       = useState<ActiveTitle | null>(null);
   const [challengeHistory,  setChallengeHistory]  = useState<ChallengeHistoryItem[]>([]);
   const [last7Days,         setLast7Days]         = useState<{ date: string; steps: number }[]>([]);

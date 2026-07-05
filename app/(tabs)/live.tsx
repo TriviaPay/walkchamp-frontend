@@ -1145,11 +1145,10 @@ export default function LiveTab() {
                 ? { ...p, currentSteps: Math.max(p.currentSteps, data.steps) }
                 : p
             );
+            const sorted = [...updated].sort((a, b) => b.currentSteps - a.currentSteps);
             return {
               ...r,
-              players: updated
-                .map((p, i) => ({ ...p, rank: i + 1 }))
-                .sort((a, b) => b.currentSteps - a.currentSteps),
+              players: sorted.map((p, i) => ({ ...p, rank: i + 1 })),
             };
           })
         );

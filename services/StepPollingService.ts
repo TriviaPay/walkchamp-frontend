@@ -122,12 +122,7 @@ class StepPollingService {
       }
 
       if (raceSteps === this._lastEmittedSteps) {
-        this._unchangedTicks = (this._unchangedTicks ?? 0) + 1;
-        if (this._unchangedTicks < 3) {
-          if (__DEV__) console.log(`[RaceSync] skippedNoChange raceSteps:${raceSteps}`);
-          return;
-        }
-        if (__DEV__) console.log(`[RaceSync] re-emit unchanged raceSteps:${raceSteps} (keepalive)`);
+        if (__DEV__) console.log(`[RaceSync] unchanged raceSteps:${raceSteps} (re-emit)`);
       } else {
         this._unchangedTicks = 0;
       }

@@ -29,6 +29,7 @@ import {
   stepScopedKeys,
   writeDailyStepsForUserDate,
 } from "@/utils/stepScopedStorage";
+import { shouldIgnoreLegacyPhantomBump, sanitizeLegacyProviderSteps, stepEngineLog } from "@/utils/stepAccuracy";
 
 let notificationTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingNotification = false;
@@ -314,6 +315,10 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
       `[StepReset] currentUserId=${activeUserId ?? "none"} localDate=${today} previousLocalDate=${trackingDate ?? "none"} dayChanged=${needsRollover}`,
     );
   }
+  stepEngineLog(
+    "DayReset",
+    `previousDate=${trackingDate ?? lastKnownTrackingDate ?? "none"} currentDate=${today} reset=${needsRollover}`,
+  );
 
   if (!needsRollover) {
     if (trackingDate == null) {
@@ -429,8 +434,9 @@ export function updateStepProgressFromRealSource(input: {
     return;
   }
 
-  if (input.todaySteps !== undefined) {
-    const next = Math.max(0, Math.floor(input.todaySteps));
+  let resolvedTodaySteps = input.todaySteps;
+  if (resolvedTodaySteps !== undefined) {
+    let next = Math.max(0, Math.floor(resolvedTodaySteps));
     const delta = next - current.todaySteps;
     // Reject suspicious small fixed jumps from native_service when verified source is active.
     if (
@@ -447,17 +453,33 @@ export function updateStepProgressFromRealSource(input: {
       }
       return;
     }
+    if (isDeviceSensorSource(source) && !stepProviderManager.usesVerifiedStepSource()) {
+      next = sanitizeLegacyProviderSteps(
+        next,
+        current.todaySteps,
+        current.todaySteps,
+      );
+    }
+    if (shouldIgnoreLegacyPhantomBump(current.todaySteps, next)) {
+      if (__DEV__) {
+        console.log(
+          `[StepEngine] rejected phantom bump previous=${current.todaySteps} incoming=${next} source=${source}`,
+        );
+      }
+      return;
+    }
+    resolvedTodaySteps = next;
   }
 
   if (__DEV__) {
     console.log(
-      `[StepSource] real update source=${source} todaySteps=${input.todaySteps ?? current.todaySteps} raceSteps=${input.raceSteps ?? current.raceSteps}`,
+      `[StepSource] real update source=${source} todaySteps=${resolvedTodaySteps ?? current.todaySteps} raceSteps=${input.raceSteps ?? current.raceSteps}`,
     );
   }
 
   store.dispatch(
     raceProgressActions.updateFromDeviceSource({
-      todaySteps: input.todaySteps,
+      todaySteps: resolvedTodaySteps,
       raceSteps: input.raceSteps,
       stepSource: source,
       updatedAt,
@@ -465,7 +487,7 @@ export function updateStepProgressFromRealSource(input: {
   );
 
   const after = store.getState().raceProgress;
-  if (input.todaySteps !== undefined) {
+  if (resolvedTodaySteps !== undefined) {
     console.log(`[StepEngine] step update todaySteps=${after.todaySteps}`);
   }
   if (input.raceSteps !== undefined) {
@@ -474,7 +496,7 @@ export function updateStepProgressFromRealSource(input: {
     );
   }
 
-  if (input.todaySteps !== undefined) {
+  if (resolvedTodaySteps !== undefined) {
     const s = store.getState().raceProgress;
     store.dispatch(walkActions.setTodaySteps(s.todaySteps));
     scheduleWalkNotificationUpdate(false);
@@ -865,6 +887,53 @@ export function setStepProgressUser(
   store.dispatch(raceProgressActions.setUserContext({ userId, username }));
 }
 
+/**
+ * Ensure Redux has an active race entry so feedRaceStepsToStore updates Live UI.
+ * Safe to call on every live-screen focus / re-enter / resume.
+ */
+export function ensureActiveRaceInStore(params: {
+  raceId: string;
+  raceStartTime: string;
+  userId: string;
+  username: string;
+  goalSteps: number;
+  totalParticipants?: number;
+  bootSteps?: number;
+}): void {
+  const boot = Math.max(0, Math.floor(params.bootSteps ?? 0));
+  const s = store.getState().raceProgress;
+
+  if (
+    s.raceStatus === "active" &&
+    s.activeRaceId === params.raceId &&
+    s.userId === params.userId
+  ) {
+    if (boot > s.raceSteps) {
+      store.dispatch(
+        raceProgressActions.updateFromDeviceSource({
+          raceSteps: boot,
+          stepSource: mapProviderSource(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      scheduleNotificationUpdate(true);
+    }
+    console.log(
+      `[StepCoordinator] ensureActiveRaceInStore ok raceId=${params.raceId} raceSteps=${store.getState().raceProgress.raceSteps}`,
+    );
+    return;
+  }
+
+  setActiveRaceProgress({
+    ...params,
+    bootSteps: boot,
+    freshStart: false,
+  });
+  console.log(
+    `[StepCoordinator] ensureActiveRaceInStore activated raceId=${params.raceId} bootSteps=${boot}`,
+  );
+}
+
 export function setActiveRaceProgress(params: {
   raceId: string;
   raceStartTime: string;
@@ -982,7 +1051,13 @@ export function syncRaceProgressToBackend(options?: {
   deviceTotalSteps?: number;
 }): void {
   const s = store.getState().raceProgress;
-  if (!s.activeRaceId || s.raceStatus !== "active") return;
+  if (!s.activeRaceId || s.raceStatus !== "active") {
+    stepEngineLog(
+      "Sync",
+      `skippedCompletedRace=true raceId=${s.activeRaceId ?? "none"} status=${s.raceStatus}`,
+    );
+    return;
+  }
 
   store.dispatch(raceProgressActions.setSyncing(true));
 
@@ -1157,6 +1232,7 @@ export async function clearLocalStepStorageForAccountSwitch(userId?: string): Pr
   if (__DEV__) {
     console.log(`[AuthSwitch] clearing step state userId=${userId ?? "unknown"}`);
   }
+  stepEngineLog("AuthSwitch", "clearedStepState=true");
 
   await Promise.all([
     userId ? clearScopedStepStateForUser(userId) : Promise.resolve(),
@@ -1250,6 +1326,19 @@ export async function clearUserSessionStepState(
  * account changes (logout/login or direct account switch).
  */
 export async function bindStepSessionToUser(userId: string): Promise<boolean> {
+  try {
+    const {
+      clearSignedOutLegacySensorState,
+      setAndroidLegacySensorUserContext,
+    } = await import(
+      "@/services/steps/providers/androidLegacySensorProvider"
+    );
+    await clearSignedOutLegacySensorState();
+    setAndroidLegacySensorUserContext(userId);
+  } catch {
+    // non-fatal
+  }
+
   const lastUserId = await storageGet<string>(STORAGE_KEYS.LAST_STEP_USER_ID);
   const switched = !!lastUserId && lastUserId !== userId;
   if (switched) {
@@ -1261,14 +1350,6 @@ export async function bindStepSessionToUser(userId: string): Promise<boolean> {
     await clearUserSessionStepState(lastUserId, "account_switch");
   }
   await deleteLegacyUnscopedStepKeys();
-  try {
-    const { setAndroidLegacySensorUserContext } = await import(
-      "@/services/steps/providers/androidLegacySensorProvider"
-    );
-    setAndroidLegacySensorUserContext(userId);
-  } catch {
-    // non-fatal
-  }
   await storageSet(STORAGE_KEYS.LAST_STEP_USER_ID, userId);
   if (__DEV__) {
     console.log(`[StepService] started for new user userId=${userId}`);

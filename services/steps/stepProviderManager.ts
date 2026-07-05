@@ -136,6 +136,39 @@ async function selectProvider(forceReselect = false): Promise<StepProvider | nul
 
 async function runInitialize(forceReselect = false): Promise<void> {
   await selectProvider(forceReselect);
+  await logStepSourceDiagnostics();
+}
+
+async function logStepSourceDiagnostics(): Promise<void> {
+  if (Platform.OS === "android") {
+    let hcAvail = false;
+    try {
+      const init = await androidHCService.initialize();
+      hcAvail = init.initialized && init.availability === "available";
+    } catch {
+      hcAvail = false;
+    }
+    const legacyAvail = await androidLegacySensorProvider.isAvailable();
+    const id = _activeProvider?.providerId ?? null;
+    const selected =
+      id === "android_health_connect"
+        ? "health_connect"
+        : id === "android_legacy_sensor"
+          ? "sensor"
+          : "none";
+    console.log(
+      `[StepSource] selected=${selected} healthConnectAvailable=${hcAvail} sensorAvailable=${legacyAvail}`,
+    );
+    return;
+  }
+  if (Platform.OS === "ios") {
+    const ok = await iosHealthKitProvider.isAvailable();
+    console.log(
+      `[StepSource] selected=${ok ? "healthkit" : "none"} healthKitAvailable=${ok}`,
+    );
+    return;
+  }
+  console.log("[StepSource] selected=none");
 }
 
 export const stepProviderManager = {

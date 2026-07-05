@@ -40,6 +40,12 @@ import {
   type CashChallengePaymentQuote,
 } from "@/services/cashChallengeApi";
 import { useApp } from "@/context/AppContext";
+import {
+  refundMessageFromCancelBody,
+  refundMessageFromLeaveBody,
+  type RaceCancelResponse,
+  type RaceLeaveResponse,
+} from "@/services/refundApi";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const BG = "#080B14";
@@ -1350,7 +1356,7 @@ export default function AvailableRoomsScreen() {
   const [consentUpcomingRoom, setConsentUpcomingRoom] = useState<UpcomingRoom | null>(null);
   const [consentChecks, setConsentChecks] = useState([false, false, false, false]);
   const [consentPaymentQuote, setConsentPaymentQuote] = useState<CashChallengePaymentQuote | null>(null);
-  const { walletBalance } = useApp();
+  const { walletBalance, refreshWallet } = useApp();
 
   // ── Upcoming rooms state ──────────────────────────────────────────────────
   const [upcomingRooms, setUpcomingRooms] = useState<UpcomingRoom[]>([]);
@@ -1463,11 +1469,24 @@ export default function AvailableRoomsScreen() {
     if (registeringRoomId) return;
     setRegisteringRoomId(room.room_id);
     try {
-      const res = await authFetch(`/api/rooms/${room.room_id}/cancel-registration`, { method: "POST" });
+      // Scheduled rooms: cancel registration (no charge until race starts).
+      // Open/full waiting rooms: leave triggers canonical wallet refund.
+      const useLeave = room.status === "open" || room.status === "full";
+      const res = await authFetch(
+        useLeave
+          ? `/api/races/${room.room_id}/leave`
+          : `/api/rooms/${room.room_id}/cancel-registration`,
+        { method: "POST", ...(useLeave ? { body: JSON.stringify({ reason: "cancel_registration" }) } : {}) },
+      );
+      const body = await res.json().catch(() => ({})) as RaceLeaveResponse & Record<string, unknown>;
       if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as Record<string, unknown>;
         AppAlert.alert("Could not cancel", (body.error as string) ?? "Please try again.");
         return;
+      }
+      if (useLeave) {
+        await refreshWallet();
+        const refundMsg = refundMessageFromLeaveBody(body);
+        if (refundMsg) AppAlert.alert("Refund", refundMsg);
       }
       setUpcomingRooms((prev) =>
         prev.map((r) =>
@@ -1481,7 +1500,7 @@ export default function AvailableRoomsScreen() {
     } finally {
       setRegisteringRoomId(null);
     }
-  }, [registeringRoomId]);
+  }, [registeringRoomId, refreshWallet]);
 
   const handleCancelRoom = useCallback(async (room: UpcomingRoom) => {
     if (registeringRoomId) return;
@@ -1496,11 +1515,14 @@ export default function AvailableRoomsScreen() {
             setRegisteringRoomId(room.room_id);
             try {
               const res = await authFetch(`/api/races/${room.room_id}/cancel`, { method: "POST" });
+              const body = await res.json().catch(() => ({})) as RaceCancelResponse & Record<string, unknown>;
               if (!res.ok) {
-                const body = await res.json().catch(() => ({})) as Record<string, unknown>;
                 AppAlert.alert("Could not cancel", (body.error as string) ?? "Please try again.");
                 return;
               }
+              await refreshWallet();
+              const refundMsg = refundMessageFromCancelBody(body);
+              if (refundMsg) AppAlert.alert("Room Cancelled", refundMsg);
               setUpcomingRooms((prev) => prev.filter((r) => r.room_id !== room.room_id));
             } catch {
               AppAlert.alert("Error", "Network error. Please try again.");
@@ -1511,7 +1533,7 @@ export default function AvailableRoomsScreen() {
         },
       ]
     );
-  }, [registeringRoomId]);
+  }, [registeringRoomId, refreshWallet]);
 
   // ── Pusher subscription ────────────────────────────────────────────────────
   useEffect(() => {

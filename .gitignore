@@ -50,6 +50,7 @@ nohup.out
 dist-export-*/
 .verify-export-android/
 package-lock.json
+package_dump.txt
 modules/**/android/build/
 modules/**/android/.gradle/
 frontend/
