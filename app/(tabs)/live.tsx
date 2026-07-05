@@ -1,10 +1,10 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { BlueShoe } from "@/components/BlueShoe";
+import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { SkeletonList, SkeletonRaceRow } from "@/components/SkeletonRows";
 import { screenCache } from "@/utils/screenCache";
 import { router } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 import {
   ActivityIndicator,
   Animated,
@@ -27,7 +27,6 @@ import { useTabBarHeight } from "@/hooks/useTabBarHeight";
 import { usePresence } from "@/context/PresenceContext";
 import { useAuth } from "@/context/AuthContext";
 import { authFetch } from "@/utils/authFetch";
-import { getApiBase } from "@/utils/apiUrl";
 import { connectPusher, subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf, rs } from "@/utils/responsive";
@@ -530,7 +529,6 @@ function RaceCard({
   myUsername?: string;
   onAvatarPress?: (p: LiveRacePlayer) => void;
 }) {
-  const { getAvatarVersion } = useAvatarVersionContext();
   const { isDark } = useTheme();
   const isFinished = race.status === "completed";
 
@@ -751,26 +749,15 @@ function RaceCard({
                 <RankCircle rank={i + 1} colors={colors} />
 
                 {/* Avatar — tappable to open profile */}
-                <TouchableOpacity
-                  activeOpacity={0.75}
+                <ProfileAvatar
+                  userId={p.userId}
+                  avatarVersion={p.avatarVersion ?? 0}
+                  avatarColor={p.avatarColor}
+                  displayName={p.username}
+                  size={rs(30)}
+                  borderWidth={1.5}
                   onPress={() => onAvatarPress?.(p)}
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                >
-                  {p.userId ? (
-                    <Image
-                      source={{ uri: `${getApiBase()}/api/profile/avatar/${p.userId}?v=${getAvatarVersion(p.userId, p.avatarVersion ?? 0)}` }}
-                      style={[st.avatar, { borderColor: p.avatarColor }]}
-                      cachePolicy="memory-disk"
-                      contentFit="cover"
-                    />
-                  ) : (
-                    <View style={[st.avatar, { backgroundColor: p.avatarColor + "25", borderColor: p.avatarColor }]}>
-                      <Text style={[st.avatarText, { color: p.avatarColor }]}>
-                        {p.username.charAt(0).toUpperCase()}
-                      </Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
+                />
 
                 {/* Name + progress */}
                 <View style={st.playerMid}>

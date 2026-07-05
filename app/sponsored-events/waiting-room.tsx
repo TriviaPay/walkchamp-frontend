@@ -14,6 +14,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
 import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
+import { parseSponsoredEventsResponse } from "@/utils/sponsoredEventsApi";
 import { authFetch } from "@/utils/authFetch";
 import { useAppDispatch } from "@/store/hooks";
 import { fetchCoinBalance } from "@/store/slices/coinsSlice";
@@ -130,8 +131,8 @@ export default function SponsoredWaitingRoom() {
     try {
       const res = await authFetch("/api/sponsored-events");
       if (!res.ok) return;
-      const data = await res.json() as { events: SponsoredEvent[] };
-      const found = (data.events ?? []).find((e) => e.id === id);
+      const data = parseSponsoredEventsResponse(await res.json().catch(() => ({})));
+      const found = data.events.find((e) => e.id === id);
       if (found) setEvent(found);
     } catch { /* silent */ }
     finally { setLoading(false); }
@@ -148,8 +149,8 @@ export default function SponsoredWaitingRoom() {
     try {
       const res = await authFetch("/api/sponsored-events");
       if (!res.ok) return;
-      const data = await res.json() as { events: SponsoredEvent[] };
-      const found = (data.events ?? []).find((e) => e.id === id);
+      const data = parseSponsoredEventsResponse(await res.json().catch(() => ({})));
+      const found = data.events.find((e) => e.id === id);
       if (!found || found.status !== "in_progress") return;
     } catch {
       return;
@@ -172,8 +173,8 @@ export default function SponsoredWaitingRoom() {
       try {
         const res = await authFetch("/api/sponsored-events");
         if (!res.ok) return;
-        const data = await res.json() as { events: SponsoredEvent[] };
-        const found = (data.events ?? []).find((e) => e.id === id);
+        const data = parseSponsoredEventsResponse(await res.json().catch(() => ({})));
+        const found = data.events.find((e) => e.id === id);
         if (found) {
           setEvent(found);
           if (found.status === "in_progress") {

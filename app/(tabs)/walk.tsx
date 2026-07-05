@@ -1720,6 +1720,15 @@ function WalkScreenContent() {
   const themeCoinBalance = useSelector((s: RootState) => s.trackThemes.coinBalance);
   const themesPurchaseLoading = useSelector((s: RootState) => s.trackThemes.purchaseLoading);
   const coinBalance = useSelector((s: RootState) => s.coins.balance?.currentBalance ?? themeCoinBalance);
+  const canonicalTodaySteps = useSelector((s: RootState) =>
+    s.raceProgress.userId === user?.id
+      ? Math.max(0, Math.floor(s.raceProgress.todaySteps))
+      : 0,
+  );
+  const liveTodaySteps = Math.max(
+    Number.isFinite(contextTodaySteps) ? contextTodaySteps : 0,
+    canonicalTodaySteps,
+  );
   const [purchaseConfirmModal, setPurchaseConfirmModal] = useState<{ code: string; name: string; price: number } | null>(null);
   const [showCoinsInfo, setShowCoinsInfo] = useState(false);
   const [showCoinStore, setShowCoinStore] = useState(false);
@@ -1814,14 +1823,23 @@ function WalkScreenContent() {
   const stepsInitializing =
     stepsHydrated &&
     !stepsSourceReady &&
+    contextTodaySteps <= 0 &&
     (stepPermissionStatus === "granted" || usingRealTracking);
   const { safeSteps: safeTodaySteps, safeGoal: goalSteps, progress: goalProgress, percent: goalPercent } =
     clampDailyProgress(
-      userReady && !stepsInitializing && Number.isFinite(contextTodaySteps)
-        ? contextTodaySteps
+      userReady && !stepsInitializing && Number.isFinite(liveTodaySteps)
+        ? liveTodaySteps
         : 0,
       contextDailyGoal > 0 ? contextDailyGoal : dbWalk.goalSteps,
     );
+
+  useFocusEffect(useCallback(() => {
+    if (!userReady || !usingRealTracking) return;
+    const syncInterval = setInterval(() => {
+      void refreshTodaySteps({ rehydrateBackend: false, mergeNative: true });
+    }, STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_POLL_MS);
+    return () => clearInterval(syncInterval);
+  }, [refreshTodaySteps, userReady, usingRealTracking]));
 
   useEffect(() => {
     if (!user?.id) {
@@ -3263,7 +3281,7 @@ function WalkScreenContent() {
                     <Text style={styles.raceCardLabel}>Cash Prize Challenge</Text>
                     <Text style={styles.raceCardSub}>Skill-based walking challenge · Prize rewards</Text>
                     <View style={{ flexDirection: "row", gap: 5, marginTop: 5, flexWrap: "wrap" }}>
-                      {["$3 entry", "Step goal", "Top finishers"].map((chip) => (
+                      {["$3 entry", "Step goal"].map((chip) => (
                         <View key={chip} style={{ backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2 }}>
                           <Text style={{ color: "#FFF", fontSize: 10, fontWeight: "700" }}>{chip}</Text>
                         </View>
@@ -3313,15 +3331,9 @@ function WalkScreenContent() {
 
             const ctaLabel = isRacing
               ? "🏃 Racing"
-              : isJoinWin && ss
-                ? `Join ${ss.registeredCount}/${ss.maxSlots}`
-                : isRegistered && ss
-                  ? `Joined ${ss.registeredCount}/${ss.maxSlots}`
-                  : isAvailable && ss
-                    ? `Join ${ss.registeredCount}/${ss.maxSlots}`
-                    : isWatchLive
-                      ? "Watch Live"
-                      : "View";
+              : isWatchLive
+                ? "Watch Live"
+                : "View";
 
             const subText = isRacing
               ? "You're racing right now!"
@@ -3411,7 +3423,7 @@ function WalkScreenContent() {
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 1 }}
                     >
-                      <Text style={[styles.sponsoredCtaText, { fontSize: (isJoinWin || isRegistered || isAvailable) ? 10 : 12 }]}>{ctaLabel}</Text>
+                      <Text style={styles.sponsoredCtaText}>{ctaLabel}</Text>
                     </LinearGradient>
                   </View>
                 </LinearGradient>

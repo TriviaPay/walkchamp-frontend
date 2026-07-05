@@ -17,7 +17,7 @@ import { uploadGroupImage, groupImageUri } from "@/services/mediaApi";
 import { subscribeToChannel } from "@/services/realtimeService";
 import { SkeletonGroupDetailScreen } from "@/components/SkeletonRows";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
-import { useWalk } from "@/context/WalkContext";
+import { useWalkContext } from "@/context/WalkContext";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
@@ -327,7 +327,7 @@ export default function GroupDetailScreen() {
   const { safeBottom } = useSafeLayout();
   const { groupId, section } = useLocalSearchParams<{ groupId: string; section?: string | string[] }>();
   const paramSection = Array.isArray(section) ? section[0] : section;
-  const { todaySteps: liveSteps } = useWalk();
+  const { todaySteps: liveSteps } = useWalkContext();
 
   const [group, setGroup] = useState<Group | null>(null);
   const [members, setMembers] = useState<MemberEntry[]>([]);

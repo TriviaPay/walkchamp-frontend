@@ -67,7 +67,7 @@ export function stepEngineLog(tag: string, message: string): void {
   if (!__DEV__) return;
   const important =
     tag === "AuthSwitch" ||
-    /rejected|failed|sanitized|skippedCompletedRace/i.test(message);
+    /rejected|failed|skippedCompletedRace/i.test(message);
   if (!important && !STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) return;
   console.log(`[${tag}] ${message}`);
 }
@@ -119,15 +119,27 @@ export function sanitizeLegacyProviderSteps(
     previousProviderSteps != null
       ? Math.max(0, Math.floor(previousProviderSteps))
       : backend;
+
+  // No established baseline yet — accept the first real sensor read (backend not synced).
+  if (previous === 0 && backend === 0 && provider > 0) {
+    return provider;
+  }
+
+  // Monotonic forward progress — trust background/native FGS catch-up between polls.
+  if (provider >= previous && previous > 0) {
+    return provider;
+  }
+
   const tickJump = provider - previous;
   const aheadOfBackend = provider - backend;
 
   if (
-    tickJump > STEP_SYNC_CONFIG.LEGACY_MAX_TICK_JUMP &&
-    aheadOfBackend > STEP_SYNC_CONFIG.LEGACY_MAX_UNCONFIRMED_AHEAD
+    provider < previous ||
+    (tickJump > STEP_SYNC_CONFIG.LEGACY_MAX_TICK_JUMP &&
+      aheadOfBackend > STEP_SYNC_CONFIG.LEGACY_MAX_UNCONFIRMED_AHEAD)
   ) {
     const capped = Math.max(backend, previous);
-    stepEngineLog(
+    stepDebugVerboseLog(
       "StepEngine",
       `sanitizedLegacyProvider provider=${provider} backend=${backend} previous=${previous} capped=${capped}`,
     );
@@ -192,6 +204,20 @@ export function hydrateStepDisplayFromSources(params: {
   const provider = Math.max(0, Math.floor(params.providerSteps));
   const backend = Math.max(0, Math.floor(params.backendSteps));
   const local = Math.max(0, Math.floor(params.localCachedSteps));
+  const verified =
+    params.verifiedSource ?? stepProviderManager.usesVerifiedStepSource();
+
+  // Verified HC/HealthKit may return 0 while still initializing — keep backend/local until provider confirms.
+  if (verified && provider === 0) {
+    const fallback = Math.max(backend, local);
+    if (fallback > 0) {
+      stepEngineLog(
+        "StepEngine",
+        `hydrate verified pending provider=0 fallback=${fallback} backend=${backend} local=${local}`,
+      );
+      return fallback;
+    }
+  }
 
   if (provider === 0 && backend === 0 && local > 0) {
     stepEngineLog(
@@ -276,7 +302,11 @@ export function capWalkStepsForSync(
   }
   if (!verified && backendSteps != null) {
     const backend = Math.max(0, Math.floor(backendSteps));
-    const sanitized = sanitizeLegacyProviderSteps(ui, backend, backend);
+    const provider =
+      providerSteps != null ? Math.max(0, Math.floor(providerSteps)) : 0;
+    // Stale backend must not cap steps the provider already confirmed.
+    const ceiling = Math.max(backend, provider);
+    const sanitized = sanitizeLegacyProviderSteps(ui, ceiling, ceiling);
     return Math.min(ui, sanitized);
   }
   return ui;
@@ -292,17 +322,15 @@ export function logStepAccuracyAudit(ctx: StepAccuracyAuditContext): void {
   const providerId =
     ctx.providerId ?? stepProviderManager.getActiveProviderId() ?? "none";
   const verified = stepProviderManager.usesVerifiedStepSource();
-  stepEngineLog(
+  stepDebugVerboseLog(
     "StepAudit",
     `surface=${ctx.surface} localDate=${getTodayKey()} tz=${tz} provider=${providerId} verified=${verified} providerSteps=${ctx.providerSteps ?? "n/a"} backendSteps=${ctx.backendSteps ?? "n/a"} displaySteps=${ctx.displaySteps ?? "n/a"} delta=${ctx.delta ?? "n/a"}`,
-  );
-  if (__DEV__) {
-    console.log(`[StepAudit] detail`, {
+    {
       lastSynced: ctx.lastSynced,
       previousPoll: ctx.previousPoll,
       raceStartAt: ctx.raceStartAt,
       raceSteps: ctx.raceSteps,
       ...ctx.extra,
-    });
-  }
+    },
+  );
 }

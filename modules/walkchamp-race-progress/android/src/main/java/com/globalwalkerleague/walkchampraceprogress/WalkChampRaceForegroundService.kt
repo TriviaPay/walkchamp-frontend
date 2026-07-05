@@ -792,8 +792,16 @@ class WalkChampRaceForegroundService : Service() {
     syncNativeStepState(state)
   }
 
+  /** Never regress the ongoing walk notification within the same local day. */
+  private fun monotonicWalkSteps(incoming: Int): Int {
+    val today = NativeStepState.localDateString()
+    val fromPrefs = parseStepsFromWalkBody(prefs().getString("walk_body", "") ?: "")
+    val fromEngine = sensorEngine?.currentState()?.takeIf { it.localDate == today }?.todaySteps ?: 0
+    return maxOf(incoming.coerceAtLeast(0), fromPrefs, fromEngine)
+  }
+
   private fun updateWalkNotificationToSteps(steps: Int, stepSource: String? = null) {
-    val safeSteps = steps.coerceAtLeast(0)
+    val safeSteps = monotonicWalkSteps(steps)
     val body = formatWalkNotificationBody(safeSteps)
     val deepLink = prefs().getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
     val title = prefs().getString("walk_title", "Walk Champ") ?: "Walk Champ"
@@ -1373,7 +1381,15 @@ class WalkChampRaceForegroundService : Service() {
         return START_STICKY
       }
       ACTION_START_WALK, ACTION_UPDATE_WALK -> {
-        val notification = buildWalkNotificationFromIntent(intent)
+        val todayStepsExtra = intent.getIntExtra(EXTRA_TODAY_STEPS, -1)
+        val bodyFromIntent = intent.getStringExtra(EXTRA_BODY) ?: ""
+        val parsedSteps =
+          if (todayStepsExtra >= 0) todayStepsExtra else parseStepsFromWalkBody(bodyFromIntent)
+        val safeSteps = monotonicWalkSteps(parsedSteps)
+        val deepLink = intent.getStringExtra(EXTRA_DEEP_LINK) ?: "walkchamp://walk"
+        val title = intent.getStringExtra(EXTRA_TITLE) ?: "Walk Champ"
+        val body = formatWalkNotificationBody(safeSteps)
+        val notification = buildWalkNotification(this, body, deepLink, title)
         lastWalkNotification = notification
         walkRunning = true
         val nm = notificationManager()
@@ -1391,6 +1407,8 @@ class WalkChampRaceForegroundService : Service() {
           nm.notify(NOTIFICATION_ID_WALK, notification)
         }
         ensureWorker()
+        intent.putExtra(EXTRA_TODAY_STEPS, safeSteps)
+        intent.putExtra(EXTRA_BODY, body)
         workerHandler?.post {
           completeStartWalkWork(intent, isStart = action == ACTION_START_WALK)
         }

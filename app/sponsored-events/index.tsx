@@ -10,8 +10,7 @@ import {
   Animated,
   Image,
   Share,
-  Modal,
-  Pressable,
+  RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
@@ -19,10 +18,16 @@ import { Feather } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { isSponsoredRegistrationOpen, canOpenSponsoredWaitingRoom } from "@/utils/sponsoredEventRegistration";
+import {
+  isSponsoredEventVisible,
+  parseSponsoredEventsResponse,
+  type SponsoredEventDto,
+} from "@/utils/sponsoredEventsApi";
 import { useAppDispatch } from "@/store/hooks";
 import { fetchCoinBalance } from "@/store/slices/coinsSlice";
 import { rf, rs } from "@/utils/responsive";
 import { SkeletonList } from "@/components/SkeletonRows";
+import { authFetch } from "@/utils/authFetch";
 import { getBadgeColor } from "@/utils/mockData";
 import { subscribeToChannel, SPONSORED_EVENTS_CHANNEL, EVENTS } from "@/services/realtimeService";
 import { getApiBase } from "@/utils/apiUrl";
@@ -73,27 +78,7 @@ interface RegisteredUser {
   countryFlag: string | null;
   badge: string;
 }
-interface SponsoredEvent {
-  id: string;
-  title: string;
-  status: string;
-  scheduledStartAt: string | null;
-  startedAt?: string | null;
-  endsAt?: string | null;
-  targetSteps: number;
-  maxSlots: number;
-  registeredCount: number;
-  prizePoolCents: number;
-  prizePerWinnerCents?: number;
-  winnerCount?: number;
-  entryCoinFee: number;
-  isRegistered: boolean;
-  isActive: boolean;
-  joinWindowOpen: boolean;
-  isFull: boolean;
-  canRegister: boolean;
-  registeredUsers: RegisteredUser[];
-}
+interface SponsoredEvent extends SponsoredEventDto {}
 
 // ── Countdown ──────────────────────────────────────────────────────────────────
 function useCountdown(iso: string | null): string {
@@ -878,7 +863,9 @@ export default function SponsoredEventsScreen() {
   const [events, setEvents]               = useState<SponsoredEvent[]>([]);
   const [coinBalance, setCoinBalance]      = useState(0);
   const [loading, setLoading]              = useState(true);
+  const [refreshing, setRefreshing]        = useState(false);
   const [generating, setGenerating]        = useState(false);
+  const [fetchError, setFetchError]        = useState<string | null>(null);
   const [registeringId, setRegisteringId]  = useState<string | null>(null);
   const [leavingId, setLeavingId]          = useState<string | null>(null);
 
@@ -891,13 +878,26 @@ export default function SponsoredEventsScreen() {
 
   const fetchEvents = useCallback(async () => {
     try {
+      setFetchError(null);
       const res = await authFetch("/api/sponsored-events");
-      if (!res.ok) return;
-      const data = await res.json() as { events: SponsoredEvent[]; coinBalance: number };
-      setEvents(data.events ?? []);
-      setCoinBalance(data.coinBalance ?? 0);
-    } catch { /* silent */ }
-    finally { setLoading(false); }
+      const raw = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = (raw as { error?: string }).error ?? `Could not load events (${res.status})`;
+        setFetchError(err);
+        return;
+      }
+      const { events: list, coinBalance: balance } = parseSponsoredEventsResponse(raw);
+      setEvents(list);
+      setCoinBalance(balance);
+      if (__DEV__) {
+        console.log(`[SponsoredEvents] fetched count=${list.length} coinBalance=${balance}`);
+      }
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Could not load sponsored events");
+      if (__DEV__) console.log("[SponsoredEvents] fetch failed", err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   const autoGenerate = useCallback(async () => {
@@ -915,14 +915,11 @@ export default function SponsoredEventsScreen() {
   }, [fetchEvents]));
 
   useEffect(() => {
-    const futureScheduled = events.filter(
-      (e) => e.status === "scheduled" && e.scheduledStartAt && new Date(e.scheduledStartAt).getTime() > Date.now()
-    );
-    if (!loading && futureScheduled.length === 0) {
+    if (!loading && events.length === 0 && !fetchError) {
       autoGenerate();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading]);
+  }, [loading, events.length, fetchError]);
 
   // Real-time updates
   useEffect(() => {
@@ -1053,13 +1050,7 @@ export default function SponsoredEventsScreen() {
   // ── Render ────────────────────────────────────────────────────────────────
   // Only show events that are live or haven't started yet — hide past/completed/cancelled
   const now = Date.now();
-  const visibleEvents = events.filter((ev) => {
-    if (ev.status === "in_progress") return true;
-    if (ev.status === "scheduled" && ev.scheduledStartAt) {
-      return new Date(ev.scheduledStartAt).getTime() > now;
-    }
-    return false;
-  });
+  const visibleEvents = events.filter((ev) => isSponsoredEventVisible(ev, now));
   const upcomingCount = visibleEvents.filter((e) => e.status === "scheduled").length;
 
   return (
@@ -1086,15 +1077,37 @@ export default function SponsoredEventsScreen() {
       ) : events.length === 0 ? (
         <View style={sc.centered}>
           <Text style={{ fontSize: 52 }}>🏆</Text>
-          <Text style={sc.emptyTitle}>No Events Yet</Text>
-          <Text style={sc.emptyBody}>Weekend races are being set up. Tap to refresh.</Text>
-          <TouchableOpacity style={sc.refreshBtn} onPress={autoGenerate} activeOpacity={0.8}>
+          <Text style={sc.emptyTitle}>{fetchError ? "Could Not Load Events" : "No Events Yet"}</Text>
+          <Text style={sc.emptyBody}>
+            {fetchError ?? "Weekend races are being set up. Tap to refresh."}
+          </Text>
+          <TouchableOpacity style={sc.refreshBtn} onPress={() => { setLoading(true); void fetchEvents(); }} activeOpacity={0.8}>
+            <Feather name="refresh-cw" size={14} color="#FFF" />
+            <Text style={sc.refreshText}>Refresh</Text>
+          </TouchableOpacity>
+        </View>
+      ) : visibleEvents.length === 0 ? (
+        <View style={sc.centered}>
+          <Text style={{ fontSize: 52 }}>🏆</Text>
+          <Text style={sc.emptyTitle}>No Upcoming Events</Text>
+          <Text style={sc.emptyBody}>Past weekend races have ended. Pull to refresh for the latest schedule.</Text>
+          <TouchableOpacity style={sc.refreshBtn} onPress={() => { setLoading(true); void fetchEvents(); }} activeOpacity={0.8}>
             <Feather name="refresh-cw" size={14} color="#FFF" />
             <Text style={sc.refreshText}>Refresh</Text>
           </TouchableOpacity>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={sc.list} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={sc.list}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => { setRefreshing(true); void fetchEvents().finally(() => setRefreshing(false)); }}
+              tintColor="#A855F7"
+            />
+          }
+        >
           <PrizeBanner />
           {upcomingCount > 0 && (
             <View style={sc.sectionRow}>

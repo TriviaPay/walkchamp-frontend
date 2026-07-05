@@ -230,7 +230,33 @@ class StepTrackingNotificationService {
     }
     const native = getNativeModule();
     if (!native) return;
-    const steps = Math.max(0, Math.floor(payload.todaySteps));
+    let steps = Math.max(0, Math.floor(payload.todaySteps));
+    if (Platform.OS === "android") {
+      try {
+        const native = await this.getNativeStepState(payload.userId);
+        const today = new Date();
+        const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+        const nativeStale = !!(native?.localDate && native.localDate !== localDate);
+        if (
+          !nativeStale &&
+          native?.todaySteps != null &&
+          steps < native.todaySteps
+        ) {
+          logOngoing(
+            `skippedReason=belowNative incoming=${steps} native=${native.todaySteps}`,
+          );
+          return;
+        }
+      } catch {
+        // proceed with incoming steps
+      }
+    }
+    if (lastSteps >= 0 && steps < lastSteps) {
+      logOngoing(
+        `skippedReason=regression incoming=${steps} last=${lastSteps}`,
+      );
+      return;
+    }
     if (!force && shouldThrottle(steps, false)) return;
 
     const nativePayload = await toNativePayload({ ...payload, todaySteps: steps });
