@@ -108,9 +108,11 @@ class RaceStepSyncBuffer {
       if (deviceTotalSteps !== undefined) {
         this.pendingDeviceTotal = deviceTotalSteps;
       }
-      console.log(
-        `[RaceStepSync] queued raceId=${raceId} steps=${raceSteps} (background)`,
-      );
+      if (__DEV__) {
+        console.log(
+          `[RaceStepSync] queued raceId=${raceId} steps=${raceSteps} (background)`,
+        );
+      }
       return;
     }
     const cfg = LIVE_RACE_SYNC_CONFIG;
@@ -141,7 +143,9 @@ class RaceStepSyncBuffer {
     }
 
     if (delta <= 0) {
-      console.log(`[Sync] skippedDuplicate=true raceId=${raceId} steps=${raceSteps}`);
+      if (__DEV__) {
+        console.log(`[Sync] skippedDuplicate=true raceId=${raceId} steps=${raceSteps}`);
+      }
       return;
     }
 

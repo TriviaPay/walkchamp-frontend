@@ -466,7 +466,9 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       const raceId = raceIdRef.current;
       const raceStart = raceStartTimeRef.current;
       const userId = userProfileRef.current.userId;
-      console.log(`[LiveRace] re-enter raceId=${raceId} userId=${userId}`);
+      if (__DEV__) {
+        console.log(`[LiveRace] re-enter raceId=${raceId} userId=${userId}`);
+      }
       ensureActiveRaceInStore({
         raceId,
         raceStartTime: raceStart.toISOString(),
@@ -508,9 +510,11 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       // (legacy sensor only — HC uses time-range reads and doesn't need this).
       const nativeMerged = await mergeRaceStepsWithNative(Math.max(deviceSteps, safeServer));
       let merged = Math.max(deviceSteps, safeServer, nativeMerged);
-      console.log(
-        `[LiveRace] localComputedRaceSteps=${deviceSteps} server=${safeServer} native=${nativeMerged} reconciled=${merged}`,
-      );
+      if (__DEV__) {
+        console.log(
+          `[LiveRace] localComputedRaceSteps=${deviceSteps} server=${safeServer} native=${nativeMerged} reconciled=${merged}`,
+        );
+      }
 
       // Reject single-step phantom bumps on refresh/catch-up when using verified sources.
       if (
@@ -640,7 +644,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           await clearPendingRace();
         }
       } catch (err) {
-        console.log("[Startup] race recovery failed", err);
+        console.warn("[Startup] race recovery failed", err);
       }
     };
 

@@ -14,6 +14,7 @@ import { stepTrackingNotificationService } from "@/services/stepTrackingNotifica
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { getLocalDateStr, isStepSnapshotFromBeforeToday } from "@/utils/timezone";
 import { sanitizeLegacyProviderSteps } from "@/utils/stepAccuracy";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 
 export function mergeMonotonic(current: number, incoming: number): number {
   return Math.max(Math.max(0, Math.floor(current)), Math.max(0, Math.floor(incoming)));
@@ -75,7 +76,7 @@ export async function mergeWalkStepsWithNative(providerSteps: number): Promise<n
 
   const merged = Math.max(provider, nativeSteps);
   const sanitized = sanitizeLegacyProviderSteps(merged, provider, provider);
-  if (sanitized < merged) {
+  if (sanitized < merged && __DEV__ && STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) {
     console.log(
       `[StepStore] sanitized native walk merge provider=${provider} native=${nativeSteps} merged=${merged} final=${sanitized}`,
     );

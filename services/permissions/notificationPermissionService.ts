@@ -24,6 +24,7 @@ export type NotificationPermissionRequestResult = {
 let inFlightRequest: Promise<NotificationPermissionRequestResult> | null = null;
 
 function permLog(msg: string, extra?: unknown): void {
+  if (!__DEV__) return;
   if (extra !== undefined) {
     console.log(`[NotificationPermission] ${msg}`, extra);
   } else {

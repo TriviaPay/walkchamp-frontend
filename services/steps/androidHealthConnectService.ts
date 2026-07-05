@@ -24,6 +24,7 @@
  */
 
 import type { Permission } from "react-native-health-connect";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { storageGet, storageSet } from "@/utils/storage";
 
 const HC_MANIFEST_BLOCKED_KEY = "hc_manifest_read_steps_blocked" as never;
@@ -173,6 +174,14 @@ let _permissionRequested = false;
 let _permissionRequestInFlight = false;
 /** In-memory cache — last confirmed today total. Updated on every successful HC read. */
 let _cachedTodaySteps = 0;
+let _lastInitResult: HCInitResult | null = null;
+let _permCache: { status: HCPermStatus; at: number } | null = null;
+let _permBackoffUntil = 0;
+let _lastHcErrorLogAt = 0;
+
+const HC_PERM_CACHE_MS = 60_000;
+const HC_PERM_BACKOFF_MS = 120_000;
+const HC_ERROR_LOG_COOLDOWN_MS = 60_000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -242,11 +251,27 @@ function hasStepsRead(perms: HCPerm[]): boolean {
 }
 
 function hcLog(message: string, detail?: unknown): void {
+  if (!__DEV__ || !STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) return;
   if (detail !== undefined) {
     console.log(`[AndroidHC] ${message}`, detail);
   } else {
     console.log(`[AndroidHC] ${message}`);
   }
+}
+
+function hcWarnOnce(message: string, detail?: unknown): void {
+  const now = Date.now();
+  if (now - _lastHcErrorLogAt < HC_ERROR_LOG_COOLDOWN_MS) return;
+  _lastHcErrorLogAt = now;
+  if (detail !== undefined) {
+    console.warn(`[AndroidHC] ${message}`, detail);
+  } else {
+    console.warn(`[AndroidHC] ${message}`);
+  }
+}
+
+function isHcRateLimitedError(detail: unknown): boolean {
+  return String(detail).toLowerCase().includes("rate limited");
 }
 
 function emptyResult(start: Date, end: Date): StepReadResult {
@@ -330,6 +355,10 @@ export const androidHCService = {
       };
     }
 
+    if (_initialized && _lastInitResult?.initialized) {
+      return _lastInitResult;
+    }
+
     const hc = loadHCModule();
     if (!hc) {
       return {
@@ -357,7 +386,8 @@ export const androidHCService = {
       _availability = availability;
 
       if (availability !== "available") {
-        return { availability, permission: "unavailable", initialized: false };
+        _lastInitResult = { availability, permission: "unavailable", initialized: false };
+        return _lastInitResult;
       }
 
       const ok = await hc.initialize(HC_PROVIDER_PACKAGE);
@@ -365,18 +395,21 @@ export const androidHCService = {
       _initialized = ok;
 
       if (!ok) {
-        return { availability, permission: "unavailable", initialized: false };
+        _lastInitResult = { availability, permission: "unavailable", initialized: false };
+        return _lastInitResult;
       }
 
       const permission = await this.getPermissionStatus();
-      return { availability, permission, initialized: true };
+      _lastInitResult = { availability, permission, initialized: true };
+      return _lastInitResult;
     } catch (e) {
-      hcLog("initialize error", e);
-      return {
+      hcWarnOnce("initialize error", e);
+      _lastInitResult = {
         availability: "not_supported",
         permission: "unavailable",
         initialized: false,
       };
+      return _lastInitResult;
     }
   },
 
@@ -389,19 +422,34 @@ export const androidHCService = {
   async getPermissionStatus(): Promise<HCPermStatus> {
     if (isExpoGo()) return "unavailable";
     if (!_initialized) return "unknown";
+    const now = Date.now();
+    if (now < _permBackoffUntil && _permCache) {
+      return _permCache.status;
+    }
+    if (_permCache && now - _permCache.at < HC_PERM_CACHE_MS) {
+      return _permCache.status;
+    }
     const hc = loadHCModule();
     if (!hc) return "unavailable";
     try {
       const granted = await hc.getGrantedPermissions();
       const hasSteps = hasStepsRead(granted);
       hcLog(`granted permissions: ${formatPerms(granted)} — Steps read: ${hasSteps}`);
-      if (hasSteps) return "granted";
-      // Only treat as denied after HC returned a non-empty dialog result without Steps.
-      if (_permissionRequested) return "denied";
-      return "unknown";
+      const status: HCPermStatus = hasSteps
+        ? "granted"
+        : _permissionRequested
+          ? "denied"
+          : "unknown";
+      _permCache = { status, at: now };
+      return status;
     } catch (e) {
-      hcLog("getPermissionStatus error", e);
-      return "unknown";
+      if (isHcRateLimitedError(e)) {
+        _permBackoffUntil = now + HC_PERM_BACKOFF_MS;
+        hcWarnOnce("getPermissionStatus rate limited — backing off", e);
+      } else {
+        hcWarnOnce("getPermissionStatus error", e);
+      }
+      return _permCache?.status ?? "unknown";
     }
   },
 

@@ -3,6 +3,7 @@ import { requireOptionalExpoNativeModule } from "@/utils/expoNativeModule";
 import Constants from "expo-constants";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotificationConfig";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { getValidSession } from "@/services/authService";
 import {
@@ -118,7 +119,9 @@ async function getActivityRecognitionGranted(): Promise<boolean | "n/a"> {
 }
 
 function logOngoing(msg: string): void {
-  console.log(`[OngoingNotification] ${msg}`);
+  if (__DEV__) {
+    console.log(`[OngoingNotification] ${msg}`);
+  }
 }
 
 async function logOngoingDiagnostics(phase: string): Promise<void> {
@@ -240,7 +243,9 @@ class StepTrackingNotificationService {
       }
       lastUpdateMs = Date.now();
       lastSteps = steps;
-      logOngoing(`notifyUpdated id=91002 steps=${steps}`);
+      if (STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) {
+        logOngoing(`notifyUpdated id=91002 steps=${steps}`);
+      }
     } catch (err) {
       logOngoing(`update failed error=${String(err)}`);
       if (__DEV__) console.warn("[StepTrackingNotif] update failed", err);

@@ -23,6 +23,7 @@ import type {
   StepReadResult,
   StepTrackingStatus,
 } from "./stepProviderTypes";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 
 const PROVIDER_LABELS: Record<StepProviderId, string> = {
   ios_healthkit: "HealthKit",
@@ -33,9 +34,23 @@ const PROVIDER_LABELS: Record<StepProviderId, string> = {
 let _activeProvider: StepProvider | null = null;
 let _watchStop: (() => void) | null = null;
 let _initializing: Promise<void> | null = null;
+let _diagnosticsLogged = false;
+let _lastHcProbeAt = 0;
+let _statusCache: { perm: StepPermissionState; at: number } | null = null;
+
+const HC_PROBE_MS = 5 * 60_000;
+const STATUS_CACHE_MS = 15_000;
 
 function devLog(msg: string, ...args: unknown[]): void {
-  if (__DEV__) console.log(`[StepProvider] ${msg}`, ...args);
+  if (__DEV__ && STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) {
+    console.log(`[StepProvider] ${msg}`, ...args);
+  }
+}
+
+function sourceLog(msg: string): void {
+  if (__DEV__ && STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) {
+    console.log(msg);
+  }
 }
 
 async function probeHcManifestBlocked(): Promise<boolean> {
@@ -51,12 +66,28 @@ async function ensureActivityRecognitionPermission(): Promise<boolean> {
 
 async function trySelectAndroidProvider(
   preferHc = true,
+  forceReselect = false,
 ): Promise<StepProvider | null> {
+  if (
+    !forceReselect &&
+    _activeProvider &&
+    (_activeProvider.providerId === "android_legacy_sensor" ||
+      _activeProvider.providerId === "android_health_connect" ||
+      _activeProvider.providerId === "ios_healthkit")
+  ) {
+    return _activeProvider;
+  }
+
   devLog("platform android");
 
   const legacyAvailable = await androidLegacySensorProvider.isAvailable();
+  const now = Date.now();
+  const shouldProbeHc =
+    preferHc &&
+    (forceReselect || now - _lastHcProbeAt >= HC_PROBE_MS || !_activeProvider);
 
-  if (preferHc) {
+  if (shouldProbeHc) {
+    _lastHcProbeAt = now;
     try {
       const init = await androidHCService.initialize();
       const hcBlocked = await probeHcManifestBlocked();
@@ -70,7 +101,7 @@ async function trySelectAndroidProvider(
         devLog(`Health Connect status: usable=true permission=${hcPerm}`);
         if (hcPerm === "granted") {
           devLog("selected android_health_connect");
-          console.log("[StepSource] selected=health_connect healthConnectAvailable=true");
+          sourceLog("[StepSource] selected=health_connect healthConnectAvailable=true");
           return androidHealthConnectProvider;
         }
         // HC not granted — use legacy when available (unsupported / no manifest).
@@ -91,11 +122,13 @@ async function trySelectAndroidProvider(
     } catch (e) {
       devLog("Health Connect selection error — trying legacy", e);
     }
+  } else if (preferHc && legacyAvailable) {
+    devLog("skipped HC probe — legacy sensor active");
   }
 
   if (legacyAvailable) {
     devLog("selected android_legacy_sensor");
-    console.log("[StepSource] selected=sensor healthConnectAvailable=false sensorAvailable=true");
+    sourceLog("[StepSource] selected=sensor healthConnectAvailable=false sensorAvailable=true");
     return androidLegacySensorProvider;
   }
 
@@ -111,13 +144,13 @@ async function selectProvider(forceReselect = false): Promise<StepProvider | nul
     const ok = await iosHealthKitProvider.isAvailable();
     _activeProvider = ok ? iosHealthKitProvider : null;
     if (_activeProvider) devLog("selected ios_healthkit");
-    if (_activeProvider) console.log("[StepSource] selected=healthkit");
+    if (_activeProvider) sourceLog("[StepSource] selected=healthkit");
     return _activeProvider;
   }
 
   if (Platform.OS !== "android") return null;
 
-  _activeProvider = await trySelectAndroidProvider(true);
+  _activeProvider = await trySelectAndroidProvider(true, forceReselect);
 
   // HC unavailable — force legacy
   if (
@@ -125,7 +158,7 @@ async function selectProvider(forceReselect = false): Promise<StepProvider | nul
     ((await _activeProvider.getPermissionStatus()) === "denied" &&
       (await androidLegacySensorProvider.isAvailable()))
   ) {
-    const legacy = await trySelectAndroidProvider(false);
+    const legacy = await trySelectAndroidProvider(false, forceReselect);
     if (legacy?.providerId === "android_legacy_sensor") {
       _activeProvider = legacy;
     }
@@ -140,6 +173,8 @@ async function runInitialize(forceReselect = false): Promise<void> {
 }
 
 async function logStepSourceDiagnostics(): Promise<void> {
+  if (!__DEV__ || !STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE || _diagnosticsLogged) return;
+  _diagnosticsLogged = true;
   if (Platform.OS === "android") {
     let hcAvail = false;
     try {
@@ -156,19 +191,19 @@ async function logStepSourceDiagnostics(): Promise<void> {
         : id === "android_legacy_sensor"
           ? "sensor"
           : "none";
-    console.log(
+    sourceLog(
       `[StepSource] selected=${selected} healthConnectAvailable=${hcAvail} sensorAvailable=${legacyAvail}`,
     );
     return;
   }
   if (Platform.OS === "ios") {
     const ok = await iosHealthKitProvider.isAvailable();
-    console.log(
+    sourceLog(
       `[StepSource] selected=${ok ? "healthkit" : "none"} healthKitAvailable=${ok}`,
     );
     return;
   }
-  console.log("[StepSource] selected=none");
+  sourceLog("[StepSource] selected=none");
 }
 
 export const stepProviderManager = {
@@ -176,6 +211,9 @@ export const stepProviderManager = {
   async initialize(forceReselect = false): Promise<StepTrackingStatus> {
     if (_initializing) {
       await _initializing;
+      return this.refreshStatus();
+    }
+    if (_activeProvider && !forceReselect) {
       return this.refreshStatus();
     }
     _initializing = runInitialize(forceReselect).finally(() => {
@@ -219,7 +257,15 @@ export const stepProviderManager = {
       status.ready = false;
       return status;
     }
+    const now = Date.now();
+    if (_statusCache && now - _statusCache.at < STATUS_CACHE_MS) {
+      const status = this.getStepTrackingStatus();
+      status.permission = _statusCache.perm;
+      status.ready = _statusCache.perm === "granted";
+      return status;
+    }
     const perm = await _activeProvider.getPermissionStatus();
+    _statusCache = { perm, at: now };
     const status = this.getStepTrackingStatus();
     status.permission = perm;
     status.ready = perm === "granted";
@@ -241,6 +287,21 @@ export const stepProviderManager = {
     const result = await _activeProvider.getTodaySteps();
     devLog(`today steps ${result.steps} provider=${result.providerId}`);
     return result;
+  },
+
+  /** Background FGS poll — no HC re-probe, no permission spam. */
+  async getTodayStepsForBackgroundPoll(): Promise<StepReadResult | null> {
+    if (!_activeProvider) {
+      await this.initialize();
+    }
+    if (!_activeProvider) return null;
+    const cachedPerm = _statusCache?.perm;
+    const perm =
+      cachedPerm && cachedPerm === "granted"
+        ? cachedPerm
+        : await _activeProvider.getPermissionStatus();
+    if (perm !== "granted") return null;
+    return _activeProvider.getTodaySteps();
   },
 
   async getStepsForRange(start: Date, end: Date): Promise<StepReadResult | null> {

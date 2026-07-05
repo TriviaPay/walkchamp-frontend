@@ -66,6 +66,9 @@ export const STEP_SYNC_CONFIG = {
 
   /** Legacy sensor — max single poll jump while walking (faster walks still OK) */
   LEGACY_MAX_TICK_JUMP: 8,
+
+  /** Set true in __DEV__ to log every poll/notification tick (very noisy). */
+  STEP_DEBUG_VERBOSE: false,
 } as const;
 
 /** Live race backend sync buffer — used by raceStepSyncBuffer.ts */

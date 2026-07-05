@@ -62,9 +62,24 @@ export function shouldIgnoreLegacyPhantomBump(
   return false;
 }
 
-/** Release-safe step pipeline logging (always on). */
+/** Verbose step pipeline logging — __DEV__ only; routine polls need STEP_DEBUG_VERBOSE. */
 export function stepEngineLog(tag: string, message: string): void {
+  if (!__DEV__) return;
+  const important =
+    tag === "AuthSwitch" ||
+    /rejected|failed|sanitized|skippedCompletedRace/i.test(message);
+  if (!important && !STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) return;
   console.log(`[${tag}] ${message}`);
+}
+
+/** Opt-in verbose diagnostics ([AndroidHC], [StepSource], poll ticks). */
+export function stepDebugVerboseLog(tag: string, message: string, detail?: unknown): void {
+  if (!__DEV__ || !STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) return;
+  if (detail !== undefined) {
+    console.log(`[${tag}] ${message}`, detail);
+  } else {
+    console.log(`[${tag}] ${message}`);
+  }
 }
 
 export type StepAccuracySurface =
@@ -144,19 +159,11 @@ export function resolveTodayDisplaySteps(params: {
   }
 
   if (verified) {
-    stepEngineLog(
-      "StepEngine",
-      `calculatedTodaySteps=${provider} healthStepsToday=${provider} backend=${backend} verified=true`,
-    );
     return provider;
   }
 
   const display =
     params.allowBackendCatchUp && backend > provider ? backend : provider;
-  stepEngineLog(
-    "StepEngine",
-    `calculatedTodaySteps=${display} provider=${provider} backend=${backend} verified=false`,
-  );
   return display;
 }
 

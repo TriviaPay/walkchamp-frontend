@@ -4,6 +4,7 @@
  */
 
 import { Platform } from "react-native";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { storageGet, storageRemove, storageSet } from "@/utils/storage";
 import { stepScopedKeys } from "@/utils/stepScopedStorage";
 import { isExpoGo } from "../androidHealthConnectService";
@@ -55,6 +56,7 @@ let _rawAtSubscription = 0;
 let _userId: string | null = null;
 let _watchStartedAtMs = 0;
 let _ignoredInitialPhantom = false;
+let _loadedDailyKey: string | null = null;
 
 function activeUserId(): string | null {
   return _userId;
@@ -151,6 +153,9 @@ async function loadDailyState(): Promise<void> {
   }
   const today = getLocalDateKey();
   const keys = scoped(today);
+  const dayKey = `${_userId}:${today}`;
+  const firstLoadToday = _loadedDailyKey !== dayKey;
+  _loadedDailyKey = dayKey;
   const storedDate = await storageGet<string>(keys.currentLocalDate);
   const storedBaseline =
     (await storageGet<number>(keys.baseline)) ?? 0;
@@ -159,7 +164,7 @@ async function loadDailyState(): Promise<void> {
   if (storedDate === today) {
     _todaySteps = Math.max(_todaySteps, storedToday);
     _dailyBaseline = storedBaseline;
-    if (__DEV__) {
+    if (__DEV__ && STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE && firstLoadToday) {
       console.log(
         `[StepBaseline] loaded existing baseline userId=${_userId} localDate=${today} baseline=${storedBaseline}`,
       );
@@ -170,7 +175,7 @@ async function loadDailyState(): Promise<void> {
     await storageSet(keys.currentLocalDate, today);
     await storageSet(keys.baseline, 0);
     await storageSet(keys.steps, 0);
-    if (__DEV__) {
+    if (__DEV__ && STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) {
       console.log(
         `[StepBaseline] created new baseline userId=${_userId} localDate=${today} baseline=0`,
       );
@@ -192,7 +197,7 @@ function alignDailyBaselineForWatch(): void {
   const keys = scoped();
   _dailyBaseline = _todaySteps;
   void storageSet(keys.baseline, _dailyBaseline);
-  if (__DEV__) {
+  if (__DEV__ && STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) {
     console.log(
       `[StepBaseline] userId=${_userId} localDate=${getLocalDateKey()} baseline=${_dailyBaseline}`,
     );

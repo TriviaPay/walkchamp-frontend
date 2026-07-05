@@ -730,7 +730,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       setStepsSourceReady(true);
       setStepsHydrated(true);
     } catch (err) {
-      console.log("[Startup] WalkContext load failed", err);
+      console.warn("[Startup] WalkContext load failed", err);
       setStepsSourceReady(true);
       setStepsHydrated(true);
     }
@@ -1282,11 +1282,13 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
               dailyGoal: todayDailyGoalRef.current,
             });
             if (!started) {
-              console.log("[OngoingNotification] direct start returned false");
+              if (__DEV__) {
+                console.log("[OngoingNotification] direct start returned false");
+              }
             }
             void pushWalkNotificationFromCanonicalStore(true, user.id);
           } catch (notifErr) {
-            console.log("[OngoingNotification] notification start error", notifErr);
+            console.warn("[OngoingNotification] notification start error", notifErr);
           }
         } else if (
           Platform.OS === "android" &&
@@ -1295,7 +1297,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           Alert.alert("Notifications Disabled", getOngoingNotificationDeniedMessage());
         }
       } catch (e) {
-        console.log("[WalkContext] applyTrackingActivation error", e);
+        console.warn("[WalkContext] applyTrackingActivation error", e);
       }
     },
     [
@@ -1372,9 +1374,11 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         setStepProgressUser(user.id, user.username ?? null);
         const notifOk = await hasOngoingNotificationAccess();
         if (!notifOk) {
-          console.log(
-            "[Steps] notifications disabled — polling steps without foreground service",
-          );
+          if (__DEV__) {
+            console.log(
+              "[Steps] notifications disabled — polling steps without foreground service",
+            );
+          }
           setUsingRealTracking(true);
           usingRealRef.current = true;
           setTrackingStatusState("walking");
@@ -1393,7 +1397,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         await applyTrackingActivation(true);
       }
       } catch (err) {
-        console.log("[Startup] WalkContext tracking init failed", err);
+        console.warn("[Startup] WalkContext tracking init failed", err);
       }
     };
 
@@ -1548,7 +1552,9 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
   const requestStepPermission = useCallback(async () => {
     if (permissionRequestInFlightRef.current) {
-      console.log("[WalkContext] requestStepPermission skipped — already in flight");
+      if (__DEV__) {
+        console.log("[WalkContext] requestStepPermission skipped — already in flight");
+      }
       return;
     }
     if (__DEV__) console.log(`[WalkContext] requestStepPermission — platform: ${Platform.OS}`);
