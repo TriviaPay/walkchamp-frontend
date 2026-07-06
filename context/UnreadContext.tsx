@@ -71,6 +71,7 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
 
     const onNewRequest = () => setPendingRequests((n) => n + 1);
     const onAccepted = () => void fetchSummary();
+    const onRejected = () => setPendingRequests((n) => Math.max(0, n - 1));
     const onPrivateMsg = (data: { isPrivate?: boolean }) => {
       if (data.isPrivate) setPrivateUnread((n) => n + 1);
     };
@@ -78,12 +79,14 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
 
     channel.bind(EVENTS.FRIEND_REQUEST_NEW, onNewRequest);
     channel.bind(EVENTS.FRIEND_REQUEST_ACCEPTED, onAccepted);
+    channel.bind(EVENTS.FRIEND_REQUEST_REJECTED, onRejected);
     channel.bind(EVENTS.CHAT_NEW_MESSAGE, onPrivateMsg);
     channel.bind(EVENTS.GROUP_INVITE_NEW, onGroupInvite);
 
     return () => {
       channel.unbind(EVENTS.FRIEND_REQUEST_NEW, onNewRequest);
       channel.unbind(EVENTS.FRIEND_REQUEST_ACCEPTED, onAccepted);
+      channel.unbind(EVENTS.FRIEND_REQUEST_REJECTED, onRejected);
       channel.unbind(EVENTS.CHAT_NEW_MESSAGE, onPrivateMsg);
       channel.unbind(EVENTS.GROUP_INVITE_NEW, onGroupInvite);
     };

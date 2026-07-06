@@ -22,7 +22,9 @@ import { dbProfileToUserProfile } from "@/utils/profileMapper";
 import type { UserProfile } from "@/store/types";
 import { authEvents } from "@/utils/authEvents";
 import { screenCache } from "@/utils/screenCache";
-import { storageSet, storageRemove, STORAGE_KEYS } from "@/utils/storage";
+import { storageGet, storageSet, storageRemove, STORAGE_KEYS } from "@/utils/storage";
+import { perf } from "@/utils/perfLogger";
+import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { dynamicIconService } from "@/services/dynamicIconService";
 import { waitForAppStartupReady } from "@/services/appStartup";
 import { stepPollingService } from "@/services/StepPollingService";
@@ -63,9 +65,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const authTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Restore session from SecureStore on app launch
+  // Restore session: hydrate cached profile instantly, then validate in background.
+  const authRestoreStartRef = useRef(Date.now());
   useEffect(() => {
-    dispatch(restoreSession());
+    perf.appStartStart();
+    void (async () => {
+      const { session, refresh } = await getStoredSession();
+      if (session && refresh?.trim()) {
+        const cachedUser = await storageGet<UserProfile>(STORAGE_KEYS.USER);
+        if (cachedUser) {
+          perf.cacheHit("auth_user");
+          dispatch(
+            authActions.hydrateFromCache({
+              user: cachedUser,
+              sessionToken: session,
+              refreshToken: refresh,
+            }),
+          );
+        } else {
+          perf.cacheMiss("auth_user");
+        }
+      }
+      await dispatch(restoreSession());
+      perf.authRestore(Date.now() - authRestoreStartRef.current);
+    })();
   }, [dispatch]);
 
   // Called after signup / social login — state goes directly into Redux
@@ -140,9 +163,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, [dispatch]);
 
-  // After session restore completes, sync the latest profile from the API.
-  // This keeps avatarVersion (and other profile fields) fresh even if the
-  // in-app session cache is stale (e.g. avatar changed on another device).
+  // After session restore completes, schedule proactive token refresh.
+  // restoreSession already fetches a fresh profile — skip duplicate refreshUserProfile here.
   const didPostRestoreRef = useRef(false);
   useEffect(() => {
     if (!isRestoringSession) {
@@ -151,20 +173,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (sessionToken) {
           void scheduleProactiveTokenRefresh();
         }
-        refreshUserProfile().catch(() => {});
       }
     } else {
-      // Reset so the next restore cycle also gets a fresh fetch
       didPostRestoreRef.current = false;
     }
-  }, [isRestoringSession, refreshUserProfile, sessionToken]);
+  }, [isRestoringSession, sessionToken]);
 
   // When the app comes back to foreground, sync the current user's profile so
   // stale avatarVersion / profileImageUrl values are never displayed.
   useEffect(() => {
     const handleAppStateChange = (nextState: AppStateStatus) => {
       if (nextState === "active") {
-        // Proactively refresh before profile fetch so foreground never hits expired JWT.
+        if (!apiFetchAllowed("auth_profile_foreground", 60_000)) {
+          perf.apiSkipped("profile_foreground_throttled");
+          return;
+        }
+        markApiFetched("auth_profile_foreground");
         void getValidSession()
           .then(() => refreshUserProfile())
           .catch(() => {});

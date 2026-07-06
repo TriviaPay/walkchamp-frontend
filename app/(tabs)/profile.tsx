@@ -104,26 +104,37 @@ interface ProfileData {
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
-async function fetchServerStats(): Promise<ServerStats | null> {
+interface ProfileMeResponse {
+  profile: ProfileData | null;
+  stats: ServerStats | null;
+  activeTitle: ActiveTitle | null;
+  challengeHistory: ChallengeHistoryItem[];
+  last7Days: { date: string; steps: number }[];
+  stepSource: { platform: string; permissionStatus: string; setupCompleted: boolean } | null;
+}
+
+async function fetchProfileMeFull(): Promise<ProfileMeResponse | null> {
   try {
     const res = await authFetch(`/api/profile/me`);
     if (!res.ok) return null;
     const json = await res.json();
-    return json.data?.stats ?? null;
+    const data = json.data ?? {};
+    return {
+      profile: data.profile ?? null,
+      stats: data.stats ?? null,
+      activeTitle: data.active_title ?? null,
+      challengeHistory: Array.isArray(data.challengeHistory) ? data.challengeHistory : [],
+      last7Days: Array.isArray(data.last7Days) ? data.last7Days : [],
+      stepSource: data.stepSource ?? null,
+    };
   } catch {
     return null;
   }
 }
 
 async function fetchProfileMe(): Promise<ProfileData | null> {
-  try {
-    const res = await authFetch(`/api/profile/me`);
-    if (!res.ok) return null;
-    const json = await res.json();
-    return json.data?.profile ?? null;
-  } catch {
-    return null;
-  }
+  const full = await fetchProfileMeFull();
+  return full?.profile ?? null;
 }
 
 async function updateProfileMe(updates: Partial<ProfileData>): Promise<{ success: boolean; error?: string }> {
@@ -556,22 +567,16 @@ export default function ProfileScreen() {
   useFocusEffect(
     useCallback(() => {
       (async () => {
-        const [stats, profileData] = await Promise.all([
-          fetchServerStats(),
-          fetchProfileMe(),
-        ]);
-        if (stats) setServerStats(stats);
-        // Fetch active title + new profile data in one call
-        try {
-          const res = await authFetch(`/api/profile/me`);
-          if (res.ok) {
-            const json = await res.json();
-            setActiveTitle(json.data?.active_title ?? null);
-            if (Array.isArray(json.data?.challengeHistory)) setChallengeHistory(json.data.challengeHistory);
-            if (Array.isArray(json.data?.last7Days)) setLast7Days(json.data.last7Days);
-            if (json.data?.stepSource !== undefined) setStepSourceInfo(json.data.stepSource);
+        const profileData = await fetchProfileMeFull();
+        if (profileData?.stats) setServerStats(profileData.stats);
+        if (profileData) {
+          setActiveTitle(profileData.activeTitle);
+          if (profileData.challengeHistory.length > 0) {
+            setChallengeHistory(profileData.challengeHistory);
           }
-        } catch { /* ignore */ }
+          if (profileData.last7Days.length > 0) setLast7Days(profileData.last7Days);
+          if (profileData.stepSource !== undefined) setStepSourceInfo(profileData.stepSource);
+        }
         // Evaluate achievement titles — show unlock modal for any newly earned titles
         try {
           const evalRes = await authFetch("/api/me/titles/evaluate", { method: "POST" });
@@ -588,7 +593,7 @@ export default function ProfileScreen() {
         void dispatch(fetchCoinBalance());
         // Fetch push notification preference
         void getNotificationPreferences().then((enabled) => setPushEnabled(enabled)).catch(() => {});
-      })(); }, [])
+      })(); }, [dispatch, triggerUnlocks])
   );
 
   // Load editable fields when edit mode opens

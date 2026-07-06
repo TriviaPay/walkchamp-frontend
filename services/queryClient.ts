@@ -1,11 +1,26 @@
 import { QueryClient } from "@tanstack/react-query";
 import { stepsKeys, walkKeys, USER_STEP_QUERY_PREFIXES } from "@/services/queryKeys";
 
+/** Default stale times by data volatility (ms). */
+export const QUERY_STALE_TIMES = {
+  profile: 120_000,
+  wallet: 30_000,
+  liveRace: 5_000,
+  leaderboard: 60_000,
+  staticConfig: 600_000,
+  steps: 30_000,
+} as const;
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      staleTime: 30_000,
+      staleTime: QUERY_STALE_TIMES.steps,
+      gcTime: 10 * 60_000,
+      // Reuse cached data on tab revisit; background refetch only when stale.
+      refetchOnMount: false,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
     },
   },
 });

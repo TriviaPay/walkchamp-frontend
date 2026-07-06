@@ -1,5 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useState, useRef, useCallback } from "react";
+import React, { useCallback, useRef, useState } from "react";
+import { useFocusEffect } from "expo-router";
 import {
   ActivityIndicator,
   Modal,
@@ -160,6 +161,13 @@ export default function WalletScreen() {
   const { walletBalance, pendingBalance, walletCurrency, transactions, requestWithdrawal, refreshWallet } =
     useApp();
   const { user } = useAuth();
+
+  // Silent background refresh when wallet tab is focused (cached data stays visible).
+  useFocusEffect(
+    useCallback(() => {
+      void refreshWallet({ silent: true });
+    }, [refreshWallet]),
+  );
 
   // ── Country / provider logic ──────────────────────────────────────────────
   const userCountryCode = user?.countryCode ?? null;

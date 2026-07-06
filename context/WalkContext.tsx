@@ -174,7 +174,12 @@ interface WalkContextType {
    */
   triggerSync: () => Promise<void>;
   /** Re-query today's steps from the active health provider (HC / HealthKit / sensor). */
-  refreshTodaySteps: (opts?: { rehydrateBackend?: boolean; mergeNative?: boolean }) => Promise<void>;
+  refreshTodaySteps: (opts?: {
+    rehydrateBackend?: boolean;
+    mergeNative?: boolean;
+    /** When false, refresh rank/backend metadata only — never bump displayed steps (tab focus). */
+    applyDisplay?: boolean;
+  }) => Promise<void>;
   /** Resume legacy sensor watch + mirror ongoing notification after race. */
   resumeStepWatching: () => Promise<void>;
   /** True once local step state has loaded for the current user. */
@@ -874,7 +879,11 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     [persistDailySteps, user?.id],
   );
 
-  const hydrateTodayStepsFromBackend = useCallback(async (opts?: { skipProviderRead?: boolean }) => {
+  const hydrateTodayStepsFromBackend = useCallback(async (opts?: {
+    skipProviderRead?: boolean;
+    applyDisplay?: boolean;
+  }) => {
+    const applyDisplay = opts?.applyDisplay !== false;
     if (!user?.id) return;
     if (!authReady || !sessionToken) {
       if (__DEV__) {
@@ -949,7 +958,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         todayStepsRef.current,
         localCached,
       );
-      if (hydratedDisplay > todayStepsRef.current) {
+      if (applyDisplay && hydratedDisplay > todayStepsRef.current) {
         await forceSetTodayStepDisplay(hydratedDisplay);
       }
       await captureProviderBindSnapshot();
@@ -999,12 +1008,17 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         "StepEngine",
         `backendHydrateFailed fallback finalTodaySteps=${finalDisplay} provider=${providerSteps} local=${localCached}`,
       );
-      if (finalDisplay > 0) {
+      if (applyDisplay && finalDisplay > 0) {
         backendTodayStepsRef.current = Math.max(
           backendTodayStepsRef.current,
           finalDisplay,
         );
         await forceSetTodayStepDisplay(finalDisplay);
+      } else if (finalDisplay > 0) {
+        backendTodayStepsRef.current = Math.max(
+          backendTodayStepsRef.current,
+          finalDisplay,
+        );
       }
       await captureProviderBindSnapshot();
       setStepsSourceReady(true);
@@ -1280,19 +1294,38 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         "WalkScreen",
         `canonicalMirror reason=${reason} coordinator=${coordinatorSteps} display=${display}`,
       );
-      await forceSetTodayStepDisplay(display);
+      await applyTodayStepCount(display, false);
     },
-    [forceSetTodayStepDisplay, readProviderTodaySteps, user?.id],
+    [applyTodayStepCount, readProviderTodaySteps, user?.id],
   );
 
-  const refreshRealSteps = useCallback(async (opts?: { rehydrateBackend?: boolean; mergeNative?: boolean }) => {
+  const refreshRealSteps = useCallback(async (opts?: {
+    rehydrateBackend?: boolean;
+    mergeNative?: boolean;
+    applyDisplay?: boolean;
+  }) => {
     if (!user?.id) return;
     const rehydrateBackend = opts?.rehydrateBackend ?? true;
     const mergeNative = opts?.mergeNative === true;
+    const applyDisplay = opts?.applyDisplay !== false;
     const resumeStartedAt = Date.now();
-    stepEngineLog("Resume", "refreshStarted=true");
+    stepEngineLog("Resume", `refreshStarted=true applyDisplay=${applyDisplay}`);
     await checkDayChange();
     const needsBind = stepBindUserIdRef.current !== user.id;
+
+    if (!applyDisplay) {
+      suppressStartupStepBumps(8_000);
+      if (rehydrateBackend || needsBind) {
+        await hydrateTodayStepsFromBackend({
+          skipProviderRead: true,
+          applyDisplay: false,
+        });
+      }
+      setStepsSourceReady(true);
+      return;
+    }
+
+    suppressStartupStepBumps(mergeNative ? 5_000 : 8_000);
 
     let display: number;
     if (mergeNative) {
@@ -1301,24 +1334,15 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         "Resume",
         `authoritativeTodaySteps=${display} renderedImmediately=${display > 0}`,
       );
-    } else if (
-      Platform.OS === "android" &&
-      !stepProviderManager.usesVerifiedStepSource()
-    ) {
-      display = await resolveAuthoritativeTodaySteps(user.id, { mergeNative: true });
     } else {
       const data = await stepProviderManager.getTodaySteps();
       const providerSteps = Math.max(0, data?.steps ?? 0);
       display = resolveLiveDisplaySteps(providerSteps);
-      if (display <= todayStepsRef.current) {
-        const localCached = await readDailyStepsForUserDate(user.id, getTodayKey());
-        display = Math.max(
-          display,
-          todayStepsRef.current,
-          localCached,
-          backendTodayStepsRef.current,
-        );
-      }
+      display = Math.max(
+        display,
+        todayStepsRef.current,
+        store.getState().raceProgress.todaySteps,
+      );
     }
 
     setStepsSourceReady(true);
@@ -1340,17 +1364,17 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
     if (rehydrateBackend || needsBind) {
       const backendStartedAt = Date.now();
-      await hydrateTodayStepsFromBackend({ skipProviderRead: mergeNative });
+      await hydrateTodayStepsFromBackend({
+        skipProviderRead: mergeNative,
+        applyDisplay: true,
+      });
       stepEngineLog(
         "Resume",
         `backendRefreshMs=${Date.now() - backendStartedAt}`,
       );
     }
 
-    const useAuthoritativeFinal =
-      mergeNative ||
-      (Platform.OS === "android" && !stepProviderManager.usesVerifiedStepSource());
-    const finalSteps = useAuthoritativeFinal
+    const finalSteps = mergeNative
       ? await resolveAuthoritativeTodaySteps(user.id, { mergeNative: true })
       : Math.max(display, todayStepsRef.current, store.getState().raceProgress.todaySteps);
 

@@ -168,6 +168,21 @@ const authSlice = createSlice({
   name: "auth",
   initialState,
   reducers: {
+  /** Instant hydrate from AsyncStorage while full restore validates the session. */
+    hydrateFromCache(
+      state,
+      action: PayloadAction<{
+        user: UserProfile;
+        sessionToken: string;
+        refreshToken: string;
+      }>,
+    ) {
+      state.sessionToken = action.payload.sessionToken;
+      state.refreshToken = action.payload.refreshToken;
+      state.user = action.payload.user;
+      state.isAuthenticated = true;
+      // isRestoringSession stays true until restoreSession settles.
+    },
     // Called directly by AuthContext.login() after signup/social login
     loginSuccess(
       state,

@@ -14,6 +14,7 @@ $dlRoot = "C:\Users\RACHANA\Downloads\Walk-Tracker (7)\Walk-Tracker\frontend"
 $files = @(
     "hooks\useSafeLayout.ts",
     "hooks\useParticipantStepAnimator.ts",
+    "hooks\useIncrementalStepDisplay.ts",
     "hooks\useTabBarHeight.ts",
     "components\ScreenContainer.tsx",
     "components\SkeletonRows.tsx",

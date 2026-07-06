@@ -19,9 +19,13 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
+import { screenCache } from "@/utils/screenCache";
+import { perf } from "@/utils/perfLogger";
+import { runCoalesced, apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { authFetch } from "@/utils/authFetch";
 import { getLocalDateStr } from "@/utils/timezone";
 import { getApiBase } from "@/utils/apiUrl";
+import { profileAvatarImageUri } from "@/services/mediaApi";
 import { useAuth } from "@/context/AuthContext";
 import { SkeletonGroupsScreen } from "@/components/SkeletonRows";
 import { useWalk } from "@/context/WalkContext";
@@ -57,6 +61,7 @@ interface MemberAvatar {
   username: string;
   avatarUrl: string | null;
   avatarColor: string | null;
+  avatarVersion?: number;
 }
 
 interface UserGroup {
@@ -196,8 +201,10 @@ function AvatarBubble({ a, i, borderColor, size }: {
   a: MemberAvatar; i: number; borderColor: string; size: number;
 }) {
   const [imgErr, setImgErr] = useState(false);
-  const displayUri = a.avatarUrl && a.userId ? `${getApiBase()}/api/profile/avatar/${a.userId}` : null;
-  const hasImg = !!displayUri && !imgErr;
+  const displayUri = a.userId && !imgErr
+    ? profileAvatarImageUri(a.userId, a.avatarVersion ?? 0)
+    : null;
+  const hasImg = !!displayUri;
   const bg = stackBg(a.username, i, a.avatarColor);
   return (
     <View style={{
@@ -210,7 +217,7 @@ function AvatarBubble({ a, i, borderColor, size }: {
       zIndex: 10 - i,
     }}>
       {hasImg ? (
-        <Image source={{ uri: displayUri! }} style={{ width: size, height: size }} onError={() => setImgErr(true)} />
+        <Image source={{ uri: displayUri }} style={{ width: size, height: size }} onError={() => setImgErr(true)} />
       ) : (
         <Text style={{ fontSize: size * 0.38, color: "#fff", fontWeight: "800" }}>
           {(a.username ?? "?")[0].toUpperCase()}
@@ -364,6 +371,15 @@ function GroupCard({ group, onPress }: { group: UserGroup; onPress: () => void }
   );
 }
 
+interface GroupsOverviewCache {
+  summary: OverviewSummary;
+  filters: FilterChip[];
+  groups: UserGroup[];
+  pendingInvites: PendingInvite[];
+}
+
+const GROUPS_CACHE_KEY = "screen_groups_overview";
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 export default function GroupsScreen() {
   const router = useRouter();
@@ -371,12 +387,23 @@ export default function GroupsScreen() {
   const { todaySteps: liveSteps } = useWalk();
   const { pendingGroupInvites: groupInviteCount, clearGroupInvites } = useUnread();
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(
+    () => screenCache.getSync(GROUPS_CACHE_KEY) === null,
+  );
   const [refreshing, setRefreshing] = useState(false);
-  const [summary, setSummary] = useState<OverviewSummary>({ total_groups: 0, today_user_steps: 0, active_members_total: 0 });
-  const [filters, setFilters] = useState<FilterChip[]>([]);
-  const [groups, setGroups] = useState<UserGroup[]>([]);
-  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [summary, setSummary] = useState<OverviewSummary>(
+    () => screenCache.getSync<GroupsOverviewCache>(GROUPS_CACHE_KEY)?.summary
+      ?? { total_groups: 0, today_user_steps: 0, active_members_total: 0 },
+  );
+  const [filters, setFilters] = useState<FilterChip[]>(
+    () => screenCache.getSync<GroupsOverviewCache>(GROUPS_CACHE_KEY)?.filters ?? [],
+  );
+  const [groups, setGroups] = useState<UserGroup[]>(
+    () => screenCache.getSync<GroupsOverviewCache>(GROUPS_CACHE_KEY)?.groups ?? [],
+  );
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>(
+    () => screenCache.getSync<GroupsOverviewCache>(GROUPS_CACHE_KEY)?.pendingInvites ?? [],
+  );
   const [selectedFilter, setSelectedFilter] = useState<GroupTypeFilter>("all");
   const hasLoadedRef = useRef(false);
 
@@ -397,27 +424,63 @@ export default function GroupsScreen() {
     setCreateColorTheme("custom_purple_blue");
   };
 
-  const fetchOverview = useCallback(async () => {
+  const fetchOverview = useCallback(async (opts?: { force?: boolean }) => {
+    const cacheKey = `${GROUPS_CACHE_KEY}_${getLocalDateStr()}`;
+    if (!opts?.force && !apiFetchAllowed(cacheKey, 30_000)) {
+      perf.apiSkipped("groups_overview_throttled");
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+    markApiFetched(cacheKey);
+
     try {
-      const res = await authFetch(`/api/groups/overview?localDate=${getLocalDateStr()}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data.summary) setSummary(data.summary);
-      if (data.filters) setFilters(data.filters);
-      if (data.groups) setGroups(data.groups);
-      if (data.pendingInvites !== undefined) setPendingInvites(data.pendingInvites);
+      await runCoalesced(GROUPS_CACHE_KEY, async () => {
+        const res = await authFetch(`/api/groups/overview?localDate=${getLocalDateStr()}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const next: GroupsOverviewCache = {
+          summary: data.summary ?? summary,
+          filters: data.filters ?? [],
+          groups: data.groups ?? [],
+          pendingInvites: data.pendingInvites ?? [],
+        };
+        if (data.summary) setSummary(data.summary);
+        if (data.filters) setFilters(data.filters);
+        if (data.groups) setGroups(data.groups);
+        if (data.pendingInvites !== undefined) setPendingInvites(data.pendingInvites);
+        void screenCache.set(GROUPS_CACHE_KEY, next);
+      });
     } catch (e) {
       if (__DEV__) console.log("[GroupsLanding] fetch error:", e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [summary]);
 
   useFocusEffect(
     useCallback(() => {
-      if (!hasLoadedRef.current) setLoading(true);
-      fetchOverview().then(() => { hasLoadedRef.current = true; });
+      void (async () => {
+        if (!screenCache.getSync(GROUPS_CACHE_KEY)) {
+          const diskCached = await screenCache.get<GroupsOverviewCache>(GROUPS_CACHE_KEY);
+          if (diskCached) {
+            perf.cacheHit(GROUPS_CACHE_KEY);
+            setSummary(diskCached.summary);
+            setFilters(diskCached.filters);
+            setGroups(diskCached.groups);
+            setPendingInvites(diskCached.pendingInvites);
+            setLoading(false);
+          } else {
+            perf.cacheMiss(GROUPS_CACHE_KEY);
+          }
+        } else {
+          perf.cacheHit(GROUPS_CACHE_KEY);
+        }
+        if (!hasLoadedRef.current) setLoading(screenCache.getSync(GROUPS_CACHE_KEY) === null);
+        await fetchOverview();
+        hasLoadedRef.current = true;
+      })();
       if (groupInviteCount > 0) clearGroupInvites();
     }, [fetchOverview, groupInviteCount, clearGroupInvites]),
   );
@@ -439,7 +502,7 @@ export default function GroupsScreen() {
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    fetchOverview();
+    void fetchOverview({ force: true });
   }, [fetchOverview]);
 
   const handleAccept = async (invite: PendingInvite) => {

@@ -1,5 +1,5 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { AppState, Platform, type AppStateStatus } from "react-native";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { AppState, InteractionManager, Platform, type AppStateStatus } from "react-native";
 import { type LeaderboardUser, type WalletTransaction } from "@/utils/mockData";
 import { STORAGE_KEYS, storageGet, storageSet } from "@/utils/storage";
 import { getValidSession } from "@/services/authService";
@@ -7,6 +7,10 @@ import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
 import { getDeviceTimezone, getLocalDateStr, getLocalWeekStart, getLocalMonthStart } from "@/utils/timezone";
 import { dynamicIconService } from "@/services/dynamicIconService";
 import { waitForAppStartupReady } from "@/services/appStartup";
+import { runCoalesced, apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import { screenCache } from "@/utils/screenCache";
+import { perf } from "@/utils/perfLogger";
+import { useAuth } from "@/context/AuthContext";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -27,8 +31,13 @@ interface AppContextType {
   transactions: WalletTransaction[];
   requestWithdrawal: (amount: number, method: string, payoutDetails?: Record<string, string>) => Promise<void>;
   addReward: (amount: number, description: string) => void;
-  refreshWallet: () => Promise<void>;
-  refreshLeaderboard: (period?: string, scope?: string, countryCode?: string) => Promise<void>;
+  refreshWallet: (opts?: { silent?: boolean }) => Promise<void>;
+  refreshLeaderboard: (
+    period?: string,
+    scope?: string,
+    countryCode?: string,
+    opts?: { silent?: boolean },
+  ) => Promise<void>;
   walletLoading: boolean;
   leaderboardLoading: boolean;
 }
@@ -111,6 +120,10 @@ function mapApiTransaction(tx: Record<string, unknown>): WalletTransaction {
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  const { user, loading: authLoading, sessionToken } = useAuth();
+  const hasWalletCacheRef = useRef(false);
+  const hasLeaderboardCacheRef = useRef(false);
+
   const [walletBalance, setWalletBalance] = useState(0);
   const [pendingBalance, setPendingBalance] = useState(0);
   const [walletCurrency, setWalletCurrency] = useState("USD");
@@ -120,21 +133,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [walletLoading, setWalletLoading] = useState(false);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
 
-  const refreshWallet = useCallback(async () => {
-    setWalletLoading(true);
+  const refreshWallet = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true || hasWalletCacheRef.current;
+    if (!silent) setWalletLoading(true);
     try {
-      const data = await apiFetch<{ wallet: WalletData }>("/api/wallet");
-      if (data?.wallet) {
-        setWalletBalance(data.wallet.availableBalance);
-        setPendingBalance(data.wallet.pendingBalance);
-        if (data.wallet.currency) setWalletCurrency(data.wallet.currency.toUpperCase());
-        storageSet(STORAGE_KEYS.WALLET, data.wallet.availableBalance);
-      }
+      await runCoalesced("wallet_refresh", async () => {
+        const data = await apiFetch<{ wallet: WalletData }>("/api/wallet");
+        if (data?.wallet) {
+          setWalletBalance(data.wallet.availableBalance);
+          setPendingBalance(data.wallet.pendingBalance);
+          if (data.wallet.currency) setWalletCurrency(data.wallet.currency.toUpperCase());
+          storageSet(STORAGE_KEYS.WALLET, data.wallet.availableBalance);
+          hasWalletCacheRef.current = true;
+        }
 
-      const [txData, depositData] = await Promise.all([
-        apiFetch<{ transactions: Array<Record<string, unknown>> }>("/api/wallet/transactions"),
-        apiFetch<{ deposits: Array<Record<string, unknown>> }>("/api/wallet/deposit/list"),
-      ]);
+        const [txData, depositData] = await Promise.all([
+          apiFetch<{ transactions: Array<Record<string, unknown>> }>("/api/wallet/transactions"),
+          apiFetch<{ deposits: Array<Record<string, unknown>> }>("/api/wallet/deposit/list"),
+        ]);
 
       const walletTxs = txData?.transactions?.map(mapApiTransaction) ?? [];
 
@@ -196,6 +212,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setTransactions(allTxs);
         storageSet(STORAGE_KEYS.TRANSACTIONS, allTxs);
       }
+      });
     } catch {
       const cached = await storageGet<number>(STORAGE_KEYS.WALLET);
       if (cached !== null) setWalletBalance(cached);
@@ -210,23 +227,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     period = "all_time",
     scope = "global",
     countryCode?: string,
+    opts?: { silent?: boolean },
   ) => {
-    setLeaderboardLoading(true);
+    const silent = opts?.silent === true || hasLeaderboardCacheRef.current;
+    if (!silent) setLeaderboardLoading(true);
+    const cacheKey = `app_lb_${period}_${scope}_${countryCode ?? "none"}`;
     try {
-      const params = new URLSearchParams({ period, scope });
-      if (scope === "regional" && countryCode) params.set("countryCode", countryCode);
-      // Include local date boundaries so the server computes the period in
-      // the user's calendar day rather than the server's UTC date.
-      params.set("localDate", getLocalDateStr());
-      if (period === "week") params.set("weekStart", getLocalWeekStart());
-      if (period === "month") params.set("monthStart", getLocalMonthStart());
-      const data = await apiFetch<{ leaderboard: LeaderboardUser[]; userRank: number }>(
-        `/api/leaderboard?${params.toString()}`,
-      );
-      if (data) {
-        setLeaderboard(data.leaderboard ?? []);
-        setUserRank(data.userRank ?? 9999);
-      }
+      await runCoalesced(`leaderboard_${cacheKey}`, async () => {
+        const params = new URLSearchParams({ period, scope });
+        if (scope === "regional" && countryCode) params.set("countryCode", countryCode);
+        params.set("localDate", getLocalDateStr());
+        if (period === "week") params.set("weekStart", getLocalWeekStart());
+        if (period === "month") params.set("monthStart", getLocalMonthStart());
+        const data = await apiFetch<{ leaderboard: LeaderboardUser[]; userRank: number }>(
+          `/api/leaderboard?${params.toString()}`,
+        );
+        if (data) {
+          setLeaderboard(data.leaderboard ?? []);
+          setUserRank(data.userRank ?? 9999);
+          hasLeaderboardCacheRef.current = true;
+          void screenCache.set(cacheKey, {
+            leaderboard: data.leaderboard ?? [],
+            userRank: data.userRank ?? 9999,
+          });
+        }
+      });
     } catch {
       // Keep existing data on error
     } finally {
@@ -235,15 +260,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (authLoading || !sessionToken || !user?.id) return;
+
     const load = async () => {
-      const cached = await storageGet<number>(STORAGE_KEYS.WALLET);
-      if (cached !== null) setWalletBalance(cached);
+      const cachedWallet = await storageGet<number>(STORAGE_KEYS.WALLET);
+      if (cachedWallet !== null) {
+        setWalletBalance(cachedWallet);
+        hasWalletCacheRef.current = true;
+        perf.cacheHit("wallet_balance");
+      } else {
+        perf.cacheMiss("wallet_balance");
+      }
       const cachedTxs = await storageGet<WalletTransaction[]>(STORAGE_KEYS.TRANSACTIONS);
       if (cachedTxs) setTransactions(cachedTxs);
 
-      // Sync device timezone to the user's backend preferences so the server
-      // can use the correct IANA timezone for future computations.
-      // Fire-and-forget: timezone sync must never delay the main load.
+      const lbCacheKey = `app_lb_all_time_global_none`;
+      const cachedLb = screenCache.getSync<{ leaderboard: LeaderboardUser[]; userRank: number }>(lbCacheKey)
+        ?? await screenCache.get<{ leaderboard: LeaderboardUser[]; userRank: number }>(lbCacheKey);
+      if (cachedLb) {
+        setLeaderboard(cachedLb.leaderboard);
+        setUserRank(cachedLb.userRank);
+        hasLeaderboardCacheRef.current = true;
+        perf.cacheHit(lbCacheKey);
+      }
+
+      // Timezone sync is fire-and-forget — must never delay wallet/rank display.
       getValidSession().then((session) => {
         if (!session) return;
         fetch(`${API_BASE}/api/user/preferences`, {
@@ -254,10 +295,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ timezone: getDeviceTimezone() }),
-        }).catch(() => {}); // ignore errors — non-critical background sync
+        }).catch(() => {});
       }).catch(() => {});
 
-      await Promise.all([refreshWallet(), refreshLeaderboard()]);
+      // Wallet is shown on Walk tab — fetch immediately in background.
+      void refreshWallet({ silent: hasWalletCacheRef.current });
+
+      // Leaderboard rank is non-critical for first paint — defer after interactions.
+      InteractionManager.runAfterInteractions(() => {
+        if (!apiFetchAllowed("app_leaderboard_rank", 60_000)) {
+          perf.apiSkipped("leaderboard_throttled");
+          return;
+        }
+        markApiFetched("app_leaderboard_rank");
+        void refreshLeaderboard("all_time", "global", undefined, {
+          silent: hasLeaderboardCacheRef.current,
+        });
+      });
 
       void waitForAppStartupReady().then(() => {
         setTimeout(() => {
@@ -268,7 +322,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
     };
     load();
-  }, [refreshWallet, refreshLeaderboard]);
+  }, [authLoading, sessionToken, user?.id, refreshWallet, refreshLeaderboard]);
 
   useEffect(() => {
     const onChange = (state: AppStateStatus) => {

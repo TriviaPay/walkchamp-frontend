@@ -656,21 +656,35 @@ export async function setupNotificationClickHandler(
 // ── Foreground notification handler ──────────────────────────────────────────
 export async function setupForegroundHandler(): Promise<() => void> {
   if (Platform.OS === "web") return () => {};
+  if (_foregroundHandlerCleanup) return _foregroundHandlerCleanup;
+
   const OneSignal = await ensureOneSignalInitialized();
   if (!OneSignal) return () => {};
 
   const handleForeground: NotifEventHandler = (event) => {
     const fgEvent = event as ForegroundWillDisplayEvent;
-    const data = fgEvent.notification.additionalData ?? {};
-    pushLog(`foreground received type=${String((data as Record<string, unknown>).type ?? "unknown")}`);
-    // Show the banner even in foreground — Pusher handles live race UI updates
-    // but push is still useful for out-of-context messages (e.g. friend request
-    // while user is on the Leaderboard screen)
+    const rawData = fgEvent.notification.additionalData ?? {};
+    const data = (
+      typeof rawData === "object" &&
+      rawData !== null &&
+      "custom" in rawData &&
+      typeof (rawData as { custom?: unknown }).custom === "object"
+        ? { ...(rawData as Record<string, unknown>), ...((rawData as { custom: Record<string, unknown> }).custom) }
+        : rawData
+    ) as Record<string, unknown>;
+    const type = String(data.type ?? "unknown");
+    const title = fgEvent.notification.title ?? "";
+    pushLog(`foreground received type=${type} title=${title}`);
+    // OneSignal v5: preventDefault + display() required to show system banner while app is open.
+    fgEvent.preventDefault();
     fgEvent.notification.display();
   };
 
   OneSignal.Notifications.addEventListener("foregroundWillDisplay", handleForeground);
-  return () => OneSignal.Notifications.removeEventListener("foregroundWillDisplay", handleForeground);
+  const cleanup = () => OneSignal.Notifications.removeEventListener("foregroundWillDisplay", handleForeground);
+  _foregroundHandlerCleanup = cleanup;
+  pushLog("foreground handler registered");
+  return cleanup;
 }
 
 // ── In-app notification helpers (unchanged) ───────────────────────────────────

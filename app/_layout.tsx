@@ -40,15 +40,14 @@ import { useAuth } from "@/context/AuthContext";
 import { connectPusher, subscribeToChannel, unsubscribeFromChannel, CHANNELS } from "@/services/realtimeService";
 import { initDynamicIconService } from "@/services/dynamicIconService";
 import { initStepProgressCoordinator } from "@/services/stepProgressCoordinator";
-import {
-  scheduleAppStartupReady,
-  waitForAppStartupReady,
-} from "@/services/appStartup";
+import { scheduleAppStartupReady, waitForAppStartupReady } from "@/services/appStartup";
+import { perf } from "@/utils/perfLogger";
 import {
   ensureOneSignalInitialized,
   ensurePushRegistration,
   logoutOneSignal,
   setupNotificationClickHandler,
+  setupForegroundHandler,
 } from "@/services/notificationService";
 import { resolveDeepLink } from "@/utils/deepLinkUtils";
 import * as Linking from "expo-linking";
@@ -57,6 +56,7 @@ import { PushPermissionPrompt } from "@/components/PushPermissionPrompt";
 import { StepTrackingNotificationPrompt } from "@/components/StepTrackingNotificationPrompt";
 
 // ── App startup diagnostics ────────────────────────────────────────────────
+perf.appStartStart();
 if (__DEV__) {
   console.log(`[AppStart] platform: ${Platform.OS}`);
   console.log(`[AppStart] env loaded: API_URL=${process.env.EXPO_PUBLIC_API_URL ?? "(unset)"} DESCOPE=${process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID ? "set" : "(unset)"} PUSHER_KEY=${process.env.EXPO_PUBLIC_PUSHER_KEY ? "set" : "(unset)"}`);
@@ -219,12 +219,14 @@ function PushNotificationSetup() {
 
   useEffect(() => {
     let cleanupClick: (() => void) | undefined;
+    let cleanupForeground: (() => void) | undefined;
     let linkingSub: { remove: () => void } | undefined;
 
     void waitForAppStartupReady().then(async () => {
       try {
         await ensureOneSignalInitialized();
         cleanupClick = await setupNotificationClickHandler(navigateFromRoute);
+        cleanupForeground = await setupForegroundHandler();
 
         const handleDeepLink = (url: string | null) => {
           if (!url) return;
@@ -242,6 +244,7 @@ function PushNotificationSetup() {
 
     return () => {
       cleanupClick?.();
+      cleanupForeground?.();
       linkingSub?.remove();
     };
   }, [navigateFromRoute]);

@@ -1336,7 +1336,6 @@ export default function AvailableRoomsScreen() {
   const { setActiveRace, joinRace } = useRace();
   const { user } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<RoomTab>("instant");
   const [rooms, setRooms] = useState<Room[]>([]);
   const [activeRoomCount, setActiveRoomCount] = useState(0);
   const [publicRoomCount, setPublicRoomCount] = useState(0);
@@ -1400,9 +1399,6 @@ export default function AvailableRoomsScreen() {
     }
   }, []);
 
-  useEffect(() => { void fetchRooms(); }, [fetchRooms]);
-
-  // ── Fetch upcoming rooms ───────────────────────────────────────────────────
   const fetchUpcomingRooms = useCallback(async (isRefresh = false) => {
     if (isRefresh) setUpcomingRefreshing(true);
     else setUpcomingLoading(true);
@@ -1425,8 +1421,28 @@ export default function AvailableRoomsScreen() {
   }, []);
 
   useEffect(() => {
-    if (activeTab === "upcoming") void fetchUpcomingRooms();
-  }, [activeTab, fetchUpcomingRooms]);
+    void Promise.all([fetchRooms(), fetchUpcomingRooms()]);
+  }, [fetchRooms, fetchUpcomingRooms]);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([fetchRooms(true), fetchUpcomingRooms(true)]);
+  }, [fetchRooms, fetchUpcomingRooms]);
+
+  const groupedUpcomingRooms = useMemo(
+    () => groupByLocalDate(upcomingRooms),
+    [upcomingRooms],
+  );
+
+  const scheduledRoomCount = upcomingRooms.length;
+  const displayActiveCount = activeRoomCount > 0 ? activeRoomCount : rooms.length;
+
+  const headerSubtitle = useMemo(() => {
+    if (loading || upcomingLoading) return "Loading rooms…";
+    return `${displayActiveCount} active room${displayActiveCount !== 1 ? "s" : ""} • ${scheduledRoomCount} scheduled room${scheduledRoomCount !== 1 ? "s" : ""}`;
+  }, [loading, upcomingLoading, displayActiveCount, scheduledRoomCount]);
+
+  const isPageLoading = loading || upcomingLoading;
+  const isRefreshing = refreshing || upcomingRefreshing;
 
   // ── Register for upcoming room ─────────────────────────────────────────────
   const doRegister = useCallback(async (room: UpcomingRoom) => {
@@ -1771,37 +1787,7 @@ export default function AvailableRoomsScreen() {
     setSelectedHostId(room.host_user_id);
   }, []);
 
-  // ── Subtitle text ──────────────────────────────────────────────────────────
-  function headerSubtitle(): string {
-    if (activeTab === "upcoming") {
-      if (upcomingLoading) return "Loading scheduled rooms…";
-      if (upcomingRooms.length === 0) return "No scheduled rooms right now";
-      return `${upcomingRooms.length} scheduled room${upcomingRooms.length !== 1 ? "s" : ""}`;
-    }
-    if (activeRoomCount === 0) return "No rooms available right now";
-    const parts: string[] = [];
-    if (publicRoomCount > 0) parts.push(`${publicRoomCount} public`);
-    if (privateRoomCount > 0) parts.push(`${privateRoomCount} private`);
-    const breakdown = parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
-    return `${activeRoomCount} active room${activeRoomCount !== 1 ? "s" : ""}${breakdown}`;
-  }
-
   // ── Render ─────────────────────────────────────────────────────────────────
-  const renderItem = useCallback(
-    ({ item }: { item: Room }) => (
-      <RoomCard
-        room={item}
-        onJoin={handleJoin}
-        onJoinWithCode={() => setJoinWithCodeVisible(true)}
-        onViewHost={handleViewHost}
-        joining={joiningRoomId === item.room_id}
-      />
-    ),
-    [handleJoin, handleViewHost, joiningRoomId]
-  );
-
-  const keyExtractor = useCallback((item: Room) => item.room_id, []);
-
   return (
     <SafeAreaView style={[s.container, { flex: 1 }]} edges={["top", "left", "right", "bottom"]}>
       {/* Header */}
@@ -1813,52 +1799,41 @@ export default function AvailableRoomsScreen() {
         </TouchableOpacity>
         <View style={s.headerCenter}>
           <Text style={s.headerTitle}>Available Rooms</Text>
-          <Text style={s.headerSub}>{headerSubtitle()}</Text>
+          <Text style={s.headerSub}>{headerSubtitle}</Text>
         </View>
         <TouchableOpacity
-          onPress={() => void fetchRooms(true)}
+          onPress={() => void refreshAll()}
           style={s.headerBtn}
           activeOpacity={0.7}
-          disabled={refreshing || loading}
+          disabled={isRefreshing || isPageLoading}
         >
           <View style={s.refreshBtn}>
             <Feather
               name="refresh-cw"
               size={18}
-              color={refreshing ? GREEN : "#8B9AC0"}
+              color={isRefreshing ? GREEN : "#8B9AC0"}
             />
           </View>
         </TouchableOpacity>
       </View>
 
-      {/* Tab switcher: Instant Rooms | Upcoming Rooms */}
-      <View style={s.tabRow}>
-        <TouchableOpacity
-          style={[s.tabBtn, activeTab === "instant" && s.tabBtnActive]}
-          onPress={() => setActiveTab("instant")}
-          activeOpacity={0.8}
+      {isPageLoading ? (
+        <View style={[s.list, { paddingTop: rs(8), flex: 1 }]}>
+          <SkeletonList count={5} variant="race" />
+        </View>
+      ) : (
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[s.list, { paddingBottom: rs(20) + safeBottom, flexGrow: 1 }]}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={() => void refreshAll()}
+              tintColor={GREEN}
+              colors={[GREEN, "#00B4FF"]}
+            />
+          }
         >
-          <Feather name="zap" size={13} color={activeTab === "instant" ? GREEN : "#6B7FA8"} />
-          <Text style={[s.tabLabel, activeTab === "instant" && s.tabLabelActive]}>Current Rooms</Text>
-          {activeRoomCount > 0 && activeTab !== "instant" && (
-            <View style={s.tabBadge}>
-              <Text style={s.tabBadgeText}>{activeRoomCount > 99 ? "99+" : activeRoomCount}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[s.tabBtn, activeTab === "upcoming" && s.tabBtnActiveUpcoming]}
-          onPress={() => setActiveTab("upcoming")}
-          activeOpacity={0.8}
-        >
-          <Feather name="calendar" size={13} color={activeTab === "upcoming" ? "#00B4FF" : "#6B7FA8"} />
-          <Text style={[s.tabLabel, activeTab === "upcoming" && s.tabLabelActiveUpcoming]}>Upcoming Rooms</Text>
-        </TouchableOpacity>
-      </View>
-
-
-      {activeTab === "instant" ? (
-        <>
           {/* Join with Code banner */}
           <TouchableOpacity
             style={s.joinCodeBanner}
@@ -1882,97 +1857,56 @@ export default function AvailableRoomsScreen() {
             </TouchableOpacity>
           </TouchableOpacity>
 
-          {/* Instant rooms body */}
-          {loading ? (
-            <View style={[s.list, { paddingTop: rs(8) }]}>
-              <SkeletonList count={5} variant="race" />
-            </View>
-          ) : error ? (
-            <View style={s.center}>
-              <View style={s.emptyIconWrap}>
-                <Feather name="wifi-off" size={28} color="#8B9AC0" />
-              </View>
-              <Text style={s.emptyTitle}>Connection error</Text>
-              <Text style={s.emptySub}>{error}</Text>
-              <TouchableOpacity style={s.retryBtn} onPress={() => void fetchRooms()} activeOpacity={0.8}>
+          {/* Current Rooms */}
+          <View style={s.sectionHeader}>
+            <Text style={s.sectionTitle}>Current Rooms</Text>
+          </View>
+          {error ? (
+            <View style={s.sectionEmpty}>
+              <Feather name="wifi-off" size={22} color="#8B9AC0" />
+              <Text style={s.sectionEmptyTitle}>Could not load active rooms</Text>
+              <Text style={s.sectionEmptySub}>{error}</Text>
+              <TouchableOpacity style={s.retryBtn} onPress={() => void fetchRooms(true)} activeOpacity={0.8}>
                 <Text style={s.retryBtnText}>Retry</Text>
               </TouchableOpacity>
             </View>
-          ) : (
-            <FlatList
-              data={rooms}
-              keyExtractor={keyExtractor}
-              renderItem={renderItem}
-              contentContainerStyle={[
-                s.list,
-                rooms.length === 0 && s.listGrow,
-                { paddingBottom: rs(20) },
-              ]}
-              refreshControl={
-                <RefreshControl
-                  refreshing={refreshing}
-                  onRefresh={() => void fetchRooms(true)}
-                  tintColor={GREEN}
-                />
-              }
-              ListEmptyComponent={
-                <View style={s.center}>
-                  <View style={s.emptyIconWrap}>
-                    <Feather name="inbox" size={28} color="#8B9AC0" />
-                  </View>
-                  <Text style={s.emptyTitle}>No instant rooms available right now.</Text>
-                  <Text style={s.emptySub}>Create a room or use quick join from the Walk tab.</Text>
-                  <TouchableOpacity style={s.retryBtn} onPress={() => void fetchRooms(true)} activeOpacity={0.8}>
-                    <Text style={s.retryBtnText}>Refresh</Text>
-                  </TouchableOpacity>
-                </View>
-              }
-              showsVerticalScrollIndicator={false}
-            />
-          )}
-        </>
-      ) : (
-        /* Upcoming Rooms tab */
-        upcomingLoading ? (
-          <View style={[s.list, { flex: 1, paddingTop: rs(8) }]}>
-            <SkeletonList count={4} variant="race" />
-          </View>
-        ) : upcomingError ? (
-          <View style={[s.center, { flex: 1, paddingBottom: rs(20) }]}>
-            <Feather name="alert-circle" size={28} color="#FF6B6B" />
-            <Text style={[s.emptyTitle, { color: "#FF6B6B", marginTop: 12 }]}>Failed to load</Text>
-            <Text style={s.emptySub}>{upcomingError}</Text>
-            <TouchableOpacity
-              style={{ marginTop: 16, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 10, backgroundColor: "#00B4FF20", borderWidth: 1, borderColor: "#00B4FF40" }}
-              onPress={() => void fetchUpcomingRooms()}
-            >
-              <Text style={{ color: "#00B4FF", fontWeight: "700", fontSize: rf(13) }}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        ) : upcomingRooms.length === 0 ? (
-          <View style={[s.center, { flex: 1, paddingBottom: rs(20) }]}>
-            <View style={[s.emptyIconWrap, { backgroundColor: "#00B4FF10", borderColor: "#00B4FF30" }]}>
-              <Feather name="calendar" size={28} color="#00B4FF" />
+          ) : rooms.length === 0 ? (
+            <View style={s.sectionEmpty}>
+              <Text style={s.sectionEmptyTitle}>No active rooms right now</Text>
             </View>
-            <Text style={s.emptyTitle}>No upcoming rooms yet.</Text>
-            <Text style={s.emptySub}>
-              Create or register for a future challenge.{"\n"}Scheduled rooms will appear here.
-            </Text>
-          </View>
-        ) : (
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingTop: 12, paddingBottom: rs(20), flexGrow: 1 }}
-            refreshControl={
-              <RefreshControl
-                refreshing={upcomingRefreshing}
-                onRefresh={() => void fetchUpcomingRooms(true)}
-                tintColor="#00B4FF"
-                colors={["#00B4FF"]}
-              />
-            }
-          >
-            {groupByLocalDate(upcomingRooms).map((group) => (
+          ) : (
+            rooms.map((item) => (
+              <View key={item.room_id} style={s.currentRoomItem}>
+                <RoomCard
+                  room={item}
+                  onJoin={handleJoin}
+                  onJoinWithCode={() => setJoinWithCodeVisible(true)}
+                  onViewHost={handleViewHost}
+                  joining={joiningRoomId === item.room_id}
+                />
+              </View>
+            ))
+          )}
+
+          {/* Upcoming Rooms grouped by date */}
+          {upcomingError ? (
+            <View style={[s.sectionEmpty, { marginTop: rs(12) }]}>
+              <Feather name="alert-circle" size={22} color="#FF6B6B" />
+              <Text style={[s.sectionEmptyTitle, { color: "#FF6B6B" }]}>Could not load scheduled rooms</Text>
+              <Text style={s.sectionEmptySub}>{upcomingError}</Text>
+              <TouchableOpacity
+                style={{ marginTop: 12, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 10, backgroundColor: "#00B4FF20", borderWidth: 1, borderColor: "#00B4FF40" }}
+                onPress={() => void fetchUpcomingRooms(true)}
+              >
+                <Text style={{ color: "#00B4FF", fontWeight: "700", fontSize: rf(13) }}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : groupedUpcomingRooms.length === 0 ? (
+            <View style={s.sectionEmpty}>
+              <Text style={s.sectionEmptyTitle}>No scheduled rooms yet</Text>
+            </View>
+          ) : (
+            groupedUpcomingRooms.map((group) => (
               <DateSection
                 key={group.date}
                 group={group}
@@ -1983,9 +1917,9 @@ export default function AvailableRoomsScreen() {
                 onCancelRoom={handleCancelRoom}
                 onViewHost={handleViewUpcomingHost}
               />
-            ))}
-          </ScrollView>
-        )
+            ))
+          )}
+        </ScrollView>
       )}
 
       <ActiveRaceModal
@@ -2162,7 +2096,14 @@ const s = StyleSheet.create({
   headerTitle: { fontSize: rf(18), fontWeight: "800", color: "#EAEFF8", letterSpacing: -0.3 },
   headerSub: { fontSize: rf(12), color: "#6B7FA8", marginTop: 2 },
 
-  // ── Tab switcher ─────────────────────────────────────────────────────────
+  sectionHeader: { paddingHorizontal: rs(16), marginTop: rs(16), marginBottom: rs(8) },
+  sectionTitle: { fontSize: rf(16), fontWeight: "800", color: "#D4DCEF" },
+  sectionEmpty: { alignItems: "center", paddingHorizontal: rs(24), paddingVertical: rs(20), gap: 6 },
+  sectionEmptyTitle: { fontSize: rf(14), fontWeight: "700", color: "#8B9AC0", textAlign: "center" },
+  sectionEmptySub: { fontSize: rf(12), color: "#6B7FA8", textAlign: "center" },
+  currentRoomItem: { marginBottom: rs(12) },
+
+  // ── Tab switcher (removed — kept for reference) ───────────────────────────
   tabRow: {
     flexDirection: "row",
     marginHorizontal: 16,

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { stepsKeys } from "@/services/queryKeys";
+import { QUERY_STALE_TIMES } from "@/services/queryClient";
 import { fetchTodayWalkFromApi } from "@/services/walkTodayApi";
 import { getTodayKey } from "@/utils/format";
 
@@ -18,6 +19,9 @@ export function useTodayWalkSteps(userId: string | undefined | null) {
       : ["todaySteps", "anonymous", localDate],
     queryFn: () => fetchTodayWalkFromApi(userId!, localDate),
     enabled,
+    staleTime: QUERY_STALE_TIMES.steps,
+    gcTime: 10 * 60_000,
+    refetchOnMount: false,
   });
 
   const data = query.data;

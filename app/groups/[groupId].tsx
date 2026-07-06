@@ -14,6 +14,7 @@ import { authFetch } from "@/utils/authFetch";
 import { getLocalDateStr } from "@/utils/timezone";
 import { getApiBase } from "@/utils/apiUrl";
 import { uploadGroupImage, groupImageUri } from "@/services/mediaApi";
+import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { subscribeToChannel } from "@/services/realtimeService";
 import { SkeletonGroupDetailScreen } from "@/components/SkeletonRows";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
@@ -41,7 +42,7 @@ const T = {
 type GroupType = "friends" | "family" | "office" | "custom";
 type TabKey = "today" | "overall" | "members" | "history";
 
-interface Profile { id: string; username: string; fullName: string | null; avatarUrl: string | null; countryCode: string | null }
+interface Profile { id: string; username: string; fullName: string | null; avatarUrl: string | null; avatarVersion?: number; countryCode: string | null }
 interface MemberEntry {
   id: string; userId: string; role: string; joinedAt: string | null;
   profile: Profile | null; todaySteps: number; allTimeSteps: number;
@@ -71,6 +72,7 @@ interface PendingGroupInvite {
 }
 interface SelectedMember {
   userId: string; username: string; fullName: string | null; avatarUrl: string | null;
+  avatarVersion?: number;
   countryCode: string | null; role: string; todaySteps: number; allTimeSteps: number;
   isCurrentUser: boolean;
 }
@@ -192,58 +194,43 @@ function Sparkline({ data, color, width: W, height: H }: { data: number[]; color
 }
 
 // ── Avatar circle ─────────────────────────────────────────────────────────────
-// `userId` + `hasAvatar` → use the public display proxy so OCI auth is handled server-side.
-// `url` is kept only as a "has avatar" signal (raw OCI URLs can't be fetched directly by RN).
-function AvatarCircle({ userId, url, username, color, size = 38 }: { userId?: string | null; url?: string | null; username?: string | null; color: string; size?: number }) {
-  const [imgErr, setImgErr] = useState(false);
-  const displayUri = url && userId ? `${getApiBase()}/api/profile/avatar/${userId}` : null;
-  const hasImg = !!displayUri && !imgErr;
-  const initial = (username?.[0] ?? "?").toUpperCase();
+function AvatarCircle({
+  userId, url, username, color, size = 38, avatarVersion,
+}: {
+  userId?: string | null; url?: string | null; username?: string | null;
+  color: string; size?: number; avatarVersion?: number | null;
+}) {
   return (
-    <View style={{
-      width: size, height: size, borderRadius: size / 2, borderWidth: 2,
-      borderColor: color,
-      backgroundColor: hasImg ? "transparent" : avatarBg(username),
-      alignItems: "center", justifyContent: "center", overflow: "hidden",
-    }}>
-      {hasImg ? (
-        <Image
-          source={{ uri: displayUri }}
-          style={{ width: size, height: size }}
-          onError={() => setImgErr(true)}
-        />
-      ) : (
-        <Text style={{ fontSize: size * 0.38, fontWeight: "800", color: "#FFFFFF" }}>
-          {initial}
-        </Text>
-      )}
-    </View>
+    <ProfileAvatar
+      userId={userId}
+      profileImageUrl={url}
+      avatarVersion={avatarVersion}
+      avatarColor={color}
+      displayName={username ?? ""}
+      size={size}
+      borderWidth={2}
+    />
   );
 }
 
 // ── Large avatar for the member profile modal ─────────────────────────────────
-function ModalAvatar({ userId, username, url, borderColor }: { userId?: string | null; username: string; url: string | null; borderColor: string }) {
-  const [imgErr, setImgErr] = useState(false);
-  const displayUri = url && userId ? `${getApiBase()}/api/profile/avatar/${userId}` : null;
-  const hasImg = !!displayUri && !imgErr;
+function ModalAvatar({
+  userId, username, url, borderColor, avatarVersion,
+}: {
+  userId?: string | null; username: string; url: string | null;
+  borderColor: string; avatarVersion?: number | null;
+}) {
   return (
     <View style={{ alignItems: "center", marginBottom: 12 }}>
-      <View style={[s.mpAvatar, {
-        backgroundColor: hasImg ? "transparent" : avatarBg(username),
-        borderColor,
-      }]}>
-        {hasImg ? (
-          <Image
-            source={{ uri: displayUri }}
-            style={{ width: 72, height: 72, borderRadius: 36 }}
-            onError={() => setImgErr(true)}
-          />
-        ) : (
-          <Text style={{ fontSize: 30, fontWeight: "800", color: "#FFFFFF" }}>
-            {(username?.[0] ?? "?").toUpperCase()}
-          </Text>
-        )}
-      </View>
+      <ProfileAvatar
+        userId={userId}
+        profileImageUrl={url}
+        avatarVersion={avatarVersion}
+        avatarColor={borderColor}
+        displayName={username}
+        size={72}
+        borderWidth={2}
+      />
     </View>
   );
 }
@@ -775,6 +762,7 @@ function TodayTab({ todayLB, topWalker, avgStepsPerHr, theme, onMemberPress }: {
                 username: entry.profile?.username ?? "Unknown",
                 fullName: entry.profile?.fullName ?? null,
                 avatarUrl: entry.profile?.avatarUrl ?? null,
+                avatarVersion: entry.profile?.avatarVersion,
                 countryCode: entry.profile?.countryCode ?? null,
                 role: entry.role,
                 todaySteps: entry.steps,
@@ -788,7 +776,7 @@ function TodayTab({ todayLB, topWalker, avgStepsPerHr, theme, onMemberPress }: {
               }]}
             >
               <RankBadge rank={entry.rank} />
-              <AvatarCircle userId={entry.userId} url={entry.profile?.avatarUrl} username={entry.profile?.username} color={theme.g1} />
+              <AvatarCircle userId={entry.userId} url={entry.profile?.avatarUrl} username={entry.profile?.username} color={theme.g1} avatarVersion={entry.profile?.avatarVersion} />
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
                   <Text style={{ color: T.white, fontWeight: "700", fontSize: 14 }} numberOfLines={1}>
@@ -880,6 +868,7 @@ function OverallTab({ overallLB, groupStats, theme, onMemberPress }: {
                 username: entry.profile?.username ?? "Unknown",
                 fullName: entry.profile?.fullName ?? null,
                 avatarUrl: entry.profile?.avatarUrl ?? null,
+                avatarVersion: entry.profile?.avatarVersion,
                 countryCode: entry.profile?.countryCode ?? null,
                 role: entry.role,
                 todaySteps: 0,
@@ -893,7 +882,7 @@ function OverallTab({ overallLB, groupStats, theme, onMemberPress }: {
               }]}
             >
               <RankBadge rank={entry.rank} />
-              <AvatarCircle userId={entry.userId} url={entry.profile?.avatarUrl} username={entry.profile?.username} color={theme.g1} />
+              <AvatarCircle userId={entry.userId} url={entry.profile?.avatarUrl} username={entry.profile?.username} color={theme.g1} avatarVersion={entry.profile?.avatarVersion} />
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
                   <Text style={{ color: T.white, fontWeight: "700", fontSize: 14 }} numberOfLines={1}>
@@ -992,6 +981,7 @@ function MembersTab({ members, pendingGroupInvites, isAdmin, groupId, adminUserI
               username: m.profile?.username ?? "Unknown",
               fullName: m.profile?.fullName ?? null,
               avatarUrl: m.profile?.avatarUrl ?? null,
+              avatarVersion: m.profile?.avatarVersion,
               countryCode: m.profile?.countryCode ?? null,
               role: m.role,
               todaySteps: m.todaySteps,
@@ -1013,7 +1003,7 @@ function MembersTab({ members, pendingGroupInvites, isAdmin, groupId, adminUserI
             ) : (
               <View style={{ width: 40, marginRight: 4 }} />
             )}
-            <AvatarCircle userId={m.userId} url={m.profile?.avatarUrl} username={m.profile?.username} color={theme.g1} size={38} />
+            <AvatarCircle userId={m.userId} url={m.profile?.avatarUrl} username={m.profile?.username} color={theme.g1} size={38} avatarVersion={m.profile?.avatarVersion} />
             <View style={{ flex: 1, marginLeft: 10 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
                 <Text style={{ color: T.white, fontWeight: "700", fontSize: 14 }} numberOfLines={1}>
@@ -1056,11 +1046,14 @@ function MembersTab({ members, pendingGroupInvites, isAdmin, groupId, adminUserI
               <View style={[s.rankBadge, { backgroundColor: "rgba(255,200,61,0.12)", borderColor: "rgba(255,200,61,0.3)", marginRight: 4 }]}>
                 <Feather name="clock" size={12} color={T.gold} />
               </View>
-              <View style={[s.memberAvatar, { backgroundColor: "rgba(255,200,61,0.12)", borderColor: "rgba(255,200,61,0.3)" }]}>
-                <Text style={{ fontSize: 14, fontWeight: "700", color: T.gold }}>
-                  {(inv.invitedProfile?.username?.[0] ?? "?").toUpperCase()}
-                </Text>
-              </View>
+              <AvatarCircle
+                userId={inv.invitedUserId}
+                url={inv.invitedProfile?.avatarUrl}
+                username={inv.invitedProfile?.username}
+                color={T.gold}
+                size={38}
+                avatarVersion={inv.invitedProfile?.avatarVersion}
+              />
               <View style={{ flex: 1, marginLeft: 10 }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
                   <Text style={{ color: T.white, fontWeight: "700", fontSize: 14 }} numberOfLines={1}>
@@ -1159,7 +1152,7 @@ function MemberProfileModal({ member, theme, onClose }: {
             <View style={s.mpHandle} />
 
             {/* Avatar */}
-            <ModalAvatar userId={member.userId} username={member.username} url={member.avatarUrl} borderColor={theme.g1} />
+            <ModalAvatar userId={member.userId} username={member.username} url={member.avatarUrl} borderColor={theme.g1} avatarVersion={member.avatarVersion} />
 
             <Text style={s.mpName}>
               {member.fullName ?? member.username}
@@ -1205,7 +1198,7 @@ function MemberProfileModal({ member, theme, onClose }: {
 }
 
 // ── Invite member modal ───────────────────────────────────────────────────────
-interface SearchUser { id: string; username: string; fullName: string | null; avatarUrl: string | null; avatarColor: string | null; countryFlag: string | null }
+interface SearchUser { id: string; username: string; fullName: string | null; avatarUrl: string | null; avatarVersion?: number; avatarColor: string | null; countryFlag: string | null }
 
 function InviteMemberModal({ groupId, theme, onClose, onInvited }: {
   groupId: string; theme: { g1: string; g2: string; glow: string };
@@ -1321,20 +1314,16 @@ function InviteMemberModal({ groupId, theme, onClose, onInvited }: {
                     }}
                   >
                     {/* Avatar */}
-                    <View style={{
-                      width: 36, height: 36, borderRadius: 18,
-                      backgroundColor: u.avatarColor ?? avatarBg(u.username),
-                      alignItems: "center", justifyContent: "center",
-                      overflow: "hidden", marginRight: 10,
-                    }}>
-                      {u.avatarUrl ? (
-                        <Image source={{ uri: `${getApiBase()}/api/profile/avatar/${u.id}` }} style={{ width: 36, height: 36 }} />
-                      ) : (
-                        <Text style={{ color: "#fff", fontWeight: "800", fontSize: 15 }}>
-                          {(u.username[0] ?? "?").toUpperCase()}
-                        </Text>
-                      )}
-                    </View>
+                    <ProfileAvatar
+                      userId={u.id}
+                      profileImageUrl={u.avatarUrl}
+                      avatarVersion={u.avatarVersion}
+                      avatarColor={u.avatarColor ?? avatarBg(u.username)}
+                      displayName={u.username}
+                      size={36}
+                      borderWidth={0}
+                      style={{ marginRight: 10 }}
+                    />
                     <View style={{ flex: 1 }}>
                       <Text style={{ color: T.white, fontWeight: "700", fontSize: 14 }} numberOfLines={1}>
                         {u.fullName ?? u.username}
@@ -1680,6 +1669,7 @@ function LeaveModal({ groupName, groupId, isAdmin, otherMembers, theme, onClose,
                       username={uname}
                       color={theme.g1}
                       size={40}
+                      avatarVersion={member.profile?.avatarVersion}
                     />
                     <View style={{ flex: 1 }}>
                       <Text style={{ color: T.white, fontWeight: "700", fontSize: 14 }}>{uname}</Text>

@@ -449,7 +449,9 @@ export const androidLegacySensorProvider: StepProvider = {
         } catch {}
         _sub = null;
       }
-      void storageSet(scoped().baseline, _todaySteps);
+      if (requireBoundUser()) {
+        void storageSet(scoped().baseline, _todaySteps);
+      }
     };
   },
 

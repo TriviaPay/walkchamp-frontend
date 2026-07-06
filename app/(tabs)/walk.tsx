@@ -34,6 +34,7 @@ import { useColors } from "@/hooks/useColors";
 import { useTheme } from "@/context/ThemeContext";
 import { useSound } from "@/context/SoundContext";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
+import { useIncrementalStepDisplay } from "@/hooks/useIncrementalStepDisplay";
 import { useWalkContext, TrackingStatus } from "@/context/WalkContext";
 import { useStepSourceGuard } from "@/hooks/useStepSourceGuard";
 import { ENABLE_CASH_CHALLENGES, ENABLE_LEGACY_CASH_RACE_CARDS } from "@/config/featureFlags";
@@ -1826,23 +1827,18 @@ function WalkScreenContent() {
   const stepsInitializing =
     stepsHydrated &&
     !stepsSourceReady &&
-    contextTodaySteps <= 0 &&
+    liveTodaySteps <= 0 &&
     (stepPermissionStatus === "granted" || usingRealTracking);
+  const confirmedWalkSteps =
+    userReady && Number.isFinite(liveTodaySteps) ? liveTodaySteps : 0;
+  const displayedWalkSteps = useIncrementalStepDisplay(confirmedWalkSteps);
   const { safeSteps: safeTodaySteps, safeGoal: goalSteps, progress: goalProgress, percent: goalPercent } =
     clampDailyProgress(
-      userReady && !stepsInitializing && Number.isFinite(liveTodaySteps)
-        ? liveTodaySteps
+      userReady && (!stepsInitializing || confirmedWalkSteps > 0)
+        ? confirmedWalkSteps
         : 0,
       contextDailyGoal > 0 ? contextDailyGoal : dbWalk.goalSteps,
     );
-
-  useFocusEffect(useCallback(() => {
-    if (!userReady || !usingRealTracking) return;
-    const syncInterval = setInterval(() => {
-      void refreshTodaySteps({ rehydrateBackend: false, mergeNative: true });
-    }, STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_POLL_MS);
-    return () => clearInterval(syncInterval);
-  }, [refreshTodaySteps, userReady, usingRealTracking]));
 
   useEffect(() => {
     if (!user?.id) {
@@ -1967,7 +1963,11 @@ function WalkScreenContent() {
       await refreshTodayRank();
       void refetchDbWalk();
       if (usingRealTracking) {
-        await refreshTodaySteps({ rehydrateBackend: true });
+        await refreshTodaySteps({
+          rehydrateBackend: true,
+          mergeNative: false,
+          applyDisplay: false,
+        });
         await resumeStepWatching();
       }
     })();
@@ -2790,16 +2790,11 @@ function WalkScreenContent() {
                     </View>
                     <Text style={[styles.autoTrackingLabel, { color: colors.foreground }]}>
                       Auto Tracking <Text style={{ color: colors.primary, fontWeight: "700" }}>ON</Text>
-                      {verificationLevel === "limited" && (
-                        <Text style={{ color: "#F59E0B", fontWeight: "600", fontSize: 11 }}> · Limited</Text>
-                      )}
                     </Text>
                     <Text style={[styles.trackingSub, { color: colors.mutedForeground }]}>
                       {verificationLevel === "verified"
                         ? "Verified Tracking — eligible for rewards and races"
-                        : verificationLevel === "limited"
-                          ? "Limited Tracking — display only, not eligible for rewards"
-                          : "Steps count automatically when you walk"}
+                        : "Steps count automatically when you walk"}
                     </Text>
                   </>
                 ) : (
@@ -2813,7 +2808,7 @@ function WalkScreenContent() {
                     </Text>
                     <Text style={[styles.trackingSub, { color: colors.mutedForeground }]}>
                       {Platform.OS === "android" && stepPermissionStatus === "unavailable" && hcAvailability === "not_supported"
-                        ? "Limited phone sensor tracking may be available — tap Connect to try"
+                        ? "Phone sensor tracking may be available — tap Connect to try"
                         : Platform.OS === "android" && stepPermissionStatus === "unavailable" && hcAvailability === "not_installed"
                           ? "Install Health Connect from Google Play, then return to grant Steps permission"
                         : Platform.OS === "android" && stepPermissionStatus === "unavailable" && hcAvailability === "needs_update"
@@ -2862,7 +2857,7 @@ function WalkScreenContent() {
             </View>
 
             <View style={styles.stepsHero}>
-              <WalkProgressIcon steps={safeTodaySteps} goal={goalSteps} size={56} style={styles.stepsHeroIcon} />
+              <WalkProgressIcon steps={displayedWalkSteps} goal={goalSteps} size={56} style={styles.stepsHeroIcon} />
               <View style={styles.stepsHeroText}>
                 {stepsInitializing ? (
                   <>
@@ -2871,7 +2866,7 @@ function WalkScreenContent() {
                   </>
                 ) : (
                   <>
-                    <Text style={[styles.stepsHeroValue, { color: colors.foreground }]}>{safeTodaySteps.toLocaleString()}</Text>
+                    <Text style={[styles.stepsHeroValue, { color: colors.foreground }]}>{displayedWalkSteps.toLocaleString()}</Text>
                     <Text style={[styles.stepsHeroLabel, { color: colors.mutedForeground }]}>steps today</Text>
                   </>
                 )}

@@ -3,6 +3,8 @@
  * Event-driven paths (Pusher) remain primary; HTTP is fallback with throttles.
  */
 
+import { perf } from "@/utils/perfLogger";
+
 const lastFetchAt = new Map<string, number>();
 const inFlight = new Map<string, Promise<unknown>>();
 
@@ -37,7 +39,11 @@ export function resetApiFetchGate(keyPrefix?: string): void {
 /** Run at most one in-flight request per key; subsequent callers share the promise. */
 export async function runCoalesced<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const existing = inFlight.get(key) as Promise<T> | undefined;
-  if (existing) return existing;
+  if (existing) {
+    perf.duplicateRequestBlocked(key);
+    perf.apiDeduped(key);
+    return existing;
+  }
 
   const promise = fn().finally(() => {
     inFlight.delete(key);

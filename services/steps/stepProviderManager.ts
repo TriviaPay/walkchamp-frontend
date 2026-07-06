@@ -498,7 +498,11 @@ export const stepProviderManager = {
 
   stopWatchingSteps(): void {
     if (_watchStop) {
-      _watchStop();
+      try {
+        _watchStop();
+      } catch (e) {
+        if (__DEV__) devLog("stopWatchingSteps cleanup error", e);
+      }
       _watchStop = null;
     }
     _activeProvider?.stopWatchingSteps?.();

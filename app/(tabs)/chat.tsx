@@ -3,6 +3,8 @@ import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows";
 import { screenCache } from "@/utils/screenCache";
+import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import { perf } from "@/utils/perfLogger";
 import { getApiBase } from "@/utils/apiUrl";
 import {
   Animated,
@@ -137,6 +139,15 @@ interface SearchUser {
   requestId?: string | null; }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function dedupeRequestsByUser(items: FriendRequest[]): FriendRequest[] {
+  const seen = new Set<string>();
+  return items.filter((r) => {
+    if (seen.has(r.userId)) return false;
+    seen.add(r.userId);
+    return true;
+  });
+}
 
 function getTime() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
@@ -600,10 +611,19 @@ function GlobalChatTab({ colors, insets, user, headerHeight }: {
   // Refresh online IDs when tab comes into focus or app returns to foreground
   useFocusEffect(useCallback(() => { void fetchOnlineIds(); }, [fetchOnlineIds]));
 
-  // Refetch when app comes back to foreground (e.g. user re-opens the app)
+  // Refetch when app comes back to foreground — throttled to avoid duplicate storms.
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active") { void loadMessages(); void fetchOnlineIds(); }
+      if (state === "active") {
+        if (apiFetchAllowed("chat_global_resume", 15_000)) {
+          markApiFetched("chat_global_resume");
+          perf.backgroundRefresh("chat_global");
+          void loadMessages();
+          void fetchOnlineIds();
+        } else {
+          perf.apiSkipped("chat_global_resume_throttled");
+        }
+      }
     });
     return () => sub.remove();
   }, [loadMessages, fetchOnlineIds]);
@@ -1529,6 +1549,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
   const [searchResults, setSearchResults] = useState<SearchUser[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sendingToRef = useRef<Set<string>>(new Set());
 
   const runSearch = useCallback(async (q: string) => {
     if (q.length < 2) { setSearchResults([]); setSearchLoading(false); return; }
@@ -1550,32 +1571,160 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     setSearchQuery(""); setSearchResults([]); setSearchLoading(false); }, []);
 
-  const sendRequestFromSearch = useCallback(async (targetId: string) => {
-    setSearchResults((prev) => prev.map((u) => u.id === targetId ? { ...u, friendStatus: "pending_sent" as const } : u));
-    try {
-      await authFetch("/api/friends/request", { method: "POST", body: JSON.stringify({ targetUserId: targetId }) });
-    } catch {
-      setSearchResults((prev) => prev.map((u) => u.id === targetId ? { ...u, friendStatus: "none" as const } : u)); }
-  }, []);
-
   const load = useCallback(async () => {
     try {
       const [fr, fds] = await Promise.all([
         authFetch("/api/friends/requests").then((r) => r.json()),
         authFetch("/api/friends").then((r) => r.json()),
       ]);
-      setReceived(fr.received ?? []);
-      setSent(fr.sent ?? []);
-      setFriends(fds.friends ?? []); } catch {}
+      setReceived(dedupeRequestsByUser(fr.received ?? []));
+      setSent(dedupeRequestsByUser(fr.sent ?? []));
+      setFriends(fds.friends ?? []);
+    } catch {}
     setLoading(false);
-    setRefreshing(false); }, []);
+    setRefreshing(false);
+  }, []);
+
+  const friendIds = useMemo(() => new Set(friends.map((f) => f.id)), [friends]);
+
+  const visibleReceived = useMemo(
+    () => dedupeRequestsByUser(received.filter((r) => !friendIds.has(r.userId))),
+    [received, friendIds],
+  );
+
+  const visibleSent = useMemo(
+    () => dedupeRequestsByUser(sent.filter((r) => !friendIds.has(r.userId))),
+    [sent, friendIds],
+  );
+
+  const resolvedSearchResults = useMemo(() => {
+    const sentByUserId = new Map(visibleSent.map((s) => [s.userId, s.id]));
+    const receivedByUserId = new Map(visibleReceived.map((r) => [r.userId, r.id]));
+
+    return searchResults.map((u) => {
+      if (friendIds.has(u.id)) {
+        return { ...u, friendStatus: "friends" as const, requestId: null };
+      }
+      const receivedRequestId = receivedByUserId.get(u.id);
+      if (receivedRequestId) {
+        return { ...u, friendStatus: "pending_received" as const, requestId: receivedRequestId };
+      }
+      const sentRequestId = sentByUserId.get(u.id);
+      if (sentRequestId) {
+        return { ...u, friendStatus: "pending_sent" as const, requestId: sentRequestId };
+      }
+      if (u.friendStatus === "pending_sent" || u.friendStatus === "pending_received") {
+        return { ...u, friendStatus: "none" as const, requestId: null };
+      }
+      return u;
+    });
+  }, [searchResults, friendIds, visibleSent, visibleReceived]);
+
+  const upsertSentRequest = useCallback((requestId: string, user: SearchUser) => {
+    setSent((prev) => {
+      if (prev.some((r) => r.id === requestId || r.userId === user.id)) return prev;
+      return [{
+        id: requestId,
+        type: "sent" as const,
+        userId: user.id,
+        username: user.username,
+        flag: user.flag,
+        avatarColor: user.avatarColor,
+        avatarUrl: user.avatarUrl ?? null,
+        avatarVersion: user.avatarVersion ?? null,
+      }, ...prev];
+    });
+  }, []);
+
+  const addFriendLocally = useCallback((req: Pick<FriendRequest, "userId" | "username" | "flag" | "avatarColor" | "avatarUrl" | "avatarVersion">) => {
+    setFriends((prev) => {
+      if (prev.some((f) => f.id === req.userId)) return prev;
+      return [{
+        id: req.userId,
+        username: req.username,
+        flag: req.flag,
+        avatarColor: req.avatarColor,
+        avatarUrl: req.avatarUrl ?? null,
+        avatarVersion: req.avatarVersion ?? null,
+      }, ...prev];
+    });
+    setReceived((prev) => prev.filter((r) => r.userId !== req.userId));
+    setSent((prev) => prev.filter((r) => r.userId !== req.userId));
+    setSearchResults((prev) => prev.map((u) => (
+      u.id === req.userId ? { ...u, friendStatus: "friends" as const, requestId: null } : u
+    )));
+  }, []);
+
+  const clearPendingForUser = useCallback((userId: string) => {
+    setReceived((prev) => prev.filter((r) => r.userId !== userId));
+    setSent((prev) => prev.filter((r) => r.userId !== userId));
+    setSearchResults((prev) => prev.map((u) => (
+      u.id === userId ? { ...u, friendStatus: "none" as const, requestId: null } : u
+    )));
+  }, []);
+
+  const sendRequestFromSearch = useCallback(async (targetId: string) => {
+    if (sendingToRef.current.has(targetId)) return;
+    const targetUser = searchResults.find((u) => u.id === targetId);
+    if (targetUser?.friendStatus === "pending_sent") return;
+
+    sendingToRef.current.add(targetId);
+    setSearchResults((prev) => prev.map((u) => u.id === targetId ? { ...u, friendStatus: "pending_sent" as const } : u));
+    try {
+      const res = await authFetch("/api/friends/request", { method: "POST", body: JSON.stringify({ targetUserId: targetId }) });
+      if (!res.ok) {
+        clearPendingForUser(targetId);
+        return;
+      }
+      const data = (await res.json()) as { request?: { id: string } };
+      const requestId = data.request?.id ?? null;
+      if (!requestId) {
+        clearPendingForUser(targetId);
+        return;
+      }
+      if (targetUser) {
+        upsertSentRequest(requestId, { ...targetUser, friendStatus: "pending_sent", requestId });
+      }
+      setSearchResults((prev) => prev.map((u) => u.id === targetId ? { ...u, friendStatus: "pending_sent" as const, requestId } : u));
+    } catch {
+      clearPendingForUser(targetId);
+    } finally {
+      sendingToRef.current.delete(targetId);
+    }
+  }, [searchResults, clearPendingForUser, upsertSentRequest]);
+
+  const cancelRequestFromSearch = useCallback(async (requestId: string, targetId: string) => {
+    setActionLoading(requestId);
+    clearPendingForUser(targetId);
+    try {
+      await authFetch("/api/friends/cancel", { method: "POST", body: JSON.stringify({ requestId }) });
+    } catch {
+      void load();
+    }
+    setActionLoading(null);
+  }, [clearPendingForUser, load]);
 
   const acceptFromSearch = useCallback(async (requestId: string, targetId: string) => {
+    const user = searchResults.find((u) => u.id === targetId);
+    if (user) {
+      addFriendLocally({
+        userId: targetId,
+        username: user.username,
+        flag: user.flag,
+        avatarColor: user.avatarColor,
+        avatarUrl: user.avatarUrl,
+        avatarVersion: user.avatarVersion,
+      });
+    }
+    setActionLoading(requestId);
     try {
       await authFetch("/api/friends/accept", { method: "POST", body: JSON.stringify({ requestId }) });
-      setSearchResults((prev) => prev.map((u) => u.id === targetId ? { ...u, friendStatus: "friends" as const, requestId: null } : u));
+      await load();
+    } catch {
       void load();
-    } catch {} }, [load]);
+    }
+    setActionLoading(null);
+  }, [addFriendLocally, load, searchResults]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -1590,25 +1739,36 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
 
     const handleNewRequest = (data: { id: string; userId: string; username: string; flag: string; avatarColor: string; createdAt: string }) => {
       setReceived((prev) => {
-        if (prev.some((r) => r.id === data.id)) return prev;
+        if (prev.some((r) => r.id === data.id || r.userId === data.userId)) return prev;
         return [{ id: data.id, type: "received" as const, userId: data.userId, username: data.username, flag: data.flag, avatarColor: data.avatarColor, createdAt: data.createdAt }, ...prev]; }); };
 
     const handleAccepted = () => { void load(); };
 
+    const handleRejected = (data: { requestId: string; otherUserId: string }) => {
+      setReceived((prev) => prev.filter((r) => r.id !== data.requestId && r.userId !== data.otherUserId));
+      setSent((prev) => prev.filter((r) => r.id !== data.requestId && r.userId !== data.otherUserId));
+      setSearchResults((prev) => prev.map((u) => (
+        u.id === data.otherUserId ? { ...u, friendStatus: "none" as const, requestId: null } : u
+      )));
+    };
+
     channel.bind(EVENTS.FRIEND_REQUEST_NEW, handleNewRequest);
     channel.bind(EVENTS.FRIEND_REQUEST_ACCEPTED, handleAccepted);
+    channel.bind(EVENTS.FRIEND_REQUEST_REJECTED, handleRejected);
 
     return () => {
       channel.unbind(EVENTS.FRIEND_REQUEST_NEW, handleNewRequest);
-      channel.unbind(EVENTS.FRIEND_REQUEST_ACCEPTED, handleAccepted); }; }, [user?.id, load]);
+      channel.unbind(EVENTS.FRIEND_REQUEST_ACCEPTED, handleAccepted);
+      channel.unbind(EVENTS.FRIEND_REQUEST_REJECTED, handleRejected); }; }, [user?.id, load]);
 
   // Merge requests that arrived while on another sub-tab (from parent ChatScreen)
   useEffect(() => {
     if (!incomingRequests.length) return;
     setReceived((prev) => {
       const existingIds = new Set(prev.map((r) => r.id));
-      const news = incomingRequests.filter((r) => !existingIds.has(r.id));
-      return news.length ? [...news, ...prev] : prev; }); }, [incomingRequests]);
+      const existingUserIds = new Set(prev.map((r) => r.userId));
+      const news = incomingRequests.filter((r) => !existingIds.has(r.id) && !existingUserIds.has(r.userId));
+      return news.length ? dedupeRequestsByUser([...news, ...prev]) : prev; }); }, [incomingRequests]);
 
   // Reload when parent receives friend_request:accepted or friend:list_updated on any sub-tab
   useEffect(() => {
@@ -1619,24 +1779,37 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
   const acceptRequest = async (req: FriendRequest) => {
     setActionLoading(req.id);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    addFriendLocally(req);
     try {
       await authFetch("/api/friends/accept", { method: "POST", body: JSON.stringify({ requestId: req.id }) });
-      await load(); } catch {}
-    setActionLoading(null); };
+      await load();
+    } catch {
+      void load();
+    }
+    setActionLoading(null);
+  };
 
   const rejectRequest = async (req: FriendRequest) => {
     setActionLoading(req.id);
+    clearPendingForUser(req.userId);
     try {
       await authFetch("/api/friends/reject", { method: "POST", body: JSON.stringify({ requestId: req.id }) });
-      setReceived((prev) => prev.filter((r) => r.id !== req.id)); } catch {}
-    setActionLoading(null); };
+    } catch {
+      void load();
+    }
+    setActionLoading(null);
+  };
 
   const cancelRequest = async (req: FriendRequest) => {
     setActionLoading(req.id);
+    clearPendingForUser(req.userId);
     try {
       await authFetch("/api/friends/cancel", { method: "POST", body: JSON.stringify({ requestId: req.id }) });
-      setSent((prev) => prev.filter((r) => r.id !== req.id)); } catch {}
-    setActionLoading(null); };
+    } catch {
+      void load();
+    }
+    setActionLoading(null);
+  };
 
   const removeFriend = (f: FriendItem) => {
     AppAlert.alert(
@@ -1656,6 +1829,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
                 conversationId = data.conversationId ?? null;
               }
               setFriends((prev) => prev.filter((fr) => fr.id !== f.id));
+              clearPendingForUser(f.id);
               onUnfriend?.(f.id, conversationId);
             } catch {}
           },
@@ -1663,7 +1837,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
       ]
     ); };
 
-  const hasRequests = received.length > 0 || sent.length > 0;
+  const hasRequests = visibleReceived.length > 0 || visibleSent.length > 0;
 
   return (
     <ScrollView
@@ -1705,10 +1879,10 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
               <SkeletonList count={4} variant="user" />
             </View>
           )}
-          {!searchLoading && searchResults.length === 0 && (
+          {!searchLoading && resolvedSearchResults.length === 0 && (
             <Text style={[cStyles.emptyHint, { color: colors.mutedForeground }]}>No users found for "{searchQuery}"</Text>
           )}
-          {searchResults.map((u) => (
+          {resolvedSearchResults.map((u) => (
             <View key={u.id} style={[cStyles.neonCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               {u.avatarUrl ? (
                 <View style={{ width: 48, height: 48, borderRadius: 24, overflow: "hidden", borderWidth: 2, borderColor: u.avatarColor + "80" }}>
@@ -1730,9 +1904,24 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
                   <Text style={{ color: "#00E676", fontSize: 13, fontWeight: "600" }}>Friends</Text>
                 </View>
               ) : u.friendStatus === "pending_sent" ? (
-                <View style={{ borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border }}>
-                  <Text style={{ color: colors.mutedForeground, fontSize: 13, fontWeight: "600" }}>Requested</Text>
-                </View>
+                <TouchableOpacity
+                  style={{
+                    borderRadius: 10,
+                    borderWidth: 1.5,
+                    borderColor: colors.warning + "60",
+                    paddingHorizontal: 14,
+                    paddingVertical: 8,
+                    backgroundColor: colors.warning + "12",
+                    opacity: u.requestId && actionLoading === u.requestId ? 0.6 : 1,
+                  }}
+                  onPress={() => u.requestId ? void cancelRequestFromSearch(u.requestId, u.id) : undefined}
+                  disabled={!u.requestId || actionLoading === u.requestId}
+                  activeOpacity={0.8}
+                >
+                  <Text style={{ color: colors.warning, fontSize: 13, fontWeight: "600" }}>
+                    {u.requestId && actionLoading === u.requestId ? "…" : "Cancel"}
+                  </Text>
+                </TouchableOpacity>
               ) : u.friendStatus === "pending_received" ? (
                 <TouchableOpacity
                   style={{ borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: "#00E67612", borderWidth: 1.5, borderColor: "#00E676" }}
@@ -1760,12 +1949,12 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
         <Text style={[cStyles.sectionTitle, { color: colors.foreground }]}>Friend Requests</Text>
         {hasRequests && (
           <View style={[cStyles.countBadge, { backgroundColor: "#A855F7" }]}>
-            <Text style={cStyles.countBadgeText}>{received.length + sent.length}</Text>
+            <Text style={cStyles.countBadgeText}>{visibleReceived.length + visibleSent.length}</Text>
           </View>
         )}
       </View>
 
-      {received.map((r) => (
+      {visibleReceived.map((r) => (
         <View key={r.id} style={[cStyles.neonCard, {
           backgroundColor: colors.card,
           borderColor: highlightUserId === r.userId ? "#A855F7" : colors.border,
@@ -1808,7 +1997,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
         </View>
       ))}
 
-      {sent.map((r) => (
+      {visibleSent.map((r) => (
         <View key={r.id} style={[cStyles.neonCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           {r.avatarUrl && r.userId ? (
             <View style={{ width: 48, height: 48, borderRadius: 24, overflow: "hidden", borderWidth: 2, borderColor: r.avatarColor + "80" }}>
@@ -1988,9 +2177,9 @@ export default function ChatScreen() {
               setIncomingFriendRequests((prev) => {
                 const merged = [...prev];
                 for (const r of received) {
-                  if (!merged.some((x) => x.id === r.id)) {
+                  if (!merged.some((x) => x.id === r.id || x.userId === r.userId)) {
                     merged.push({ id: r.id, type: "received" as const, userId: r.userId, username: r.username, flag: r.flag, avatarColor: r.avatarColor, avatarUrl: r.avatarUrl ?? null }); } }
-                return merged; }); } } } } catch {} })(); }, [user?.id]);
+                return dedupeRequestsByUser(merged); }); } } } } catch {} })(); }, [user?.id]);
 
   const [headerHeight, setHeaderHeight] = useState(getSafeTop(insets.top) + 96);
 
@@ -2013,8 +2202,12 @@ export default function ChatScreen() {
     if (!channel) return;
     const onNewRequest = (data: { id: string; userId: string; username: string; flag: string; avatarColor: string }) => {
       setIncomingFriendRequests((prev) => {
-        if (prev.some((r) => r.id === data.id)) return prev;
+        if (prev.some((r) => r.id === data.id || r.userId === data.userId)) return prev;
         return [{ id: data.id, type: "received" as const, userId: data.userId, username: data.username, flag: data.flag, avatarColor: data.avatarColor }, ...prev]; }); };
+
+    const onRejected = (data: { requestId: string; otherUserId: string }) => {
+      setIncomingFriendRequests((prev) => prev.filter((r) => r.id !== data.requestId && r.userId !== data.otherUserId));
+    };
 
     // When a request is accepted, signal FriendsTab to reload its full list
     const onAccepted = () => {
@@ -2026,10 +2219,12 @@ export default function ChatScreen() {
 
     channel.bind(EVENTS.FRIEND_REQUEST_NEW, onNewRequest);
     channel.bind(EVENTS.FRIEND_REQUEST_ACCEPTED, onAccepted);
+    channel.bind(EVENTS.FRIEND_REQUEST_REJECTED, onRejected);
     channel.bind(EVENTS.FRIEND_LIST_UPDATED, onListUpdated);
     return () => {
       channel.unbind(EVENTS.FRIEND_REQUEST_NEW, onNewRequest);
       channel.unbind(EVENTS.FRIEND_REQUEST_ACCEPTED, onAccepted);
+      channel.unbind(EVENTS.FRIEND_REQUEST_REJECTED, onRejected);
       channel.unbind(EVENTS.FRIEND_LIST_UPDATED, onListUpdated); }; }, [user?.id]);
 
   // Track activeTab in a ref so the global-chat handler below doesn't need it as a dependency

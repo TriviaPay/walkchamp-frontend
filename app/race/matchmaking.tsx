@@ -755,6 +755,7 @@ export default function MatchmakingScreen() {
 
   // ── Cancel / leave ────────────────────────────────────────────────────────
   const entryFeeCents = liveRoom?.entryAmountCents ?? (raceEntryFee > 0 ? Math.round(raceEntryFee * 100) : 0);
+  const isCoinsBattleRoom = liveRoom?.entryType === "coins_battle";
   const isPaidCashRoom =
     entryFeeCents > 0 &&
     liveRoom?.entryType !== "coins_battle" &&
@@ -775,6 +776,11 @@ export default function MatchmakingScreen() {
       const refundMsg = refundMessageFromLeaveBody(body);
       if (refundMsg) {
         AppAlert.alert("Refund Complete", refundMsg);
+      } else if (isCoinsBattleRoom) {
+        AppAlert.alert(
+          "Left Room",
+          "No coins were charged — entry fees are only deducted when the race starts.",
+        );
       }
       router.replace("/(tabs)/walk");
     } finally {
@@ -782,13 +788,15 @@ export default function MatchmakingScreen() {
       setRefundModalVisible(false);
       setRefundQuote(null);
     }
-  }, [backendRaceId, cancelRace, refreshWallet]);
+  }, [backendRaceId, cancelRace, refreshWallet, isCoinsBattleRoom]);
 
   const handleCancel = useCallback(() => {
     if (isHostMode && backendRaceId) {
       AppAlert.alert(
         "Cancel Room?",
-        "This will cancel the waiting room for all players.",
+        isCoinsBattleRoom
+          ? "This will cancel the waiting room for all players. No coins have been charged yet."
+          : "This will cancel the waiting room for all players.",
         [
           { text: "Keep Waiting", style: "cancel" },
           {
@@ -801,7 +809,14 @@ export default function MatchmakingScreen() {
                   const body = await res.json().catch(() => ({})) as RaceCancelResponse;
                   await refreshWallet();
                   const refundMsg = refundMessageFromCancelBody(body);
-                  if (refundMsg) AppAlert.alert("Room Cancelled", refundMsg);
+                  if (refundMsg) {
+                    AppAlert.alert("Room Cancelled", refundMsg);
+                  } else if (isCoinsBattleRoom) {
+                    AppAlert.alert(
+                      "Room Cancelled",
+                      "No coins were charged — entry fees are only deducted when the race starts.",
+                    );
+                  }
                 }
               }
               cancelRace();
@@ -832,7 +847,9 @@ export default function MatchmakingScreen() {
     } else if (!isHostMode && backendRaceId) {
       AppAlert.alert(
         "Leave Room?",
-        "You can rejoin from the Live tab if you change your mind.",
+        isCoinsBattleRoom
+          ? "You can rejoin from the Live tab if you change your mind. No coins have been charged yet."
+          : "You can rejoin from the Live tab if you change your mind.",
         [
           { text: "Stay", style: "cancel" },
           {
@@ -846,7 +863,7 @@ export default function MatchmakingScreen() {
       cancelRace();
       router.replace("/(tabs)/walk");
     }
-  }, [isHostMode, backendRaceId, cancelRace, isPaidCashRoom, entryFeeCents, liveRoom?.maxPlayers, raceMaxPlayers, executeLeave, refreshWallet]);
+  }, [isHostMode, backendRaceId, cancelRace, isPaidCashRoom, isCoinsBattleRoom, entryFeeCents, liveRoom?.maxPlayers, raceMaxPlayers, executeLeave, refreshWallet]);
 
   // ── Host: start race ──────────────────────────────────────────────────────
   const startingRef = useRef(false);
