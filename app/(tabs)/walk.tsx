@@ -24,6 +24,7 @@ import {
   View} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { AppAlert } from "@/components/AppAlert";
+import { AvatarPickerSheet } from "@/components/AvatarPickerSheet";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { useAvatarCache } from "@/hooks/useAvatarCache";
 import * as Clipboard from "expo-clipboard";
