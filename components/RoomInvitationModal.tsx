@@ -15,6 +15,8 @@ import { getApiBase } from "@/utils/apiUrl";
 import { router } from "expo-router";
 import { getStoredSession } from "@/services/authService";
 import { useRace } from "@/context/RaceContext";
+import { useAuth } from "@/context/AuthContext";
+import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 const INVITE_TTL = 20;
@@ -41,6 +43,7 @@ interface Props {
 
 export function RoomInvitationModal({ invitation, onDismiss }: Props) {
   const { setActiveRace, joinRace } = useRace();
+  const { user } = useAuth();
   const [secondsLeft, setSecondsLeft] = useState(INVITE_TTL);
   const [responding, setResponding] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -127,14 +130,15 @@ export function RoomInvitationModal({ invitation, onDismiss }: Props) {
       onDismiss();
       router.push({
         pathname: "/race/matchmaking",
-        params: {
+        params: buildMatchmakingParams({
           raceId,
-          isHost: "false",
-          isPrivate: room?.isPrivate ? "true" : "false",
-          seedFeeCents: String(room?.entryAmountCents ?? 0),
-          seedMaxPlayers: String(room?.maxPlayers ?? 10),
-          seedTargetSteps: String(room?.targetSteps ?? 1000),
-        },
+          isHost: false,
+          user,
+          initialCurrentPlayers: room?.currentPlayers,
+          initialTargetSteps: room?.targetSteps,
+          initialMaxPlayers: room?.maxPlayers,
+          initialIsPrivate: room?.isPrivate,
+        }),
       });
     } catch {
       setResponding(false);

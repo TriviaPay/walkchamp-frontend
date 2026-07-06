@@ -19,6 +19,7 @@ import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -28,6 +29,7 @@ import {
   ActivityIndicator,
   Animated,
   Dimensions,
+  InteractionManager,
   Modal,
   Platform,
   ScrollView,
@@ -46,11 +48,13 @@ import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useRace, RACE_DEFAULTS } from "@/context/RaceContext";
+import { useAuth } from "@/context/AuthContext";
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import {
   liveRaceFetchAllowed,
   markLiveRaceFetched,
+  resetLiveRaceFetchGate,
 } from "@/utils/liveRaceFetchGate";
 import {
   connectPusher,
@@ -62,14 +66,17 @@ import {
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf, rs } from "@/utils/responsive";
 import { CashChallengeRefundBreakdown } from "@/components/CashChallengePaymentBreakdown";
-import { fetchCashChallengePaymentQuote, formatUsdFromDollars, refundBreakdownFromQuote, type CashChallengePaymentQuote } from "@/services/cashChallengeApi";
-import {
-  refundMessageFromCancelBody,
-  refundMessageFromLeaveBody,
-  type RaceCancelResponse,
-  type RaceLeaveResponse,
-} from "@/services/refundApi";
+import { fetchCashChallengePaymentQuote, formatUsdFromDollars, refundBreakdownFromQuote, buildOptimisticRefundQuote, type CashChallengePaymentQuote } from "@/services/cashChallengeApi";
 import { useApp } from "@/context/AppContext";
+import {
+  buildSelfParticipant,
+  cacheWaitingRoomState,
+  parseInitialParticipants,
+  readWaitingRoomCacheSync,
+  waitingRoomCacheKey,
+  type WaitingRoomLiveMeta,
+} from "@/utils/waitingRoomSeed";
+import { screenCache } from "@/utils/screenCache";
 
 const SCREEN_W = Dimensions.get("window").width;
 
@@ -297,7 +304,10 @@ export default function MatchmakingScreen() {
     initialMaxPlayers?: string;
     initialIsPrivate?: string;
     initialInviteCode?: string;
+    initialCurrentPlayers?: string;
   }>();
+
+  const { user } = useAuth();
 
   const {
     racePhase,
@@ -318,9 +328,13 @@ export default function MatchmakingScreen() {
   const [refundModalVisible, setRefundModalVisible] = useState(false);
   const [refundQuote, setRefundQuote] = useState<CashChallengePaymentQuote | null>(null);
   const [refundConfirming, setRefundConfirming] = useState(false);
+  /** Inline confirm — opens instantly (no AppAlert dismiss delay, no pre-fetch). */
+  const [confirmModal, setConfirmModal] = useState<"host_cancel" | "leave" | null>(null);
 
   const backendRaceId = params.raceId ?? contextRaceId;
   const isHostMode = params.isHost === "true";
+  /** Set when leaving — skips polls/Pusher updates so exit navigation is not blocked. */
+  const exitingRef = useRef(false);
 
   // ── Stale-state guard on mount ────────────────────────────────────────────
   // If racePhase is already "in_race"/"countdown"/"finished" when we arrive at
@@ -341,22 +355,10 @@ export default function MatchmakingScreen() {
   }, []);
 
 
-  // ── Pre-populate participants from join-with-code response ────────────────
-  // When arriving via join-with-code flow, the response already includes the
-  // full participant list. Pre-populate immediately so the grid is not empty
-  // during the first polling interval.
-  const initialParticipantsSeededRef = useRef(false);
-  useEffect(() => {
-    if (initialParticipantsSeededRef.current || !params.initialParticipants) return;
-    initialParticipantsSeededRef.current = true;
-    try {
-      const initial = JSON.parse(params.initialParticipants) as RoomParticipant[];
-      if (Array.isArray(initial) && initial.length > 0) {
-        setParticipants(initial);
-      }
-    } catch { /* ignore bad JSON — first poll will populate */ }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // ── Pre-populate participants synchronously from navigation params ─────────
+  const [participants, setParticipants] = useState<RoomParticipant[]>(
+    () => parseInitialParticipants(params.initialParticipants) ?? [],
+  );
 
   // ── Local start-phase state machine ──────────────────────────────────────
   const [startPhase, setStartPhase] = useState<StartPhase>("idle");
@@ -387,9 +389,11 @@ export default function MatchmakingScreen() {
     isPrivate?: boolean;
     inviteCode?: string | null;
   } | null>(() => {
-    if (!params.initialEntryType) return null;
+    if (!params.initialEntryType && !params.initialCurrentPlayers) return null;
     return {
-      currentPlayers: 1,
+      currentPlayers: params.initialCurrentPlayers
+        ? Number(params.initialCurrentPlayers)
+        : 1,
       maxPlayers: params.initialMaxPlayers ? Number(params.initialMaxPlayers) : raceMaxPlayers,
       status: "open",
       targetSteps: params.initialTargetSteps ? Number(params.initialTargetSteps) : undefined,
@@ -401,7 +405,6 @@ export default function MatchmakingScreen() {
     };
   });
   const [copiedCode, setCopiedCode] = useState(false);
-  const [participants, setParticipants] = useState<RoomParticipant[]>([]);
   const [selectedParticipant, setSelectedParticipant] = useState<RoomParticipant | null>(null);
   const [wasRemoved, setWasRemoved] = useState(false);
   // Ref so the Pusher onRemoved closure (captured at effect mount) can
@@ -429,6 +432,150 @@ export default function MatchmakingScreen() {
   const [roomTimeLeft, setRoomTimeLeft] = useState<number | null>(null);
   const isHostModeRef = useRef(isHostMode);
   useEffect(() => { isHostModeRef.current = isHostMode; }, [isHostMode]);
+
+  const entryFeeCents = liveRoom?.entryAmountCents ?? (raceEntryFee > 0 ? Math.round(raceEntryFee * 100) : 0);
+  const isCoinsBattleRoom = liveRoom?.entryType === "coins_battle";
+  const isPaidCashRoom =
+    entryFeeCents > 0 &&
+    liveRoom?.entryType !== "coins_battle" &&
+    liveRoom?.entryType !== "free";
+
+  const clearWaitingRoomLocalState = useCallback(() => {
+    if (backendRaceId) {
+      screenCache.invalidate(waitingRoomCacheKey(backendRaceId));
+      resetLiveRaceFetchGate(backendRaceId);
+      unsubscribeFromChannel(CHANNELS.liveRace(backendRaceId));
+    }
+    cancelRace();
+  }, [backendRaceId, cancelRace]);
+
+  const navigateToWalkInstant = useCallback(() => {
+    if (exitingRef.current) return;
+    exitingRef.current = true;
+
+    // Navigate first — never block on context/store cleanup or modal state updates.
+    router.replace("/(tabs)/walk");
+
+    InteractionManager.runAfterInteractions(() => {
+      clearWaitingRoomLocalState();
+      setConfirmModal(null);
+      setRefundModalVisible(false);
+      setLeaving(false);
+    });
+  }, [clearWaitingRoomLocalState]);
+
+  const navigateToWalkRef = useRef(navigateToWalkInstant);
+  useEffect(() => {
+    navigateToWalkRef.current = navigateToWalkInstant;
+  }, [navigateToWalkInstant]);
+
+  const runRoomExitApi = useCallback(
+    async (endpoint: "leave" | "cancel") => {
+      if (!backendRaceId) return;
+      try {
+        await authFetch(`/api/races/${backendRaceId}/${endpoint}`, {
+          method: "POST",
+          timeoutMs: 4_000,
+        });
+      } catch {
+        /* navigate-first — wallet refresh reconciles */
+      }
+      void refreshWallet({ silent: true });
+    },
+    [backendRaceId, refreshWallet],
+  );
+
+  const executeLeave = useCallback(() => {
+    navigateToWalkInstant();
+    void runRoomExitApi("leave");
+  }, [navigateToWalkInstant, runRoomExitApi]);
+
+  const executeHostCancel = useCallback(() => {
+    navigateToWalkInstant();
+    void runRoomExitApi("cancel");
+  }, [navigateToWalkInstant, runRoomExitApi]);
+
+  const handleCancel = useCallback(() => {
+    if (isHostMode && backendRaceId) {
+      setConfirmModal("host_cancel");
+      return;
+    }
+    if (!isHostMode && backendRaceId && isPaidCashRoom) {
+      const maxPlayers = liveRoom?.maxPlayers ?? raceMaxPlayers;
+      setRefundQuote(buildOptimisticRefundQuote(entryFeeCents, maxPlayers));
+      setRefundModalVisible(true);
+      void fetchCashChallengePaymentQuote({
+        entryFeeCents,
+        numberOfPlayers: maxPlayers,
+      })
+        .then((q) => setRefundQuote(q))
+        .catch(() => { /* keep optimistic quote */ });
+      return;
+    }
+    if (!isHostMode && backendRaceId) {
+      setConfirmModal("leave");
+      return;
+    }
+    navigateToWalkInstant();
+  }, [
+    isHostMode,
+    backendRaceId,
+    isPaidCashRoom,
+    entryFeeCents,
+    liveRoom?.maxPlayers,
+    raceMaxPlayers,
+    navigateToWalkInstant,
+  ]);
+
+  // ── Room expiry timer (5 min from createdAt) ──────────────────────────────
+
+  // Instant UI: cache → optimistic self before first paint when params are empty.
+  const instantSeedDoneRef = useRef(false);
+  useLayoutEffect(() => {
+    if (instantSeedDoneRef.current || !backendRaceId) return;
+    instantSeedDoneRef.current = true;
+
+    if (participants.length > 0) return;
+
+    const cached = readWaitingRoomCacheSync(backendRaceId);
+    if (cached?.participants?.length) {
+      setParticipants(cached.participants);
+      if (cached.liveRoom) setLiveRoom(cached.liveRoom);
+      return;
+    }
+
+    if (participants.length === 0 && user) {
+      const self = buildSelfParticipant(user, isHostMode);
+      setParticipants([self]);
+      setLiveRoom((prev) => ({
+        currentPlayers: params.initialCurrentPlayers
+          ? Number(params.initialCurrentPlayers)
+          : prev?.currentPlayers ?? 1,
+        maxPlayers:
+          prev?.maxPlayers ??
+          (params.initialMaxPlayers ? Number(params.initialMaxPlayers) : raceMaxPlayers),
+        status: prev?.status ?? "open",
+        targetSteps: prev?.targetSteps,
+        entryType: prev?.entryType,
+        entryAmountCents: prev?.entryAmountCents,
+        coinEntryAmount: prev?.coinEntryAmount,
+        coinPrizePool: prev?.coinPrizePool,
+        isPrivate: prev?.isPrivate,
+        inviteCode: prev?.inviteCode ?? null,
+      }));
+    }
+  }, [backendRaceId, isHostMode, participants.length, raceMaxPlayers, user, params.initialCurrentPlayers, params.initialMaxPlayers]);
+
+  const persistWaitingRoomCache = useCallback(
+    (nextParticipants: RoomParticipant[], nextLiveRoom: typeof liveRoom) => {
+      if (!backendRaceId || nextParticipants.length === 0) return;
+      cacheWaitingRoomState(backendRaceId, {
+        participants: nextParticipants,
+        liveRoom: nextLiveRoom as WaitingRoomLiveMeta | null,
+      });
+    },
+    [backendRaceId],
+  );
 
   // ── Server-authoritative race status check ─────────────────────────────────
   const fetchRaceStartState = useCallback(async (): Promise<{
@@ -515,73 +662,78 @@ export default function MatchmakingScreen() {
     };
   }, []);
 
-  // ── Poll room + participants while this screen is focused ─────────────────
+  // ── Poll room + participants (immediate on focus, then interval) ───────────
+  const pollRoomRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
+
+  const pollRoom = useCallback(
+    async (force = false) => {
+      if (!backendRaceId || exitingRef.current) return;
+      const gateKey = `${backendRaceId}:matchmaking`;
+      if (
+        !force &&
+        !liveRaceFetchAllowed(gateKey, STEP_SYNC_CONFIG.MATCHMAKING_ROOM_POLL_MS)
+      ) {
+        return;
+      }
+      try {
+        const res = await authFetch(`/api/races/${backendRaceId}`);
+        if (!res.ok) return;
+        markLiveRaceFetched(gateKey);
+        const data = await res.json();
+        const nextLiveRoom = {
+          currentPlayers: data.race.currentPlayers ?? 1,
+          maxPlayers: data.race.maxPlayers ?? raceMaxPlayers,
+          status: data.race.status,
+          targetSteps: data.race.targetSteps,
+          entryType: data.race.entryType,
+          entryAmountCents: data.race.entryAmountCents,
+          coinEntryAmount: data.race.coinEntryAmount,
+          coinPrizePool: data.race.coinPrizePool,
+          isPrivate: data.race.isPrivate,
+          inviteCode: data.race.inviteCode ?? null,
+        };
+        setLiveRoom(nextLiveRoom);
+        if (!roomExpiresAtRef.current && data.race.createdAt) {
+          roomExpiresAtRef.current = new Date(
+            new Date(data.race.createdAt).getTime() + 10 * 60_000,
+          );
+        }
+        if (data.race.targetSteps) {
+          setRaceTargetSteps(data.race.targetSteps);
+        }
+        if (data.race.startedAt && !raceStartedAtRef.current) {
+          raceStartedAtRef.current = new Date(data.race.startedAt);
+        }
+        if (Array.isArray(data.participants) && data.participants.length > 0) {
+          const nextParticipants = data.participants as RoomParticipant[];
+          setParticipants(nextParticipants);
+          persistWaitingRoomCache(nextParticipants, nextLiveRoom);
+        }
+        if (
+          data.race.status === "in_progress" &&
+          startPhaseRef.current === "idle"
+        ) {
+          beginCountdown(3, data.race.currentPlayers ?? 2);
+        }
+      } catch { /* silent */ }
+    },
+    [backendRaceId, raceMaxPlayers, beginCountdown, setRaceTargetSteps, persistWaitingRoomCache],
+  );
+
+  useEffect(() => {
+    pollRoomRef.current = pollRoom;
+  }, [pollRoom]);
+
   useFocusEffect(
     useCallback(() => {
       if (!backendRaceId) return;
-      let cancelled = false;
-
-      const pollRoom = async () => {
-        if (cancelled) return;
-        const gateKey = `${backendRaceId}:matchmaking`;
-        if (
-          !liveRaceFetchAllowed(
-            gateKey,
-            STEP_SYNC_CONFIG.MATCHMAKING_ROOM_POLL_MS,
-          )
-        ) {
-          return;
-        }
-        try {
-          const res = await authFetch(`/api/races/${backendRaceId}`);
-          if (!res.ok || cancelled) return;
-          markLiveRaceFetched(gateKey);
-          const data = await res.json();
-          setLiveRoom({
-            currentPlayers: data.race.currentPlayers ?? 1,
-            maxPlayers: data.race.maxPlayers ?? raceMaxPlayers,
-            status: data.race.status,
-            targetSteps: data.race.targetSteps,
-            entryType: data.race.entryType,
-            entryAmountCents: data.race.entryAmountCents,
-            coinEntryAmount: data.race.coinEntryAmount,
-            coinPrizePool: data.race.coinPrizePool,
-            isPrivate: data.race.isPrivate,
-            inviteCode: data.race.inviteCode ?? null,
-          });
-          if (!roomExpiresAtRef.current && data.race.createdAt) {
-            roomExpiresAtRef.current = new Date(
-              new Date(data.race.createdAt).getTime() + 10 * 60_000,
-            );
-          }
-          if (data.race.targetSteps) {
-            setRaceTargetSteps(data.race.targetSteps);
-          }
-          if (data.race.startedAt && !raceStartedAtRef.current) {
-            raceStartedAtRef.current = new Date(data.race.startedAt);
-          }
-          if (Array.isArray(data.participants) && data.participants.length > 0) {
-            setParticipants(data.participants as RoomParticipant[]);
-          }
-          if (
-            data.race.status === "in_progress" &&
-            startPhaseRef.current === "idle"
-          ) {
-            beginCountdown(3, data.race.currentPlayers ?? 2);
-          }
-        } catch { /* silent */ }
-      };
-
-      pollRoom();
+      void pollRoom(true);
       const interval = setInterval(
-        pollRoom,
+        () => { void pollRoom(false); },
         STEP_SYNC_CONFIG.MATCHMAKING_ROOM_POLL_MS,
       );
-      return () => {
-        cancelled = true;
-        clearInterval(interval);
-      };
-    }, [backendRaceId, raceMaxPlayers, beginCountdown, setRaceTargetSteps]),
+      return () => clearInterval(interval);
+    }, [backendRaceId, pollRoom]),
   );
 
   // ── Store race ID in context ──────────────────────────────────────────────
@@ -600,6 +752,11 @@ export default function MatchmakingScreen() {
     if (!channel) return;
 
     const currentPlayers = () => liveRoomRef.current?.currentPlayers ?? 2;
+
+    const refreshRoomFromServer = (data?: { raceId?: string }) => {
+      if (data?.raceId && data.raceId !== backendRaceId) return;
+      void pollRoomRef.current?.(true);
+    };
 
     // race:starting — the authoritative trigger for the countdown overlay
     const onStarting = (data: { raceId?: string; countdownSeconds?: number }) => {
@@ -624,12 +781,11 @@ export default function MatchmakingScreen() {
     // race:cancelled
     const onCancelled = (data: { raceId?: string }) => {
       if (data.raceId && data.raceId !== backendRaceId) return;
-      if (!screenFocusedRef.current) return;
-      AppAlert.alert(
-        "Room Cancelled",
-        "The host cancelled this race room.",
-        [{ text: "OK", onPress: () => { cancelRace(); router.replace("/(tabs)/walk"); } }],
-      );
+      if (!screenFocusedRef.current || exitingRef.current) return;
+      navigateToWalkRef.current();
+      setTimeout(() => {
+        AppAlert.alert("Room Cancelled", "The host cancelled this race room.");
+      }, 300);
     };
 
     // room:participant_removed
@@ -666,6 +822,8 @@ export default function MatchmakingScreen() {
     channel.bind("race:cancelled", onCancelled);
     channel.bind("room:participant_removed", onRemoved);
     channel.bind("race:player-left", onLeft);
+    channel.bind("race:player-joined", refreshRoomFromServer);
+    channel.bind("coins_battle.joined", refreshRoomFromServer);
 
     return () => {
       channel.unbind("race:starting", onStarting);
@@ -673,6 +831,8 @@ export default function MatchmakingScreen() {
       channel.unbind("race:cancelled", onCancelled);
       channel.unbind("room:participant_removed", onRemoved);
       channel.unbind("race:player-left", onLeft);
+      channel.unbind("race:player-joined", refreshRoomFromServer);
+      channel.unbind("coins_battle.joined", refreshRoomFromServer);
       unsubscribeFromChannel(CHANNELS.liveRace(backendRaceId));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -705,14 +865,11 @@ export default function MatchmakingScreen() {
   // ── Handle being removed from room ───────────────────────────────────────
   useEffect(() => {
     if (!wasRemoved) return;
-    // Navigate immediately — don't wait for the user to press OK.
-    cancelRace();
-    router.replace("/(tabs)/walk");
-    // Show a native alert (works reliably from any context, including after navigation).
+    navigateToWalkInstant();
     setTimeout(() => {
       Alert.alert("Removed from Room", "The host removed you from this room.");
     }, 350);
-  }, [wasRemoved, cancelRace]);
+  }, [wasRemoved, navigateToWalkInstant]);
 
   // ── Pulse animation ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -733,137 +890,27 @@ export default function MatchmakingScreen() {
       if (!roomExpiresAtRef.current) return;
       const remaining = Math.max(0, Math.round((roomExpiresAtRef.current.getTime() - Date.now()) / 1000));
       setRoomTimeLeft(remaining);
-      if (remaining === 0) {
+        if (remaining === 0) {
         clearInterval(id);
         const endpoint = isHostModeRef.current ? "cancel" : "leave";
-        authFetch(`/api/races/${backendRaceId}/${endpoint}`, { method: "POST" }).catch(() => {});
+        void authFetch(`/api/races/${backendRaceId}/${endpoint}`, { method: "POST" }).catch(() => {});
         if (!screenFocusedRef.current) {
-          cancelRace();
+          clearWaitingRoomLocalState();
           return;
         }
-        const expiredTitle = "Room Expired";
-        const expiredMsg = isHostModeRef.current
-          ? "The 10-minute waiting window has passed. The room has been closed."
-          : "The host's room has expired. You have been removed from the waiting room.";
-        AppAlert.alert(expiredTitle, expiredMsg, [
-          { text: "OK", onPress: () => { cancelRace(); router.replace("/(tabs)/walk"); } },
-        ]);
+        navigateToWalkInstant();
+        setTimeout(() => {
+          AppAlert.alert(
+            "Room Expired",
+            isHostModeRef.current
+              ? "The 10-minute waiting window has passed. The room has been closed."
+              : "The host's room has expired. You have been removed from the waiting room.",
+          );
+        }, 300);
       }
     }, 1000);
     return () => clearInterval(id);
-  }, [backendRaceId, cancelRace]);
-
-  // ── Cancel / leave ────────────────────────────────────────────────────────
-  const entryFeeCents = liveRoom?.entryAmountCents ?? (raceEntryFee > 0 ? Math.round(raceEntryFee * 100) : 0);
-  const isCoinsBattleRoom = liveRoom?.entryType === "coins_battle";
-  const isPaidCashRoom =
-    entryFeeCents > 0 &&
-    liveRoom?.entryType !== "coins_battle" &&
-    liveRoom?.entryType !== "free";
-
-  const executeLeave = useCallback(async () => {
-    if (!backendRaceId) {
-      cancelRace();
-      router.replace("/(tabs)/walk");
-      return;
-    }
-    setLeaving(true);
-    try {
-      const res = await authFetch(`/api/races/${backendRaceId}/leave`, { method: "POST" });
-      const body = await res.json().catch(() => ({})) as RaceLeaveResponse;
-      await refreshWallet();
-      cancelRace();
-      const refundMsg = refundMessageFromLeaveBody(body);
-      if (refundMsg) {
-        AppAlert.alert("Refund Complete", refundMsg);
-      } else if (isCoinsBattleRoom) {
-        AppAlert.alert(
-          "Left Room",
-          "No coins were charged — entry fees are only deducted when the race starts.",
-        );
-      }
-      router.replace("/(tabs)/walk");
-    } finally {
-      setLeaving(false);
-      setRefundModalVisible(false);
-      setRefundQuote(null);
-    }
-  }, [backendRaceId, cancelRace, refreshWallet, isCoinsBattleRoom]);
-
-  const handleCancel = useCallback(() => {
-    if (isHostMode && backendRaceId) {
-      AppAlert.alert(
-        "Cancel Room?",
-        isCoinsBattleRoom
-          ? "This will cancel the waiting room for all players. No coins have been charged yet."
-          : "This will cancel the waiting room for all players.",
-        [
-          { text: "Keep Waiting", style: "cancel" },
-          {
-            text: "Cancel Room",
-            style: "destructive",
-            onPress: async () => {
-              if (backendRaceId) {
-                const res = await authFetch(`/api/races/${backendRaceId}/cancel`, { method: "POST" }).catch(() => null);
-                if (res?.ok) {
-                  const body = await res.json().catch(() => ({})) as RaceCancelResponse;
-                  await refreshWallet();
-                  const refundMsg = refundMessageFromCancelBody(body);
-                  if (refundMsg) {
-                    AppAlert.alert("Room Cancelled", refundMsg);
-                  } else if (isCoinsBattleRoom) {
-                    AppAlert.alert(
-                      "Room Cancelled",
-                      "No coins were charged — entry fees are only deducted when the race starts.",
-                    );
-                  }
-                }
-              }
-              cancelRace();
-              router.replace("/(tabs)/walk");
-            },
-          },
-        ],
-      );
-    } else if (!isHostMode && backendRaceId && isPaidCashRoom) {
-      void fetchCashChallengePaymentQuote({
-        entryFeeCents,
-        numberOfPlayers: liveRoom?.maxPlayers ?? raceMaxPlayers,
-      })
-        .then((q) => {
-          setRefundQuote(q);
-          setRefundModalVisible(true);
-        })
-        .catch(() => {
-          AppAlert.alert(
-            "Leave Room?",
-            "Your entry fee will be refunded to your wallet if you leave before the race starts.",
-            [
-              { text: "Stay", style: "cancel" },
-              { text: "Leave", style: "destructive", onPress: () => void executeLeave() },
-            ],
-          );
-        });
-    } else if (!isHostMode && backendRaceId) {
-      AppAlert.alert(
-        "Leave Room?",
-        isCoinsBattleRoom
-          ? "You can rejoin from the Live tab if you change your mind. No coins have been charged yet."
-          : "You can rejoin from the Live tab if you change your mind.",
-        [
-          { text: "Stay", style: "cancel" },
-          {
-            text: "Leave",
-            style: "destructive",
-            onPress: () => void executeLeave(),
-          },
-        ],
-      );
-    } else {
-      cancelRace();
-      router.replace("/(tabs)/walk");
-    }
-  }, [isHostMode, backendRaceId, cancelRace, isPaidCashRoom, isCoinsBattleRoom, entryFeeCents, liveRoom?.maxPlayers, raceMaxPlayers, executeLeave, refreshWallet]);
+  }, [backendRaceId, clearWaitingRoomLocalState, navigateToWalkInstant]);
 
   // ── Host: start race ──────────────────────────────────────────────────────
   const startingRef = useRef(false);
@@ -904,7 +951,11 @@ export default function MatchmakingScreen() {
   }, [backendRaceId, setStart, beginCountdown]);
 
   // ── Derived values ────────────────────────────────────────────────────────
-  const realPlayerCount = liveRoom?.currentPlayers ?? playersJoined;
+  const realPlayerCount = Math.max(
+    liveRoom?.currentPlayers ?? 0,
+    participants.length,
+    playersJoined,
+  );
   const realMaxPlayers = liveRoom?.maxPlayers ?? raceMaxPlayers;
   const canStart = isHostMode && realPlayerCount >= 2 && startPhase === "idle";
   // Use liveRoom.entryType as the authoritative source (populated from backend).
@@ -1439,11 +1490,58 @@ export default function MatchmakingScreen() {
         } : undefined}
       />
 
+      {/* ── Instant confirm (cancel / leave) — no AppAlert dismiss delay ── */}
+      <Modal
+        visible={confirmModal !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirmModal(null)}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", paddingHorizontal: 28 }}>
+          <View style={{ backgroundColor: colors.card, borderRadius: 18, borderWidth: 1, borderColor: colors.border, overflow: "hidden" }}>
+            <View style={{ paddingHorizontal: 22, paddingTop: 22, paddingBottom: 16, alignItems: "center" }}>
+              <Text style={{ fontSize: rf(17), fontWeight: "700", color: colors.foreground, textAlign: "center" }}>
+                {confirmModal === "host_cancel" ? "Cancel Room?" : "Leave Room?"}
+              </Text>
+              <Text style={{ fontSize: rf(14), color: colors.mutedForeground, textAlign: "center", marginTop: 8, lineHeight: 20 }}>
+                {confirmModal === "host_cancel"
+                  ? isCoinsBattleRoom
+                    ? "This will cancel the waiting room for all players. No coins have been charged yet."
+                    : "This will cancel the waiting room for all players."
+                  : isCoinsBattleRoom
+                    ? "You can rejoin from the Live tab. No coins have been charged yet."
+                    : "You can rejoin from the Live tab if you change your mind."}
+              </Text>
+            </View>
+            <View style={{ height: 1, backgroundColor: colors.border }} />
+            <View style={{ flexDirection: "row", padding: 12, gap: 8 }}>
+              <TouchableOpacity
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 11, borderWidth: 1, borderColor: colors.border, alignItems: "center" }}
+                onPress={() => setConfirmModal(null)}
+              >
+                <Text style={{ color: colors.mutedForeground, fontWeight: "600" }}>
+                  {confirmModal === "host_cancel" ? "Keep Waiting" : "Stay"}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 11, backgroundColor: colors.destructive, alignItems: "center", opacity: leaving ? 0.6 : 1 }}
+                disabled={leaving}
+                onPress={confirmModal === "host_cancel" ? executeHostCancel : executeLeave}
+              >
+                <Text style={{ color: "#fff", fontWeight: "700" }}>
+                  {confirmModal === "host_cancel" ? "Cancel Room" : "Leave"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* ── Refund confirmation (paid cash leave) ── */}
       <Modal
         visible={refundModalVisible}
         transparent
-        animationType="slide"
+        animationType="fade"
         onRequestClose={() => setRefundModalVisible(false)}
       >
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" }}>
@@ -1461,8 +1559,7 @@ export default function MatchmakingScreen() {
               style={{ borderRadius: 14, overflow: "hidden", marginTop: 12, opacity: refundConfirming ? 0.6 : 1 }}
               disabled={refundConfirming}
               onPress={() => {
-                setRefundConfirming(true);
-                void executeLeave().finally(() => setRefundConfirming(false));
+                executeLeave();
               }}
             >
               <LinearGradient colors={[colors.primary, colors.accent]} style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14 }}>

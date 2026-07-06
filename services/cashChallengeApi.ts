@@ -93,3 +93,35 @@ export function refundBreakdownFromQuote(quote: CashChallengePaymentQuote) {
     walletRefundAmount,
   };
 }
+
+/** Instant refund modal — entry fee refunded to wallet before API quote loads. */
+export function buildOptimisticRefundQuote(
+  entryFeeCents: number,
+  numberOfPlayers: number,
+): CashChallengePaymentQuote {
+  const entryFee = entryFeeCents / 100;
+  return {
+    entryFee,
+    entryFeeCents,
+    numberOfPlayers,
+    entryPool: entryFee * numberOfPlayers,
+    entryPoolCents: entryFeeCents * numberOfPlayers,
+    prizePool: 0,
+    prizePoolCents: 0,
+    rewardSplit: [],
+    paymentProcessingFee: 0,
+    paymentProcessingFeeCents: 0,
+    platformServiceFee: 0,
+    platformServiceFeeCents: 0,
+    totalPayable: entryFee,
+    totalPayableCents: entryFeeCents,
+    walletRefundAmount: entryFee,
+    walletRefundAmountCents: entryFeeCents,
+    refundDestination: "wallet",
+    walletBalance: 0,
+    walletBalanceCents: 0,
+    canAfford: true,
+    currency: "usd",
+    paymentProvider: "stripe",
+  };
+}

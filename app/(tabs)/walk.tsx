@@ -94,6 +94,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { clampDailyProgress } from "@/utils/stepProgress";
 import CoinsBattleModal from "@/components/CoinsBattleModal";
 import { screenCache } from "@/utils/screenCache";
+import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows";
 import { subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
 import { useTodayWalkSteps } from "@/hooks/useTodayWalkSteps";
@@ -1711,6 +1712,15 @@ function WalkScreenContent() {
   const { guardRewardAction, canJoinRewardRaces, verificationLevel } = useStepSourceGuard();
   const { userRank, walletBalance } = useApp();
   const { user, logout, loading: authLoading, sessionToken } = useAuth();
+  const navToMatchmaking = useCallback(
+    (opts: Omit<Parameters<typeof buildMatchmakingParams>[0], "user">) => {
+      router.push({
+        pathname: "/race/matchmaking",
+        params: buildMatchmakingParams({ ...opts, user }),
+      });
+    },
+    [user],
+  );
   const dbWalk = useTodayWalkSteps(user?.id);
   const tabBarHeight = useTabBarHeight();
   const modalScrollPad = { paddingBottom: safeBottom + rs(40) };
@@ -2406,7 +2416,7 @@ function WalkScreenContent() {
       // then vanishes with no slide animation onto the already-rendered screen.
       navigating = true;
       setSetupModalAnimated(false);
-      router.push({ pathname: "/race/matchmaking", params: { raceId, isHost: isHosting ? "true" : "false" } });
+      navToMatchmaking({ raceId, isHost: isHosting });
       InteractionManager.runAfterInteractions(() => {
         setSetupModal(null);
         setFreeJoining(false);
@@ -2446,7 +2456,7 @@ function WalkScreenContent() {
       setActiveRace(raceId, false);
       joinRace(fee, maxPlayers, false);
       loadChallengeStatuses();
-      router.push({ pathname: "/race/matchmaking", params: { raceId, isHost: "false" } });
+      navToMatchmaking({ raceId, isHost: false });
     } catch {
       AppAlert.alert("Error", "Could not connect. Please try again.");
     } finally {
@@ -2494,7 +2504,7 @@ function WalkScreenContent() {
         return;
       }
       dispatch(fetchCoinBalance());
-      router.push({ pathname: "/race/matchmaking", params: { raceId, isHost: "false" } });
+      navToMatchmaking({ raceId, isHost: false });
     } catch {
       AppAlert.alert("Error", "Network error. Please try again.");
     } finally {
@@ -2510,9 +2520,9 @@ function WalkScreenContent() {
     if (ar.room_status === "in_progress") {
       router.push({ pathname: "/race/live-detail", params: { id: ar.room_id } });
     } else {
-      router.push({
-        pathname: "/race/matchmaking",
-        params: { raceId: ar.room_id, isHost: ar.current_user_role === "host" ? "true" : "false" },
+      navToMatchmaking({
+        raceId: ar.room_id,
+        isHost: ar.current_user_role === "host",
       });
     }
   };
@@ -2670,16 +2680,18 @@ function WalkScreenContent() {
 
       router.push({
         pathname: "/race/matchmaking",
-        params: {
-          raceId: data.raceId,
-          isHost: "true",
+        params: buildMatchmakingParams({
+          raceId: data.raceId!,
+          isHost: true,
+          user,
+          initialCurrentPlayers: 1,
           initialEntryType: data.race?.entryType ?? entryType,
-          initialTargetSteps: String(data.race?.targetSteps ?? STEP_TARGETS[challengeTargetIdx]),
-          initialCoinEntryAmount: String(data.race?.coinEntryAmount ?? 0),
-          initialMaxPlayers: String(data.race?.maxPlayers ?? challengeMaxPlayers),
-          initialIsPrivate: String(data.race?.isPrivate ?? (roomType === "private")),
+          initialTargetSteps: data.race?.targetSteps ?? STEP_TARGETS[challengeTargetIdx],
+          initialCoinEntryAmount: data.race?.coinEntryAmount ?? 0,
+          initialMaxPlayers: data.race?.maxPlayers ?? challengeMaxPlayers,
+          initialIsPrivate: data.race?.isPrivate ?? (roomType === "private"),
           initialInviteCode: data.race?.inviteCode ?? data.inviteCode ?? "",
-        },
+        }),
       });
 
       navigating = true;
@@ -3024,7 +3036,7 @@ function WalkScreenContent() {
                     if (cs?.raceId) {
                       setActiveRace(cs.raceId, cs.isHost);
                       joinRace(opt.fee, cs.maxPlayers, cs.isHost);
-                      router.push({ pathname: "/race/matchmaking", params: { raceId: cs.raceId, isHost: cs.isHost ? "true" : "false" } });
+                      navToMatchmaking({ raceId: cs.raceId!, isHost: !!cs.isHost });
                     }
                     return;
                   }
@@ -3093,7 +3105,7 @@ function WalkScreenContent() {
                   if (cs?.raceId) {
                     setActiveRace(cs.raceId, cs.isHost);
                     joinRace(opt.fee, cs.maxPlayers, cs.isHost);
-                    router.push({ pathname: "/race/matchmaking", params: { raceId: cs.raceId, isHost: cs.isHost ? "true" : "false" } });
+                    navToMatchmaking({ raceId: cs.raceId!, isHost: !!cs.isHost });
                   }
                   return;
                 }
@@ -3242,7 +3254,7 @@ function WalkScreenContent() {
                 if (premCs?.raceId) {
                   setActiveRace(premCs.raceId, premCs.isHost);
                   joinRace(3, premCs.maxPlayers, premCs.isHost);
-                  router.push({ pathname: "/race/matchmaking", params: { raceId: premCs.raceId, isHost: premCs.isHost ? "true" : "false" } });
+                  navToMatchmaking({ raceId: premCs.raceId!, isHost: !!premCs.isHost });
                 }
                 return;
               }
@@ -4754,7 +4766,7 @@ function WalkScreenContent() {
           } else {
             setActiveRace(info.raceId, true);
             joinRace(entryKeyToFee(info.entryKey), 10, true);
-            router.push({ pathname: "/race/matchmaking", params: { raceId: info.raceId, isHost: "true" } });
+            navToMatchmaking({ raceId: info.raceId!, isHost: true });
           }
         }}
       />
@@ -4767,7 +4779,16 @@ function WalkScreenContent() {
           setChallengeModal(false);
           setActiveRace(result.room_id, false);
           joinRace(result.entry_fee, result.max_players, false);
-          router.push({ pathname: "/race/matchmaking", params: { raceId: result.room_id, isHost: "false" } });
+          router.push({
+            pathname: "/race/matchmaking",
+            params: buildMatchmakingParams({
+              raceId: result.room_id,
+              isHost: false,
+              user,
+              participants: result.participants,
+              initialCurrentPlayers: result.participants?.length,
+            }),
+          });
         }}
       />
 
@@ -4777,7 +4798,7 @@ function WalkScreenContent() {
         onCreated={(raceId, isHost) => {
           setCoinsBattleVisible(false);
           dispatch(fetchCoinBalance());
-          router.push({ pathname: "/race/matchmaking", params: { raceId, isHost: isHost ? "true" : "false" } });
+          navToMatchmaking({ raceId, isHost });
         }}
       />
 

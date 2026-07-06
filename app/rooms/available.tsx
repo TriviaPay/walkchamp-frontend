@@ -24,6 +24,7 @@ import { ChannelAdapter, subscribeToChannel, unsubscribeFromChannel } from "@/se
 import { rf, rs } from "@/utils/responsive";
 import { useRace } from "@/context/RaceContext";
 import { useAuth } from "@/context/AuthContext";
+import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { AppAlert } from "@/components/AppAlert";
 import ActiveRaceModal, { type ActiveRaceInfo } from "@/components/ActiveRaceModal";
@@ -1686,13 +1687,20 @@ export default function AvailableRoomsScreen() {
 
       setActiveRace(room.room_id, false);
       joinRace(room.entry_fee, room.max_players, false);
-      router.push({ pathname: "/race/matchmaking", params: { raceId: room.room_id, isHost: "false" } });
+      router.push({
+        pathname: "/race/matchmaking",
+        params: buildMatchmakingParams({
+          raceId: room.room_id,
+          isHost: false,
+          user,
+        }),
+      });
     } catch {
       AppAlert.alert("Error", "Could not connect. Please try again.");
     } finally {
       setJoiningRoomId(null);
     }
-  }, [joiningRoomId, setActiveRace, joinRace, fetchRooms]);
+  }, [joiningRoomId, setActiveRace, joinRace, fetchRooms, user]);
 
   const handleJoin = useCallback((room: Room) => {
     if (room.entry_fee > 0) {
@@ -1708,12 +1716,17 @@ export default function AvailableRoomsScreen() {
     setJoinWithCodeVisible(false);
     setActiveRace(result.room_id, false);
     joinRace(result.entry_fee, result.max_players, false);
-    const params: Record<string, string> = { raceId: result.room_id, isHost: "false" };
-    if (result.participants && result.participants.length > 0) {
-      params.initialParticipants = JSON.stringify(result.participants);
-    }
-    router.push({ pathname: "/race/matchmaking", params });
-  }, [setActiveRace, joinRace]);
+    router.push({
+      pathname: "/race/matchmaking",
+      params: buildMatchmakingParams({
+        raceId: result.room_id,
+        isHost: false,
+        user,
+        participants: result.participants,
+        initialCurrentPlayers: result.participants?.length,
+      }),
+    });
+  }, [setActiveRace, joinRace, user]);
 
   // ── Active race modal handlers ─────────────────────────────────────────────
   const handleStayInActiveRace = () => {
@@ -1726,7 +1739,11 @@ export default function AvailableRoomsScreen() {
     } else {
       router.push({
         pathname: "/race/matchmaking",
-        params: { raceId: ar.room_id, isHost: ar.current_user_role === "host" ? "true" : "false" },
+        params: buildMatchmakingParams({
+          raceId: ar.room_id,
+          isHost: ar.current_user_role === "host",
+          user,
+        }),
       });
     }
   };
