@@ -17,10 +17,8 @@ interface ProfileAvatarProps {
 }
 
 /**
- * Shared avatar component — single source of truth for profile picture display.
- *
- * - Tries the proxy URL whenever userId is known (profileImageUrl is optional).
- * - Falls back to initials when load fails or no userId.
+ * Shared avatar — initials instantly, local pick preview instantly,
+ * remote URL keyed by avatarVersion (immutable CDN cache).
  */
 export function ProfileAvatar({
   userId,
@@ -33,19 +31,25 @@ export function ProfileAvatar({
   onPress,
   style,
 }: ProfileAvatarProps) {
-  const { getAvatarVersion } = useAvatarVersionContext();
+  const { getAvatarVersion, getLocalPreview, setLocalPreview } = useAvatarVersionContext();
   const [loadFailed, setLoadFailed] = useState(false);
   const initials = displayName.trim() ? displayName.trim().charAt(0).toUpperCase() : "?";
 
   const effectiveVersion = userId ? getAvatarVersion(userId, avatarVersion ?? 0) : (avatarVersion ?? 0);
-  const tryImage = !!userId && !loadFailed;
-  const imageUri = tryImage
-    ? profileAvatarImageUri(userId, effectiveVersion)
-    : null;
+  const localPreview = userId ? getLocalPreview(userId) : null;
+  const serverUri =
+    userId && profileImageUrl && !loadFailed
+      ? profileAvatarImageUri(userId, effectiveVersion)
+      : null;
+  const [remoteReady, setRemoteReady] = useState(false);
 
   useEffect(() => {
     setLoadFailed(false);
-  }, [userId, effectiveVersion, profileImageUrl]);
+    setRemoteReady(false);
+  }, [userId, effectiveVersion, profileImageUrl, localPreview]);
+
+  const showLocal = !!localPreview && !remoteReady;
+  const showPhoto = showLocal || !!serverUri;
 
   const containerStyle: ViewStyle[] = [
     styles.container,
@@ -60,18 +64,36 @@ export function ProfileAvatar({
     ...(style ? [style] : []),
   ];
 
-  const inner = imageUri ? (
-    <Image
-      source={{ uri: imageUri }}
-      style={{ width: size, height: size, borderRadius: size / 2 }}
-      contentFit="cover"
-      cachePolicy="memory-disk"
-      onError={() => setLoadFailed(true)}
-    />
-  ) : (
-    <Text style={[styles.initials, { color: avatarColor, fontSize: size * 0.38 }]}>
-      {initials}
-    </Text>
+  const inner = (
+    <>
+      <Text style={[styles.initials, { color: avatarColor, fontSize: size * 0.38 }]}>
+        {initials}
+      </Text>
+      {serverUri ? (
+        <Image
+          source={{ uri: serverUri }}
+          style={[StyleSheet.absoluteFillObject, { borderRadius: size / 2 }]}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          transition={0}
+          recyclingKey={`avatar-${userId}-${effectiveVersion}`}
+          onError={() => setLoadFailed(true)}
+          onLoad={() => {
+            setRemoteReady(true);
+            if (userId) setLocalPreview(userId, null);
+          }}
+        />
+      ) : null}
+      {showLocal ? (
+        <Image
+          source={{ uri: localPreview! }}
+          style={[StyleSheet.absoluteFillObject, { borderRadius: size / 2 }]}
+          contentFit="cover"
+          cachePolicy="none"
+          transition={0}
+        />
+      ) : null}
+    </>
   );
 
   if (onPress) {

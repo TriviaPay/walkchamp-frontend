@@ -165,6 +165,9 @@ export function resolveNotificationRoute(
   if (resolved) return resolved;
 
   const type = pickString(data, "type") ?? "";
+  const screen = pickString(data, "screen");
+  if (screen === "walk") return "/(tabs)/walk";
+
   const roomId = pickString(data, "roomId", "room_id");
   const eventId = pickString(data, "eventId", "event_id", "room_id");
   const groupId = pickString(data, "walkingGroupId", "walking_group_id", "groupId", "group_id");
@@ -197,6 +200,9 @@ export function resolveNotificationRoute(
       if (profileUserId) return `/public-profile/${encodeURIComponent(profileUserId)}`;
       return "/(tabs)/walk";
 
+    case "daily_goal_reminder":
+      return "/(tabs)/walk";
+
     case "walking_group_invite_received":
     case "walking_group_request_accepted":
     case "walking_group_request_rejected":
@@ -206,6 +212,9 @@ export function resolveNotificationRoute(
       return groupId
         ? `/groups/${encodeURIComponent(groupId)}?section=requests`
         : "/groups";
+
+    case "group_daily_goal_completed":
+      return groupId ? `/groups/${encodeURIComponent(groupId)}` : "/groups";
 
     case "group_invite_accepted":
       return groupId ? `/groups/${encodeURIComponent(groupId)}` : "/groups";

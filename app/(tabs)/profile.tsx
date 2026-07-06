@@ -6,7 +6,6 @@ import React, { useState, useCallback, useEffect, useRef } from "react";
 import {
   ActivityIndicator,
   Animated,
-  Image,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -50,11 +49,14 @@ import { rf, rs } from "@/utils/responsive";
 import MyTitlesModal, { type ActiveTitle, difficultyColor } from "@/components/MyTitlesModal";
 import WearableSetupModal from "@/components/WearableSetupModal";
 import { useTitleUnlock } from "@/context/TitleUnlockContext";
+import { useAvatarCache, PROFILE_ME_CACHE_KEY } from "@/hooks/useAvatarCache";
+import { ProfileAvatar } from "@/components/ProfileAvatar";
+import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import {
   deleteProfileAvatar,
-  profileAvatarImageUri,
   uploadProfileAvatar,
 } from "@/services/mediaApi";
+import { screenCache } from "@/utils/screenCache";
 
 // iOS can report HEIC as the mimeType even when quality<1 converts data to JPEG.
 // Normalize it so the server always receives a recognised image type.
@@ -111,6 +113,26 @@ interface ProfileMeResponse {
   challengeHistory: ChallengeHistoryItem[];
   last7Days: { date: string; steps: number }[];
   stepSource: { platform: string; permissionStatus: string; setupCompleted: boolean } | null;
+}
+
+const PROFILE_ME_TTL_MS = 90_000;
+const PROFILE_TITLES_EVAL_TTL_MS = 5 * 60_000;
+
+function applyProfileMeData(
+  data: ProfileMeResponse,
+  setters: {
+    setServerStats: (v: ServerStats | null) => void;
+    setActiveTitle: (v: ActiveTitle | null) => void;
+    setChallengeHistory: (v: ChallengeHistoryItem[]) => void;
+    setLast7Days: (v: { date: string; steps: number }[]) => void;
+    setStepSourceInfo: (v: { platform: string; permissionStatus: string; setupCompleted: boolean } | null) => void;
+  },
+): void {
+  if (data.stats) setters.setServerStats(data.stats);
+  setters.setActiveTitle(data.activeTitle);
+  if (data.challengeHistory.length > 0) setters.setChallengeHistory(data.challengeHistory);
+  if (data.last7Days.length > 0) setters.setLast7Days(data.last7Days);
+  if (data.stepSource !== undefined) setters.setStepSourceInfo(data.stepSource);
 }
 
 async function fetchProfileMeFull(): Promise<ProfileMeResponse | null> {
@@ -299,8 +321,9 @@ export default function ProfileScreen() {
   const { allTimeSteps, currentStreak, weeklySteps, requestStepPermission } = useWalk();
   const { userRank } = useApp();
 
-  // Profile view state
-  const [serverStats,       setServerStats]       = useState<ServerStats | null>(null);
+  // Profile view state — seed from cache for instant paint
+  const cachedProfile = screenCache.getSync<ProfileMeResponse>(PROFILE_ME_CACHE_KEY);
+  const [serverStats,       setServerStats]       = useState<ServerStats | null>(cachedProfile?.stats ?? null);
   const [showTitlesModal,   setShowTitlesModal]   = useState(false);
 
   useEffect(() => {
@@ -309,10 +332,10 @@ export default function ProfileScreen() {
     }
   }, [openTitlesParam]);
 
-  const [activeTitle,       setActiveTitle]       = useState<ActiveTitle | null>(null);
-  const [challengeHistory,  setChallengeHistory]  = useState<ChallengeHistoryItem[]>([]);
-  const [last7Days,         setLast7Days]         = useState<{ date: string; steps: number }[]>([]);
-  const [stepSourceInfo,    setStepSourceInfo]    = useState<{ platform: string; permissionStatus: string; setupCompleted: boolean } | null>(null);
+  const [activeTitle,       setActiveTitle]       = useState<ActiveTitle | null>(cachedProfile?.activeTitle ?? null);
+  const [challengeHistory,  setChallengeHistory]  = useState<ChallengeHistoryItem[]>(cachedProfile?.challengeHistory ?? []);
+  const [last7Days,         setLast7Days]         = useState<{ date: string; steps: number }[]>(cachedProfile?.last7Days ?? []);
+  const [stepSourceInfo,    setStepSourceInfo]    = useState<{ platform: string; permissionStatus: string; setupCompleted: boolean } | null>(cachedProfile?.stepSource ?? null);
   const [showWearableSetup, setShowWearableSetup] = useState(false);
   const [deleteLoading,     setDeleteLoading]     = useState(false);
 
@@ -393,10 +416,14 @@ export default function ProfileScreen() {
   const { soundEnabled, setSoundEnabled } = useSound();
   const { isDark: darkTheme, toggleTheme } = useTheme();
 
-  // Avatar — local URI after pick (optimistic), falls back to server URL
-  const [avatarUri,        setAvatarUri]        = useState<string | null>(null);
+  // Avatar picker state
   const [uploadingAvatar,  setUploadingAvatar]  = useState(false);
   const [showAvatarPicker, setShowAvatarPicker] = useState(false);
+  const {
+    beginLocalAvatarPick,
+    applyAvatarUploadSuccess,
+    applyAvatarRemoved,
+  } = useAvatarCache();
 
   // Animate edit panel
   const editAnim = useRef(new Animated.Value(0)).current;
@@ -410,14 +437,7 @@ export default function ProfileScreen() {
         if (__DEV__ && Platform.OS === "ios") {
           console.log("[iOS Avatar] Upload success:", result.imageUri);
         }
-        setAvatarUri(result.imageUri);
-        updateUser({
-          profileImageUrl: result.avatarUrl || result.displayUrl,
-          avatarVersion: result.avatarVersion,
-        });
-        refreshUserProfile()
-          .then(() => { if (__DEV__ && Platform.OS === "ios") console.log("[iOS Avatar] Profile refetch success"); })
-          .catch(() => {});
+        applyAvatarUploadSuccess(result);
       } else {
         AppAlert.alert("Upload Failed", "Could not save your photo. Please try again.");
       }
@@ -426,19 +446,14 @@ export default function ProfileScreen() {
     } finally {
       setUploadingAvatar(false);
     }
-  }, [refreshUserProfile, updateUser]);
+  }, [applyAvatarUploadSuccess]);
 
   const handleRemoveAvatar = useCallback(async () => {
     try {
       setUploadingAvatar(true);
       const result = await deleteProfileAvatar();
       if (result.success) {
-        setAvatarUri(null);
-        updateUser({
-          profileImageUrl: null,
-          avatarVersion: result.avatarVersion ?? 0,
-        });
-        refreshUserProfile().catch(() => {});
+        applyAvatarRemoved(result.avatarVersion ?? 0);
       } else {
         AppAlert.alert("Error", "Could not remove photo. Please try again.");
       }
@@ -447,7 +462,7 @@ export default function ProfileScreen() {
     } finally {
       setUploadingAvatar(false);
     }
-  }, [refreshUserProfile, updateUser]);
+  }, [applyAvatarRemoved]);
 
   // ── Camera permission + photo picker ────────────────────────────────────────
   const handleTakePhoto = useCallback(async () => {
@@ -481,7 +496,7 @@ export default function ProfileScreen() {
         const asset = result.assets[0];
         const mime = normalizeMime(asset.mimeType);
         if (__DEV__ && Platform.OS === "ios") console.log("[iOS Avatar] Selected asset URI:", asset.uri);
-        setAvatarUri(asset.uri);
+        beginLocalAvatarPick(asset.uri);
         if (__DEV__ && Platform.OS === "ios") console.log("[iOS Avatar] Upload started");
         uploadAvatarToServer(asset.uri, mime);
       }
@@ -493,7 +508,7 @@ export default function ProfileScreen() {
         AppAlert.alert("Error", "Could not open camera. Please try again.");
       }
     }
-  }, [uploadAvatarToServer]);
+  }, [beginLocalAvatarPick, uploadAvatarToServer]);
 
   const handleChooseFromLibrary = useCallback(async () => {
     if (__DEV__ && Platform.OS === "ios") console.log("[iOS Avatar] Modal option selected: Choose from Library");
@@ -531,31 +546,19 @@ export default function ProfileScreen() {
         const asset = result.assets[0];
         const mime = normalizeMime(asset.mimeType);
         if (__DEV__ && Platform.OS === "ios") console.log("[iOS Avatar] Selected asset URI:", asset.uri);
-        setAvatarUri(asset.uri);
+        beginLocalAvatarPick(asset.uri);
         if (__DEV__ && Platform.OS === "ios") console.log("[iOS Avatar] Upload started");
         uploadAvatarToServer(asset.uri, mime);
       }
     } catch (err: unknown) {
       AppAlert.alert("Error", "Could not open photo library. Please try again.");
     }
-  }, [uploadAvatarToServer]);
+  }, [beginLocalAvatarPick, uploadAvatarToServer]);
 
   const handleAvatarPress = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setShowAvatarPicker(true);
   }, []);
-
-  // Seed local avatar URI from server — proxy URL is always accessible via the Replit reverse proxy.
-  // Only seed when the user has an avatar recorded (profileImageUrl != null).
-  // Skip while an upload is in progress to avoid overwriting the optimistic preview.
-  useEffect(() => {
-    if (uploadingAvatar) return;
-    setAvatarUri(
-      user?.id && user?.profileImageUrl
-        ? profileAvatarImageUri(user.id, user.avatarVersion ?? 0)
-        : null,
-    );
-  }, [user?.id, user?.profileImageUrl, user?.avatarVersion, uploadingAvatar]);
 
   useFocusEffect(
     useCallback(() => {
@@ -564,36 +567,56 @@ export default function ProfileScreen() {
     }, []),
   );
 
+  const profileSetters = useRef({
+    setServerStats,
+    setActiveTitle,
+    setChallengeHistory,
+    setLast7Days,
+    setStepSourceInfo,
+  });
+  profileSetters.current = {
+    setServerStats,
+    setActiveTitle,
+    setChallengeHistory,
+    setLast7Days,
+    setStepSourceInfo,
+  };
+
   useFocusEffect(
     useCallback(() => {
-      (async () => {
-        const profileData = await fetchProfileMeFull();
-        if (profileData?.stats) setServerStats(profileData.stats);
-        if (profileData) {
-          setActiveTitle(profileData.activeTitle);
-          if (profileData.challengeHistory.length > 0) {
-            setChallengeHistory(profileData.challengeHistory);
+      void screenCache.get<ProfileMeResponse>(PROFILE_ME_CACHE_KEY).then((cached) => {
+        if (cached) applyProfileMeData(cached, profileSetters.current);
+      });
+
+      if (apiFetchAllowed("profile_me_full", PROFILE_ME_TTL_MS)) {
+        markApiFetched("profile_me_full");
+        void (async () => {
+          const profileData = await fetchProfileMeFull();
+          if (profileData) {
+            applyProfileMeData(profileData, profileSetters.current);
+            void screenCache.set(PROFILE_ME_CACHE_KEY, profileData);
           }
-          if (profileData.last7Days.length > 0) setLast7Days(profileData.last7Days);
-          if (profileData.stepSource !== undefined) setStepSourceInfo(profileData.stepSource);
-        }
-        // Evaluate achievement titles — show unlock modal for any newly earned titles
-        try {
-          const evalRes = await authFetch("/api/me/titles/evaluate", { method: "POST" });
-          if (evalRes.ok) {
+        })();
+      }
+
+      if (apiFetchAllowed("profile_titles_evaluate", PROFILE_TITLES_EVAL_TTL_MS)) {
+        markApiFetched("profile_titles_evaluate");
+        void authFetch("/api/me/titles/evaluate", { method: "POST" })
+          .then(async (evalRes) => {
+            if (!evalRes.ok) return;
             const evalData = await evalRes.json() as {
               newly_unlocked: Array<{ code: string; title: string; difficulty: string; icon: string | null }>;
             };
             if (evalData.newly_unlocked?.length > 0) {
               triggerUnlocks(evalData.newly_unlocked);
             }
-          }
-        } catch { /* ignore */ }
-        // Fetch coin balance from DB into Redux
-        void dispatch(fetchCoinBalance());
-        // Fetch push notification preference
-        void getNotificationPreferences().then((enabled) => setPushEnabled(enabled)).catch(() => {});
-      })(); }, [dispatch, triggerUnlocks])
+          })
+          .catch(() => {});
+      }
+
+      void dispatch(fetchCoinBalance());
+      void getNotificationPreferences().then((enabled) => setPushEnabled(enabled)).catch(() => {});
+    }, [dispatch, triggerUnlocks]),
   );
 
   // Load editable fields when edit mode opens
@@ -739,14 +762,16 @@ export default function ProfileScreen() {
           {/* Top row: avatar + info */}
           <View style={styles.profileTop}>
             <TouchableOpacity style={styles.avatarWrapper} onPress={handleAvatarPress} activeOpacity={0.8} disabled={uploadingAvatar}>
-              <View style={[styles.avatar, { backgroundColor: avatarColor + "30", borderColor: avatarColor }]}>
-                {avatarUri ? (
-                  <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
-                ) : (
-                  <Text style={[styles.avatarLetter, { color: avatarColor }]}>
-                    {(user?.fullName ?? "W").charAt(0).toUpperCase()}
-                  </Text>
-                )}
+              <View style={styles.avatarWrapperInner}>
+                <ProfileAvatar
+                  userId={user?.id}
+                  profileImageUrl={user?.profileImageUrl}
+                  avatarVersion={user?.avatarVersion}
+                  avatarColor={avatarColor}
+                  displayName={user?.fullName ?? "W"}
+                  size={rs(72)}
+                  borderWidth={3}
+                />
                 {uploadingAvatar && (
                   <View style={styles.avatarUploadOverlay}>
                     <ActivityIndicator size="small" color="#fff" />
@@ -1155,7 +1180,7 @@ export default function ProfileScreen() {
         options={[
           { label: "Take Photo", icon: "camera", onPress: handleTakePhoto },
           { label: "Choose from Library", icon: "image", onPress: handleChooseFromLibrary },
-          ...(avatarUri ? [{ label: "Remove Photo", icon: "trash-2", destructive: true, onPress: handleRemoveAvatar }] : []),
+          ...(user?.profileImageUrl ? [{ label: "Remove Photo", icon: "trash-2", destructive: true, onPress: handleRemoveAvatar }] : []),
         ]}
       />
     </KeyboardAvoidingView>
@@ -1170,6 +1195,7 @@ const styles = StyleSheet.create({
   profileCard:    { borderRadius: 20, borderWidth: 1, padding: rs(18), marginBottom: rs(24), gap: 14 },
   profileTop:     { flexDirection: "row", gap: 14 },
   avatarWrapper:    { position: "relative" },
+  avatarWrapperInner: { position: "relative", width: rs(72), height: rs(72) },
   avatar:           { width: rs(72), height: rs(72), borderRadius: rs(36), borderWidth: 2.5, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   avatarImage:      { width: rs(72), height: rs(72), borderRadius: rs(36) },
   avatarLetter:     { fontSize: rf(28), fontWeight: "800" },

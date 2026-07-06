@@ -6,6 +6,7 @@ import { screenCache } from "@/utils/screenCache";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { perf } from "@/utils/perfLogger";
 import { getApiBase } from "@/utils/apiUrl";
+import { prefetchProfileAvatars } from "@/services/mediaApi";
 import {
   Animated,
   ActivityIndicator,
@@ -26,6 +27,7 @@ import {
   KeyboardAvoidingView,
   View} from "react-native";
 import { AppAlert } from "@/components/AppAlert";
+import { CachedAvatarImage } from "@/components/CachedAvatarImage";
 import { useSafeLayout, getSafeTop, getSafeBottom } from "@/hooks/useSafeLayout";
 import type { EdgeInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
@@ -852,7 +854,7 @@ function GlobalChatTab({ colors, insets, user, headerHeight }: {
                           <View style={{ position: "relative" }}>
                             {item.avatarUrl && item.userId ? (
                               <View style={{ width: 32, height: 32, borderRadius: 16, overflow: "hidden", borderWidth: 1.5, borderColor: item.avatarColor }}>
-                                <Image source={{ uri: `${API_BASE}/api/profile/avatar/${item.userId}?v=${getAvatarVersion(item.userId, item.avatarVersion ?? 0)}` }} style={{ width: 32, height: 32 }} />
+                                <CachedAvatarImage userId={item.userId} avatarVersion={getAvatarVersion(item.userId, item.avatarVersion ?? 0)} size={32} />
                               </View>
                             ) : (
                               <Avatar color={item.avatarColor} letter={item.username[0]} size={32} />
@@ -885,7 +887,7 @@ function GlobalChatTab({ colors, insets, user, headerHeight }: {
                         <View style={{ alignSelf: "flex-end" }}>
                           {user?.id && user?.profileImageUrl ? (
                             <View style={{ width: 32, height: 32, borderRadius: 16, overflow: "hidden", borderWidth: 1.5, borderColor: user?.avatarColor ?? "#00E676" }}>
-                              <Image source={{ uri: `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` }} style={{ width: 32, height: 32 }} />
+                              <CachedAvatarImage userId={user.id} avatarVersion={user?.avatarVersion ?? 0} size={32} />
                             </View>
                           ) : (
                             <Avatar color={user?.avatarColor ?? "#00E676"} letter={(user?.username ?? "Y")[0]} size={32} />
@@ -985,6 +987,13 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
         const fresh: Conversation[] = data.conversations ?? [];
         setConversations(fresh);
         void screenCache.set("screen_conversations", fresh);
+        prefetchProfileAvatars(
+          fresh.map((c) => ({
+            userId: c.friendId,
+            avatarUrl: c.friendAvatarUrl,
+            avatarVersion: c.friendAvatarVersion,
+          })),
+        );
       }
     } catch {}
     setLoadingConvs(false);
@@ -1301,7 +1310,7 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
           <View style={{ position: "relative" }}>
             <View style={{ width: 42, height: 42, borderRadius: 21, overflow: "hidden", borderWidth: 2, borderColor: colors.primary + "40", backgroundColor: activeFriend.avatarColor, alignItems: "center", justifyContent: "center" }}>
               {activeFriend.avatarUrl ? (
-                <Image source={{ uri: `${API_BASE}/api/profile/avatar/${activeFriend.id}?v=${getAvatarVersion(activeFriend.id, activeFriend.avatarVersion ?? 0)}` }} style={{ width: 42, height: 42 }} />
+                <CachedAvatarImage userId={activeFriend.id} avatarVersion={getAvatarVersion(activeFriend.id, activeFriend.avatarVersion ?? 0)} size={42} />
               ) : (
                 <Text style={{ fontSize: 16, fontWeight: "800", color: "#fff" }}>{activeFriend.username[0].toUpperCase()}</Text>
               )}
@@ -1490,7 +1499,7 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
             <View style={{ position: "relative" }}>
               {conv.friendAvatarUrl ? (
                 <View style={{ width: 50, height: 50, borderRadius: 25, overflow: "hidden", borderWidth: 2, borderColor: conv.friendAvatarColor + "80" }}>
-                  <Image source={{ uri: `${API_BASE}/api/profile/avatar/${conv.friendId}?v=${getAvatarVersion(conv.friendId, conv.friendAvatarVersion ?? 0)}` }} style={{ width: 50, height: 50 }} />
+                  <CachedAvatarImage userId={conv.friendId} avatarVersion={getAvatarVersion(conv.friendId, conv.friendAvatarVersion ?? 0)} size={50} />
                 </View>
               ) : (
                 <Avatar color={conv.friendAvatarColor} letter={conv.friendUsername[0]} size={50} />
@@ -1580,6 +1589,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
       setReceived(dedupeRequestsByUser(fr.received ?? []));
       setSent(dedupeRequestsByUser(fr.sent ?? []));
       setFriends(fds.friends ?? []);
+      prefetchProfileAvatars(fds.friends ?? []);
     } catch {}
     setLoading(false);
     setRefreshing(false);
@@ -1619,6 +1629,19 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
       return u;
     });
   }, [searchResults, friendIds, visibleSent, visibleReceived]);
+
+  const displaySearchResults = useMemo(() => {
+    const listedUserIds = new Set([
+      ...friendIds,
+      ...visibleSent.map((s) => s.userId),
+      ...visibleReceived.map((r) => r.userId),
+    ]);
+    return resolvedSearchResults.filter((u) => {
+      if (listedUserIds.has(u.id)) return false;
+      if (u.friendStatus !== "none") return false;
+      return true;
+    });
+  }, [resolvedSearchResults, friendIds, visibleSent, visibleReceived]);
 
   const upsertSentRequest = useCallback((requestId: string, user: SearchUser) => {
     setSent((prev) => {
@@ -1670,6 +1693,21 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
 
     sendingToRef.current.add(targetId);
     setSearchResults((prev) => prev.map((u) => u.id === targetId ? { ...u, friendStatus: "pending_sent" as const } : u));
+    if (targetUser) {
+      setSent((prev) => {
+        if (prev.some((r) => r.userId === targetId)) return prev;
+        return [{
+          id: `pending-${targetId}`,
+          type: "sent" as const,
+          userId: targetUser.id,
+          username: targetUser.username,
+          flag: targetUser.flag,
+          avatarColor: targetUser.avatarColor,
+          avatarUrl: targetUser.avatarUrl ?? null,
+          avatarVersion: targetUser.avatarVersion ?? null,
+        }, ...prev];
+      });
+    }
     try {
       const res = await authFetch("/api/friends/request", { method: "POST", body: JSON.stringify({ targetUserId: targetId }) });
       if (!res.ok) {
@@ -1685,6 +1723,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
       if (targetUser) {
         upsertSentRequest(requestId, { ...targetUser, friendStatus: "pending_sent", requestId });
       }
+      setSent((prev) => prev.map((r) => r.id === `pending-${targetId}` ? { ...r, id: requestId } : r));
       setSearchResults((prev) => prev.map((u) => u.id === targetId ? { ...u, friendStatus: "pending_sent" as const, requestId } : u));
     } catch {
       clearPendingForUser(targetId);
@@ -1879,14 +1918,18 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
               <SkeletonList count={4} variant="user" />
             </View>
           )}
-          {!searchLoading && resolvedSearchResults.length === 0 && (
-            <Text style={[cStyles.emptyHint, { color: colors.mutedForeground }]}>No users found for "{searchQuery}"</Text>
+          {!searchLoading && displaySearchResults.length === 0 && (
+            <Text style={[cStyles.emptyHint, { color: colors.mutedForeground }]}>
+              {resolvedSearchResults.length > 0
+                ? "Matching users are listed in Requests or Friends below."
+                : `No users found for "${searchQuery}"`}
+            </Text>
           )}
-          {resolvedSearchResults.map((u) => (
+          {displaySearchResults.map((u) => (
             <View key={u.id} style={[cStyles.neonCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               {u.avatarUrl ? (
                 <View style={{ width: 48, height: 48, borderRadius: 24, overflow: "hidden", borderWidth: 2, borderColor: u.avatarColor + "80" }}>
-                  <Image source={{ uri: `${API_BASE}/api/profile/avatar/${u.id}?v=${u.avatarVersion ?? 0}` }} style={{ width: 48, height: 48 }} />
+                  <CachedAvatarImage userId={u.id} avatarVersion={u.avatarVersion ?? 0} size={48} />
                 </View>
               ) : (
                 <Avatar color={u.avatarColor} letter={(u.username[0] ?? "?").toUpperCase()} size={48} />
@@ -1964,7 +2007,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
           <View style={{ position: "relative" }}>
             {r.avatarUrl && r.userId ? (
               <View style={{ width: 48, height: 48, borderRadius: 24, overflow: "hidden", borderWidth: 2, borderColor: r.avatarColor + "80" }}>
-                <Image source={{ uri: `${API_BASE}/api/profile/avatar/${r.userId}?v=${getAvatarVersion(r.userId, r.avatarVersion ?? 0)}` }} style={{ width: 48, height: 48 }} />
+                <CachedAvatarImage userId={r.userId} avatarVersion={getAvatarVersion(r.userId, r.avatarVersion ?? 0)} size={48} />
               </View>
             ) : (
               <Avatar color={r.avatarColor} letter={r.username[0]} size={48} />
@@ -2001,7 +2044,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
         <View key={r.id} style={[cStyles.neonCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           {r.avatarUrl && r.userId ? (
             <View style={{ width: 48, height: 48, borderRadius: 24, overflow: "hidden", borderWidth: 2, borderColor: r.avatarColor + "80" }}>
-              <Image source={{ uri: `${API_BASE}/api/profile/avatar/${r.userId}?v=${getAvatarVersion(r.userId, r.avatarVersion ?? 0)}` }} style={{ width: 48, height: 48 }} />
+              <CachedAvatarImage userId={r.userId} avatarVersion={getAvatarVersion(r.userId, r.avatarVersion ?? 0)} size={48} />
             </View>
           ) : (
             <Avatar color={r.avatarColor} letter={r.username[0]} size={48} />
@@ -2048,7 +2091,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
           <View style={{ position: "relative" }}>
             {f.avatarUrl && f.id ? (
               <View style={{ width: 48, height: 48, borderRadius: 24, overflow: "hidden", borderWidth: 2, borderColor: f.avatarColor + "80" }}>
-                <Image source={{ uri: `${API_BASE}/api/profile/avatar/${f.id}?v=${getAvatarVersion(f.id, f.avatarVersion ?? 0)}` }} style={{ width: 48, height: 48 }} />
+                <CachedAvatarImage userId={f.id} avatarVersion={getAvatarVersion(f.id, f.avatarVersion ?? 0)} size={48} />
               </View>
             ) : (
               <Avatar color={f.avatarColor} letter={f.username[0]} size={48} />

@@ -38,6 +38,26 @@ export function profileAvatarImageUri(userId: string, avatarVersion = 0): string
   return `${getApiBase()}/api/profile/avatar/${userId}?v=${avatarVersion}`;
 }
 
+/** Warm disk cache for avatars — call after login or list fetch. */
+export function prefetchProfileAvatar(userId: string, avatarVersion = 0): void {
+  if (!userId) return;
+  void import("expo-image").then(({ Image }) => {
+    void Image.prefetch(profileAvatarImageUri(userId, avatarVersion), {
+      cachePolicy: "memory-disk",
+    });
+  });
+}
+
+export function prefetchProfileAvatars(
+  entries: Array<{ userId: string; avatarVersion?: number | null; avatarUrl?: string | null }>,
+): void {
+  for (const e of entries) {
+    if (e.userId && e.avatarUrl) {
+      prefetchProfileAvatar(e.userId, e.avatarVersion ?? 0);
+    }
+  }
+}
+
 export function groupImageUri(groupId: string, imageVersion = 0): string {
   return `${getApiBase()}/api/groups/${groupId}/image?v=${imageVersion}`;
 }

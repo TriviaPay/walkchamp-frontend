@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Alert, AppState, AppStateStatus, Platform } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
-import type { RootState, AppDispatch } from "@/store";
+import { store } from "@/store";
 import {
   authActions,
   restoreSession,
@@ -20,6 +20,7 @@ import {
 } from "@/services/tokenRefreshScheduler";
 import { dbProfileToUserProfile } from "@/utils/profileMapper";
 import type { UserProfile } from "@/store/types";
+import { prefetchProfileAvatar } from "@/services/mediaApi";
 import { authEvents } from "@/utils/authEvents";
 import { screenCache } from "@/utils/screenCache";
 import { storageGet, storageSet, storageRemove, STORAGE_KEYS } from "@/utils/storage";
@@ -82,6 +83,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               refreshToken: refresh,
             }),
           );
+          if (cachedUser.id && cachedUser.profileImageUrl) {
+            prefetchProfileAvatar(cachedUser.id, cachedUser.avatarVersion ?? 0);
+          }
         } else {
           perf.cacheMiss("auth_user");
         }
@@ -107,6 +111,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           refreshToken: refreshJwt,
         }),
       );
+      if (profile.id && profile.profileImageUrl) {
+        prefetchProfileAvatar(profile.id, profile.avatarVersion ?? 0);
+      }
       await bindStepSessionToUser(profile.id);
       // Give the caller's router.replace() time to be queued before
       // releasing the gate — prevents index.tsx from racing ahead.
@@ -147,6 +154,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const updateUser = useCallback(
     async (updates: Partial<UserProfile>) => {
       dispatch(authActions.updateUser(updates));
+      const merged = store.getState().auth.user;
+      if (merged) {
+        void storageSet(STORAGE_KEYS.USER, merged);
+      }
     },
     [dispatch],
   );
@@ -159,7 +170,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const session = await getValidSession();
       if (!session) return;
       const raw = await fetchMe(session);
-      if (raw) dispatch(authActions.updateUser(dbProfileToUserProfile(raw)));
+      if (raw) {
+        const mapped = dbProfileToUserProfile(raw);
+        dispatch(authActions.updateUser(mapped));
+        if (mapped.id && mapped.profileImageUrl) {
+          prefetchProfileAvatar(mapped.id, mapped.avatarVersion ?? 0);
+        }
+      }
     } catch {}
   }, [dispatch]);
 

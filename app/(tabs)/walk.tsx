@@ -24,7 +24,8 @@ import {
   View} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { AppAlert } from "@/components/AppAlert";
-import { AvatarPickerSheet } from "@/components/AvatarPickerSheet";
+import { ProfileAvatar } from "@/components/ProfileAvatar";
+import { useAvatarCache } from "@/hooks/useAvatarCache";
 import * as Clipboard from "expo-clipboard";
 import * as ImagePicker from "expo-image-picker";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
@@ -95,6 +96,7 @@ import { clampDailyProgress } from "@/utils/stepProgress";
 import CoinsBattleModal from "@/components/CoinsBattleModal";
 import { screenCache } from "@/utils/screenCache";
 import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
+import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows";
 import { subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
 import { useTodayWalkSteps } from "@/hooks/useTodayWalkSteps";
@@ -828,12 +830,12 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
   colors: ReturnType<typeof useColors>; }) {
   const { safeBottom } = useSafeLayout();
   const { refreshUserProfile, updateUser } = useAuth();
+  const { beginLocalAvatarPick, applyAvatarUploadSuccess, applyAvatarRemoved } = useAvatarCache();
   const { requestStepPermission } = useWalkContext();
   const ac = user?.avatarColor ?? colors.primary;
 
   // Avatar + server stats
   const [profileStats,    setProfileStats]    = useState<ServerProfileStats | null>(null);
-  const [avatarUrl,       setAvatarUrl]       = useState<string | null>(null);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
   // Titles
@@ -946,6 +948,8 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
 
   useEffect(() => {
     if (!visible) { setIsEditing(false); return; }
+    if (!apiFetchAllowed("walk_profile_modal", 90_000)) return;
+    markApiFetched("walk_profile_modal");
     void (async () => {
       const res = await authFetch("/api/profile/me").catch(() => null);
       if (!res?.ok) return;
@@ -953,13 +957,8 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
       const stats = json.data?.stats ?? null;
       if (stats) {
         const profileId = json.data?.profile?.id ?? null;
-        const avatarVersion: number = json.data?.profile?.avatarVersion ?? 0;
-        const url = profileId
-          ? profileAvatarImageUri(profileId, avatarVersion)
-          : null;
         const title: ActiveTitle | null = json.data?.active_title ?? null;
-        setProfileStats({ ...stats, avatarUrl: url, activeTitle: title });
-        setAvatarUrl(url);
+        setProfileStats({ ...stats, activeTitle: title });
         setActiveTitle(title);
         if (typeof stats.globalRank === "number") setProfileRank(stats.globalRank);
       }
@@ -988,15 +987,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
       }
       if (json.data?.stepSource !== undefined) setStepSourceInfo(json.data.stepSource);
     })();
-  }, [visible]);
-
-  // Sync avatar URL from Redux whenever the user uploads a new photo on any screen
-  useEffect(() => {
-    if (uploadingAvatar) return;
-    if (user?.id && user?.profileImageUrl) {
-      setAvatarUrl(profileAvatarImageUri(user.id, user?.avatarVersion ?? 0));
-    } else if (!user?.profileImageUrl) {
-      setAvatarUrl(null); } }, [user?.id, user?.profileImageUrl, user?.avatarVersion, uploadingAvatar]);
+  }, [visible, todaySteps]);
 
   // Load editable fields when edit panel opens
   useEffect(() => {
@@ -1026,16 +1017,11 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
     AppAlert.alert("Saved!", "Your profile has been updated.", [{ text: "OK", onPress: () => setIsEditing(false) }]); };
 
   const handlePickAndUpload = async (uri: string, mimeType?: string) => {
-    setAvatarUrl(uri);
+    beginLocalAvatarPick(uri);
     setUploadingAvatar(true);
     const result = await uploadProfileAvatar(uri, mimeType);
     if (result) {
-      setAvatarUrl(result.imageUri);
-      updateUser({
-        profileImageUrl: result.avatarUrl || result.displayUrl,
-        avatarVersion: result.avatarVersion,
-      });
-      refreshUserProfile().catch(() => {});
+      applyAvatarUploadSuccess(result);
     } else {
       AppAlert.alert("Error", "Could not upload photo. Please try again.");
     }
@@ -1099,12 +1085,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
   const handleRemovePhoto = async () => {
     setUploadingAvatar(true);
     const result = await deleteProfileAvatar();
-    setAvatarUrl(null);
-    updateUser({
-      profileImageUrl: null,
-      avatarVersion: result.avatarVersion ?? 0,
-    });
-    refreshUserProfile().catch(() => {});
+    applyAvatarRemoved(result.avatarVersion ?? 0);
     setUploadingAvatar(false);
   };
 
@@ -1189,11 +1170,15 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
           <View style={pmStyles.avatarSection}>
             <TouchableOpacity onPress={handleAvatarPress} disabled={uploadingAvatar} activeOpacity={0.8} style={pmStyles.avatarWrapper}>
               <View style={[pmStyles.avatar, { backgroundColor: ac + "25", borderColor: ac }]}>
-                {avatarUrl ? (
-                  <Image source={{ uri: avatarUrl }} style={pmStyles.avatarImg} />
-                ) : (
-                  <Text style={[pmStyles.avatarText, { color: ac }]}>{(user?.fullName ?? "W").charAt(0).toUpperCase()}</Text>
-                )}
+                <ProfileAvatar
+                  userId={user?.id}
+                  profileImageUrl={user?.profileImageUrl}
+                  avatarVersion={user?.avatarVersion}
+                  avatarColor={ac}
+                  displayName={user?.fullName ?? "W"}
+                  size={84}
+                  borderWidth={3}
+                />
                 {uploadingAvatar && (
                   <View style={pmStyles.avatarOverlay}>
                     <ActivityIndicator size="small" color="#fff" />
@@ -1591,7 +1576,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
         options={[
           { label: "Take Photo", icon: "camera", onPress: handleTakePhoto },
           { label: "Choose from Library", icon: "image", onPress: handleChoosePhoto },
-          ...(avatarUrl ? [{ label: "Remove Photo", icon: "trash-2", destructive: true, onPress: handleRemovePhoto }] : []),
+          ...(user?.profileImageUrl ? [{ label: "Remove Photo", icon: "trash-2", destructive: true, onPress: handleRemovePhoto }] : []),
         ]}
       />
       </SafeAreaView>
@@ -2768,13 +2753,16 @@ function WalkScreenContent() {
               activeOpacity={0.7}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
-            {user?.id && user?.profileImageUrl ? (
-              <Image source={{ uri: profileAvatarImageUri(user.id, user?.avatarVersion ?? 0) }} style={styles.profileAvatarImg} />
-            ) : (
-              <Text style={[styles.profileAvatarText, { color: user?.avatarColor ?? colors.primary }]}>
-                {(user?.fullName ?? "W").charAt(0).toUpperCase()}
-              </Text>
-            )}
+            <ProfileAvatar
+              userId={user?.id}
+              profileImageUrl={user?.profileImageUrl}
+              avatarVersion={user?.avatarVersion}
+              avatarColor={user?.avatarColor ?? colors.primary}
+              displayName={user?.fullName ?? "W"}
+              size={44}
+              borderWidth={0}
+              style={{ borderWidth: 0 }}
+            />
           </TouchableOpacity>
           </View>
         </View>
