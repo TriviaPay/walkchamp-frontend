@@ -173,37 +173,21 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
   const isPrivate = room.requires_code;
   const isFull = room.current_players >= room.max_players;
   const disabled = joining || isFull;
-  const isCoinsBattle = room.challenge_type === "coins_battle";
+  const isCoins = room.challenge_type === "coins_battle";
+  const isCash = !isCoins && room.entry_fee > 0;
+  const accent = isCash ? CASH_BLUE : isCoins ? GOLD : GREEN;
 
-  if (isCoinsBattle) {
-    return <CoinsBattleCard room={room} onJoin={onJoin} onJoinWithCode={onJoinWithCode} onViewHost={onViewHost} joining={joining} isFull={isFull} disabled={disabled} isPrivate={isPrivate} />;
-  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const trackSource = (TRACK_LAYOUT_OPTIONS.find((t) => t.label === room.theme_name)?.source ?? require("@/assets/images/bg.png")) as any;
 
-  const isCash = room.entry_fee > 0;
-  const accent = isCash ? CASH_BLUE : GREEN;
-  const avatarColor = room.host_avatar_color || accent;
+  const prizePoolDollars = isCash ? room.reward_pool : 0;
+  const prizePoolCoins = isCoins ? (room.coin_entry_amount ?? 0) * room.current_players : 0;
 
-  const entryDisplay = isCash ? `$${room.entry_fee.toFixed(2)}` : "Free";
-  const entryLabel = isCash ? "entry fee" : "entry";
-  const entryColor = isCash ? CASH_BLUE : GREEN;
-
-  const rewardDisplay = isCash
-    ? (room.reward_pool > 0 ? `$${room.reward_pool.toFixed(2)}` : "Pool builds")
-    : (room.reward_label || "Coins & badges");
-  const rewardSubLabel = isCash
-    ? (room.reward_pool > 0 ? "prize pool" : "as players join")
-    : "reward";
-
-  const filledSlots = room.current_players;
-  const totalSlots = room.max_players;
-  const progressPct = `${Math.min(100, (filledSlots / totalSlots) * 100)}%` as `${number}%`;
-
-  const joinBtnColors = isFull
-    ? (["#2A2D3A", "#1E2130"] as const)
-    : isCash
+  const gradColors = isCash
     ? ([CASH_BLUE, "#0369A1"] as const)
+    : isCoins
+    ? ([GOLD, GOLD_DARK] as const)
     : ([GREEN, "#00C853"] as const);
-  const joinTextColor = isFull ? "#8B9AC0" : "#000";
 
   const handlePress = () => {
     if (disabled) return;
@@ -212,137 +196,146 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
   };
 
   return (
-    <View style={[pc.wrap, { borderColor: accent + "35" }]}>
-      {/* Colored glow line */}
-      <LinearGradient
-        colors={[accent + "00", accent + "80", accent + "00"]}
-        start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }}
-        style={pc.topGlow}
-      />
+    <View style={[cc.wrap, { borderColor: accent + "50" }]}>
+      <Image source={trackSource} style={cc.bgImage} resizeMode="cover" />
+      <View style={cc.overlay} />
+      <LinearGradient colors={["transparent", "rgba(0,0,0,0.93)"]} style={cc.bottomGrad} />
+      <LinearGradient colors={[accent + "DD", "transparent"]} style={cc.topGlow} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} />
 
-      {/* Header: type label + privacy badge + player count */}
-      <View style={pc.headerRow}>
-        <View style={pc.titleGroup}>
-          {isCash
-            ? <Feather name="dollar-sign" size={13} color={CASH_BLUE} />
-            : <Ionicons name="walk-outline" size={14} color={GREEN} />}
-          <Text style={[pc.headerTitle, { color: accent }]}>
-            {isCash ? "CASH CHALLENGE" : "FREE CHALLENGE"}
-          </Text>
-        </View>
-        <View style={pc.headerRight}>
-          {isPrivate ? (
-            <View style={[pc.visBadge, { backgroundColor: PURPLE + "20", borderColor: PURPLE + "50" }]}>
-              <Feather name="lock" size={9} color={PURPLE} />
-              <Text style={[pc.visBadgeText, { color: PURPLE }]}>Private</Text>
-            </View>
-          ) : (
-            <View style={[pc.visBadge, { backgroundColor: "#00B4FF18", borderColor: "#00B4FF45" }]}>
-              <Feather name="globe" size={9} color="#00B4FF" />
-              <Text style={[pc.visBadgeText, { color: "#00B4FF" }]}>Public</Text>
-            </View>
-          )}
-          <View style={pc.playerPill}>
-            <Feather name="users" size={10} color="#8B9AC0" />
-            <Text style={pc.playerText}>{filledSlots}/{totalSlots}</Text>
-          </View>
-        </View>
-      </View>
-
-      {/* Divider */}
-      <View style={[pc.divider, { backgroundColor: accent + "22" }]} />
-
-      {/* Host row */}
-      <TouchableOpacity onPress={() => onViewHost(room)} activeOpacity={0.75} style={pc.hostRow}>
-        <HostAvatar userId={room.host_user_id} avatarColor={avatarColor} username={room.host_username} size={rs(36)} accent={accent} />
-        <View style={{ flex: 1 }}>
-          <Text style={pc.hostUsername} numberOfLines={1}>
-            @{room.host_username}{room.host_country_flag ? `  ${room.host_country_flag}` : ""}
-          </Text>
-          <Text style={pc.hostLabel}>Host</Text>
-        </View>
-        <Feather name="chevron-right" size={14} color="#4B5680" />
-      </TouchableOpacity>
-
-      {/* Stats panel */}
-      <View style={[pc.statsRow, { borderColor: accent + "20" }]}>
-        <View style={pc.statChip}>
-          <View style={[pc.statIconWrap, { backgroundColor: GREEN + "18" }]}>
-            <Feather name="target" size={15} color={GREEN} />
-          </View>
-          <Text style={pc.statValue}>{fmtSteps(room.target_steps)}</Text>
-          <Text style={pc.statLabel}>steps target</Text>
-        </View>
-
-        <View style={[pc.statDivider, { backgroundColor: accent + "25" }]} />
-
-        <View style={pc.statChip}>
-          <View style={[pc.statIconWrap, { backgroundColor: entryColor + "18" }]}>
-            {isCash
-              ? <Feather name="dollar-sign" size={15} color={CASH_BLUE} />
-              : <Feather name="zap" size={14} color={GREEN} />}
-          </View>
-          <Text style={[pc.statValue, { color: entryColor }]}>{entryDisplay}</Text>
-          <Text style={pc.statLabel}>{entryLabel}</Text>
-        </View>
-
-        <View style={[pc.statDivider, { backgroundColor: accent + "25" }]} />
-
-        <View style={pc.statChip}>
-          <View style={[pc.statIconWrap, { backgroundColor: "#F59E0B18" }]}>
-            <Feather name="award" size={15} color="#F59E0B" />
-          </View>
-          <Text style={[pc.statValue, { fontSize: rf(11) }]} numberOfLines={1}>{rewardDisplay}</Text>
-          <Text style={pc.statLabel}>{rewardSubLabel}</Text>
-        </View>
-      </View>
-
-      {/* Player slots progress bar */}
-      <View style={pc.slotsBar}>
-        <View style={pc.slotsTrack}>
-          <View style={[pc.slotsFill, { width: progressPct, backgroundColor: accent }]} />
-        </View>
-        <Text style={pc.slotsText}>{filledSlots}/{totalSlots} players joined</Text>
-      </View>
-
-      {/* Full-width join button */}
-      <TouchableOpacity
-        onPress={handlePress}
-        disabled={disabled}
-        activeOpacity={0.85}
-        style={[pc.joinBtn, { opacity: disabled && !joining ? 0.5 : 1 }]}
-      >
-        <LinearGradient
-          colors={joinBtnColors}
-          start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-          style={pc.joinBtnGrad}
-        >
-          {joining ? (
-            <>
-              <ActivityIndicator size="small" color="#000" />
-              <Text style={[pc.joinBtnText, { color: "#000" }]}>Joining…</Text>
-            </>
-          ) : (
-            <>
-              <Feather
-                name={isFull ? "x-circle" : isPrivate ? "lock" : "users"}
-                size={16}
-                color={joinTextColor}
-              />
-              <Text style={[pc.joinBtnText, { color: joinTextColor }]}>
-                {isFull ? "Room Full" : isPrivate ? "Enter with Code" : "Join"}
+      <View style={cc.content}>
+        <View style={cc.badgeRow}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+            <View style={[
+              cc.typeBadge,
+              { backgroundColor: accent + "30", borderColor: accent },
+              (isCash || isCoins) && cc.typeBadgeHighlight,
+            ]}>
+              {isCash ? <Feather name="dollar-sign" size={9} color={accent} />
+                : isCoins ? <CoinIcon size={11} />
+                : <Ionicons name="walk-outline" size={10} color={accent} />}
+              <Text style={[cc.typeBadgeText, { color: accent }]}>
+                {isCash ? "CASH" : isCoins ? "COINS ⚔️" : "FREE"}
               </Text>
-            </>
+            </View>
+            {isCash && (
+              <View style={[cc.entryFeePill, { borderColor: CASH_BLUE, backgroundColor: CASH_BLUE + "30" }]}>
+                <Feather name="dollar-sign" size={8} color={CASH_BLUE} />
+                <Text style={[cc.entryFeePillText, { color: "#FFFFFF" }]}>
+                  Fee ${room.entry_fee.toFixed(0)}
+                </Text>
+              </View>
+            )}
+            {isCoins && (
+              <View style={[cc.entryFeePill, { borderColor: GOLD + "90", backgroundColor: GOLD + "25" }]}>
+                <CoinIcon size={9} />
+                <Text style={[cc.entryFeePillText, { color: GOLD }]}>
+                  Fee {(room.coin_entry_amount ?? 0).toLocaleString()}
+                </Text>
+              </View>
+            )}
+          </View>
+          <View style={{ flex: 1 }} />
+          {isPrivate ? (
+            <View style={[cc.visBadge, { backgroundColor: PURPLE + "28", borderColor: PURPLE + "65" }]}>
+              <Feather name="lock" size={7} color={PURPLE} />
+              <Text style={[cc.visBadgeText, { color: PURPLE }]}>Private</Text>
+              <Text style={[cc.visBadgeText, { color: "#BCC8E8" }]}>{room.current_players}/{room.max_players}</Text>
+            </View>
+          ) : (
+            <View style={[cc.visBadge, { backgroundColor: GREEN + "18", borderColor: GREEN + "45" }]}>
+              <Feather name="globe" size={7} color={GREEN} />
+              <Text style={[cc.visBadgeText, { color: GREEN }]}>Public</Text>
+              <Text style={[cc.visBadgeText, { color: "#BCC8E8" }]}>{room.current_players}/{room.max_players}</Text>
+            </View>
           )}
-        </LinearGradient>
-      </TouchableOpacity>
-
-      {room.created_ago_label ? (
-        <View style={pc.timeRow}>
-          <Feather name="clock" size={10} color="#4B5680" />
-          <Text style={pc.timeText}>{room.created_ago_label}</Text>
         </View>
-      ) : null}
+
+        <TouchableOpacity style={cc.hostRow} onPress={() => onViewHost(room)} activeOpacity={0.7}>
+          {room.host_avatar_url ? (
+            <Image
+              source={{ uri: `${getApiBase()}/api/profile/avatar/${room.host_user_id}` }}
+              style={cc.hostAvatar}
+            />
+          ) : (
+            <View style={[cc.hostAvatar, { backgroundColor: room.host_avatar_color ?? (accent + "88") }]}>
+              <Text style={cc.hostInitial}>{(room.host_username[0] ?? "?").toUpperCase()}</Text>
+            </View>
+          )}
+          <Text style={cc.hostName} numberOfLines={1}>@{room.host_username}</Text>
+          {room.host_country_flag ? <Text style={{ fontSize: rf(12) }}>{room.host_country_flag}</Text> : null}
+        </TouchableOpacity>
+
+        <View style={cc.countdownBlock}>
+          <Text style={[cc.countdownBig, { color: accent }]} numberOfLines={1}>Active now</Text>
+          {room.created_ago_label ? (
+            <Text style={cc.countdownSmall} numberOfLines={1}>{room.created_ago_label}</Text>
+          ) : null}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 2 }}>
+            <Feather name="users" size={9} color="#8B9AC0" />
+            <Text style={[cc.countdownSmall, { color: "#8B9AC0" }]}>
+              {room.current_players}/{room.max_players} players joined
+            </Text>
+          </View>
+        </View>
+
+        <View style={[cc.chipsRow, { flexWrap: "wrap" }]}>
+          <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4 }]}>
+            <Image source={require("@/assets/images/blue-shoe.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
+            <Text style={cc.chipText}>{fmtSteps(room.target_steps)} steps</Text>
+          </View>
+          {!isCash && !isCoins && (
+            <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 3 }]}>
+              <CoinIcon size={9} />
+              <Text style={cc.chipText}>🥇{FREE_REWARDS.first} 🥈{FREE_REWARDS.second} 🥉{FREE_REWARDS.third}</Text>
+            </View>
+          )}
+          {isCash && (
+            <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
+              <Image source={require("@/assets/images/trophy-cash.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
+              <Text style={[cc.chipText, { color: GOLD }]}>
+                {prizePoolDollars > 0 ? `Prize Pool $${prizePoolDollars.toFixed(0)}` : "Prize Pool updates as players join"}
+              </Text>
+            </View>
+          )}
+          {isCoins && prizePoolCoins > 0 && (
+            <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
+              <CoinIcon size={9} />
+              <Text style={[cc.chipText, { color: GOLD }]}>Prize Pool {prizePoolCoins.toLocaleString()}</Text>
+            </View>
+          )}
+        </View>
+
+        <TouchableOpacity
+          style={[cc.registerBtn, { opacity: disabled && !joining ? 0.55 : 1 }]}
+          onPress={handlePress}
+          disabled={disabled}
+          activeOpacity={0.8}
+        >
+          <LinearGradient
+            colors={isFull ? (["#2A2D3A", "#1E2130"] as const) : gradColors}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+            style={[cc.registerBtnGrad, { flexDirection: "row", gap: 8 }]}
+          >
+            {joining ? (
+              <>
+                <ActivityIndicator size="small" color={isCoins ? "#000" : "#FFF"} />
+                <Text style={[cc.registerBtnText, { color: isCoins ? "#000" : "#FFF" }]}>Joining…</Text>
+              </>
+            ) : (
+              <>
+                {!isFull && (
+                  isPrivate ? <Feather name="lock" size={12} color={isCoins ? "#000" : "#FFF"} />
+                  : isCoins ? <CoinIcon size={14} />
+                  : <Feather name="users" size={12} color="#FFF" />
+                )}
+                <Text style={[cc.registerBtnText, { color: isFull ? "#8B9AC0" : isCoins ? "#000" : "#FFF" }]}>
+                  {isFull ? "Full" : isPrivate ? "Enter with Code" : isCoins ? "Join Battle" : "Join"}
+                </Text>
+              </>
+            )}
+          </LinearGradient>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -1271,6 +1264,73 @@ const cc = StyleSheet.create({
   cancelRoomBtnText: { fontSize: rf(13), fontWeight: "700", color: "#FF6B6B" },
 });
 
+// ── Current rooms section (horizontal scroll, matches scheduled layout) ───────
+interface CurrentRoomsSectionProps {
+  rooms: Room[];
+  error: string | null;
+  joiningRoomId: string | null;
+  onJoin: (room: Room) => void;
+  onJoinWithCode: () => void;
+  onViewHost: (room: Room) => void;
+  onViewAll: () => void;
+  onRetry: () => void;
+}
+
+function CurrentRoomsSection({
+  rooms, error, joiningRoomId, onJoin, onJoinWithCode, onViewHost, onViewAll, onRetry,
+}: CurrentRoomsSectionProps) {
+  return (
+    <View style={ds.section}>
+      <View style={ds.header}>
+        <View>
+          <Text style={ds.dateLabel}>Current Rooms</Text>
+          <Text style={ds.roomCount}>
+            {error ? "—" : `${rooms.length} room${rooms.length !== 1 ? "s" : ""}`}
+          </Text>
+        </View>
+        {rooms.length > 0 && (
+          <TouchableOpacity style={ds.viewAllBtn} onPress={onViewAll} activeOpacity={0.7}>
+            <Text style={ds.viewAllText}>View All</Text>
+            <Feather name="chevron-right" size={13} color="#00B4FF" />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {error ? (
+        <View style={ds.emptyWrap}>
+          <Feather name="wifi-off" size={22} color="#8B9AC0" />
+          <Text style={ds.emptyTitle}>Could not load active rooms</Text>
+          <Text style={ds.emptySub}>{error}</Text>
+          <TouchableOpacity style={ds.retryBtn} onPress={onRetry} activeOpacity={0.8}>
+            <Text style={ds.retryBtnText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : rooms.length === 0 ? (
+        <View style={ds.emptyWrap}>
+          <Text style={ds.emptyTitle}>No active rooms right now</Text>
+        </View>
+      ) : (
+        <FlatList
+          horizontal
+          data={rooms}
+          keyExtractor={(item) => item.room_id}
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={ds.listContent}
+          renderItem={({ item }) => (
+            <RoomCard
+              room={item}
+              onJoin={onJoin}
+              onJoinWithCode={onJoinWithCode}
+              onViewHost={onViewHost}
+              joining={joiningRoomId === item.room_id}
+            />
+          )}
+        />
+      )}
+    </View>
+  );
+}
+
 // ── Date section (header + horizontal scroll) ─────────────────────────────────
 interface DateSectionProps {
   group: DateGroup;
@@ -1329,6 +1389,17 @@ const ds = StyleSheet.create({
   viewAllBtn: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: "#00B4FF12", borderWidth: 1, borderColor: "#00B4FF30" },
   viewAllText: { fontSize: rf(12), fontWeight: "700", color: "#00B4FF" },
   listContent: { paddingHorizontal: rs(16), paddingBottom: 4 },
+  emptyWrap: { alignItems: "center", paddingHorizontal: rs(24), paddingVertical: rs(20), marginHorizontal: rs(16), gap: 6 },
+  emptyTitle: { fontSize: rf(14), fontWeight: "700", color: "#8B9AC0", textAlign: "center" },
+  emptySub: { fontSize: rf(12), color: "#6B7FA8", textAlign: "center" },
+  retryBtn: {
+    marginTop: 6,
+    paddingHorizontal: rs(24), paddingVertical: rs(10),
+    borderRadius: 12,
+    backgroundColor: GREEN + "20",
+    borderWidth: 1, borderColor: GREEN + "50",
+  },
+  retryBtnText: { fontSize: rf(14), fontWeight: "700", color: GREEN },
 });
 
 // ── Main screen ───────────────────────────────────────────────────────────────
@@ -1352,6 +1423,7 @@ export default function AvailableRoomsScreen() {
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [selectedHostData, setSelectedHostData] = useState<PublicProfileInitialData | null>(null);
   const [joinWithCodeVisible, setJoinWithCodeVisible] = useState(false);
+  const [currentViewAllOpen, setCurrentViewAllOpen] = useState(false);
   const [consentRoom, setConsentRoom] = useState<Room | null>(null);
   const [consentUpcomingRoom, setConsentUpcomingRoom] = useState<UpcomingRoom | null>(null);
   const [consentChecks, setConsentChecks] = useState([false, false, false, false]);
@@ -1862,7 +1934,6 @@ export default function AvailableRoomsScreen() {
             </View>
             <View style={s.joinCodeTexts}>
               <Text style={s.joinCodeTitle}>Have a private room code?</Text>
-              <Text style={s.joinCodeSub}>Enter a code to join instantly</Text>
             </View>
             <TouchableOpacity
               style={s.joinCodeBtn}
@@ -1875,35 +1946,16 @@ export default function AvailableRoomsScreen() {
           </TouchableOpacity>
 
           {/* Current Rooms */}
-          <View style={s.sectionHeader}>
-            <Text style={s.sectionTitle}>Current Rooms</Text>
-          </View>
-          {error ? (
-            <View style={s.sectionEmpty}>
-              <Feather name="wifi-off" size={22} color="#8B9AC0" />
-              <Text style={s.sectionEmptyTitle}>Could not load active rooms</Text>
-              <Text style={s.sectionEmptySub}>{error}</Text>
-              <TouchableOpacity style={s.retryBtn} onPress={() => void fetchRooms(true)} activeOpacity={0.8}>
-                <Text style={s.retryBtnText}>Retry</Text>
-              </TouchableOpacity>
-            </View>
-          ) : rooms.length === 0 ? (
-            <View style={s.sectionEmpty}>
-              <Text style={s.sectionEmptyTitle}>No active rooms right now</Text>
-            </View>
-          ) : (
-            rooms.map((item) => (
-              <View key={item.room_id} style={s.currentRoomItem}>
-                <RoomCard
-                  room={item}
-                  onJoin={handleJoin}
-                  onJoinWithCode={() => setJoinWithCodeVisible(true)}
-                  onViewHost={handleViewHost}
-                  joining={joiningRoomId === item.room_id}
-                />
-              </View>
-            ))
-          )}
+          <CurrentRoomsSection
+            rooms={rooms}
+            error={error}
+            joiningRoomId={joiningRoomId}
+            onJoin={handleJoin}
+            onJoinWithCode={() => setJoinWithCodeVisible(true)}
+            onViewHost={handleViewHost}
+            onViewAll={() => setCurrentViewAllOpen(true)}
+            onRetry={() => void fetchRooms(true)}
+          />
 
           {/* Upcoming Rooms grouped by date */}
           {upcomingError ? (
@@ -1953,6 +2005,37 @@ export default function AvailableRoomsScreen() {
         onClose={() => setJoinWithCodeVisible(false)}
         onJoined={handleJoinWithCodeSuccess}
       />
+
+      <Modal
+        visible={currentViewAllOpen}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setCurrentViewAllOpen(false)}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: BG }}>
+          <View style={s.viewAllModalHeader}>
+            <Text style={s.viewAllModalTitle}>Current Rooms</Text>
+            <TouchableOpacity onPress={() => setCurrentViewAllOpen(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Feather name="x" size={22} color="#EAEFF8" />
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            contentContainerStyle={[s.viewAllModalList, { paddingBottom: safeBottom + 20 }]}
+            showsVerticalScrollIndicator={false}
+          >
+            {rooms.map((item) => (
+              <RoomCard
+                key={item.room_id}
+                room={item}
+                onJoin={handleJoin}
+                onJoinWithCode={() => setJoinWithCodeVisible(true)}
+                onViewHost={handleViewHost}
+                joining={joiningRoomId === item.room_id}
+              />
+            ))}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
 
       <PublicProfileModal
         visible={!!selectedHostId}
@@ -2219,6 +2302,18 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: GREEN + "50",
   },
   retryBtnText: { fontSize: rf(14), fontWeight: "700", color: GREEN },
+
+  viewAllModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: rs(16),
+    paddingVertical: rs(12),
+    borderBottomWidth: 1,
+    borderBottomColor: "#1E2640",
+  },
+  viewAllModalTitle: { fontSize: rf(18), fontWeight: "800", color: "#EAEFF8" },
+  viewAllModalList: { padding: rs(16), alignItems: "center", gap: 12 },
 
   // ── Paid entry consent modal ──────────────────────────────────────────────
   consentWrap:        { flex: 1, backgroundColor: "#080B14" },
