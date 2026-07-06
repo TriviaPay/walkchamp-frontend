@@ -1,3 +1,18 @@
+import TargetStepsSliderPicker from "@/components/TargetStepsSliderPicker";
+import PlayersSliderPicker from "@/components/PlayersSliderPicker";
+import StartTimePickerModal from "@/components/StartTimePickerModal";
+import {
+  formatPlayerLabel,
+  getDefaultPlayerCount,
+  isValidPlayerCount,
+} from "@/utils/players";
+import {
+  getTargetStepOptions,
+  getDefaultTargetSteps,
+  formatStepLabel,
+  isValidTargetSteps,
+  type TargetStepDuration,
+} from "@/utils/targetSteps";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlueShoe } from "@/components/BlueShoe";
 import { RaceJoinBadge, JoinProgressOverlay } from "@/components/RaceJoinBadge";
@@ -227,12 +242,7 @@ const STEP_TARGETS = [
   200000, 250000, 300000, 400000, 500000, 750000, 1000000,
 ];
 
-const GOAL_STEP_TARGETS: Record<"daily" | "weekly" | "monthly", number[]> = {
-  daily:   [500, 1000, 2000, 5000, 10000, 15000, 20000],
-  weekly:  [10000, 20000, 35000, 50000, 70000, 100000],
-  monthly: [50000, 100000, 150000, 200000, 300000, 500000],
-};
-type GoalPeriodType = keyof typeof GOAL_STEP_TARGETS;
+type GoalPeriodType = TargetStepDuration;
 const USD_ENTRY_AMOUNTS = [3, 5, 10, 15, 20, 25];
 const COINS_ENTRY_AMOUNTS = [500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000];
 function fmtStepLabel(n: number): string {
@@ -396,7 +406,7 @@ const TargetStepsCenteredPicker = React.memo(function TargetStepsCenteredPicker(
   );
 });
 
-const PLAYER_COUNTS = [2, 3, 4, 5, 6, 7, 8, 9, 10];
+const PLAYER_COUNTS = [2, 3, 4, 5, 6, 7, 8, 9, 10]; // legacy quick-race modal
 
 // ── Scheduling helpers ────────────────────────────────────────────────────────
 function fmtShortDate(d: Date): string {
@@ -1767,9 +1777,11 @@ function WalkScreenContent() {
   const [challengeModalAnimated, setChallengeModalAnimated] = useState(true);
   const [roomType, setRoomType] = useState<"public" | "private">("private");
   const [challengeEntryIdx, setChallengeEntryIdx] = useState(0);
-  const [challengeTargetIdx, setChallengeTargetIdx] = useState(2);
-  const [challengeMaxPlayers, setChallengeMaxPlayers] = useState(10);
-  const [activePicker, setActivePicker] = useState<"entryFee" | "coinAmount" | "usdAmount" | "goalType" | "steps" | "players" | "startTime" | null>(null);
+  const [challengeTargetSteps, setChallengeTargetSteps] = useState(getDefaultTargetSteps("daily"));
+  const [stepsPickerDraft, setStepsPickerDraft] = useState(getDefaultTargetSteps("daily"));
+  const [challengeMaxPlayers, setChallengeMaxPlayers] = useState(getDefaultPlayerCount());
+  const [playersPickerDraft, setPlayersPickerDraft] = useState(getDefaultPlayerCount());
+  const [activePicker, setActivePicker] = useState<"entryFee" | "coinAmount" | "usdAmount" | "goalType" | "steps" | "players" | null>(null);
   const [challengeEntryMode, setChallengeEntryMode] = useState<"free" | "coins" | "usd">("free");
   const [challengeUsdAmount, setChallengeUsdAmount] = useState(3);
   const [setupPaymentQuote, setSetupPaymentQuote] = useState<CashChallengePaymentQuote | null>(null);
@@ -1780,6 +1792,7 @@ function WalkScreenContent() {
   const [challengeEndDate, setChallengeEndDate] = useState<Date | null>(null);
   const [challengeStartTimeIdx, setChallengeStartTimeIdx] = useState(0);
   const [showStartDatePicker, setShowStartDatePicker] = useState(false);
+  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
   const [showEndDatePicker, setShowEndDatePicker] = useState(false);
   // Always keep end date locked to start + duration (1/7/30 days), preserving the selected start time
   useEffect(() => {
@@ -1805,6 +1818,11 @@ function WalkScreenContent() {
       console.log("[CreateChallengeTime] timezone:", getUserTimezone());
     }
   }, [challengeStartDate, challengeGoalType, challengeStartTimeIdx]);
+
+  useEffect(() => {
+    setChallengeTargetSteps(getDefaultTargetSteps(challengeGoalType));
+  }, [challengeGoalType]);
+
   const pickerSlideY = useRef(new Animated.Value(500)).current;
   const [challengeCreating, setChallengeCreating] = useState(false);
   const [joinWithCodeVisible, setJoinWithCodeVisible] = useState(false);
@@ -2137,9 +2155,10 @@ function WalkScreenContent() {
   const isCoinsBattleEntry = challengeEntryMode === "coins";
   const isUsdEntry = challengeEntryMode === "usd";
   const coinEntryAmount = COINS_ENTRY_AMOUNTS[challengeEntryIdx] ?? COINS_ENTRY_AMOUNTS[0]!;
-  const goalStepOptions = GOAL_STEP_TARGETS[challengeGoalType];
-  const clampedTargetIdx = Math.min(challengeTargetIdx, goalStepOptions.length - 1);
-  const targetStepsForCreate = goalStepOptions[clampedTargetIdx]!;
+  const goalStepOptions = useMemo(() => getTargetStepOptions(challengeGoalType), [challengeGoalType]);
+  const targetStepsForCreate = isValidTargetSteps(challengeGoalType, challengeTargetSteps)
+    ? challengeTargetSteps
+    : getDefaultTargetSteps(challengeGoalType);
   const durationDays = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
   const durationDaysLabel = challengeGoalType === "daily" ? "1 day" : challengeGoalType === "weekly" ? "7 days" : "30 days";
 
@@ -2583,6 +2602,18 @@ function WalkScreenContent() {
         }
       }
 
+      if (!isValidPlayerCount(challengeMaxPlayers)) {
+        AppAlert.alert("Invalid Players", "Please select a valid player count between 2 and 10.");
+        setChallengeCreating(false);
+        return;
+      }
+
+      if (!isValidTargetSteps(challengeGoalType, targetStepsForCreate)) {
+        AppAlert.alert("Invalid Target", "Please select a valid target step goal for this challenge duration.");
+        setChallengeCreating(false);
+        return;
+      }
+
       const timezone = getUserTimezone();
 
       const body: Record<string, unknown> = {
@@ -2648,7 +2679,7 @@ function WalkScreenContent() {
           inviteCode: data.inviteCode ?? null,
           isPrivate: isPrivateRoom,
           scheduledStartAt: data.scheduledStartAt ?? new Date().toISOString(),
-          targetSteps: data.race?.targetSteps ?? STEP_TARGETS[challengeTargetIdx],
+          targetSteps: data.race?.targetSteps ?? targetStepsForCreate,
           entryType: data.race?.entryType ?? entryType,
           entryAmountCents: data.race?.entryAmountCents ?? 0,
           coinEntryAmount: data.race?.coinEntryAmount ?? 0,
@@ -2672,7 +2703,7 @@ function WalkScreenContent() {
           user,
           initialCurrentPlayers: 1,
           initialEntryType: data.race?.entryType ?? entryType,
-          initialTargetSteps: data.race?.targetSteps ?? STEP_TARGETS[challengeTargetIdx],
+          initialTargetSteps: data.race?.targetSteps ?? targetStepsForCreate,
           initialCoinEntryAmount: data.race?.coinEntryAmount ?? 0,
           initialMaxPlayers: data.race?.maxPlayers ?? challengeMaxPlayers,
           initialIsPrivate: data.race?.isPrivate ?? (roomType === "private"),
@@ -3880,7 +3911,7 @@ function WalkScreenContent() {
       </Modal>
 
       {/* ── Create Challenge Modal ── */}
-      <Modal visible={challengeModal} animationType={challengeModalAnimated ? "slide" : "none"} presentationStyle="pageSheet" transparent={false} onDismiss={() => { setChallengeModalAnimated(true); setActivePicker(null); setShowCreateConfirm(false); setCreateConfirmChecks([false, false, false]); setChallengeStartDate(new Date()); setChallengeEndDate(null); setChallengeStartTimeIdx(0); setShowStartDatePicker(false); setShowEndDatePicker(false); setChallengeEntryMode("free"); setChallengeGoalType("daily"); setChallengeTargetIdx(0); }}>
+      <Modal visible={challengeModal} animationType={challengeModalAnimated ? "slide" : "none"} presentationStyle="pageSheet" transparent={false} onDismiss={() => { setChallengeModalAnimated(true); setActivePicker(null); setShowCreateConfirm(false); setCreateConfirmChecks([false, false, false]); setChallengeStartDate(new Date()); setChallengeEndDate(null); setChallengeStartTimeIdx(0); setShowStartDatePicker(false); setShowEndDatePicker(false); setChallengeEntryMode("free"); setChallengeGoalType("daily"); setChallengeTargetSteps(getDefaultTargetSteps("daily")); setStepsPickerDraft(getDefaultTargetSteps("daily")); setChallengeMaxPlayers(getDefaultPlayerCount()); setPlayersPickerDraft(getDefaultPlayerCount()); }}>
         <SafeAreaView edges={["top", "left", "right", "bottom"]} style={[styles.modalWrap, { backgroundColor: colors.background }]}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
@@ -4171,27 +4202,27 @@ function WalkScreenContent() {
                       </>}
                       {/* Target Steps row */}
                       <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginHorizontal: 14 }} />
-                      <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 12 }} onPress={() => setActivePicker("steps")} activeOpacity={0.75}>
+                      <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 12 }} onPress={() => { setStepsPickerDraft(targetStepsForCreate); setActivePicker("steps"); }} activeOpacity={0.75}>
                         <View style={iconBg}><Feather name="activity" size={15} color={accent} /></View>
                         <View style={{ flex: 1 }}>
                           <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.foreground }}>Target Steps</Text>
                           <Text style={{ fontSize: rf(10), color: colors.mutedForeground }}>Steps to complete in {durationDaysLabel}</Text>
                         </View>
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: accent + "15", borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: accent + "40" }}>
-                          <Text style={{ fontSize: rf(12), fontWeight: "700", color: accent }}>{fmtStepLabel(targetStepsForCreate)} steps</Text>
+                          <Text style={{ fontSize: rf(12), fontWeight: "700", color: accent }}>{formatStepLabel(targetStepsForCreate)}</Text>
                           <Feather name="chevron-down" size={11} color={accent} />
                         </View>
                       </TouchableOpacity>
                       {/* Players row */}
                       <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginHorizontal: 14 }} />
-                      <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 12 }} onPress={() => setActivePicker("players")} activeOpacity={0.75}>
+                      <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 12 }} onPress={() => { setPlayersPickerDraft(challengeMaxPlayers); setActivePicker("players"); }} activeOpacity={0.75}>
                         <View style={iconBg}><Feather name="users" size={15} color={accent} /></View>
                         <View style={{ flex: 1 }}>
                           <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.foreground }}>Players</Text>
                           <Text style={{ fontSize: rf(10), color: colors.mutedForeground }}>Max participants</Text>
                         </View>
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: accent + "15", borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: accent + "40" }}>
-                          <Text style={{ fontSize: rf(12), fontWeight: "700", color: accent }}>{challengeMaxPlayers} players</Text>
+                          <Text style={{ fontSize: rf(12), fontWeight: "700", color: accent }}>{formatPlayerLabel(challengeMaxPlayers)}</Text>
                           <Feather name="chevron-down" size={11} color={accent} />
                         </View>
                       </TouchableOpacity>
@@ -4237,7 +4268,7 @@ function WalkScreenContent() {
                                   if (nextIdx >= 0) setChallengeStartTimeIdx(nextIdx);
                                 }
                               }
-                              setActivePicker("startTime");
+                              setShowStartTimePicker(true);
                             }}
                             activeOpacity={0.78}
                           >
@@ -4471,10 +4502,9 @@ function WalkScreenContent() {
                       : activePicker === "usdAmount" ? "Entry Amount ($)"
                       : activePicker === "goalType" ? "Goal Type"
                       : activePicker === "steps" ? "Target Steps"
-                      : activePicker === "players" ? "Players"
-                      : "Start Time"}
+                      : "Players"}
                   </Text>
-                  <ScrollView showsVerticalScrollIndicator={activePicker === "startTime"} indicatorStyle="white" keyboardShouldPersistTaps="handled">
+                  <ScrollView showsVerticalScrollIndicator={false} indicatorStyle="white" keyboardShouldPersistTaps="handled">
                     {activePicker === "entryFee" && (() => {
                       const acc = roomType === "public" ? colors.accent : "#A855F7";
                       const modeOptions = [
@@ -4551,9 +4581,7 @@ function WalkScreenContent() {
                               <TouchableOpacity key={opt.type} activeOpacity={0.72}
                                 onPress={() => {
                                   setChallengeGoalType(opt.type);
-                                  setChallengeTargetIdx(0);
                                   setActivePicker(null);
-                                  // End date auto-recalculated by useEffect
                                 }}
                                 style={{ flexDirection: "row", alignItems: "center", gap: rs(12), padding: rs(14), borderRadius: rs(14), borderWidth: 1.5, borderColor: sel ? acc : colors.border, backgroundColor: sel ? acc + "14" : colors.background }}>
                                 <View style={{ flex: 1 }}>
@@ -4567,63 +4595,69 @@ function WalkScreenContent() {
                         </View>
                       );
                     })()}
-                    {activePicker === "steps" && goalStepOptions.map((steps, i) => {
-                      const isActive = clampedTargetIdx === i;
+                    {activePicker === "steps" && (() => {
                       const acc = roomType === "public" ? colors.accent : "#A855F7";
                       return (
-                        <TouchableOpacity key={steps} activeOpacity={0.72}
-                          onPress={() => { setChallengeTargetIdx(i); setActivePicker(null); }}
-                          style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 24, paddingVertical: 17, borderBottomWidth: 1, borderBottomColor: colors.border + "55", backgroundColor: isActive ? acc + "12" : "transparent" }}>
-                          <Text style={{ fontSize: rf(15), color: isActive ? acc : colors.foreground, fontWeight: isActive ? "700" : "500" }}>{fmtStepLabel(steps)} steps</Text>
-                          {isActive && <Feather name="check-circle" size={17} color={acc} />}
-                        </TouchableOpacity>
-                      );
-                    })}
-                    {activePicker === "players" && PLAYER_COUNTS.map((n) => {
-                      const isActive = challengeMaxPlayers === n;
-                      const acc = roomType === "public" ? colors.accent : "#A855F7";
-                      return (
-                        <TouchableOpacity key={n} activeOpacity={0.72}
-                          onPress={() => { setChallengeMaxPlayers(n); setActivePicker(null); }}
-                          style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 24, paddingVertical: 17, borderBottomWidth: 1, borderBottomColor: colors.border + "55", backgroundColor: isActive ? acc + "12" : "transparent" }}>
-                          <Text style={{ fontSize: rf(15), color: isActive ? acc : colors.foreground, fontWeight: isActive ? "700" : "500" }}>{n} players</Text>
-                          {isActive && <Feather name="check-circle" size={17} color={acc} />}
-                        </TouchableOpacity>
-                      );
-                    })}
-                    {activePicker === "startTime" && (() => {
-                      const now = new Date();
-                      const isToday = isSameDay(challengeStartDate, now);
-                      const nowMin = now.getHours() * 60 + now.getMinutes();
-                      const presets = isToday ? TIME_PRESETS_WITH_NOW : TIME_PRESETS_FUTURE;
-                      return presets
-                        .map((preset, i) => {
-                          const globalIdx = isToday ? i : i + 1;
-                          // Hide past non-Now slots when today is selected
-                          if (isToday && !preset.isNow && preset.hour * 60 + preset.minute <= nowMin) {
-                            return null;
-                          }
-                          const isActive = challengeStartTimeIdx === globalIdx;
-                          const acc = roomType === "public" ? colors.accent : "#A855F7";
-                          return (
-                            <TouchableOpacity key={preset.label} activeOpacity={0.72}
-                              onPress={() => {
-                                setChallengeStartTimeIdx(globalIdx);
-                                setActivePicker(null);
-                                if (__DEV__) {
-                                  console.log("[CreateChallengeTime] start time selected:", preset.label);
-                                }
-                              }}
-                              style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 24, paddingVertical: 17, borderBottomWidth: 1, borderBottomColor: colors.border + "55", backgroundColor: isActive ? acc + "12" : "transparent" }}>
-                              <View>
-                                <Text style={{ fontSize: rf(15), color: isActive ? acc : colors.foreground, fontWeight: isActive ? "700" : "500" }}>{preset.label}</Text>
-                                {preset.isNow && <Text style={{ fontSize: rf(11), color: colors.mutedForeground, marginTop: 2 }}>Starts right away · no scheduled time</Text>}
-                              </View>
-                              {isActive && <Feather name="check-circle" size={17} color={acc} />}
+                        <View>
+                          <TargetStepsSliderPicker
+                            duration={challengeGoalType}
+                            options={goalStepOptions}
+                            value={stepsPickerDraft}
+                            onChange={setStepsPickerDraft}
+                            accent={acc}
+                          />
+                          <View style={{ flexDirection: "row", gap: rs(10), paddingHorizontal: rs(16), paddingBottom: rs(16) }}>
+                            <TouchableOpacity
+                              style={{ flex: 1, paddingVertical: rs(13), borderRadius: rs(12), borderWidth: 1, borderColor: colors.border, alignItems: "center" }}
+                              onPress={() => setActivePicker(null)}
+                              activeOpacity={0.8}
+                            >
+                              <Text style={{ fontSize: rf(14), fontWeight: "700", color: colors.mutedForeground }}>Cancel</Text>
                             </TouchableOpacity>
-                          );
-                        })
-                        .filter(Boolean);
+                            <TouchableOpacity
+                              style={{ flex: 1, paddingVertical: rs(13), borderRadius: rs(12), backgroundColor: acc, alignItems: "center" }}
+                              onPress={() => {
+                                setChallengeTargetSteps(stepsPickerDraft);
+                                setActivePicker(null);
+                              }}
+                              activeOpacity={0.8}
+                            >
+                              <Text style={{ fontSize: rf(14), fontWeight: "800", color: "#000" }}>Apply</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })()}
+                    {activePicker === "players" && (() => {
+                      const acc = roomType === "public" ? colors.accent : "#A855F7";
+                      return (
+                        <View>
+                          <PlayersSliderPicker
+                            value={playersPickerDraft}
+                            onChange={setPlayersPickerDraft}
+                            accent={acc}
+                          />
+                          <View style={{ flexDirection: "row", gap: rs(10), paddingHorizontal: rs(16), paddingBottom: rs(16) }}>
+                            <TouchableOpacity
+                              style={{ flex: 1, paddingVertical: rs(13), borderRadius: rs(12), borderWidth: 1, borderColor: colors.border, alignItems: "center" }}
+                              onPress={() => setActivePicker(null)}
+                              activeOpacity={0.8}
+                            >
+                              <Text style={{ fontSize: rf(14), fontWeight: "700", color: colors.mutedForeground }}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={{ flex: 1, paddingVertical: rs(13), borderRadius: rs(12), backgroundColor: acc, alignItems: "center" }}
+                              onPress={() => {
+                                setChallengeMaxPlayers(playersPickerDraft);
+                                setActivePicker(null);
+                              }}
+                              activeOpacity={0.8}
+                            >
+                              <Text style={{ fontSize: rf(14), fontWeight: "800", color: "#000" }}>Apply</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
                     })()}
                   </ScrollView>
                 </Pressable>
@@ -4681,6 +4715,42 @@ function WalkScreenContent() {
               </Pressable>
             );
           })()}
+
+          <StartTimePickerModal
+            visible={showStartTimePicker}
+            accent={roomType === "public" ? colors.accent : "#A855F7"}
+            isToday={isSameDay(challengeStartDate, new Date())}
+            presets={isSameDay(challengeStartDate, new Date()) ? TIME_PRESETS_WITH_NOW : TIME_PRESETS_FUTURE}
+            selectedIndex={
+              isSameDay(challengeStartDate, new Date())
+                ? challengeStartTimeIdx
+                : Math.max(0, challengeStartTimeIdx - 1)
+            }
+            onClose={() => setShowStartTimePicker(false)}
+            onConfirm={(idx) => {
+              const now = new Date();
+              const isToday = isSameDay(challengeStartDate, now);
+              const globalIdx = isToday ? idx : idx + 1;
+              if (isToday) {
+                const preset = TIME_PRESETS_WITH_NOW[globalIdx];
+                const nowMin = now.getHours() * 60 + now.getMinutes();
+                if (preset && !preset.isNow && preset.hour * 60 + preset.minute <= nowMin) {
+                  const nextIdx = TIME_PRESETS_WITH_NOW.findIndex(
+                    (p) => !p.isNow && p.hour * 60 + p.minute > nowMin + 29,
+                  );
+                  if (nextIdx >= 0) setChallengeStartTimeIdx(nextIdx);
+                  return;
+                }
+              }
+              setChallengeStartTimeIdx(globalIdx);
+              if (__DEV__) {
+                const preset = isToday
+                  ? TIME_PRESETS_WITH_NOW[globalIdx]
+                  : TIME_PRESETS_FUTURE[idx];
+                console.log("[CreateChallengeTime] start time selected:", preset?.label);
+              }
+            }}
+          />
 
         </SafeAreaView>
       </Modal>
