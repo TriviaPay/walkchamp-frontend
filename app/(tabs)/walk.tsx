@@ -186,6 +186,9 @@ function isPaidCashFee(fee: number): boolean {
 }
 
 function cashChallengeBlockedMessage(serverError?: string): string {
+  if (serverError?.includes("Coin-entry challenges are disabled")) {
+    return "Coin-entry challenges are turned off on the API server. Enable FEATURE_COIN_ENTRY_CHALLENGES on the backend deployment.";
+  }
   if (serverError?.includes("disabled for this build")) {
     return "Cash challenges are turned off on the API server. The app is using your OVH URL — enable cash challenges on the backend deployment (ENABLE_CASH_CHALLENGES).";
   }

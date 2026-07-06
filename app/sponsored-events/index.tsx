@@ -9,6 +9,7 @@ import {
   Alert,
   Animated,
   Image,
+  Modal,
   Share,
   RefreshControl,
 } from "react-native";
