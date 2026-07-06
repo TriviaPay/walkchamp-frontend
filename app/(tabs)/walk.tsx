@@ -1,6 +1,9 @@
 import TargetStepsSliderPicker from "@/components/TargetStepsSliderPicker";
 import PlayersSliderPicker from "@/components/PlayersSliderPicker";
-import StartTimePickerModal from "@/components/StartTimePickerModal";
+import StartTimePickerModal, {
+  getNextPresetIndexForNow,
+  resolveInitialPresetIndex,
+} from "@/components/StartTimePickerModal";
 import {
   formatPlayerLabel,
   getDefaultPlayerCount,
@@ -1791,6 +1794,7 @@ function WalkScreenContent() {
   const [challengeStartDate, setChallengeStartDate] = useState<Date>(() => new Date());
   const [challengeEndDate, setChallengeEndDate] = useState<Date | null>(null);
   const [challengeStartTimeIdx, setChallengeStartTimeIdx] = useState(0);
+  const [challengeNowSetAt, setChallengeNowSetAt] = useState<number | null>(() => Date.now());
   const [showStartDatePicker, setShowStartDatePicker] = useState(false);
   const [showStartTimePicker, setShowStartTimePicker] = useState(false);
   const [showEndDatePicker, setShowEndDatePicker] = useState(false);
@@ -1804,7 +1808,8 @@ function WalkScreenContent() {
       : (TIME_PRESETS_FUTURE[Math.max(0, challengeStartTimeIdx - 1)] ?? TIME_PRESETS_FUTURE[0]!);
     const startWithTime = new Date(challengeStartDate);
     if (preset.isNow && isToday) {
-      startWithTime.setHours(now.getHours(), now.getMinutes(), 0, 0);
+      const anchor = challengeNowSetAt != null ? new Date(challengeNowSetAt) : now;
+      startWithTime.setHours(anchor.getHours(), anchor.getMinutes(), 0, 0);
     } else {
       startWithTime.setHours(preset.isNow ? now.getHours() : preset.hour, preset.isNow ? now.getMinutes() : preset.minute, 0, 0);
     }
@@ -1817,7 +1822,7 @@ function WalkScreenContent() {
       console.log("[CreateChallengeTime] calculated end time:", fmtShortTime12(endDate));
       console.log("[CreateChallengeTime] timezone:", getUserTimezone());
     }
-  }, [challengeStartDate, challengeGoalType, challengeStartTimeIdx]);
+  }, [challengeStartDate, challengeGoalType, challengeStartTimeIdx, challengeNowSetAt]);
 
   useEffect(() => {
     setChallengeTargetSteps(getDefaultTargetSteps(challengeGoalType));
@@ -4140,18 +4145,32 @@ function WalkScreenContent() {
                   const rawPreset = isToday
                     ? (TIME_PRESETS_WITH_NOW[challengeStartTimeIdx] ?? TIME_PRESETS_WITH_NOW[0])
                     : (TIME_PRESETS_FUTURE[Math.max(0, challengeStartTimeIdx - 1)] ?? TIME_PRESETS_FUTURE[0]);
-                  const effectiveTimePreset =
+                  const displayPreset =
                     isToday && !rawPreset.isNow && rawPreset.hour * 60 + rawPreset.minute <= nowMinutes
-                      ? TIME_PRESETS_WITH_NOW[0]
+                      ? (TIME_PRESETS_WITH_NOW[getNextPresetIndexForNow(TIME_PRESETS_WITH_NOW)] ?? rawPreset)
                       : rawPreset;
-                  const timeLabel = effectiveTimePreset.label;
+                  const timeLabel = displayPreset.isNow && isToday
+                    ? fmtShortTime12(challengeNowSetAt != null ? new Date(challengeNowSetAt) : new Date())
+                    : displayPreset.label;
                   const startDateLabel = isToday
                     ? "Today"
                     : challengeStartDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
                   const endDateLabel = challengeEndDate
                     ? challengeEndDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
                     : "—";
-                  const endTimeLabel = challengeEndDate ? fmtShortTime12(challengeEndDate) : "—";
+                  const endTimeLabel = (() => {
+                    if (!challengeEndDate) return "—";
+                    if (displayPreset.isNow && isToday) {
+                      const days = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
+                      const start = new Date(challengeStartDate);
+                      const anchor = challengeNowSetAt != null ? new Date(challengeNowSetAt) : new Date();
+                      start.setHours(anchor.getHours(), anchor.getMinutes(), 0, 0);
+                      const end = new Date(start);
+                      end.setDate(end.getDate() + days);
+                      return fmtShortTime12(end);
+                    }
+                    return fmtShortTime12(challengeEndDate);
+                  })();
                   const iconBg = { width: rs(34), height: rs(34), borderRadius: 10, backgroundColor: accent + "20", alignItems: "center" as const, justifyContent: "center" as const };
                   const entryModeIcon = challengeEntryMode === "coins" ? "zap" : challengeEntryMode === "usd" ? "dollar-sign" : "gift";
                   const entryModeLabel = challengeEntryMode === "free" ? "Free" : challengeEntryMode === "coins" ? "Coins" : "USD Entry";
@@ -4258,14 +4277,14 @@ function WalkScreenContent() {
                             style={{ alignItems: "center", backgroundColor: accent + "12", borderRadius: 10, borderWidth: 1, borderColor: accent + "40", paddingHorizontal: 10, paddingVertical: 6 }}
                             onPress={() => {
                               if (isToday) {
-                                const _now = new Date();
-                                const _nowMin = _now.getHours() * 60 + _now.getMinutes();
-                                const _sel = TIME_PRESETS_WITH_NOW[challengeStartTimeIdx];
-                                if (!_sel || _sel.isNow || _sel.hour * 60 + _sel.minute <= _nowMin) {
-                                  const nextIdx = TIME_PRESETS_WITH_NOW.findIndex(
-                                    (p) => !p.isNow && p.hour * 60 + p.minute > _nowMin + 29
+                                const current = TIME_PRESETS_WITH_NOW[challengeStartTimeIdx];
+                                if (!current?.isNow) {
+                                  const nextIdx = resolveInitialPresetIndex(
+                                    TIME_PRESETS_WITH_NOW,
+                                    challengeStartTimeIdx,
+                                    true,
                                   );
-                                  if (nextIdx >= 0) setChallengeStartTimeIdx(nextIdx);
+                                  setChallengeStartTimeIdx(nextIdx);
                                 }
                               }
                               setShowStartTimePicker(true);
@@ -4729,22 +4748,41 @@ function WalkScreenContent() {
             onClose={() => setShowStartTimePicker(false)}
             onConfirm={(idx) => {
               const now = new Date();
-              const isToday = isSameDay(challengeStartDate, now);
-              const globalIdx = isToday ? idx : idx + 1;
-              if (isToday) {
+              const isTodayConfirm = isSameDay(challengeStartDate, now);
+              let globalIdx = isTodayConfirm ? idx : idx + 1;
+              if (isTodayConfirm) {
                 const preset = TIME_PRESETS_WITH_NOW[globalIdx];
                 const nowMin = now.getHours() * 60 + now.getMinutes();
                 if (preset && !preset.isNow && preset.hour * 60 + preset.minute <= nowMin) {
-                  const nextIdx = TIME_PRESETS_WITH_NOW.findIndex(
-                    (p) => !p.isNow && p.hour * 60 + p.minute > nowMin + 29,
-                  );
-                  if (nextIdx >= 0) setChallengeStartTimeIdx(nextIdx);
-                  return;
+                  globalIdx = getNextPresetIndexForNow(TIME_PRESETS_WITH_NOW, now);
                 }
               }
+              const confirmedPreset = isTodayConfirm
+                ? TIME_PRESETS_WITH_NOW[globalIdx]
+                : TIME_PRESETS_FUTURE[Math.max(0, globalIdx - 1)];
+              const nowSetAt = confirmedPreset?.isNow ? Date.now() : null;
+              setChallengeNowSetAt(nowSetAt);
               setChallengeStartTimeIdx(globalIdx);
+
+              const days = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
+              const startWithTime = new Date(challengeStartDate);
+              if (confirmedPreset?.isNow && isTodayConfirm) {
+                const anchor = nowSetAt != null ? new Date(nowSetAt) : now;
+                startWithTime.setHours(anchor.getHours(), anchor.getMinutes(), 0, 0);
+              } else if (confirmedPreset) {
+                startWithTime.setHours(
+                  confirmedPreset.isNow ? now.getHours() : confirmedPreset.hour,
+                  confirmedPreset.isNow ? now.getMinutes() : confirmedPreset.minute,
+                  0,
+                  0,
+                );
+              }
+              const endDate = new Date(startWithTime);
+              endDate.setDate(endDate.getDate() + days);
+              setChallengeEndDate(endDate);
+
               if (__DEV__) {
-                const preset = isToday
+                const preset = isTodayConfirm
                   ? TIME_PRESETS_WITH_NOW[globalIdx]
                   : TIME_PRESETS_FUTURE[idx];
                 console.log("[CreateChallengeTime] start time selected:", preset?.label);
