@@ -118,7 +118,7 @@ function PulseRing() {
 }
 
 export default function SponsoredWaitingRoom() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, from } = useLocalSearchParams<{ id: string; from?: string }>();
   const dispatch = useAppDispatch();
   const [event, setEvent] = useState<SponsoredEvent | null>(null);
   const [loading, setLoading] = useState(true);
@@ -126,6 +126,14 @@ export default function SponsoredWaitingRoom() {
   const navigatedRef = useRef(false);
 
   const { label: countdown, expired } = useCountdown(event?.scheduledStartAt ?? null);
+
+  const handleBack = useCallback(() => {
+    if (from === "sponsored-events") {
+      router.back();
+      return;
+    }
+    router.replace("/sponsored-events");
+  }, [from]);
 
   const fetchEvent = useCallback(async () => {
     try {
@@ -202,7 +210,7 @@ export default function SponsoredWaitingRoom() {
       Alert.alert(
         "Event Cancelled",
         "This race has been cancelled. Your coins have been refunded.",
-        [{ text: "OK", onPress: () => router.back() }],
+        [{ text: "OK", onPress: handleBack }],
       );
     });
 
@@ -216,7 +224,7 @@ export default function SponsoredWaitingRoom() {
         .unbind(EVENTS.SPONSORED_EVENT_CANCELLED)
         .unbind(EVENTS.SPONSORED_EVENT_REGISTRATION_UPDATED);
     };
-  }, [id, fetchEvent]);
+  }, [id, fetchEvent, handleBack, navigateToRace]);
 
   const handleLeave = () => {
     Alert.alert(
@@ -264,7 +272,7 @@ export default function SponsoredWaitingRoom() {
       <SafeAreaView style={s.root} edges={["top", "bottom"]}>
         <View style={s.centered}>
           <Text style={s.errorText}>Event not found.</Text>
-          <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
+          <TouchableOpacity style={s.backBtn} onPress={handleBack}>
             <Text style={s.backBtnText}>Go Back</Text>
           </TouchableOpacity>
         </View>
@@ -280,7 +288,7 @@ export default function SponsoredWaitingRoom() {
     <SafeAreaView style={s.root} edges={["top", "bottom"]}>
       {/* Header */}
       <LinearGradient colors={["#100030", "#050010"]} style={s.header} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
-        <TouchableOpacity onPress={() => router.back()} style={s.headerBack} activeOpacity={0.7}>
+        <TouchableOpacity onPress={handleBack} style={s.headerBack} activeOpacity={0.7}>
           <Feather name="arrow-left" size={22} color="#FFF" />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>

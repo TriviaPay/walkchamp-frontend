@@ -2286,7 +2286,55 @@ function WalkScreenContent() {
     | { kind: "registered"; eventId: string; scheduledStartAt: string; registeredCount: number; maxSlots: number }
     | { kind: "available"; eventId: string; registeredCount: number; maxSlots: number }
     | { kind: "watch_live"; eventId: string };
+  type SponsoredBlockingInfo =
+    | { blocked: false; target: null; title: ""; message: ""; eventId?: undefined }
+    | { blocked: true; target: "waiting-room" | "race"; title: string; message: string; eventId: string };
   const [sponsoredStatus, setSponsoredStatus] = useState<SponsoredCardStatus | null>(null);
+
+  const openSponsoredWaitingRoom = useCallback((eventId: string) => {
+    router.push({ pathname: "/sponsored-events/waiting-room", params: { id: eventId, from: "walk" } });
+  }, []);
+
+  const getSponsoredBlockingInfo = useCallback((status: SponsoredCardStatus | null): SponsoredBlockingInfo => {
+    if (status?.kind === "join_window") {
+      return {
+        blocked: true,
+        target: "waiting-room",
+        title: "Sponsored Event Starting Soon",
+        message: "Your sponsored event is starting soon. Please stay in the waiting room or leave the event before joining another challenge.",
+        eventId: status.eventId,
+      };
+    }
+    if (status?.kind === "racing") {
+      return {
+        blocked: true,
+        target: "race",
+        title: "Sponsored Race In Progress",
+        message: "You are currently in a sponsored race. Finish or leave the race before joining another challenge.",
+        eventId: status.eventId,
+      };
+    }
+    return { blocked: false, target: null, title: "", message: "" };
+  }, []);
+
+  const showSponsoredBlockAlert = useCallback(() => {
+    const block = getSponsoredBlockingInfo(sponsoredStatus);
+    if (!block.blocked) return false;
+    AppAlert.alert(block.title, block.message, [
+      {
+        text: block.target === "race" ? "Open Race" : "Open Waiting Room",
+        onPress: () => {
+          if (block.target === "race") {
+            router.push({ pathname: "/race/live-detail", params: { id: block.eventId } });
+          } else {
+            openSponsoredWaitingRoom(block.eventId);
+          }
+        },
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+    return true;
+  }, [getSponsoredBlockingInfo, openSponsoredWaitingRoom, sponsoredStatus]);
 
   const feeToEntryType = (fee: number) =>
     fee === 0 ? "free" : fee === 1 ? "paid_1" : fee === 3 ? "paid_3" : fee === -1 ? "coins_battle" : "paid_5";
@@ -2966,9 +3014,9 @@ function WalkScreenContent() {
         </View>
 
         {/* Sponsored waiting room lockout banner */}
-        {(sponsoredStatus?.kind === "registered" || sponsoredStatus?.kind === "join_window") && (
+        {sponsoredStatus?.kind === "join_window" && (
           <TouchableOpacity
-            onPress={() => router.push({ pathname: "/sponsored-events/waiting-room", params: { id: sponsoredStatus.eventId } })}
+            onPress={() => openSponsoredWaitingRoom(sponsoredStatus.eventId)}
             activeOpacity={0.85}
             style={{ marginBottom: 10, borderRadius: 12, overflow: "hidden" }}
           >
@@ -2979,8 +3027,8 @@ function WalkScreenContent() {
             >
               <Feather name="lock" size={16} color="#C4B5FD" />
               <View style={{ flex: 1 }}>
-                <Text style={{ color: "#E9D5FF", fontWeight: "700", fontSize: 13 }}>In Sponsored Waiting Room</Text>
-                <Text style={{ color: "#A78BFA", fontSize: 11, marginTop: 1 }}>Leave the waiting room to host or join other races.</Text>
+                <Text style={{ color: "#E9D5FF", fontWeight: "700", fontSize: 13 }}>Sponsored Event Starting Soon</Text>
+                <Text style={{ color: "#A78BFA", fontSize: 11, marginTop: 1 }}>Stay in the waiting room or leave the event to host or join other races.</Text>
               </View>
               <Feather name="chevron-right" size={15} color="#A78BFA" />
             </LinearGradient>
@@ -2993,14 +3041,7 @@ function WalkScreenContent() {
           const cs = challengeStatuses[entryKey];
 
           const openHostModal = () => {
-            const _wss = sponsoredStatus;
-            if (_wss?.kind === "registered" || _wss?.kind === "join_window") {
-              AppAlert.alert("In Sponsored Waiting Room", "Leave the sponsored event waiting room first to host or join other challenges.", [
-                { text: "Open Waiting Room", onPress: () => router.push({ pathname: "/sponsored-events/waiting-room", params: { id: _wss.eventId } }) },
-                { text: "Cancel", style: "cancel" },
-              ]);
-              return;
-            }
+            if (showSponsoredBlockAlert()) return;
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             const otherActive = findActiveRaceForOtherChallenge(entryKey);
             if (otherActive) {
@@ -3044,14 +3085,7 @@ function WalkScreenContent() {
                 isJoining={joiningEntryKey === entryKey}
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  const _wss = sponsoredStatus;
-                  if (_wss?.kind === "registered" || _wss?.kind === "join_window") {
-                    AppAlert.alert("In Sponsored Waiting Room", "Leave the sponsored event waiting room first to host or join other challenges.", [
-                      { text: "Open Waiting Room", onPress: () => router.push({ pathname: "/sponsored-events/waiting-room", params: { id: _wss.eventId } }) },
-                      { text: "Cancel", style: "cancel" },
-                    ]);
-                    return;
-                  }
+                  if (showSponsoredBlockAlert()) return;
                   const s = cs?.status;
                   if (s === "user_hosting_active" || s === "user_joined_active") {
                     if (cs?.raceId) router.push({ pathname: "/race/live-detail", params: { id: cs.raceId } });
@@ -3109,14 +3143,7 @@ function WalkScreenContent() {
               key={opt.fee}
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                const _wss = sponsoredStatus;
-                if (_wss?.kind === "registered" || _wss?.kind === "join_window") {
-                  AppAlert.alert("In Sponsored Waiting Room", "Leave the sponsored event waiting room first to host or join other challenges.", [
-                    { text: "Open Waiting Room", onPress: () => router.push({ pathname: "/sponsored-events/waiting-room", params: { id: _wss.eventId } }) },
-                    { text: "Cancel", style: "cancel" },
-                  ]);
-                  return;
-                }
+                if (showSponsoredBlockAlert()) return;
                 const s = cs?.status;
                 const modeLabel = opt.fee === 0 ? "free" : `$${opt.fee}`;
                 const role = cs?.isHost ? "host" : cs?.isParticipant ? "participant" : "none";
@@ -3262,14 +3289,7 @@ function WalkScreenContent() {
 
             const handlePremiumPress = () => {
               if (__DEV__) console.log("[PremiumChallenge] $3 card clicked");
-              const _wss = sponsoredStatus;
-              if (_wss?.kind === "registered" || _wss?.kind === "join_window") {
-                AppAlert.alert("In Sponsored Waiting Room", "Leave the sponsored event waiting room first to host or join other challenges.", [
-                  { text: "Open Waiting Room", onPress: () => router.push({ pathname: "/sponsored-events/waiting-room", params: { id: _wss.eventId } }) },
-                  { text: "Cancel", style: "cancel" },
-                ]);
-                return;
-              }
+              if (showSponsoredBlockAlert()) return;
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               if (premS === "user_hosting_active" || premS === "user_joined_active") {
                 if (premCs?.raceId) router.push({ pathname: "/race/live-detail", params: { id: premCs.raceId } });
@@ -3350,8 +3370,8 @@ function WalkScreenContent() {
             const handleSponsoredPress = () => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
               if (isRacing && ss)     { router.push({ pathname: "/race/live-detail", params: { id: ss.eventId } }); return; }
-              if (isJoinWin && ss)    { router.push({ pathname: "/sponsored-events/waiting-room", params: { id: ss.eventId } }); return; }
-              if (isRegistered && ss) { router.push({ pathname: "/sponsored-events/waiting-room", params: { id: ss.eventId } }); return; }
+              if (isJoinWin && ss)    { openSponsoredWaitingRoom(ss.eventId); return; }
+              if (isRegistered && ss) { openSponsoredWaitingRoom(ss.eventId); return; }
               if (isWatchLive && ss)  { router.push({ pathname: "/race/live-detail", params: { id: ss.eventId } }); return; }
               router.push("/sponsored-events");
             };
@@ -3470,14 +3490,7 @@ function WalkScreenContent() {
           <TouchableOpacity
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              const _wss = sponsoredStatus;
-              if (_wss?.kind === "registered" || _wss?.kind === "join_window") {
-                AppAlert.alert("In Sponsored Waiting Room", "Leave the sponsored event waiting room first to host or join other challenges.", [
-                  { text: "Open Waiting Room", onPress: () => router.push({ pathname: "/sponsored-events/waiting-room", params: { id: _wss.eventId } }) },
-                  { text: "Cancel", style: "cancel" },
-                ]);
-                return;
-              }
+              if (showSponsoredBlockAlert()) return;
               const anyActive = findAnyActiveRace();
               if (anyActive) {
                 if (anyActive.cs.isHost) {

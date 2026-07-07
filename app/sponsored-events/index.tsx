@@ -730,7 +730,7 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
                 <>
                   <TouchableOpacity
                     style={[card.registerBtn, { marginBottom: 0 }]}
-                    onPress={() => router.push({ pathname: "/sponsored-events/waiting-room", params: { id: ev.id } })}
+                    onPress={() => router.push({ pathname: "/sponsored-events/waiting-room", params: { id: ev.id, from: "sponsored-events" } })}
                     activeOpacity={0.82}
                   >
                     <LinearGradient colors={["#4C1D95", "#7C3AFF", "#A855F7"]} style={[card.registerGrad, { gap: rs(10) }]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
@@ -1012,7 +1012,7 @@ export default function SponsoredEventsScreen() {
         router.push({ pathname: "/race/live-detail", params: { id: ev.id } });
       } else {
         // Scheduled — take user to waiting room immediately after registering
-        router.push({ pathname: "/sponsored-events/waiting-room", params: { id: ev.id } });
+        router.push({ pathname: "/sponsored-events/waiting-room", params: { id: ev.id, from: "sponsored-events" } });
       }
     } catch {
       setRegisterModal({ visible: false, ev: null });
