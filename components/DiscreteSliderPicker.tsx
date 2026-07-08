@@ -11,7 +11,7 @@ export default function DiscreteSliderPicker({
   value,
   onChange,
   accent,
-  valueLabel,
+  formatLabel,
   minLabel,
   maxLabel,
   badge,
@@ -20,7 +20,7 @@ export default function DiscreteSliderPicker({
   value: number;
   onChange: (v: number) => void;
   accent: string;
-  valueLabel: string;
+  formatLabel: (v: number) => string;
   minLabel: string;
   maxLabel: string;
   badge?: { title: string; subtitle: string } | null;
@@ -29,40 +29,77 @@ export default function DiscreteSliderPicker({
   const [trackW, setTrackW] = useState(0);
   const idxRef = useRef(Math.max(0, options.indexOf(value)));
   const [idx, setIdx] = useState(idxRef.current);
+  const [dragRatio, setDragRatio] = useState<number | null>(null);
+  const draggingRef = useRef(false);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
 
   useEffect(() => {
+    if (draggingRef.current) return;
     const nextIdx = Math.max(0, options.indexOf(value));
     idxRef.current = nextIdx;
     setIdx(nextIdx);
   }, [value, options]);
 
   const maxIdx = Math.max(1, options.length - 1);
-  const ratio = idx / maxIdx;
-  const thumbOffset = trackW > 0 ? ratio * Math.max(0, trackW - THUMB_SIZE) : 0;
+  const snappedRatio = idx / maxIdx;
+  const displayRatio = dragRatio ?? snappedRatio;
+  const thumbOffset = trackW > 0 ? displayRatio * Math.max(0, trackW - THUMB_SIZE) : 0;
   const fillWidth = trackW > 0 ? thumbOffset + THUMB_SIZE / 2 : 0;
+  const previewIdx = dragRatio != null
+    ? Math.max(0, Math.min(Math.round(dragRatio * maxIdx), options.length - 1))
+    : idx;
+  const displayValue = options[previewIdx] ?? value;
 
-  const applyIndex = useCallback((nextIdx: number) => {
+  const applyIndex = useCallback((nextIdx: number, fireHaptic: boolean) => {
     const clamped = Math.max(0, Math.min(nextIdx, options.length - 1));
-    if (clamped === idxRef.current) return;
+    const changed = clamped !== idxRef.current;
     idxRef.current = clamped;
     setIdx(clamped);
-    onChange(options[clamped]!);
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  }, [onChange, options]);
+    onChangeRef.current(options[clamped]!);
+    if (changed && fireHaptic) {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+  }, [options]);
 
-  const applyFromX = useCallback((x: number) => {
-    if (trackW <= 0) return;
+  const ratioFromX = useCallback((x: number) => {
+    if (trackW <= 0) return 0;
     const clampedX = Math.max(0, Math.min(x, trackW));
-    const nextIdx = Math.round((clampedX / trackW) * maxIdx);
-    applyIndex(nextIdx);
-  }, [applyIndex, maxIdx, trackW]);
+    return clampedX / trackW;
+  }, [trackW]);
 
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: (evt) => applyFromX(evt.nativeEvent.locationX),
-    onPanResponderMove: (evt) => applyFromX(evt.nativeEvent.locationX),
-  }), [applyFromX]);
+    onMoveShouldSetPanResponder: (_, gestureState) =>
+      Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+    onPanResponderTerminationRequest: () => false,
+    onPanResponderGrant: (evt) => {
+      draggingRef.current = true;
+      setDragRatio(ratioFromX(evt.nativeEvent.locationX));
+    },
+    onPanResponderMove: (evt) => {
+      const ratio = ratioFromX(evt.nativeEvent.locationX);
+      setDragRatio(ratio);
+      const nextIdx = Math.round(ratio * maxIdx);
+      if (nextIdx !== idxRef.current) {
+        applyIndex(nextIdx, true);
+      }
+    },
+    onPanResponderRelease: (evt) => {
+      const ratio = ratioFromX(evt.nativeEvent.locationX);
+      const nextIdx = Math.round(ratio * maxIdx);
+      draggingRef.current = false;
+      setDragRatio(null);
+      applyIndex(nextIdx, true);
+    },
+    onPanResponderTerminate: (evt) => {
+      const ratio = ratioFromX(evt.nativeEvent.locationX);
+      const nextIdx = Math.round(ratio * maxIdx);
+      draggingRef.current = false;
+      setDragRatio(null);
+      applyIndex(nextIdx, false);
+    },
+  }), [applyIndex, maxIdx, ratioFromX]);
 
   const onTrackLayout = (e: LayoutChangeEvent) => {
     setTrackW(e.nativeEvent.layout.width);
@@ -71,7 +108,7 @@ export default function DiscreteSliderPicker({
   return (
     <View style={{ paddingHorizontal: rs(20), paddingTop: rs(8), paddingBottom: rs(12), gap: rs(14) }}>
       <Text style={{ fontSize: rf(28), fontWeight: "800", color: accent, textAlign: "center", letterSpacing: 0.2 }}>
-        {valueLabel}
+        {formatLabel(displayValue)}
       </Text>
 
       {badge ? (

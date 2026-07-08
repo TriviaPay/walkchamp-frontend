@@ -13,6 +13,7 @@ import {
   Modal,
   Share,
   RefreshControl,
+  BackHandler,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
@@ -27,6 +28,10 @@ import {
 } from "@/utils/sponsoredEventsApi";
 import { useAppDispatch } from "@/store/hooks";
 import { fetchCoinBalance } from "@/store/slices/coinsSlice";
+import { screenCache } from "@/utils/screenCache";
+import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import { perf } from "@/utils/perfLogger";
+import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import { rf, rs } from "@/utils/responsive";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { authFetch } from "@/utils/authFetch";
@@ -859,12 +864,19 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
 }
 
 // ── Main Screen ────────────────────────────────────────────────────────────────
+const SPONSORED_EVENTS_CACHE_KEY = "screen_sponsored_events";
+const SPONSORED_EVENTS_TTL_MS = 60_000;
+
+type SponsoredEventsCache = { events: SponsoredEvent[]; coinBalance: number };
+
 export default function SponsoredEventsScreen() {
   const router = useRouter();
   const dispatch = useAppDispatch();
-  const [events, setEvents]               = useState<SponsoredEvent[]>([]);
-  const [coinBalance, setCoinBalance]      = useState(0);
-  const [loading, setLoading]              = useState(true);
+  const { markContentReady } = useScreenMountPerf("SponsoredEvents");
+  const cachedSync = screenCache.getSync<SponsoredEventsCache>(SPONSORED_EVENTS_CACHE_KEY);
+  const [events, setEvents]               = useState<SponsoredEvent[]>(cachedSync?.events ?? []);
+  const [coinBalance, setCoinBalance]      = useState(cachedSync?.coinBalance ?? 0);
+  const [loading, setLoading]              = useState(cachedSync === null);
   const [refreshing, setRefreshing]        = useState(false);
   const [generating, setGenerating]        = useState(false);
   const [fetchError, setFetchError]        = useState<string | null>(null);
@@ -877,6 +889,27 @@ export default function SponsoredEventsScreen() {
   const [profileModal, setProfileModal]   = useState<{
     visible: boolean; userId: string | null; initialData?: PublicProfileInitialData;
   }>({ visible: false, userId: null });
+
+  // Reliable back navigation: close any open modal first, guard against double
+  // presses, and fall back to a safe route when there is no screen to pop
+  // (prevents the "press twice / error / screen doesn't settle" behaviour).
+  const backLockRef = useRef(false);
+  const handleBack = useCallback(() => {
+    if (registerModal.visible) { setRegisterModal({ visible: false, ev: null }); return true; }
+    if (leaveModal.visible)    { setLeaveModal({ visible: false, ev: null });    return true; }
+    if (profileModal.visible)  { setProfileModal({ visible: false, userId: null }); return true; }
+    if (backLockRef.current) return true;
+    backLockRef.current = true;
+    setTimeout(() => { backLockRef.current = false; }, 600);
+    if (router.canGoBack()) router.back();
+    else router.replace("/(tabs)/live");
+    return true;
+  }, [router, registerModal.visible, leaveModal.visible, profileModal.visible]);
+
+  useFocusEffect(useCallback(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", handleBack);
+    return () => sub.remove();
+  }, [handleBack]));
 
   const fetchEvents = useCallback(async () => {
     try {
@@ -891,6 +924,8 @@ export default function SponsoredEventsScreen() {
       const { events: list, coinBalance: balance } = parseSponsoredEventsResponse(raw);
       setEvents(list);
       setCoinBalance(balance);
+      void screenCache.set(SPONSORED_EVENTS_CACHE_KEY, { events: list, coinBalance: balance });
+      markContentReady();
       if (__DEV__) {
         console.log(`[SponsoredEvents] fetched count=${list.length} coinBalance=${balance}`);
       }
@@ -900,7 +935,7 @@ export default function SponsoredEventsScreen() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [markContentReady]);
 
   const autoGenerate = useCallback(async () => {
     setGenerating(true);
@@ -912,9 +947,24 @@ export default function SponsoredEventsScreen() {
   }, [fetchEvents]);
 
   useFocusEffect(useCallback(() => {
-    setLoading(true);
-    fetchEvents();
-  }, [fetchEvents]));
+    void screenCache.get<SponsoredEventsCache>(SPONSORED_EVENTS_CACHE_KEY).then((cached) => {
+      if (!cached) return;
+      perf.cacheHit(SPONSORED_EVENTS_CACHE_KEY);
+      setEvents(cached.events);
+      setCoinBalance(cached.coinBalance);
+      setLoading(false);
+      markContentReady();
+    });
+    if (!apiFetchAllowed(SPONSORED_EVENTS_CACHE_KEY, SPONSORED_EVENTS_TTL_MS)) {
+      perf.apiSkipped("sponsored_events_focus");
+      return;
+    }
+    markApiFetched(SPONSORED_EVENTS_CACHE_KEY);
+    if (screenCache.getSync(SPONSORED_EVENTS_CACHE_KEY) === null) {
+      setLoading(true);
+    }
+    void fetchEvents();
+  }, [fetchEvents, markContentReady]));
 
   useEffect(() => {
     if (!loading && events.length === 0 && !fetchError) {
@@ -1059,7 +1109,7 @@ export default function SponsoredEventsScreen() {
     <SafeAreaView style={sc.root} edges={["top", "bottom"]}>
       {/* Header */}
       <LinearGradient colors={["#100030", "#050010"]} style={sc.header} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
-        <TouchableOpacity onPress={() => router.back()} style={sc.backBtn}>
+        <TouchableOpacity onPress={handleBack} style={sc.backBtn}>
           <Feather name="arrow-left" size={22} color="#fff" />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>

@@ -1,6 +1,7 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, InteractionManager, Platform, type AppStateStatus } from "react-native";
 import { type LeaderboardUser, type WalletTransaction } from "@/utils/mockData";
+import { formatRelativeDate, mapLedgerTypeToUi } from "@/utils/walletLedger";
 import { STORAGE_KEYS, storageGet, storageSet } from "@/utils/storage";
 import { getValidSession } from "@/services/authService";
 import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
@@ -83,39 +84,31 @@ async function apiPost<T>(path: string, body: unknown): Promise<T | null> {
 }
 
 function mapApiTransaction(tx: Record<string, unknown>): WalletTransaction {
-  const typeMap: Record<string, WalletTransaction["type"]> = {
-    reward: "reward",
-    prize: "reward",
-    withdrawal: "withdrawal",
-    referral: "referral",
-    race_entry: "withdrawal",
-    bonus: "bonus",
-    manual_adjustment: "deposit",
-    deposit: "deposit",
-  };
-  const date = typeof tx.date === "string" ? new Date(tx.date) : new Date();
-  const now = Date.now();
-  const diffMs = now - date.getTime();
-  const diffDays = Math.floor(diffMs / 86400000);
-  let dateStr = "Just now";
-  if (diffDays === 0) {
-    const diffHrs = Math.floor(diffMs / 3600000);
-    dateStr = diffHrs > 0 ? `${diffHrs}h ago` : "Just now";
-  } else if (diffDays === 1) {
-    dateStr = "Yesterday";
-  } else if (diffDays < 7) {
-    dateStr = `${diffDays} days ago`;
-  } else {
-    dateStr = `${Math.floor(diffDays / 7)} week${Math.floor(diffDays / 7) > 1 ? "s" : ""} ago`;
-  }
+  const apiType = String(tx.type ?? "");
+  const rawLedger =
+    typeof tx.ledgerType === "string"
+      ? tx.ledgerType
+      : typeof tx.transactionType === "string"
+        ? tx.transactionType
+        : undefined;
+  const { uiType, ledgerType } = mapLedgerTypeToUi(apiType, rawLedger);
+  const dateIso = typeof tx.date === "string" ? tx.date : new Date().toISOString();
+  const statusRaw = String(tx.status ?? "completed");
+  const status: WalletTransaction["status"] =
+    statusRaw === "completed" || statusRaw === "pending" || statusRaw === "rejected"
+      ? statusRaw
+      : statusRaw === "failed" || statusRaw === "cancelled"
+        ? "rejected"
+        : "completed";
 
   return {
     id: String(tx.id ?? ""),
-    type: typeMap[String(tx.type ?? "")] ?? "bonus",
+    type: uiType,
     amount: Number(tx.amount ?? 0),
     description: String(tx.description ?? ""),
-    date: dateStr,
-    status: (tx.status as WalletTransaction["status"]) ?? "completed",
+    date: formatRelativeDate(dateIso),
+    status,
+    ledgerType,
   };
 }
 
@@ -152,66 +145,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           apiFetch<{ deposits: Array<Record<string, unknown>> }>("/api/wallet/deposit/list"),
         ]);
 
-      const walletTxs = txData?.transactions?.map(mapApiTransaction) ?? [];
+        const walletTxs = txData?.transactions?.map(mapApiTransaction) ?? [];
+        const ledgerDepositIds = new Set(
+          walletTxs
+            .filter((t) => t.type === "deposit")
+            .map((t) => t.id),
+        );
 
-      const depositTxs: WalletTransaction[] = (depositData?.deposits ?? []).map((d) => {
-        const createdAt = typeof d.createdAt === "string" ? new Date(d.createdAt) : new Date();
-        const now = Date.now();
-        const diffMs = now - createdAt.getTime();
-        const diffDays = Math.floor(diffMs / 86400000);
-        let dateStr = "Just now";
-        if (diffDays === 0) {
-          const diffHrs = Math.floor(diffMs / 3600000);
-          dateStr = diffHrs > 0 ? `${diffHrs}h ago` : "Just now";
-        } else if (diffDays === 1) {
-          dateStr = "Yesterday";
-        } else if (diffDays < 7) {
-          dateStr = `${diffDays} days ago`;
-        } else {
-          dateStr = `${Math.floor(diffDays / 7)} week${Math.floor(diffDays / 7) > 1 ? "s" : ""} ago`;
+        // In-flight deposits only — ledger rows are source of truth once credited (Phase C).
+        const inFlightDeposits: WalletTransaction[] = (depositData?.deposits ?? [])
+          .filter((d) => {
+            const status = String(d.status ?? "pending");
+            return status === "pending" || status === "processing";
+          })
+          .filter((d) => !ledgerDepositIds.has(String(d.id)))
+          .map((d) => {
+            const createdAt = typeof d.createdAt === "string" ? d.createdAt : new Date().toISOString();
+            const status = String(d.status ?? "pending");
+            const provider = String(d.provider ?? "stripe");
+            const currency = String(d.currency ?? "USD");
+            const amountMinor = Number(d.amountMinorUnits ?? 0);
+            const rawAmount = amountMinor / 100;
+            const providerLabel = provider === "razorpay" ? "Razorpay" : "Stripe";
+            const currencySymbol = currency === "INR" ? "₹" : "$";
+            const amountLabel =
+              rawAmount % 1 === 0 ? rawAmount.toFixed(0) : rawAmount.toFixed(2);
+
+            return {
+              id: `dep-pending-${String(d.id)}`,
+              type: "deposit" as const,
+              amount: 0,
+              description: `Deposit via ${providerLabel} (${currencySymbol}${amountLabel}) — verifying`,
+              date: formatRelativeDate(createdAt),
+              status: "pending" as const,
+              ledgerType: "deposit_pending",
+            };
+          });
+
+        const allTxs = [...walletTxs, ...inFlightDeposits];
+
+        if (allTxs.length > 0 || walletTxs.length > 0) {
+          setTransactions(allTxs);
+          storageSet(STORAGE_KEYS.TRANSACTIONS, allTxs);
         }
-
-        const status = String(d.status ?? "pending");
-        const txStatus: WalletTransaction["status"] =
-          status === "succeeded" ? "completed" :
-          status === "failed" || status === "cancelled" ? "rejected" :
-          "pending";
-
-        const provider = String(d.provider ?? "stripe");
-        const currency = String(d.currency ?? "USD");
-        const creditCents = Number(d.walletCreditCents ?? 0);
-        const amountMinor = Number(d.amountMinorUnits ?? 0);
-        const displayAmount =
-          creditCents > 0 ? creditCents / 100 :
-          currency === "INR" ? (amountMinor / 100) * 1.2 / 100 :
-          amountMinor / 100;
-
-        const providerLabel = provider === "razorpay" ? "Razorpay" : "Stripe";
-        const currencySymbol = currency === "INR" ? "₹" : "$";
-        const rawAmount = amountMinor / 100;
-        const description = `Deposit via ${providerLabel} (${currencySymbol}${rawAmount % 1 === 0 ? rawAmount.toFixed(0) : rawAmount.toFixed(2)})`;
-
-        return {
-          id: `dep-${String(d.id)}`,
-          type: "deposit" as const,
-          amount: txStatus === "completed" ? displayAmount : 0,
-          description,
-          date: dateStr,
-          status: txStatus,
-        };
-      });
-
-      const allTxs = [...walletTxs, ...depositTxs].sort((a, b) => {
-        const order = { "Just now": 0, "Yesterday": 1 };
-        const aScore = order[a.date as keyof typeof order] ?? 2;
-        const bScore = order[b.date as keyof typeof order] ?? 2;
-        return aScore - bScore;
-      });
-
-      if (allTxs.length > 0 || walletTxs.length > 0) {
-        setTransactions(allTxs);
-        storageSet(STORAGE_KEYS.TRANSACTIONS, allTxs);
-      }
       });
     } catch {
       const cached = await storageGet<number>(STORAGE_KEYS.WALLET);
@@ -381,23 +357,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, [walletBalance]);
 
+  const value = useMemo(
+    () => ({
+      leaderboard,
+      userRank,
+      walletBalance,
+      pendingBalance,
+      walletCurrency,
+      transactions,
+      requestWithdrawal,
+      addReward,
+      refreshWallet,
+      refreshLeaderboard,
+      walletLoading,
+      leaderboardLoading,
+    }),
+    [
+      leaderboard,
+      userRank,
+      walletBalance,
+      pendingBalance,
+      walletCurrency,
+      transactions,
+      requestWithdrawal,
+      addReward,
+      refreshWallet,
+      refreshLeaderboard,
+      walletLoading,
+      leaderboardLoading,
+    ],
+  );
+
   return (
-    <AppContext.Provider
-      value={{
-        leaderboard,
-        userRank,
-        walletBalance,
-        pendingBalance,
-        walletCurrency,
-        transactions,
-        requestWithdrawal,
-        addReward,
-        refreshWallet,
-        refreshLeaderboard,
-        walletLoading,
-        leaderboardLoading,
-      }}
-    >
+    <AppContext.Provider value={value}>
       {children}
     </AppContext.Provider>
   );

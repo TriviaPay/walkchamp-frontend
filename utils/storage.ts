@@ -47,4 +47,8 @@ export const STORAGE_KEYS = {
   NOTIFICATION_PERMISSION_ASKED: "walkchamp_notification_permission_asked_v1",
   /** True after the post-login push permission prompt was shown once. */
   PUSH_PERMISSION_PROMPTED: "walkchamp_push_permission_prompted_v1",
+  /** In-flight wallet deposit — polled on app resume until terminal. */
+  PENDING_DEPOSIT: "walkchamp_pending_deposit_v1",
+  /** Payment result to show on wallet tab after Universal Link / resume poll. */
+  PAYMENT_RESULT: "walkchamp_payment_result_v1",
 };

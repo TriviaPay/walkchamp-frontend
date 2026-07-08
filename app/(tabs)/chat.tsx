@@ -5,6 +5,7 @@ import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows"
 import { screenCache } from "@/utils/screenCache";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { perf } from "@/utils/perfLogger";
+import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import { getApiBase } from "@/utils/apiUrl";
 import { prefetchProfileAvatars } from "@/services/mediaApi";
 import {
@@ -2136,6 +2137,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
 // ── Chat Screen ───────────────────────────────────────────────────────────────
 
 export default function ChatScreen() {
+  useScreenMountPerf("Chat");
   const colors = useColors();
   const { insets, safeTop } = useSafeLayout();
   const { user } = useAuth();

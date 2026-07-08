@@ -16,7 +16,7 @@
  *   Both iOS and Android now use authoritative range queries for recovery.
  */
 
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, AppState } from "react-native";
 import { useAuth } from "@/context/AuthContext";
 import { getValidSession } from "@/services/authService";
@@ -1557,24 +1557,35 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     clearRaceJsTimers();
   }, []);
 
+  const value = useMemo(
+    () => ({
+      racePhase, raceEntryFee, raceMaxPlayers,
+      playersJoined, participants, countdown,
+      raceTimerSeconds, userRaceSteps, walkRaceStepsDisplay, results, userFinishRank,
+      totalPool: prizeState.totalPool,
+      winnersPool: prizeState.winnersPool,
+      platformFee: prizeState.platformFee,
+      prizeTiers: prizeState.prizes,
+      isSuspicious,
+      raceId, isHost, raceStartTimeUTC,
+      raceTargetSteps, setRaceTargetSteps,
+      joinRace, startRaceManually, notifyRaceStarted, resumeLiveRace, cancelRace, resetRace, setActiveRace,
+      stopRaceStepTracking, pauseRaceStepTracking, resumeRaceStepTracking, catchUpLiveRaceSteps,
+      recordFinishedRaceStepsForWalk,
+    }),
+    [
+      racePhase, raceEntryFee, raceMaxPlayers, playersJoined, participants, countdown,
+      raceTimerSeconds, userRaceSteps, walkRaceStepsDisplay, results, userFinishRank,
+      prizeState.totalPool, prizeState.winnersPool, prizeState.platformFee, prizeState.prizes,
+      isSuspicious, raceId, isHost, raceStartTimeUTC, raceTargetSteps, setRaceTargetSteps,
+      joinRace, startRaceManually, notifyRaceStarted, resumeLiveRace, cancelRace, resetRace, setActiveRace,
+      stopRaceStepTracking, pauseRaceStepTracking, resumeRaceStepTracking, catchUpLiveRaceSteps,
+      recordFinishedRaceStepsForWalk,
+    ],
+  );
+
   return (
-    <RaceContext.Provider
-      value={{
-        racePhase, raceEntryFee, raceMaxPlayers,
-        playersJoined, participants, countdown,
-        raceTimerSeconds, userRaceSteps, walkRaceStepsDisplay, results, userFinishRank,
-        totalPool: prizeState.totalPool,
-        winnersPool: prizeState.winnersPool,
-        platformFee: prizeState.platformFee,
-        prizeTiers: prizeState.prizes,
-        isSuspicious,
-        raceId, isHost, raceStartTimeUTC,
-        raceTargetSteps, setRaceTargetSteps,
-        joinRace, startRaceManually, notifyRaceStarted, resumeLiveRace, cancelRace, resetRace, setActiveRace,
-        stopRaceStepTracking, pauseRaceStepTracking, resumeRaceStepTracking, catchUpLiveRaceSteps,
-        recordFinishedRaceStepsForWalk,
-      }}
-    >
+    <RaceContext.Provider value={value}>
       {children}
     </RaceContext.Provider>
   );

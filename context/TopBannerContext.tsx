@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -120,8 +121,13 @@ export function TopBannerProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const value = useMemo(
+    () => ({ enqueueBanner, visible, dismissBanner }),
+    [enqueueBanner, visible, dismissBanner],
+  );
+
   return (
-    <TopBannerContext.Provider value={{ enqueueBanner, visible, dismissBanner }}>
+    <TopBannerContext.Provider value={value}>
       {children}
     </TopBannerContext.Provider>
   );

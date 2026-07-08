@@ -12,13 +12,26 @@ export interface LeaderboardUser {
   avatarColor: string;
 }
 
+export type WalletTransactionType =
+  | "reward"
+  | "withdrawal"
+  | "bonus"
+  | "referral"
+  | "deposit"
+  | "challenge_entry"
+  | "prize"
+  | "refund"
+  | "reversal";
+
 export interface WalletTransaction {
   id: string;
-  type: "reward" | "withdrawal" | "bonus" | "referral" | "deposit";
+  type: WalletTransactionType;
   amount: number;
   description: string;
   date: string;
   status: "completed" | "pending" | "rejected";
+  /** Raw backend ledger type when available (deposit_credit, prize_credit, etc.). */
+  ledgerType?: string;
 }
 
 export interface Challenge {

@@ -16,6 +16,9 @@ import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { parseSponsoredEventsResponse } from "@/utils/sponsoredEventsApi";
 import { authFetch } from "@/utils/authFetch";
+import { screenCache } from "@/utils/screenCache";
+import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import { useAppDispatch } from "@/store/hooks";
 import { fetchCoinBalance } from "@/store/slices/coinsSlice";
 import { rf, rs } from "@/utils/responsive";
@@ -120,8 +123,11 @@ function PulseRing() {
 export default function SponsoredWaitingRoom() {
   const { id, from } = useLocalSearchParams<{ id: string; from?: string }>();
   const dispatch = useAppDispatch();
-  const [event, setEvent] = useState<SponsoredEvent | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { markContentReady } = useScreenMountPerf("SponsoredWaitingRoom");
+  const cacheKey = id ? `screen_sponsored_waiting:${id}` : "";
+  const cachedSync = cacheKey ? screenCache.getSync<SponsoredEvent>(cacheKey) : null;
+  const [event, setEvent] = useState<SponsoredEvent | null>(cachedSync);
+  const [loading, setLoading] = useState(!cachedSync);
   const [leaving, setLeaving] = useState(false);
   const navigatedRef = useRef(false);
 
@@ -141,15 +147,35 @@ export default function SponsoredWaitingRoom() {
       if (!res.ok) return;
       const data = parseSponsoredEventsResponse(await res.json().catch(() => ({})));
       const found = data.events.find((e) => e.id === id);
-      if (found) setEvent(found);
+      if (found) {
+        setEvent(found);
+        if (cacheKey) void screenCache.set(cacheKey, found);
+        markContentReady();
+      }
     } catch { /* silent */ }
     finally { setLoading(false); }
-  }, [id]);
+  }, [id, cacheKey, markContentReady]);
 
   useFocusEffect(useCallback(() => {
-    setLoading(true);
-    fetchEvent();
-  }, [fetchEvent]));
+    if (!id || !cacheKey) return;
+    const listCached = screenCache.getSync<{ events: SponsoredEvent[] }>("screen_sponsored_events");
+    const fromList = listCached?.events.find((e) => e.id === id);
+    if (fromList) {
+      setEvent(fromList);
+      setLoading(false);
+      markContentReady();
+    }
+    void screenCache.get<SponsoredEvent>(cacheKey).then((cached) => {
+      if (!cached) return;
+      setEvent(cached);
+      setLoading(false);
+      markContentReady();
+    });
+    if (!apiFetchAllowed(cacheKey, 30_000)) return;
+    markApiFetched(cacheKey);
+    if (!screenCache.getSync(cacheKey) && !fromList) setLoading(true);
+    void fetchEvent();
+  }, [id, cacheKey, fetchEvent, markContentReady]));
 
   // Navigate to live race only when backend confirms in_progress
   const navigateToRace = useCallback(async (raceId: string) => {

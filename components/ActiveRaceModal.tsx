@@ -61,6 +61,7 @@ export default function ActiveRaceModal({
       transparent
       animationType="fade"
       statusBarTranslucent
+      onRequestClose={onCancel}
     >
       <View style={styles.backdrop}>
         <View style={styles.card}>

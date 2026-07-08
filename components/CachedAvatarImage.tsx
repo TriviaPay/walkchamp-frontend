@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { View, ViewStyle } from "react-native";
 import { Image } from "expo-image";
-import { profileAvatarImageUri } from "@/services/mediaApi";
+import { profileAvatarImageUri, isAvatarUriLoaded, markAvatarUriLoaded } from "@/services/mediaApi";
 import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 
 type CachedAvatarImageProps = {
@@ -22,12 +22,12 @@ export function CachedAvatarImage({
   const effectiveVersion = getAvatarVersion(userId, avatarVersion ?? 0);
   const localPreview = getLocalPreview(userId);
   const serverUri = profileAvatarImageUri(userId, effectiveVersion);
-  const [remoteReady, setRemoteReady] = useState(false);
+  const [remoteReady, setRemoteReady] = useState(() => isAvatarUriLoaded(serverUri));
   const radius = size / 2;
 
   useEffect(() => {
-    setRemoteReady(false);
-  }, [effectiveVersion, localPreview]);
+    setRemoteReady(isAvatarUriLoaded(serverUri));
+  }, [effectiveVersion, localPreview, serverUri]);
 
   const showLocal = !!localPreview && !remoteReady;
 
@@ -38,9 +38,11 @@ export function CachedAvatarImage({
         style={{ width: size, height: size, borderRadius: radius }}
         contentFit="cover"
         cachePolicy="memory-disk"
+        priority="high"
         transition={0}
         recyclingKey={`avatar-${userId}-${effectiveVersion}`}
         onLoad={() => {
+          markAvatarUriLoaded(serverUri);
           setRemoteReady(true);
           setLocalPreview(userId, null);
         }}

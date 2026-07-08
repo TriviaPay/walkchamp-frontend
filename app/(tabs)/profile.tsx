@@ -52,6 +52,7 @@ import { useTitleUnlock } from "@/context/TitleUnlockContext";
 import { useAvatarCache, PROFILE_ME_CACHE_KEY } from "@/hooks/useAvatarCache";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import {
   deleteProfileAvatar,
   uploadProfileAvatar,
@@ -311,6 +312,7 @@ function AchievementCard({ icon, label, value, color }: { icon: string; label: s
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function ProfileScreen() {
+  useScreenMountPerf("Profile");
   const colors = useColors();
   const { insets, safeTop, safeBottom } = useSafeLayout();
   const searchParams = useLocalSearchParams<{ openTitles?: string | string[] }>();

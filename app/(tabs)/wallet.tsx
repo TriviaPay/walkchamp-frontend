@@ -1,8 +1,11 @@
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useFocusEffect } from "expo-router";
+import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import {
   ActivityIndicator,
+  AppState,
   Modal,
   Platform,
   ScrollView,
@@ -10,6 +13,7 @@ import {
   Text,
   TextInput,
   View,
+  type AppStateStatus,
 } from "react-native";
 import * as WebBrowser from "expo-web-browser";
 import { AppAlert } from "@/components/AppAlert";
@@ -25,6 +29,18 @@ import { rf, rs } from "@/utils/responsive";
 import type { WalletTransaction } from "@/utils/mockData";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { authFetch } from "@/utils/authFetch";
+import { PAYMENT_DEEP_LINK_SCHEME } from "@/config/paymentsConfig";
+import {
+  clearPendingDeposit,
+  consumePaymentResult,
+  depositStatusToUiResult,
+  fetchDepositStatus,
+  isTerminalDepositStatus,
+  resolvePendingDepositOnResume,
+  savePendingDeposit,
+  type PaymentResultStatus,
+} from "@/services/depositSession";
+import { ledgerTypeLabel } from "@/utils/walletLedger";
 
 const PAYOUT_METHODS = ["PayPal", "Bank Transfer", "UPI (India)", "Gift Card"];
 const MIN_WITHDRAWAL = 5;
@@ -90,7 +106,12 @@ function TransactionRow({
     bonus: "gift",
     referral: "users",
     deposit: "arrow-down-left",
+    challenge_entry: "flag",
+    prize: "award",
+    refund: "rotate-ccw",
+    reversal: "alert-circle",
   };
+  const typeBadge = ledgerTypeLabel(tx.ledgerType);
   const statusColors: Record<WalletTransaction["status"], string> = {
     completed: colors.success,
     pending: colors.warning,
@@ -121,6 +142,11 @@ function TransactionRow({
         >
           {tx.description}
         </Text>
+        {typeBadge ? (
+          <Text style={[styles.txLedgerBadge, { color: colors.mutedForeground }]}>
+            {typeBadge}
+          </Text>
+        ) : null}
         <View style={styles.txMeta}>
           <Text style={[styles.txDate, { color: colors.mutedForeground }]}>
             {tx.date}
@@ -156,6 +182,7 @@ function TransactionRow({
 }
 
 export default function WalletScreen() {
+  useScreenMountPerf("Wallet");
   const colors = useColors();
   const { insets, safeTop, safeBottom } = useSafeLayout();
   const { walletBalance, pendingBalance, walletCurrency, transactions, requestWithdrawal, refreshWallet } =
@@ -165,6 +192,8 @@ export default function WalletScreen() {
   // Silent background refresh when wallet tab is focused (cached data stays visible).
   useFocusEffect(
     useCallback(() => {
+      if (!apiFetchAllowed("wallet_tab_focus", 60_000)) return;
+      markApiFetched("wallet_tab_focus");
       void refreshWallet({ silent: true });
     }, [refreshWallet]),
   );
@@ -272,15 +301,54 @@ export default function WalletScreen() {
     setPaymentResult("hidden");
   };
 
-  /**
-   * Fetch deposit status once — shared by the background poll and the final check.
-   */
-  const fetchDepositStatus = useCallback(async (transactionId: string): Promise<string> => {
-    const res = await authFetch(`/api/wallet/deposit/status/${transactionId}`);
-    if (!res.ok) return "pending";
-    const data = (await res.json()) as { transaction: { status: string } };
-    return data.transaction.status;
-  }, []);
+  const applyPaymentResult = useCallback(async (ui: PaymentResultStatus) => {
+    if (ui === "success") {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await refreshWallet();
+      setPaymentResult("success");
+      return;
+    }
+    if (ui === "cancelled") {
+      setPaymentResult("cancelled");
+      return;
+    }
+    if (ui === "verification_failed") {
+      await refreshWallet().catch(() => {});
+      setPaymentResult("verification_failed");
+      return;
+    }
+    await refreshWallet().catch(() => {});
+    setPaymentResult("failed");
+  }, [refreshWallet]);
+
+  // Show result saved by payment-complete / Universal Link handler.
+  useFocusEffect(
+    useCallback(() => {
+      void (async () => {
+        const stored = await consumePaymentResult();
+        if (stored) {
+          await applyPaymentResult(stored.status);
+        }
+      })();
+    }, [applyPaymentResult]),
+  );
+
+  // Poll pending deposit when app returns to foreground (Phase C).
+  useEffect(() => {
+    const onAppState = (next: AppStateStatus) => {
+      if (next !== "active") return;
+      void (async () => {
+        const resolved = await resolvePendingDepositOnResume();
+        if (resolved) {
+          await applyPaymentResult(resolved.status);
+        } else {
+          await refreshWallet({ silent: true }).catch(() => {});
+        }
+      })();
+    };
+    const sub = AppState.addEventListener("change", onAppState);
+    return () => sub.remove();
+  }, [applyPaymentResult, refreshWallet]);
 
   // Pay button fires this — uses selectedPreset or custom text input
   const handleDeposit = async () => {
@@ -357,6 +425,12 @@ export default function WalletScreen() {
       setDepositStatus("open");
       if (__DEV__) console.log("[WalletDeposit] provider checkout opened:", depositProvider);
 
+      await savePendingDeposit({
+        transactionId,
+        provider: depositProvider,
+        startedAt: new Date().toISOString(),
+      });
+
       // ── Background poll ────────────────────────────────────────────────────
       // Poll the deposit status every 2 s while the browser is open.
       // This is the primary result mechanism on Android Expo Go where Chrome
@@ -368,7 +442,7 @@ export default function WalletScreen() {
         void (async () => {
           try {
             const s = await fetchDepositStatus(transactionId);
-            if (s === "succeeded" || s === "failed" || s === "cancelled") {
+            if (isTerminalDepositStatus(s)) {
               polledStatus = s;
               clearInterval(pollInterval);
               if (__DEV__) console.log("[WalletDeposit] poll detected:", s, "— dismissing browser");
@@ -389,7 +463,7 @@ export default function WalletScreen() {
       // On Android it opens a Chrome Custom Tab; the poll above closes it.
       const result = await WebBrowser.openAuthSessionAsync(
         checkoutUrl,
-        "globalwalkerleague://payment-complete",
+        PAYMENT_DEEP_LINK_SCHEME,
         {
           dismissButtonStyle: "close",
           presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
@@ -404,7 +478,7 @@ export default function WalletScreen() {
       if (!polledStatus) {
         try {
           const s = await fetchDepositStatus(transactionId);
-          if (s === "succeeded" || s === "failed" || s === "cancelled") {
+          if (isTerminalDepositStatus(s)) {
             polledStatus = s;
             if (__DEV__) console.log("[WalletDeposit] final status check:", s);
           }
@@ -418,20 +492,11 @@ export default function WalletScreen() {
       resetDeposit();
 
       // ── Resolve result ─────────────────────────────────────────────────────
-      // Poll result is the most reliable cross-platform source of truth.
-      // iOS SFAuthenticationSession deep-link result is the fallback.
-      if (polledStatus === "succeeded") {
-        if (__DEV__) console.log("[WalletDeposit] modal state: success (poll)");
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        await refreshWallet();
-        setPaymentResult("success");
-      } else if (polledStatus === "failed") {
-        if (__DEV__) console.log("[WalletDeposit] modal state: failed (poll)");
-        await refreshWallet().catch(() => {});
-        setPaymentResult("failed");
-      } else if (polledStatus === "cancelled") {
-        if (__DEV__) console.log("[WalletDeposit] modal state: cancelled (poll)");
-        setPaymentResult("cancelled");
+      const polledUi = polledStatus ? depositStatusToUiResult(polledStatus) : null;
+      if (polledUi) {
+        await clearPendingDeposit();
+        if (__DEV__) console.log("[WalletDeposit] modal state:", polledUi, "(poll)");
+        await applyPaymentResult(polledUi);
       } else if (result.type === "success" && result.url) {
         // iOS-only path: SFAuthenticationSession returned the deep-link URL
         // before any poll tick fired (extremely fast payment, < 2 s).
@@ -439,17 +504,20 @@ export default function WalletScreen() {
         try {
           const parsed = new URL(result.url);
           const status = parsed.searchParams.get("status");
-          if (status === "success") {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            await refreshWallet();
-            setPaymentResult("success");
+          await clearPendingDeposit();
+          if (status === "success" || status === "succeeded") {
+            await applyPaymentResult("success");
           } else if (status === "cancelled") {
-            setPaymentResult("cancelled");
+            await applyPaymentResult("cancelled");
+          } else if (status === "processing") {
+            setPaymentResult("verifying");
+          } else if (status === "requires_review" || status === "settlement_error") {
+            await applyPaymentResult("verification_failed");
           } else {
-            setPaymentResult("failed");
+            await applyPaymentResult("failed");
           }
         } catch {
-          setPaymentResult("failed");
+          await applyPaymentResult("failed");
         }
       } else {
         // Browser closed before payment completed (user manually dismissed)
@@ -880,7 +948,7 @@ export default function WalletScreen() {
                 <ActivityIndicator size="large" color={colors.primary} style={styles.resultSpinner} />
                 <Text style={[styles.resultTitle, { color: colors.foreground }]}>Verifying Payment</Text>
                 <Text style={[styles.resultMsg, { color: colors.mutedForeground }]}>
-                  Please wait while we securely confirm your payment…
+                  Payment recorded. Your wallet will update after backend verification — usually within a few minutes.
                 </Text>
               </>
             )}
@@ -892,7 +960,7 @@ export default function WalletScreen() {
                 </View>
                 <Text style={[styles.resultTitle, { color: colors.foreground }]}>Deposit Successful</Text>
                 <Text style={[styles.resultMsg, { color: colors.mutedForeground }]}>
-                  Your wallet has been credited. The amount is now available in your balance.
+                  Payment verified. Your wallet balance has been updated.
                 </Text>
                 <TouchableOpacity
                   style={[styles.resultBtn, { backgroundColor: colors.success }]}
@@ -931,7 +999,7 @@ export default function WalletScreen() {
                 </Text>
                 <Text style={[styles.resultMsg, { color: colors.mutedForeground }]}>
                   {paymentResult === "verification_failed"
-                    ? "We couldn't confirm your payment yet. If money was deducted, it will be credited shortly or refunded. Contact support if it doesn't resolve."
+                    ? "Payment recorded. Wallet credit is still being verified. If money was deducted, it will be credited shortly or refunded. Contact support with your transaction ID if it does not resolve."
                     : "Your payment could not be completed. No amount was deducted. Please try again."}
                 </Text>
                 <TouchableOpacity
@@ -1152,6 +1220,7 @@ const styles = StyleSheet.create({
   },
   txInfo: { flex: 1, gap: 4 },
   txDesc: { fontSize: rf(14), fontWeight: "600" },
+  txLedgerBadge: { fontSize: rf(11), marginTop: 2 },
   txMeta: { flexDirection: "row", alignItems: "center", gap: 8 },
   txDate: { fontSize: rf(12) },
   txStatusChip: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },

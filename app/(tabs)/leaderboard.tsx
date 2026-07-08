@@ -3,6 +3,8 @@ import { useFocusEffect } from "expo-router";
 import { BlueShoe } from "@/components/BlueShoe";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { screenCache } from "@/utils/screenCache";
+import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 import { authFetch } from "@/utils/authFetch";
 import { getApiBase } from "@/utils/apiUrl";
@@ -393,6 +395,7 @@ function GroupTop3Card({ entry, rank, colors, onPress }: {
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function LeaderboardScreen() {
+  useScreenMountPerf("Leaderboard");
   const colors       = useColors();
   const { safeTop }  = useSafeLayout();
   const { user }     = useAuth();
@@ -622,8 +625,13 @@ export default function LeaderboardScreen() {
   useEffect(() => {
     const sub = AppState.addEventListener("change", (nextState) => {
       if (appStateRef.current.match(/inactive|background/) && nextState === "active") {
-        // Sync steps first, then refresh the leaderboard with fresh data.
-        triggerSync().catch(() => {}).finally(() => void fetchData(true));
+        // Only refresh on resume when the last fetch is genuinely stale, so
+        // brief app switches don't trigger a full leaderboard reload. Steps are
+        // still synced so a real refresh reflects the latest counts.
+        if (apiFetchAllowed("leaderboard_resume", 60_000)) {
+          markApiFetched("leaderboard_resume");
+          triggerSync().catch(() => {}).finally(() => void fetchData(true));
+        }
       }
       appStateRef.current = nextState;
     });

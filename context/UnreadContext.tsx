@@ -3,12 +3,14 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import { AppState } from "react-native";
 import { useAuth } from "@/context/AuthContext";
 import { authFetch } from "@/utils/authFetch";
+import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
 
 interface UnreadContextValue {
@@ -59,7 +61,12 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active") void fetchSummary();
+      // Pusher keeps the unread badge live while the app is open, so only
+      // reconcile via the summary endpoint when the last fetch is stale.
+      if (state === "active" && apiFetchAllowed("unread_summary_resume", 30_000)) {
+        markApiFetched("unread_summary_resume");
+        void fetchSummary();
+      }
     });
     return () => sub.remove();
   }, [fetchSummary]);
@@ -107,19 +114,30 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
     setPendingGroupInvites(0);
   }, []);
 
+  const value = useMemo(
+    () => ({
+      privateUnread,
+      pendingRequests,
+      pendingGroupInvites,
+      totalUnread: privateUnread + pendingRequests,
+      refresh: fetchSummary,
+      markRequestsSeen,
+      clearPrivateUnread,
+      clearGroupInvites,
+    }),
+    [
+      privateUnread,
+      pendingRequests,
+      pendingGroupInvites,
+      fetchSummary,
+      markRequestsSeen,
+      clearPrivateUnread,
+      clearGroupInvites,
+    ],
+  );
+
   return (
-    <UnreadContext.Provider
-      value={{
-        privateUnread,
-        pendingRequests,
-        pendingGroupInvites,
-        totalUnread: privateUnread + pendingRequests,
-        refresh: fetchSummary,
-        markRequestsSeen,
-        clearPrivateUnread,
-        clearGroupInvites,
-      }}
-    >
+    <UnreadContext.Provider value={value}>
       {children}
     </UnreadContext.Provider>
   );

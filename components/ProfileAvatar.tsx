@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View, ViewStyle } from "react-native";
 import { Image } from "expo-image";
-import { profileAvatarImageUri } from "@/services/mediaApi";
+import { profileAvatarImageUri, isAvatarUriLoaded, markAvatarUriLoaded } from "@/services/mediaApi";
 import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 
 interface ProfileAvatarProps {
@@ -41,12 +41,14 @@ export function ProfileAvatar({
     userId && profileImageUrl && !loadFailed
       ? profileAvatarImageUri(userId, effectiveVersion)
       : null;
-  const [remoteReady, setRemoteReady] = useState(false);
+  // If this exact avatar URI already loaded this session, trust expo-image's
+  // cache and treat it as ready immediately — no initials/preview flash on reopen.
+  const [remoteReady, setRemoteReady] = useState(() => isAvatarUriLoaded(serverUri));
 
   useEffect(() => {
     setLoadFailed(false);
-    setRemoteReady(false);
-  }, [userId, effectiveVersion, profileImageUrl, localPreview]);
+    setRemoteReady(isAvatarUriLoaded(serverUri));
+  }, [userId, effectiveVersion, profileImageUrl, localPreview, serverUri]);
 
   const showLocal = !!localPreview && !remoteReady;
   const showPhoto = showLocal || !!serverUri;
@@ -75,10 +77,12 @@ export function ProfileAvatar({
           style={[StyleSheet.absoluteFillObject, { borderRadius: size / 2 }]}
           contentFit="cover"
           cachePolicy="memory-disk"
+          priority="high"
           transition={0}
           recyclingKey={`avatar-${userId}-${effectiveVersion}`}
           onError={() => setLoadFailed(true)}
           onLoad={() => {
+            markAvatarUriLoaded(serverUri);
             setRemoteReady(true);
             if (userId) setLocalPreview(userId, null);
           }}

@@ -1945,17 +1945,19 @@ export default function AvailableRoomsScreen() {
             </TouchableOpacity>
           </TouchableOpacity>
 
-          {/* Current Rooms */}
-          <CurrentRoomsSection
-            rooms={rooms}
-            error={error}
-            joiningRoomId={joiningRoomId}
-            onJoin={handleJoin}
-            onJoinWithCode={() => setJoinWithCodeVisible(true)}
-            onViewHost={handleViewHost}
-            onViewAll={() => setCurrentViewAllOpen(true)}
-            onRetry={() => void fetchRooms(true)}
-          />
+          {/* Current Rooms — only when at least one active room exists */}
+          {rooms.length > 0 && (
+            <CurrentRoomsSection
+              rooms={rooms}
+              error={error}
+              joiningRoomId={joiningRoomId}
+              onJoin={handleJoin}
+              onJoinWithCode={() => setJoinWithCodeVisible(true)}
+              onViewHost={handleViewHost}
+              onViewAll={() => setCurrentViewAllOpen(true)}
+              onRetry={() => void fetchRooms(true)}
+            />
+          )}
 
           {/* Upcoming Rooms grouped by date */}
           {upcomingError ? (

@@ -29,7 +29,7 @@ export default function TargetStepsSliderPicker({
       value={value}
       onChange={onChange}
       accent={accent}
-      valueLabel={formatStepLabel(value)}
+      formatLabel={formatStepLabel}
       minLabel="Testing: 100 steps"
       maxLabel={maxLabel}
       badge={isTesting ? {

@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { getValidSession } from "@/services/authService";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
@@ -64,8 +64,13 @@ export function TitleUnlockProvider({ children }: { children: React.ReactNode })
     }
   }, [queue]);
 
+  const value = useMemo(
+    () => ({ pendingUnlock: queue[0] ?? null, triggerUnlocks, dismissCurrent, equip, lastEquipped }),
+    [queue, triggerUnlocks, dismissCurrent, equip, lastEquipped],
+  );
+
   return (
-    <Ctx.Provider value={{ pendingUnlock: queue[0] ?? null, triggerUnlocks, dismissCurrent, equip, lastEquipped }}>
+    <Ctx.Provider value={value}>
       {children}
     </Ctx.Provider>
   );

@@ -21,7 +21,7 @@ export default function PlayersSliderPicker({
       value={value}
       onChange={onChange}
       accent={accent}
-      valueLabel={formatPlayerLabel(value)}
+      formatLabel={formatPlayerLabel}
       minLabel={formatPlayerLabel(min)}
       maxLabel={formatPlayerLabel(max)}
     />

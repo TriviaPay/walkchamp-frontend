@@ -173,7 +173,8 @@
       "./plugins/withSplitSchemeIntentFilters.js",
       "./plugins/withWalkChampProgressIcons.js",
       "./plugins/withWalkChampRaceProgress.js",
-      "./plugins/withWalkChampForegroundService.js"
+      "./plugins/withWalkChampForegroundService.js",
+      "./plugins/withPaymentAppLinks.js"
     ],
     "experiments": {
       "typedRoutes": true

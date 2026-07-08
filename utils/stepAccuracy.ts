@@ -23,13 +23,15 @@ export function isLegacyStepBumpSuppressed(): boolean {
   return Date.now() < legacyBumpIgnoreUntilMs;
 }
 
-/** Reject unconfirmed +1 bumps from legacy Android pedometer / native FGS. */
+/** Reject unconfirmed +1 bumps from legacy Android pedometer / native FGS on poll/open. */
 export function shouldIgnoreLegacyPhantomBump(
   previousSteps: number,
   incomingSteps: number,
-  options?: { backendSteps?: number; inStartupWindow?: boolean },
+  options?: { backendSteps?: number; inStartupWindow?: boolean; fromWatch?: boolean },
 ): boolean {
   if (stepProviderManager.usesVerifiedStepSource()) return false;
+  // Live sensor watch callbacks are trusted after startup — poll/open paths are not.
+  if (options?.fromWatch) return false;
 
   const current = Math.max(0, Math.floor(previousSteps));
   const incoming = Math.max(0, Math.floor(incomingSteps));
@@ -38,28 +40,29 @@ export function shouldIgnoreLegacyPhantomBump(
 
   const inStartup =
     options?.inStartupWindow ?? isLegacyStepBumpSuppressed();
-  if (inStartup) {
+  // Startup: only reject the classic cold-subscribe 0→1 phantom — not real walking.
+  if (inStartup && current === 0 && incoming > 0 && delta <= STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP) {
     stepEngineLog(
       "StepEngine",
-      `ignoredPhantomBump=true delta=${delta} reason=startup_window`,
-    );
-    return true;
-  }
-
-  const backend = Math.max(0, Math.floor(options?.backendSteps ?? 0));
-  if (
-    incoming > backend &&
-    incoming - backend <= STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP &&
-    current <= backend
-  ) {
-    stepEngineLog(
-      "StepEngine",
-      `ignoredPhantomBump=true delta=${delta} reason=unconfirmed_backend backend=${backend}`,
+      `ignoredPhantomBump=true delta=${delta} reason=startup_zero_phantom`,
     );
     return true;
   }
 
   return false;
+}
+
+/** Monotonic merge that rejects phantom +1 on poll/open; use for coordinator/UI reconcile. */
+export function filterLegacyStepIncrease(
+  currentSteps: number,
+  incomingSteps: number,
+  options?: { backendSteps?: number; fromWatch?: boolean },
+): number {
+  const current = Math.max(0, Math.floor(currentSteps));
+  const incoming = Math.max(0, Math.floor(incomingSteps));
+  if (incoming <= current) return current;
+  if (shouldIgnoreLegacyPhantomBump(current, incoming, options)) return current;
+  return incoming;
 }
 
 /** Verbose step pipeline logging — __DEV__ only; routine polls need STEP_DEBUG_VERBOSE. */

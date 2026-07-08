@@ -1,12 +1,39 @@
 /**
- * Resolves walkchamp:// / globalwalkerleague:// deep links and backend path links
- * to expo-router paths.
+ * Resolves walkchamp:// / globalwalkerleague:// deep links, HTTPS App Links,
+ * and backend path links to expo-router paths.
  */
+
+function resolvePaymentHttpsUrl(url: URL): string | null {
+  const path = url.pathname.replace(/\/+$/, "") || "/";
+  if (path.endsWith("/payment-complete") || path.endsWith("/api/wallet/deposit/done")) {
+    const params = url.searchParams;
+    const status = params.get("status");
+    const transactionId = params.get("transaction_id") ?? params.get("transactionId");
+    const qs = new URLSearchParams();
+    if (status) qs.set("status", status);
+    if (transactionId) qs.set("transaction_id", transactionId);
+    const q = qs.toString();
+    return q ? `/payment-complete?${q}` : "/payment-complete";
+  }
+  return null;
+}
+
 export function resolveDeepLink(raw: string | undefined | null): string | null {
   if (!raw || typeof raw !== "string") return null;
 
   const trimmed = raw.trim();
   if (!trimmed) return null;
+
+  // HTTPS Universal Links / App Links (Phase C)
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    try {
+      const url = new URL(trimmed);
+      const paymentRoute = resolvePaymentHttpsUrl(url);
+      if (paymentRoute) return paymentRoute;
+    } catch {
+      return null;
+    }
+  }
 
   let path = trimmed;
   if (path.startsWith("walkchamp://")) {
@@ -81,6 +108,12 @@ export function resolveDeepLink(raw: string | undefined | null): string | null {
       return "/(tabs)/walk";
     case "wallet":
       return "/(tabs)/wallet";
+    case "payment-complete": {
+      const [base, inlineQuery] = segment.split("?");
+      void base;
+      const query = inlineQuery ?? (rest.length > 0 ? rest.join("&") : "");
+      return query ? `/payment-complete?${query}` : "/payment-complete";
+    }
     case "settings":
       if (rest[0] === "step-tracking") return "/(tabs)/walk?section=step-tracking";
       return "/(tabs)/profile";
@@ -143,7 +176,8 @@ export function resolveRaceRoomRoute(roomId: string, notificationType?: string):
     type === "promotional_coins_battle" ||
     type === "promotional_cash_challenge" ||
     type === "private_room_invitation" ||
-    type === "race_invite"
+    type === "race_invite" ||
+    type === "race_starting_soon"
   ) {
     return `/race/matchmaking?raceId=${encodeURIComponent(roomId)}&isHost=false`;
   }
@@ -159,13 +193,41 @@ export function resolveNotificationRoute(
   data: Record<string, unknown>,
   launchUrl?: string,
 ): string | null {
+  const type = pickString(data, "type") ?? "";
+  const eventType = pickString(data, "eventType", "event_type");
+
+  if (type === "race_starting_soon") {
+    if (eventType === "sponsored_event") {
+      const eventId = pickString(data, "eventId", "event_id", "room_id");
+      return eventId
+        ? `/sponsored-events/waiting-room?id=${encodeURIComponent(eventId)}`
+        : "/sponsored-events";
+    }
+    const raceId = pickString(data, "raceId", "race_id", "roomId", "room_id");
+    return raceId
+      ? `/race/matchmaking?raceId=${encodeURIComponent(raceId)}&isHost=false`
+      : "/rooms/available";
+  }
+
+  const screen = pickString(data, "screen");
+  if (screen === "race_waiting_room") {
+    const raceId = pickString(data, "raceId", "race_id", "roomId", "room_id");
+    return raceId
+      ? `/race/matchmaking?raceId=${encodeURIComponent(raceId)}&isHost=false`
+      : "/rooms/available";
+  }
+  if (screen === "sponsored_waiting_room") {
+    const eventId = pickString(data, "eventId", "event_id", "room_id");
+    return eventId
+      ? `/sponsored-events/waiting-room?id=${encodeURIComponent(eventId)}`
+      : "/sponsored-events";
+  }
+
   const deepLink = pickString(data, "deepLink", "deep_link");
   const url = pickString(data, "url");
   const resolved = resolveDeepLink(deepLink ?? url ?? launchUrl);
   if (resolved) return resolved;
 
-  const type = pickString(data, "type") ?? "";
-  const screen = pickString(data, "screen");
   if (screen === "walk") return "/(tabs)/walk";
 
   const roomId = pickString(data, "roomId", "room_id");
@@ -215,6 +277,19 @@ export function resolveNotificationRoute(
 
     case "group_daily_goal_completed":
       return groupId ? `/groups/${encodeURIComponent(groupId)}` : "/groups";
+
+    case "race_starting_soon": {
+      if (eventType === "sponsored_event") {
+        const sponsoredEventId = pickString(data, "eventId", "event_id", "room_id");
+        return sponsoredEventId
+          ? `/sponsored-events/waiting-room?id=${encodeURIComponent(sponsoredEventId)}`
+          : "/sponsored-events";
+      }
+      const registeredRaceId = pickString(data, "raceId", "race_id", "roomId", "room_id");
+      return registeredRaceId
+        ? `/race/matchmaking?raceId=${encodeURIComponent(registeredRaceId)}&isHost=false`
+        : "/rooms/available";
+    }
 
     case "group_invite_accepted":
       return groupId ? `/groups/${encodeURIComponent(groupId)}` : "/groups";

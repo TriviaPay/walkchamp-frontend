@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { CHANNELS, subscribeToChannel } from "@/services/realtimeService";
 
 interface AvatarVersionContextType {
@@ -71,15 +71,18 @@ export function AvatarVersionProvider({ children }: { children: React.ReactNode 
     });
   }, []);
 
+  const value = useMemo(
+    () => ({
+      getAvatarVersion,
+      publishAvatarVersion,
+      getLocalPreview,
+      setLocalPreview,
+    }),
+    [getAvatarVersion, publishAvatarVersion, getLocalPreview, setLocalPreview],
+  );
+
   return (
-    <AvatarVersionContext.Provider
-      value={{
-        getAvatarVersion,
-        publishAvatarVersion,
-        getLocalPreview,
-        setLocalPreview,
-      }}
-    >
+    <AvatarVersionContext.Provider value={value}>
       {children}
     </AvatarVersionContext.Provider>
   );

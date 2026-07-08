@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, AppStateStatus, Platform } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 import { store } from "@/store";
@@ -69,7 +69,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Restore session: hydrate cached profile instantly, then validate in background.
   const authRestoreStartRef = useRef(Date.now());
   useEffect(() => {
-    perf.appStartStart();
     void (async () => {
       const { session, refresh } = await getStoredSession();
       if (session && refresh?.trim()) {
@@ -261,19 +260,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  const value = useMemo(
+    () => ({
+      user,
+      sessionToken,
+      loading: isRestoringSession,
+      login,
+      logout,
+      updateUser,
+      refreshUserProfile,
+      isAuthenticating,
+    }),
+    [user, sessionToken, isRestoringSession, login, logout, updateUser, refreshUserProfile, isAuthenticating],
+  );
+
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        sessionToken,
-        loading: isRestoringSession,
-        login,
-        logout,
-        updateUser,
-        refreshUserProfile,
-        isAuthenticating,
-      }}
-    >
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );

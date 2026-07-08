@@ -11,12 +11,14 @@ import {
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
+import { useTheme } from "@/context/ThemeContext";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { getValidSession } from "@/services/authService";
 import { TitleBadge } from "@/components/TitleBadge";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
+const SUCCESS_TOAST_ORANGE = "#FF9800";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface TitleEntry {
@@ -242,6 +244,7 @@ interface Props {
 
 export default function MyTitlesModal({ visible, onClose, onSaved }: Props) {
   const colors = useColors();
+  const { isDark } = useTheme();
   const { safeTop, safeBottom } = useSafeLayout();
 
   const [loading,        setLoading]        = useState(false);
@@ -322,10 +325,11 @@ export default function MyTitlesModal({ visible, onClose, onSaved }: Props) {
   const owned  = useMemo(() => filtered.filter((t) => t.owned),  [filtered]);
   const locked = useMemo(() => filtered.filter((t) => !t.owned), [filtered]);
   const isDirty = selectedCode !== originalCode;
+  const headerHeight = safeTop + 58;
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={[st.container, { backgroundColor: colors.background }]}>
+      <View style={[st.container, { backgroundColor: colors.background, paddingBottom: safeBottom }]}>
 
         {/* Header */}
         <View style={[st.header, { borderBottomColor: colors.border, paddingTop: safeTop + 8 }]}>
@@ -398,19 +402,20 @@ export default function MyTitlesModal({ visible, onClose, onSaved }: Props) {
 
         {/* Body */}
         {loading ? (
-          <View style={[st.list, { paddingTop: 8 }]}>
+          <View style={[st.bodyFill, st.list, { paddingTop: 8 }]}>
             <SkeletonList count={8} variant="title" />
           </View>
         ) : error ? (
-          <TouchableOpacity style={st.center} onPress={load}>
+          <TouchableOpacity style={[st.bodyFill, st.center]} onPress={load}>
             <Feather name="alert-circle" size={32} color={colors.destructive} />
             <Text style={[st.errorText, { color: colors.destructive }]}>{error}</Text>
-            <Text style={[st.retryText, { color: "#00E676" }]}>Tap to retry</Text>
+            <Text style={[st.retryText, { color: colors.success }]}>Tap to retry</Text>
           </TouchableOpacity>
         ) : (
           <ScrollView
+            style={st.bodyFill}
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={[st.list, { paddingBottom: safeBottom + 24 }]}
+            contentContainerStyle={[st.list, { paddingBottom: Math.max(safeBottom, 24) + 16 }]}
           >
 
             {/* ── Owned section ─────────────────────────────────────────── */}
@@ -490,26 +495,47 @@ export default function MyTitlesModal({ visible, onClose, onSaved }: Props) {
           </ScrollView>
         )}
 
-        {/* Toast */}
+        {/* Floating toast — overlays content, does not shift layout */}
         {toast && (
-          <Animated.View style={[
-            st.toast,
-            {
-              bottom: safeBottom + 16,
-              backgroundColor: toast.ok ? "#00E67618" : colors.destructive + "18",
-              borderColor:     toast.ok ? "#00E676"   : colors.destructive,
-              opacity:         toastAnim,
-            },
-          ]}>
-            <Feather
-              name={toast.ok ? "check-circle" : "alert-circle"}
-              size={16}
-              color={toast.ok ? "#00E676" : colors.destructive}
-            />
-            <Text style={[st.toastText, { color: toast.ok ? "#00E676" : colors.destructive }]}>
-              {toast.msg}
-            </Text>
-          </Animated.View>
+          <View style={st.toastOverlay} pointerEvents="box-none">
+            <Animated.View style={[
+              st.toast,
+              {
+                top: headerHeight,
+                backgroundColor: isDark ? colors.card : "#FFFFFF",
+                borderColor: toast.ok ? SUCCESS_TOAST_ORANGE : colors.destructive,
+                shadowColor: isDark ? "#000" : "#0A0B14",
+                shadowOpacity: isDark ? 0.5 : 0.16,
+                shadowRadius: 12,
+                shadowOffset: { width: 0, height: 4 },
+                elevation: 12,
+                opacity: toastAnim,
+                transform: [{
+                  translateY: toastAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-10, 0],
+                  }),
+                }],
+              },
+            ]}>
+              <View style={[
+                st.toastIconWrap,
+                { backgroundColor: (toast.ok ? SUCCESS_TOAST_ORANGE : colors.destructive) + (isDark ? "30" : "20") },
+              ]}>
+                <Feather
+                  name={toast.ok ? "check-circle" : "alert-circle"}
+                  size={16}
+                  color={toast.ok ? SUCCESS_TOAST_ORANGE : colors.destructive}
+                />
+              </View>
+              <Text style={[
+                st.toastText,
+                { color: toast.ok ? colors.foreground : colors.destructive },
+              ]}>
+                {toast.msg}
+              </Text>
+            </Animated.View>
+          </View>
         )}
       </View>
     </Modal>
@@ -536,6 +562,7 @@ const st = StyleSheet.create({
   filterChip:   { height: 34, paddingHorizontal: 14, borderRadius: 17, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
   filterChipText: { fontSize: 12, fontWeight: "600" },
 
+  bodyFill:      { flex: 1, minHeight: 0 },
   list:          { paddingHorizontal: 12, paddingVertical: 8, gap: 6 },
 
   sectionHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 4, paddingVertical: 10 },
@@ -591,6 +618,8 @@ const st = StyleSheet.create({
   emptyTitle: { fontSize: 16, fontWeight: "700" },
   emptyDesc:  { fontSize: 13, textAlign: "center", lineHeight: 18 },
 
-  toast:     { position: "absolute", left: 24, right: 24, flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: 12, borderWidth: 1 },
-  toastText: { flex: 1, fontSize: 14, fontWeight: "600" },
+  toastOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 200, elevation: 20 },
+  toast:        { position: "absolute", left: 16, right: 16, flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: 12, borderWidth: 1.5 },
+  toastIconWrap: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
+  toastText: { flex: 1, fontSize: 14, fontWeight: "700" },
 });

@@ -16,6 +16,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -89,6 +90,7 @@ import {
   resolveTodayDisplaySteps,
   hydrateStepDisplayFromSources,
   shouldIgnoreLegacyPhantomBump,
+  filterLegacyStepIncrease,
   stepEngineLog,
   suppressLegacyStepBumps,
 } from "@/utils/stepAccuracy";
@@ -665,15 +667,23 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             }
             const backendSteps = parsed?.todaySteps ?? 0;
             backendTodayStepsRef.current = backendSteps;
-            displaySteps = hydrateStepDisplayFromSources({
-              providerSteps,
+            const floor = Math.max(localCached, backendSteps, todayStepsRef.current);
+            if (stepProviderManager.usesVerifiedStepSource()) {
+              displaySteps = hydrateStepDisplayFromSources({
+                providerSteps,
+                backendSteps,
+                localCachedSteps: localCached,
+                allowBackendCatchUp: false,
+                previousProviderSteps: displaySteps,
+              });
+              displaySteps = Math.max(displaySteps, floor);
+            } else {
+              // Legacy sensor: on init trust backend + cache only — provider updates via watch.
+              displaySteps = floor;
+            }
+            displaySteps = filterLegacyStepIncrease(floor, displaySteps, {
               backendSteps,
-              localCachedSteps: localCached,
-              allowBackendCatchUp:
-                stepProviderManager.getActiveProviderId() === "android_legacy_sensor",
-              previousProviderSteps: displaySteps,
             });
-            displaySteps = Math.max(displaySteps, cachedAtStart, todayStepsRef.current);
             lastProviderPollRef.current = displaySteps;
             lastSyncedStepsRef.current = Math.min(
               parsed?.todaySteps ?? displaySteps,
@@ -748,28 +758,28 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
         if (session) {
           try {
-            const authoritative = await resolveAuthoritativeTodaySteps(user.id, {
-              mergeNative: true,
-            });
-            if (authoritative > todayStepsRef.current) {
-              setTodaySteps(authoritative);
-              todayStepsRef.current = authoritative;
-              savedDailyStepsRef.current = authoritative;
-              await writeDailyStepsForUserDate(user.id, today, authoritative);
-              updateStepProgressFromRealSource({
-                todaySteps: authoritative,
-                stepSource:
-                  activeStepSourceRef.current === "ios_healthkit"
-                    ? "healthkit"
-                    : activeStepSourceRef.current === "android_health_connect"
-                      ? "health_connect"
-                      : "android_step_counter",
-                updatedAt: new Date().toISOString(),
+            if (stepProviderManager.usesVerifiedStepSource()) {
+              const authoritative = await resolveAuthoritativeTodaySteps(user.id, {
+                mergeNative: false,
               });
-              stepEngineLog(
-                "StepEngine",
-                `init authoritativeTodaySteps=${authoritative} userId=${user.id}`,
-              );
+              if (authoritative > todayStepsRef.current) {
+                setTodaySteps(authoritative);
+                todayStepsRef.current = authoritative;
+                savedDailyStepsRef.current = authoritative;
+                await writeDailyStepsForUserDate(user.id, today, authoritative);
+                updateStepProgressFromRealSource({
+                  todaySteps: authoritative,
+                  stepSource:
+                    activeStepSourceRef.current === "ios_healthkit"
+                      ? "healthkit"
+                      : "android_health_connect",
+                  updatedAt: new Date().toISOString(),
+                });
+                stepEngineLog(
+                  "StepEngine",
+                  `init authoritativeTodaySteps=${authoritative} userId=${user.id}`,
+                );
+              }
             }
           } catch {
             // non-fatal — cached display remains
@@ -1179,6 +1189,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       if (
         shouldIgnoreLegacyPhantomBump(current, safeReal, {
           backendSteps: backendFloor,
+          fromWatch,
         })
       ) {
         if (__DEV__) {
@@ -1250,53 +1261,17 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   const mirrorCanonicalStepsToWalkUi = useCallback(
     async (coordinatorSteps: number, reason: string) => {
       if (!user?.id) return;
-      let display = Math.max(0, Math.floor(coordinatorSteps));
-      if (display <= todayStepsRef.current) return;
-
-      if (Platform.OS === "android" && !stepProviderManager.usesVerifiedStepSource()) {
-        try {
-          display = Math.max(display, await mergeWalkStepsWithNative(display));
-          const native = await stepTrackingNotificationService.getNativeStepState(user.id);
-          const nativeMatchesUser = !native?.userId || native.userId === user.id;
-          if (nativeMatchesUser) {
-            display = Math.max(display, native?.todaySteps ?? 0);
-          }
-        } catch {
-          // keep coordinator value
-        }
-      } else if (stepProviderManager.usesVerifiedStepSource()) {
-        try {
-          const providerSteps = await readProviderTodaySteps();
-          display = Math.max(
-            display,
-            resolveTodayDisplaySteps({
-              providerSteps,
-              backendSteps: backendTodayStepsRef.current,
-            }),
-            todayStepsRef.current,
-          );
-        } catch {
-          display = Math.max(display, todayStepsRef.current);
-        }
-      }
-
-      if (
-        shouldIgnoreLegacyPhantomBump(todayStepsRef.current, display, {
-          backendSteps: backendTodayStepsRef.current,
-        })
-      ) {
-        return;
-      }
-
+      const display = Math.max(0, Math.floor(coordinatorSteps));
       if (display <= todayStepsRef.current) return;
 
       stepEngineLog(
         "WalkScreen",
         `canonicalMirror reason=${reason} coordinator=${coordinatorSteps} display=${display}`,
       );
-      await applyTodayStepCount(display, false);
+      const fromWatch = !stepProviderManager.usesVerifiedStepSource();
+      await applyTodayStepCount(display, fromWatch);
     },
-    [applyTodayStepCount, readProviderTodaySteps, user?.id],
+    [applyTodayStepCount, user?.id],
   );
 
   const refreshRealSteps = useCallback(async (opts?: {
@@ -2029,43 +2004,53 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   const isWalking = trackingStatus === "walking";
   const isPaused = trackingStatus === "paused";
 
+  const value = useMemo(
+    () => ({
+      trackingStatus,
+      isWalking,
+      isPaused,
+      session,
+      todaySteps,
+      weeklySteps,
+      allTimeSteps,
+      currentStreak,
+      activeDurationMinutes,
+      milestoneReached,
+      autoTrackingEnabled,
+      usingRealTracking,
+      stepPermissionStatus,
+      hcAvailability,
+      activeStepSource,
+      verificationLevel,
+      canJoinRewardRaces: verificationLevel === "verified",
+      todayActiveMinutes,
+      todayDailyRank,
+      todayDailyGoal,
+      setTrackingStatus,
+      togglePause,
+      clearMilestone,
+      requestStepPermission,
+      enableLimitedSensorTracking,
+      refreshTodayRank: fetchTodayFromBackend,
+      refreshTodaySteps: refreshRealSteps,
+      resumeStepWatching,
+      triggerSync: syncDeltaToBackend,
+      stepsHydrated,
+      stepsSourceReady,
+      authReady,
+    }),
+    [
+      trackingStatus, isWalking, isPaused, session, todaySteps, weeklySteps, allTimeSteps,
+      currentStreak, activeDurationMinutes, milestoneReached, autoTrackingEnabled, usingRealTracking,
+      stepPermissionStatus, hcAvailability, activeStepSource, verificationLevel, todayActiveMinutes,
+      todayDailyRank, todayDailyGoal, setTrackingStatus, togglePause, clearMilestone,
+      requestStepPermission, enableLimitedSensorTracking, fetchTodayFromBackend, refreshRealSteps,
+      resumeStepWatching, syncDeltaToBackend, stepsHydrated, stepsSourceReady, authReady,
+    ],
+  );
+
   return (
-    <WalkContext.Provider
-      value={{
-        trackingStatus,
-        isWalking,
-        isPaused,
-        session,
-        todaySteps,
-        weeklySteps,
-        allTimeSteps,
-        currentStreak,
-        activeDurationMinutes,
-        milestoneReached,
-        autoTrackingEnabled,
-        usingRealTracking,
-        stepPermissionStatus,
-        hcAvailability,
-        activeStepSource,
-        verificationLevel,
-        canJoinRewardRaces: verificationLevel === "verified",
-        todayActiveMinutes,
-        todayDailyRank,
-        todayDailyGoal,
-        setTrackingStatus,
-        togglePause,
-        clearMilestone,
-        requestStepPermission,
-        enableLimitedSensorTracking,
-        refreshTodayRank: fetchTodayFromBackend,
-        refreshTodaySteps: refreshRealSteps,
-        resumeStepWatching,
-        triggerSync: syncDeltaToBackend,
-        stepsHydrated,
-        stepsSourceReady,
-        authReady,
-      }}
-    >
+    <WalkContext.Provider value={value}>
       {children}
     </WalkContext.Provider>
   );

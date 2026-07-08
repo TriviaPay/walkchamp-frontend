@@ -21,6 +21,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { screenCache } from "@/utils/screenCache";
 import { perf } from "@/utils/perfLogger";
+import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import { runCoalesced, apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { authFetch } from "@/utils/authFetch";
 import { getLocalDateStr } from "@/utils/timezone";
@@ -382,6 +383,7 @@ const GROUPS_CACHE_KEY = "screen_groups_overview";
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 export default function GroupsScreen() {
+  useScreenMountPerf("Groups");
   const router = useRouter();
   const { user } = useAuth();
   const { todaySteps: liveSteps } = useWalk();

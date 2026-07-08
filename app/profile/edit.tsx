@@ -15,6 +15,9 @@ import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { authFetch } from "@/utils/authFetch";
+import { screenCache } from "@/utils/screenCache";
+import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import { PROFILE_ME_CACHE_KEY } from "@/hooks/useAvatarCache";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { SkeletonEditForm } from '@/components/SkeletonRows';
 
@@ -75,21 +78,40 @@ export default function EditProfileScreen() {
 
   const [usernameError, setUsernameError] = useState("");
 
+  const applyProfileFields = useCallback((p: ProfileData) => {
+    setFullName(p.fullName ?? "");
+    setUsername(p.username ?? "");
+    setBio(p.bio ?? "");
+    setCountry(p.country ?? "");
+    setFlag(p.countryFlag ?? "");
+    if (p.avatarColor && AVATAR_COLORS.includes(p.avatarColor)) {
+      setAvatarColor(p.avatarColor);
+    }
+  }, []);
+
   useEffect(() => {
-    fetchProfileMe().then((p) => {
-      if (p) {
-        setFullName(p.fullName ?? "");
-        setUsername(p.username ?? "");
-        setBio(p.bio ?? "");
-        setCountry(p.country ?? "");
-        setFlag(p.countryFlag ?? "");
-        if (p.avatarColor && AVATAR_COLORS.includes(p.avatarColor)) {
-          setAvatarColor(p.avatarColor);
-        }
-      }
+    let cancelled = false;
+    const cached = screenCache.getSync<{ profile: ProfileData | null }>(PROFILE_ME_CACHE_KEY);
+    if (cached?.profile) {
+      applyProfileFields(cached.profile);
+      setLoading(false);
+    }
+    void screenCache.get<{ profile: ProfileData | null }>(PROFILE_ME_CACHE_KEY).then((disk) => {
+      if (cancelled || !disk?.profile) return;
+      applyProfileFields(disk.profile);
       setLoading(false);
     });
-  }, []);
+    if (!apiFetchAllowed("profile_edit_me", 90_000) && cached?.profile) {
+      return () => { cancelled = true; };
+    }
+    markApiFetched("profile_edit_me");
+    fetchProfileMe().then((p) => {
+      if (cancelled) return;
+      if (p) applyProfileFields(p);
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [applyProfileFields]);
 
   const validateUsername = useCallback((val: string) => {
     if (!val) { setUsernameError(""); return; }

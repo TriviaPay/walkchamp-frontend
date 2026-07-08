@@ -116,6 +116,7 @@ import CoinsBattleModal from "@/components/CoinsBattleModal";
 import { screenCache } from "@/utils/screenCache";
 import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows";
 import { subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
 import { useTodayWalkSteps } from "@/hooks/useTodayWalkSteps";
@@ -1344,7 +1345,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
           <View style={pmStyles.statsGrid}>
             {([
               { label: "Total Steps",  value: (profileStats?.allTimeSteps ?? allTimeSteps ?? 0).toLocaleString(), color: colors.primary },
-              { label: "Day Streak",   value: `${profileStats?.dayStreak ?? currentStreak ?? 0}d`,               color: colors.destructive },
+              { label: "Login Streak", value: `${profileStats?.dayStreak ?? currentStreak ?? 0}d`,               color: colors.destructive },
               { label: "Global Rank",  value: `#${profileRank}`,                                                  color: colors.gold },
               { label: "Coins Earned", value: (profileStats?.coinsEarned ?? 0).toLocaleString(),                  color: "#FFD700" },
             ]).map((s) => (
@@ -1439,7 +1440,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
               <View style={[pmStyles.toggleIcon, { backgroundColor: colors.gold + "18" }]}>
                 <Feather name="gift" size={17} color={colors.gold} />
               </View>
-              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>Invite Friends & Earn</Text>
+              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>Invite Friends</Text>
               <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
             </TouchableOpacity>
           </View>
@@ -1682,6 +1683,7 @@ export default function WalkScreen() {
 }
 
 function WalkScreenContent() {
+  useScreenMountPerf("Walk");
   const colors = useColors();
   const { isDark } = useTheme();
   const { insets, safeTop, safeBottom } = useSafeLayout();
@@ -1795,9 +1797,22 @@ function WalkScreenContent() {
   const [challengeEndDate, setChallengeEndDate] = useState<Date | null>(null);
   const [challengeStartTimeIdx, setChallengeStartTimeIdx] = useState(0);
   const [challengeNowSetAt, setChallengeNowSetAt] = useState<number | null>(() => Date.now());
+  const [challengeLiveTick, setChallengeLiveTick] = useState(() => Date.now());
   const [showStartDatePicker, setShowStartDatePicker] = useState(false);
   const [showStartTimePicker, setShowStartTimePicker] = useState(false);
   const [showEndDatePicker, setShowEndDatePicker] = useState(false);
+  const challengeIsNowStart =
+    challengeModal &&
+    isSameDay(challengeStartDate, new Date()) &&
+    (TIME_PRESETS_WITH_NOW[challengeStartTimeIdx]?.isNow === true);
+
+  useEffect(() => {
+    if (!challengeIsNowStart) return;
+    setChallengeLiveTick(Date.now());
+    const id = setInterval(() => setChallengeLiveTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [challengeIsNowStart]);
+
   // Always keep end date locked to start + duration (1/7/30 days), preserving the selected start time
   useEffect(() => {
     const days = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
@@ -1808,7 +1823,7 @@ function WalkScreenContent() {
       : (TIME_PRESETS_FUTURE[Math.max(0, challengeStartTimeIdx - 1)] ?? TIME_PRESETS_FUTURE[0]!);
     const startWithTime = new Date(challengeStartDate);
     if (preset.isNow && isToday) {
-      const anchor = challengeNowSetAt != null ? new Date(challengeNowSetAt) : now;
+      const anchor = new Date(challengeLiveTick);
       startWithTime.setHours(anchor.getHours(), anchor.getMinutes(), 0, 0);
     } else {
       startWithTime.setHours(preset.isNow ? now.getHours() : preset.hour, preset.isNow ? now.getMinutes() : preset.minute, 0, 0);
@@ -1822,7 +1837,7 @@ function WalkScreenContent() {
       console.log("[CreateChallengeTime] calculated end time:", fmtShortTime12(endDate));
       console.log("[CreateChallengeTime] timezone:", getUserTimezone());
     }
-  }, [challengeStartDate, challengeGoalType, challengeStartTimeIdx, challengeNowSetAt]);
+  }, [challengeStartDate, challengeGoalType, challengeStartTimeIdx, challengeLiveTick]);
 
   useEffect(() => {
     setChallengeTargetSteps(getDefaultTargetSteps(challengeGoalType));
@@ -4162,8 +4177,9 @@ function WalkScreenContent() {
                     isToday && !rawPreset.isNow && rawPreset.hour * 60 + rawPreset.minute <= nowMinutes
                       ? (TIME_PRESETS_WITH_NOW[getNextPresetIndexForNow(TIME_PRESETS_WITH_NOW)] ?? rawPreset)
                       : rawPreset;
+                  const liveNow = new Date(challengeLiveTick);
                   const timeLabel = displayPreset.isNow && isToday
-                    ? fmtShortTime12(challengeNowSetAt != null ? new Date(challengeNowSetAt) : new Date())
+                    ? fmtShortTime12(liveNow)
                     : displayPreset.label;
                   const startDateLabel = isToday
                     ? "Today"
@@ -4176,8 +4192,7 @@ function WalkScreenContent() {
                     if (displayPreset.isNow && isToday) {
                       const days = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
                       const start = new Date(challengeStartDate);
-                      const anchor = challengeNowSetAt != null ? new Date(challengeNowSetAt) : new Date();
-                      start.setHours(anchor.getHours(), anchor.getMinutes(), 0, 0);
+                      start.setHours(liveNow.getHours(), liveNow.getMinutes(), 0, 0);
                       const end = new Date(start);
                       end.setDate(end.getDate() + days);
                       return fmtShortTime12(end);
@@ -4526,7 +4541,7 @@ function WalkScreenContent() {
               <Animated.View
                 style={{ backgroundColor: colors.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingBottom: 40, maxHeight: "80%", transform: [{ translateY: pickerSlideY }] }}
               >
-                <Pressable onPress={() => {}}>
+                <View>
                   <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: "center", marginTop: 12, marginBottom: 2 }} />
                   <Text style={{ fontSize: rf(16), fontWeight: "700", color: colors.foreground, textAlign: "center", paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.border }}>
                     {activePicker === "entryFee" ? "Entry Type"
@@ -4536,7 +4551,12 @@ function WalkScreenContent() {
                       : activePicker === "steps" ? "Target Steps"
                       : "Players"}
                   </Text>
-                  <ScrollView showsVerticalScrollIndicator={false} indicatorStyle="white" keyboardShouldPersistTaps="handled">
+                  <ScrollView
+                    showsVerticalScrollIndicator={false}
+                    indicatorStyle="white"
+                    keyboardShouldPersistTaps="handled"
+                    scrollEnabled={activePicker !== "steps" && activePicker !== "players"}
+                  >
                     {activePicker === "entryFee" && (() => {
                       const acc = roomType === "public" ? colors.accent : "#A855F7";
                       const modeOptions = [
@@ -4692,7 +4712,7 @@ function WalkScreenContent() {
                       );
                     })()}
                   </ScrollView>
-                </Pressable>
+                </View>
               </Animated.View>
             </Pressable>
           )}

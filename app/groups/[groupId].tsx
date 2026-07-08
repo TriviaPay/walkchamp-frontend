@@ -11,6 +11,9 @@ import Svg, { Circle, Defs, LinearGradient as SvgGradient, Stop, Polyline } from
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { authFetch } from "@/utils/authFetch";
+import { screenCache } from "@/utils/screenCache";
+import { runCoalesced, apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import { getLocalDateStr } from "@/utils/timezone";
 import { getApiBase } from "@/utils/apiUrl";
 import { uploadGroupImage, groupImageUri } from "@/services/mediaApi";
@@ -75,6 +78,39 @@ interface SelectedMember {
   avatarVersion?: number;
   countryCode: string | null; role: string; todaySteps: number; allTimeSteps: number;
   isCurrentUser: boolean;
+}
+
+const groupDetailCacheKey = (groupId: string) => `screen_group_detail:${groupId}`;
+
+type GroupDetailCache = {
+  group: Group;
+  members: MemberEntry[];
+  history: DailyResult[];
+  todayLB: LeaderboardEntry[];
+  overallLB: LeaderboardEntry[];
+  groupStats: GroupStats | null;
+  pendingGroupInvites: PendingGroupInvite[];
+};
+
+function applyGroupDetailCache(
+  data: GroupDetailCache,
+  setters: {
+    setGroup: (g: Group) => void;
+    setMembers: (m: MemberEntry[]) => void;
+    setHistory: (h: DailyResult[]) => void;
+    setTodayLB: (l: LeaderboardEntry[]) => void;
+    setOverallLB: (l: LeaderboardEntry[]) => void;
+    setGroupStats: (s: GroupStats | null) => void;
+    setPendingGroupInvites: (p: PendingGroupInvite[]) => void;
+  },
+) {
+  setters.setGroup(data.group);
+  setters.setMembers(data.members);
+  setters.setHistory(data.history);
+  setters.setTodayLB(data.todayLB);
+  setters.setOverallLB(data.overallLB);
+  setters.setGroupStats(data.groupStats);
+  setters.setPendingGroupInvites(data.pendingGroupInvites);
 }
 
 const TABS: { key: TabKey; label: string; icon: string }[] = [
@@ -316,14 +352,18 @@ export default function GroupDetailScreen() {
   const paramSection = Array.isArray(section) ? section[0] : section;
   const { todaySteps: liveSteps } = useWalkContext();
 
-  const [group, setGroup] = useState<Group | null>(null);
-  const [members, setMembers] = useState<MemberEntry[]>([]);
-  const [history, setHistory] = useState<DailyResult[]>([]);
-  const [todayLB, setTodayLB] = useState<LeaderboardEntry[]>([]);
-  const [overallLB, setOverallLB] = useState<LeaderboardEntry[]>([]);
-  const [groupStats, setGroupStats] = useState<GroupStats | null>(null);
-  const [pendingGroupInvites, setPendingGroupInvites] = useState<PendingGroupInvite[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { markContentReady } = useScreenMountPerf(`GroupDetail:${groupId}`);
+  const cacheKey = groupDetailCacheKey(groupId);
+  const cachedSync = screenCache.getSync<GroupDetailCache>(cacheKey);
+
+  const [group, setGroup] = useState<Group | null>(cachedSync?.group ?? null);
+  const [members, setMembers] = useState<MemberEntry[]>(cachedSync?.members ?? []);
+  const [history, setHistory] = useState<DailyResult[]>(cachedSync?.history ?? []);
+  const [todayLB, setTodayLB] = useState<LeaderboardEntry[]>(cachedSync?.todayLB ?? []);
+  const [overallLB, setOverallLB] = useState<LeaderboardEntry[]>(cachedSync?.overallLB ?? []);
+  const [groupStats, setGroupStats] = useState<GroupStats | null>(cachedSync?.groupStats ?? null);
+  const [pendingGroupInvites, setPendingGroupInvites] = useState<PendingGroupInvite[]>(cachedSync?.pendingGroupInvites ?? []);
+  const [loading, setLoading] = useState(cachedSync === null);
   const [refreshing, setRefreshing] = useState(false);
   const hasSyncedRef = useRef(false);
   const [activeTab, setActiveTab] = useState<TabKey>("today");
@@ -340,30 +380,60 @@ export default function GroupDetailScreen() {
   const [selectedMember, setSelectedMember] = useState<SelectedMember | null>(null);
 
   const fetchData = useCallback(async (isRefresh = false) => {
-    if (!isRefresh) setLoading(true);
+    if (!isRefresh && screenCache.getSync<GroupDetailCache>(cacheKey) === null) {
+      setLoading(true);
+    }
     try {
       const ld = getLocalDateStr();
-      const [detailRes, todayRes, overallRes] = await Promise.all([
-        authFetch(`/api/groups/${groupId}?localDate=${ld}`),
-        authFetch(`/api/groups/${groupId}/leaderboard?range=today&localDate=${ld}`),
-        authFetch(`/api/groups/${groupId}/leaderboard?range=all_time`),
-      ]);
-      if (!detailRes.ok) { Alert.alert("Error", "Failed to load group"); router.back(); return; }
-      const detail = await detailRes.json();
-      const todayData = todayRes.ok ? await todayRes.json() : { leaderboard: [] };
-      const overallData = overallRes.ok ? await overallRes.json() : { leaderboard: [] };
-      setGroup(detail.group);
-      setMembers(detail.members ?? []);
-      setHistory(detail.history ?? []);
-      setGroupStats(detail.groupStats ?? null);
-      setPendingGroupInvites(detail.pendingGroupInvites ?? []);
-      setTodayLB(todayData.leaderboard ?? []);
-      setOverallLB(overallData.leaderboard ?? []);
+      await runCoalesced(cacheKey, async () => {
+        const [detailRes, todayRes, overallRes] = await Promise.all([
+          authFetch(`/api/groups/${groupId}?localDate=${ld}`),
+          authFetch(`/api/groups/${groupId}/leaderboard?range=today&localDate=${ld}`),
+          authFetch(`/api/groups/${groupId}/leaderboard?range=all_time`),
+        ]);
+        if (!detailRes.ok) { Alert.alert("Error", "Failed to load group"); router.back(); return; }
+        const detail = await detailRes.json();
+        const todayData = todayRes.ok ? await todayRes.json() : { leaderboard: [] };
+        const overallData = overallRes.ok ? await overallRes.json() : { leaderboard: [] };
+        const next: GroupDetailCache = {
+          group: detail.group,
+          members: detail.members ?? [],
+          history: detail.history ?? [],
+          groupStats: detail.groupStats ?? null,
+          pendingGroupInvites: detail.pendingGroupInvites ?? [],
+          todayLB: todayData.leaderboard ?? [],
+          overallLB: overallData.leaderboard ?? [],
+        };
+        setGroup(next.group);
+        setMembers(next.members);
+        setHistory(next.history);
+        setGroupStats(next.groupStats);
+        setPendingGroupInvites(next.pendingGroupInvites);
+        setTodayLB(next.todayLB);
+        setOverallLB(next.overallLB);
+        void screenCache.set(cacheKey, next);
+        markContentReady();
+      });
     } catch (_) {}
     finally { setLoading(false); setRefreshing(false); }
-  }, [groupId]);
+  }, [groupId, cacheKey, markContentReady]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    void screenCache.get<GroupDetailCache>(cacheKey).then((cached) => {
+      if (!cached) return;
+      applyGroupDetailCache(cached, {
+        setGroup, setMembers, setHistory, setTodayLB, setOverallLB, setGroupStats, setPendingGroupInvites,
+      });
+      setLoading(false);
+      markContentReady();
+    });
+    if (apiFetchAllowed(cacheKey, 60_000)) {
+      markApiFetched(cacheKey);
+      void fetchData(screenCache.getSync(cacheKey) !== null);
+    } else {
+      setLoading(false);
+    }
+  }, [cacheKey, fetchData, markContentReady]);
 
   useEffect(() => {
     if (!groupId) return;

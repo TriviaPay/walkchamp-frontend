@@ -25,6 +25,7 @@ export default function AlreadyHostingModal({
       transparent
       animationType="fade"
       statusBarTranslucent
+      onRequestClose={onDismiss}
     >
       <View style={styles.backdrop}>
         <View style={styles.card}>

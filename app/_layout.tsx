@@ -188,6 +188,7 @@ function RootLayoutNav() {
         <Stack.Screen name="race" options={{ presentation: "card", animation: "slide_from_right" }} />
         <Stack.Screen name="profile" options={{ presentation: "modal", animation: "slide_from_bottom" }} />
         <Stack.Screen name="live-races" />
+        <Stack.Screen name="live/date-rooms" options={{ presentation: "card", animation: "slide_from_right" }} />
         <Stack.Screen name="spectator/[id]" />
         <Stack.Screen name="payment-complete" options={{ headerShown: false }} />
       </Stack>

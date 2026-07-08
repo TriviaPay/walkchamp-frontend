@@ -3,12 +3,15 @@ import { BlueShoe } from "@/components/BlueShoe";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { SkeletonList, SkeletonRaceRow } from "@/components/SkeletonRows";
 import { screenCache } from "@/utils/screenCache";
+import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import { router } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
   AppState,
+  Dimensions,
   FlatList,
   ImageBackground,
   RefreshControl,
@@ -16,7 +19,14 @@ import {
   StyleSheet,
   Text,
   View,
+  type StyleProp,
+  type ViewStyle,
 } from "react-native";
+import {
+  groupRacesByDate,
+  getRoomCountLabel,
+  type DateGroup,
+} from "@/utils/raceDateGrouping";
 import { AppAlert } from "@/components/AppAlert";
 import { Image } from "expo-image";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
@@ -58,6 +68,10 @@ const NEON_GREEN   = "#22C55E";
 const CARD_BG      = "#0D0D1E";
 const MUTED        = "#8090A8";
 
+// Horizontal carousel card width — leaves ~15% peek of the next card so users
+// can tell the row scrolls sideways. Capped so it never gets absurd on tablets.
+const CAROUSEL_CARD_W = Math.min(340, Math.round(Dimensions.get("window").width * 0.85));
+
 const FREE_TIER_COINS = [50, 30, 20];
 function calcFreeCoins(rank: number, isTied: boolean, tieGroupSize: number): number {
   if (isTied && tieGroupSize > 1) {
@@ -67,8 +81,26 @@ function calcFreeCoins(rank: number, isTied: boolean, tieGroupSize: number): num
   return FREE_TIER_COINS[rank - 1] ?? 0;
 }
 
-const FILTERS = ["All", "Free", "Coins Battle", "Sponsored Events"] as const;
+const FILTERS = ["All", "Free", "Coins Battle", "Cash Challenges", "Sponsored Events"] as const;
 type FilterType = (typeof FILTERS)[number];
+
+const CASH_ENTRY_TYPES = new Set([
+  "paid_1", "paid_3", "paid_5", "paid_usd", "cash", "usd",
+  "$1", "$3", "$5", "USD Entry",
+]);
+
+/** All paid cash entry races (any amount), excluding sponsored / free / coins. */
+export function isCashChallengeRace(
+  race: Pick<LiveRace, "entryType" | "type"> & { entryAmountCents?: number },
+): boolean {
+  if (race.type === "sponsored") return false;
+  const et = (race.entryType ?? "").trim();
+  const lower = et.toLowerCase();
+  if (lower === "free" || lower === "coins_battle" || lower === "coins battle") return false;
+  if (CASH_ENTRY_TYPES.has(et) || CASH_ENTRY_TYPES.has(lower)) return true;
+  if ((race.entryAmountCents ?? 0) > 0 && lower !== "free" && lower !== "coins_battle") return true;
+  return false;
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface LiveRacePlayer {
@@ -99,6 +131,7 @@ export interface LiveRace {
   status: string;
   prizePool: number;
   prizePoolCents: number;
+  entryAmountCents?: number;
   coinEntryAmount: number;
   spectatorCount: number;
   startedAt: string | null;
@@ -120,24 +153,8 @@ export function formatElapsed(seconds: number): string {
 function formatFinishedAt(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
-  const now = new Date();
-  const isToday =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  const timeStr = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  if (isToday) return `Today · ${timeStr}`;
-  const dateStr = d.toLocaleDateString([], { month: "short", day: "numeric" });
-  return `${dateStr} · ${timeStr}`;
-}
-
-function formatCardDate(iso: string | null): { month: string; day: string } | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return {
-    month: d.toLocaleDateString("en-US", { month: "short" }).toUpperCase(),
-    day: String(d.getDate()),
-  };
+  // Time only — the calendar date is already shown in the date-group header.
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 function computeElapsed(startedAt: string | null, completedAt?: string | null): number {
@@ -150,8 +167,14 @@ function filterToParam(filter: FilterType): string {
   if (filter === "All") return "all";
   if (filter === "Free") return "free";
   if (filter === "Coins Battle") return "coins_battle";
+  if (filter === "Cash Challenges") return "cash_challenges";
   if (filter === "Sponsored Events") return "sponsored";
   return "all";
+}
+
+function applyChipFilter(races: LiveRace[], filter: FilterType): LiveRace[] {
+  if (filter === "Cash Challenges") return races.filter(isCashChallengeRace);
+  return races;
 }
 
 function mapRaceRow(r: Record<string, unknown>): LiveRace {
@@ -173,6 +196,7 @@ function mapRaceRow(r: Record<string, unknown>): LiveRace {
     players: (r.players as LiveRacePlayer[]) ?? [],
     trackLayout: (r.trackLayout as string) ?? "bg",
     prizePoolCents: (r.prizePoolCents as number) ?? 0,
+    entryAmountCents: (r.entryAmountCents as number) ?? 0,
     reactionCounts: (r.reactionCounts as Record<string, number>) ?? {},
     elapsedSeconds: computeElapsed(r.startedAt as string | null, r.completedAt as string | null),
   };
@@ -195,16 +219,16 @@ async function fetchLiveChallenges(filter: FilterType): Promise<{
     const liveData = liveRes.ok ? await liveRes.json() as { races?: Record<string, unknown>[] } : { races: [] };
     const finishedData = finishedRes.ok ? await finishedRes.json() as { races?: Record<string, unknown>[] } : { races: [] };
     const seenIds = new Set<string>();
-    const live = (liveData.races ?? []).filter((r) => {
+    const live = applyChipFilter((liveData.races ?? []).filter((r) => {
       if (seenIds.has(r.id as string)) return false;
       seenIds.add(r.id as string);
       return true;
-    }).map(mapRaceRow);
-    const finished = (finishedData.races ?? []).filter((r) => {
+    }).map(mapRaceRow), filter);
+    const finished = applyChipFilter((finishedData.races ?? []).filter((r) => {
       if (seenIds.has(r.id as string)) return false;
       seenIds.add(r.id as string);
       return true;
-    }).map(mapRaceRow);
+    }).map(mapRaceRow), filter);
     return { live, finished, ok: true };
   } catch {
     return { live: [], finished: [], ok: false };
@@ -219,7 +243,7 @@ async function fetchMoreFinished(filter: FilterType, offset: number): Promise<Li
     );
     if (!res.ok) return [];
     const data = await res.json() as { races?: Record<string, unknown>[] };
-    return (data.races ?? []).map(mapRaceRow);
+    return applyChipFilter((data.races ?? []).map(mapRaceRow), filter);
   } catch {
     return [];
   }
@@ -514,13 +538,14 @@ function RankCircle({ rank, colors }: { rank: number; colors: ReturnType<typeof 
   );
 }
 
-function RaceCard({
+function RaceCardBase({
   race,
   colors,
   isMyRace,
   isHost,
   myUsername,
   onAvatarPress,
+  style,
 }: {
   race: LiveRace;
   colors: ReturnType<typeof useColors>;
@@ -528,6 +553,7 @@ function RaceCard({
   isHost?: boolean;
   myUsername?: string;
   onAvatarPress?: (p: LiveRacePlayer) => void;
+  style?: StyleProp<ViewStyle>;
 }) {
   const { isDark } = useTheme();
   const isFinished = race.status === "completed";
@@ -560,6 +586,7 @@ function RaceCard({
     "$1": "#60A5FA",
     "$3": "#A78BFA",
     "$5": colors.gold,
+    "USD Entry": "#60A5FA",
     coins_battle: "#F59E0B",
   };
   const isCoinsBattle = race.entryType === "coins_battle";
@@ -578,7 +605,6 @@ function RaceCard({
     });
   })().slice(0, 3);
 
-  const cardDate = isFinished ? formatCardDate(race.completedAt) : null;
   // For sponsored events use the actual prize pool; coins battles use coin pool; paid races use 70% winners pool
   const prizePoolDisplay = isSponsored && race.prizePoolCents > 0
     ? `$${(race.prizePoolCents / 100).toFixed(0)} pool`
@@ -607,6 +633,7 @@ function RaceCard({
           shadowRadius: 10,
           elevation: 6,
         },
+        style,
       ]}
     >
       {/* ── Card hero image ─────────────────────────────────────────────── */}
@@ -656,17 +683,8 @@ function RaceCard({
             </View>
           </View>
 
-          {/* Date + Title row */}
+          {/* Title row */}
           <View style={st.cardTitleRow}>
-            {cardDate && (
-              <View style={[
-                st.dateBadge,
-                !isDark && { backgroundColor: "rgba(0,0,0,0.06)", borderColor: "rgba(0,0,0,0.12)" },
-              ]}>
-                <Text style={st.dateMonth}>{cardDate.month}</Text>
-                <Text style={[st.dateDay, !isDark && { color: colors.foreground }]}>{cardDate.day}</Text>
-              </View>
-            )}
             <View style={st.cardTitleWrap}>
               <Text style={[st.cardTitle, { color: colors.foreground }]} numberOfLines={1}>{race.title}</Text>
             </View>
@@ -952,13 +970,130 @@ function RaceCard({
   );
 }
 
+// Memoized so stable cards (e.g. finished races) don't re-render when the parent
+// re-renders on unrelated updates such as the 1-second live elapsed timer.
+export const RaceCard = React.memo(RaceCardBase);
+
 // ── List item types ───────────────────────────────────────────────────────────
+type RaceOrigin = "live" | "finished";
+
 type ListItem =
-  | { kind: "race"; race: LiveRace }
-  | { kind: "header"; label: string; sub: string; isFinished: boolean };
+  | { kind: "header"; key: string; label: string; sub: string; isFinished: boolean }
+  | { kind: "group"; key: string; origin: RaceOrigin; group: DateGroup<LiveRace>; isLastFinished?: boolean };
+
+// ── Card-shaped shimmer placeholder shown while cards load / more load ─────────
+function RaceCardSkeleton({
+  colors,
+  style,
+}: {
+  colors: ReturnType<typeof useColors>;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const pulse = useRef(new Animated.Value(0.4)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.85, duration: 650, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.4, duration: 650, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+  const bar = (w: number | `${number}%`, h: number, mt = 0) => (
+    <Animated.View style={{ width: w, height: h, marginTop: mt, borderRadius: 6, backgroundColor: colors.border, opacity: pulse }} />
+  );
+  return (
+    <View style={[st.card, { backgroundColor: colors.card, borderColor: colors.border }, style]}>
+      <Animated.View style={[st.cardHero, { backgroundColor: colors.border, opacity: pulse }]} />
+      <View style={{ padding: rs(12), gap: 9 }}>
+        {bar("60%", 16)}
+        {bar("90%", 12)}
+        {bar("80%", 12)}
+        {bar("100%", 40, 8)}
+      </View>
+    </View>
+  );
+}
+
+// ── Date section: date header + "View All" + horizontal card carousel ──────────
+const CAROUSEL_ITEM_W = CAROUSEL_CARD_W + rs(12);
+
+const DateGroupRow = React.memo(function DateGroupRow({
+  group,
+  origin,
+  colors,
+  myRace,
+  myUsername,
+  onAvatarPress,
+  onViewAll,
+  showTrailingLoader,
+}: {
+  group: DateGroup<LiveRace>;
+  origin: RaceOrigin;
+  colors: ReturnType<typeof useColors>;
+  myRace: MyActiveRace | null;
+  myUsername?: string;
+  onAvatarPress: (p: LiveRacePlayer) => void;
+  onViewAll: (origin: RaceOrigin, group: DateGroup<LiveRace>) => void;
+  showTrailingLoader?: boolean;
+}) {
+  const handleViewAll = useCallback(() => onViewAll(origin, group), [onViewAll, origin, group]);
+
+  return (
+    <View style={st.dateSection}>
+      <View style={st.dateHeaderRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={[st.dateLabel, { color: colors.foreground }]} numberOfLines={1}>
+            {group.dateLabel}
+          </Text>
+          <Text style={[st.dateCount, { color: colors.mutedForeground }]}>
+            {getRoomCountLabel(group.races.length)}
+          </Text>
+        </View>
+        <TouchableOpacity style={st.viewAllBtn} onPress={handleViewAll} activeOpacity={0.8}>
+          <Text style={st.viewAllText}>View All</Text>
+          <Feather name="chevron-right" size={14} color={NEON_PURPLE} />
+        </TouchableOpacity>
+      </View>
+      {/* Eager render (plain ScrollView) so cards are never blank mid-swipe. Only
+          the currently-visible date sections are mounted by the outer FlatList,
+          so total mounted cards stay bounded. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={st.carousel}
+        decelerationRate="fast"
+        snapToInterval={CAROUSEL_ITEM_W}
+        snapToAlignment="start"
+        removeClippedSubviews={false}
+      >
+        {group.races.map((item) => (
+          <View key={item.id} style={{ width: CAROUSEL_CARD_W, marginRight: rs(12) }}>
+            <RaceCard
+              race={item}
+              colors={colors}
+              isMyRace={item.id === myRace?.id}
+              isHost={myRace?.isHost}
+              myUsername={myUsername}
+              onAvatarPress={onAvatarPress}
+              style={st.carouselCard}
+            />
+          </View>
+        ))}
+        {showTrailingLoader && (
+          <View style={{ width: CAROUSEL_CARD_W, marginRight: rs(12) }}>
+            <RaceCardSkeleton colors={colors} style={st.carouselCard} />
+          </View>
+        )}
+      </ScrollView>
+    </View>
+  );
+});
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function LiveTab() {
+  useScreenMountPerf("Live");
   const colors = useColors();
   const { safeTop } = useSafeLayout();
   const { counts, formatCount } = usePresence();
@@ -1053,7 +1188,13 @@ export default function LiveTab() {
   useEffect(() => {
     const sub = AppState.addEventListener("change", (nextState) => {
       if (appStateRef.current.match(/inactive|background/) && nextState === "active") {
-        void loadRef.current();
+        // Only refetch on resume if the last fetch is genuinely stale. Rapid
+        // background/foreground toggles no longer trigger a full data reload;
+        // Pusher realtime keeps the list current in the meantime.
+        if (apiFetchAllowed("live_resume", 30_000)) {
+          markApiFetched("live_resume");
+          void loadRef.current();
+        }
       }
       appStateRef.current = nextState;
     });
@@ -1184,32 +1325,79 @@ export default function LiveTab() {
   const liveCount = liveChallenges.length;
   const finishedCount = finishedChallenges.length;
 
-  // Build section-aware list data — memoized so FlatList only gets a new `data`
-  // reference when liveChallenges or finishedChallenges actually change.
-  const listItems = useMemo<ListItem[]>(() => [
-    ...(liveCount > 0
-      ? [
-          {
-            kind: "header" as const,
-            label: "Live Now",
-            sub: `${liveCount} live challenge${liveCount !== 1 ? "s" : ""} right now`,
-            isFinished: false,
-          },
-          ...liveChallenges.map((r) => ({ kind: "race" as const, race: r })),
-        ]
-      : []),
-    ...(finishedCount > 0
-      ? [
-          {
-            kind: "header" as const,
-            label: "Recently Finished",
-            sub: "Here are the latest challenge results",
-            isFinished: true,
-          },
-          ...finishedChallenges.map((r) => ({ kind: "race" as const, race: r })),
-        ]
-      : []),
-  ], [liveCount, liveChallenges, finishedCount, finishedChallenges]);
+  // Open the date-specific "View All" screen. The already-filtered races for the
+  // tapped date are stashed in screenCache (mem write is synchronous) so the
+  // next screen renders instantly with identical data — no refetch, no dupes.
+  const handleViewAll = useCallback((origin: RaceOrigin, group: DateGroup<LiveRace>) => {
+    const cacheKey = `live_date_rooms:${origin}:${group.dateKey}:${activeFilter}`;
+    void screenCache.set(cacheKey, group.races);
+    router.push({
+      pathname: "/live/date-rooms",
+      params: {
+        cacheKey,
+        dateLabel: group.dateLabel,
+        count: String(group.races.length),
+        origin,
+        myRaceId: myRace?.id ?? "",
+        myRaceIsHost: myRace?.isHost ? "1" : "",
+      },
+    });
+  }, [activeFilter, myRace?.id, myRace?.isHost]);
+
+  // Live rows are rebuilt on every elapsed-timer tick (the live races change
+  // each second). Kept in its own memo so it doesn't touch finished rows.
+  const liveRows = useMemo<ListItem[]>(() => {
+    if (liveCount === 0) return [];
+    const rows: ListItem[] = [{
+      kind: "header",
+      key: "sec-live",
+      label: "Live Now",
+      sub: `${liveCount} live challenge${liveCount !== 1 ? "s" : ""} right now`,
+      isFinished: false,
+    }];
+    for (const g of groupRacesByDate(
+      liveChallenges,
+      (r) => r.startedAt ?? r.createdAt,
+      { order: "asc", withinOrder: "asc" },
+    )) {
+      rows.push({ kind: "group", key: `live-${g.dateKey}`, origin: "live", group: g });
+    }
+    return rows;
+  }, [liveCount, liveChallenges]);
+
+  // Finished rows only recompute when finished races change — so their group
+  // object references stay stable across live ticks and memoized carousels
+  // (DateGroupRow) skip re-rendering, keeping scrolling smooth.
+  const finishedRows = useMemo<ListItem[]>(() => {
+    if (finishedCount === 0) return [];
+    const rows: ListItem[] = [{
+      kind: "header",
+      key: "sec-finished",
+      label: "Recently Finished",
+      sub: "Here are the latest challenge results",
+      isFinished: true,
+    }];
+    const groups = groupRacesByDate(
+      finishedChallenges,
+      (r) => r.completedAt ?? r.startedAt ?? r.createdAt,
+      { order: "desc", withinOrder: "desc" },
+    );
+    groups.forEach((g, i) => {
+      rows.push({
+        kind: "group",
+        key: `finished-${g.dateKey}`,
+        origin: "finished",
+        group: g,
+        isLastFinished: i === groups.length - 1,
+      });
+    });
+    return rows;
+  }, [finishedCount, finishedChallenges]);
+
+  const listItems = useMemo<ListItem[]>(
+    () => [...liveRows, ...finishedRows],
+    [liveRows, finishedRows],
+  );
 
   // Memoized renderItem — stable function reference so FlatList rows don't
   // re-render just because the parent re-renders for an unrelated reason.
@@ -1224,16 +1412,18 @@ export default function LiveTab() {
       );
     }
     return (
-      <RaceCard
-        race={item.race}
+      <DateGroupRow
+        group={item.group}
+        origin={item.origin}
         colors={colors}
-        isMyRace={item.race.id === myRace?.id}
-        isHost={myRace?.isHost}
+        myRace={myRace}
         myUsername={user?.username}
         onAvatarPress={handleAvatarPress}
+        onViewAll={handleViewAll}
+        showTrailingLoader={item.origin === "finished" && item.isLastFinished && loadingMore}
       />
     );
-  }, [colors, myRace?.id, myRace?.isHost, user?.username, handleAvatarPress]);
+  }, [colors, myRace, user?.username, handleAvatarPress, handleViewAll, loadingMore]);
 
   return (
     <View style={[st.container, { paddingBottom: tabBarHeight, backgroundColor: colors.background }]}>
@@ -1260,22 +1450,22 @@ export default function LiveTab() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        style={[st.filterRow, { backgroundColor: colors.background }]}
-        contentContainerStyle={st.filterContent}
+        style={[st.filterRow, st.mainTabBar, { backgroundColor: colors.card, borderColor: colors.border }]}
+        contentContainerStyle={st.mainTabContent}
       >
         {FILTERS.map((f) => {
           const active = activeFilter === f;
-          const label = f;
+          const textColor = active ? colors.primaryForeground : colors.mutedForeground;
           return (
             <TouchableOpacity
               key={f}
               onPress={() => setActiveFilter(f)}
-              style={[st.chip, active && st.chipActive, !active && { backgroundColor: colors.card, borderColor: colors.border }]}
+              style={[st.mainTabBtn, active && { backgroundColor: colors.primary }]}
             >
               {f === "All" && (
-                <Feather name="grid" size={12} color={active ? "#FFF" : colors.mutedForeground} style={{ marginRight: 2 }} />
+                <Feather name="grid" size={12} color={textColor} style={{ marginRight: 2 }} />
               )}
-              <Text style={[st.chipText, { color: active ? "#FFF" : colors.mutedForeground }]}>{label}</Text>
+              <Text style={[st.mainTabText, { color: textColor }]}>{f}</Text>
             </TouchableOpacity>
           );
         })}
@@ -1327,7 +1517,16 @@ export default function LiveTab() {
       ) : liveCount === 0 && finishedCount === 0 ? (
         <View style={st.emptyBox}>
           <Feather name="zap-off" size={32} color={colors.mutedForeground} />
-          <Text style={[st.emptyText, { color: colors.mutedForeground }]}>No races found.</Text>
+          <Text style={[st.emptyText, { color: colors.mutedForeground }]}>
+            {activeFilter === "Cash Challenges"
+              ? "No cash challenges available right now."
+              : "No races found."}
+          </Text>
+          {activeFilter === "Cash Challenges" && (
+            <Text style={[st.emptySubText, { color: colors.mutedForeground }]}>
+              Host or join a cash challenge when one becomes available.
+            </Text>
+          )}
           <TouchableOpacity
             style={st.refreshBtn}
             onPress={load}
@@ -1339,12 +1538,13 @@ export default function LiveTab() {
       ) : (
         <FlatList
           data={listItems}
-          keyExtractor={(item) =>
-            item.kind === "header" ? `hdr-${item.label}` : item.race.id
-          }
+          keyExtractor={(item) => item.key}
           style={{ flex: 1 }}
           contentContainerStyle={[st.list, { paddingBottom: 24 }]}
           showsVerticalScrollIndicator={false}
+          initialNumToRender={4}
+          maxToRenderPerBatch={4}
+          windowSize={7}
           onEndReached={loadMoreFinished}
           onEndReachedThreshold={0.3}
           ListFooterComponent={
@@ -1390,23 +1590,34 @@ const st = StyleSheet.create({
   livePillText:     { fontSize: rf(11), fontWeight: "900", color: "#FF4444", letterSpacing: 0.8 },
   liveDot:          { width: 6, height: 6, borderRadius: 3, backgroundColor: "#FF4444" },
 
-  // Filters
-  filterRow:        { flexGrow: 0, flexShrink: 0 },
-  filterContent:    { paddingHorizontal: rs(14), paddingVertical: rs(10), gap: 8 },
-  chip:             { flexDirection: "row", alignItems: "center", paddingHorizontal: rs(14), paddingVertical: rs(8), borderRadius: 16, borderWidth: 1 },
-  chipActive:       { backgroundColor: NEON_PURPLE, borderColor: NEON_PURPLE },
-  chipText:         { fontSize: rf(13), fontWeight: "700" },
+  // Filters (matches Leaderboard main tabs)
+  filterRow:        { flexGrow: 0, flexShrink: 0, marginHorizontal: rs(14), marginBottom: rs(10) },
+  mainTabBar:       { borderRadius: 14, borderWidth: 1 },
+  mainTabContent:   { flexDirection: "row", padding: 3, gap: 3 },
+  mainTabBtn:       { flexDirection: "row", alignItems: "center", paddingVertical: rs(9), paddingHorizontal: rs(16), borderRadius: 11 },
+  mainTabText:      { fontSize: rf(13), fontWeight: "700" },
 
   // Section headers
   sectionHeader:    { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 2, marginBottom: 10, marginTop: 4 },
   sectionLabel:     { fontSize: rf(15), fontWeight: "800" },
   sectionSub:       { fontSize: rf(12), marginTop: 1 },
 
+  // Date section (grouped horizontal carousels)
+  dateSection:      { marginBottom: rs(4) },
+  dateHeaderRow:    { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 2, marginBottom: rs(10) },
+  dateLabel:        { fontSize: rf(15), fontWeight: "800", letterSpacing: -0.2 },
+  dateCount:        { fontSize: rf(11.5), fontWeight: "600", marginTop: 1 },
+  viewAllBtn:       { flexDirection: "row", alignItems: "center", gap: 2, paddingHorizontal: rs(10), paddingVertical: rs(6), borderRadius: 10, borderWidth: 1, borderColor: NEON_PURPLE + "45", backgroundColor: NEON_PURPLE + "12" },
+  viewAllText:      { fontSize: rf(12.5), fontWeight: "700", color: NEON_PURPLE },
+  carousel:         { paddingRight: rs(2), paddingBottom: rs(2), alignItems: "stretch" },
+  carouselCard:     { flex: 1 },
+
   // List
   list:             { padding: rs(14), gap: 12 },
   loadingBox:       { flex: 1, alignItems: "center", justifyContent: "center" },
   emptyBox:         { flex: 1, alignItems: "center", justifyContent: "center", gap: 14 },
   emptyText:        { fontSize: rf(15), textAlign: "center" },
+  emptySubText:     { fontSize: rf(13), textAlign: "center", paddingHorizontal: rs(24), lineHeight: rf(19) },
   refreshBtn:       { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: rs(20), paddingVertical: rs(10), borderRadius: 12, borderWidth: 1, borderColor: NEON_PURPLE + "50", backgroundColor: NEON_PURPLE + "15" },
   refreshText:      { fontSize: rf(14), fontWeight: "600", color: NEON_PURPLE },
 
@@ -1491,7 +1702,7 @@ const st = StyleSheet.create({
   viewResultsRight:   { flexDirection: "row", alignItems: "center", gap: 6 },
 
   // CTA button
-  ctaBtn:           { overflow: "hidden" },
+  ctaBtn:           { overflow: "hidden", marginTop: "auto" },
   ctaGrad:          { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: rs(14) },
   ctaText:          { fontSize: rf(15), fontWeight: "900", letterSpacing: 0.3 },
 });

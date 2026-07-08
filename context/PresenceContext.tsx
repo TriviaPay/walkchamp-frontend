@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import { getValidSession } from "@/services/authService";
 import { timeoutSignal, PRESENCE_TIMEOUT } from "@/utils/authFetch";
@@ -138,8 +138,13 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  const value = useMemo(
+    () => ({ counts, userStatus, setUserStatus, formatCount }),
+    [counts, userStatus, setUserStatus, formatCount],
+  );
+
   return (
-    <PresenceContext.Provider value={{ counts, userStatus, setUserStatus, formatCount }}>
+    <PresenceContext.Provider value={value}>
       {children}
     </PresenceContext.Provider>
   );

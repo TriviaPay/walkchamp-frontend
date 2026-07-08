@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
   Modal,
   Pressable,
   ScrollView,
@@ -319,18 +320,38 @@ export default function StartTimePickerModal({
   );
   const [wheelEpoch, setWheelEpoch] = useState(0);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [error, setError] = useState<string | null>(null);
+  const [segW, setSegW] = useState(0);
   const draftRef = useRef(draft);
   draftRef.current = draft;
+
+  // Sliding highlight for the Now / Schedule segmented control.
+  const segAnim = useRef(new Animated.Value(draft.isNow ? 0 : 1)).current;
+  useEffect(() => {
+    Animated.timing(segAnim, {
+      toValue: draft.isNow ? 0 : 1,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+  }, [draft.isNow, segAnim]);
 
   const applyWheel = useCallback((wheel: WheelValue) => {
     draftRef.current = wheel;
     setWheelSeed(wheel);
     setDraft(wheel);
     setWheelEpoch((n) => n + 1);
+    setError(null);
   }, []);
+
+  // True when a scheduled (non-"Now") time on today's date is already in the past.
+  const isPastWheel = useCallback((wheel: WheelValue, now = new Date()): boolean => {
+    if (!isToday || wheel.isNow) return false;
+    return wheelToMinutes(wheel) <= now.getHours() * 60 + now.getMinutes();
+  }, [isToday]);
 
   useEffect(() => {
     if (!visible) return;
+    setError(null);
     const resolvedIdx = resolveInitialPresetIndex(presets, selectedIndex, isToday);
     const preset = getPresetForIndex(presets, resolvedIdx);
     const wheel = presetToWheel(preset);
@@ -367,6 +388,7 @@ export default function StartTimePickerModal({
   }, [presets, applyWheel]);
 
   const onWheelInteract = useCallback(() => {
+    setError(null);
     if (!draftRef.current.isNow) return;
     const next = getNextFutureWheel(presets, new Date());
     draftRef.current = next;
@@ -377,33 +399,44 @@ export default function StartTimePickerModal({
     const next = { ...draftRef.current, isNow: false, hour12: i + 1 };
     draftRef.current = next;
     setDraft(next);
+    setError(null);
   }, []);
 
   const onMinuteChange = useCallback((i: number) => {
     const next = { ...draftRef.current, isNow: false, minute: i === 1 ? 30 : 0 };
     draftRef.current = next;
     setDraft(next);
+    setError(null);
   }, []);
 
   const onPeriodChange = useCallback((i: number) => {
     const next = { ...draftRef.current, isNow: false, isPM: i === 1 };
     draftRef.current = next;
     setDraft(next);
+    setError(null);
   }, []);
 
   const handleConfirm = useCallback(() => {
     const currentDraft = draftRef.current;
-    const finalDraft = isToday && !currentDraft.isNow
-      ? clampWheelToFuture(currentDraft, presets, true)
-      : currentDraft;
-    draftRef.current = finalDraft;
-    onConfirm(findPresetIndex(presets, finalDraft, isToday));
+    // Block scheduling a time that has already passed today.
+    if (isPastWheel(currentDraft)) {
+      setError("The selected time has already passed. Please choose a future date and time.");
+      void Haptics.notificationAsync?.(Haptics.NotificationFeedbackType?.Error);
+      return;
+    }
+    setError(null);
+    onConfirm(findPresetIndex(presets, currentDraft, isToday));
     onClose();
-  }, [isToday, presets, onConfirm, onClose]);
+  }, [isToday, presets, onConfirm, onClose, isPastWheel]);
 
   const handleDismissApply = useCallback(() => {
+    // Tapping outside on an invalid past time simply cancels (never saves a past time).
+    if (isPastWheel(draftRef.current)) {
+      onClose();
+      return;
+    }
     handleConfirm();
-  }, [handleConfirm]);
+  }, [handleConfirm, isPastWheel, onClose]);
 
   const handleCancel = useCallback(() => {
     onClose();
@@ -440,23 +473,58 @@ export default function StartTimePickerModal({
             </Text>
 
             {isToday && (
-              <TouchableOpacity
-                onPress={draft.isNow ? undefined : selectNow}
-                activeOpacity={0.85}
+              <View
+                onLayout={(e) => setSegW(e.nativeEvent.layout.width)}
                 style={{
                   marginHorizontal: rs(16),
-                  marginBottom: rs(10),
-                  paddingVertical: rs(14),
-                  paddingHorizontal: rs(14),
-                  borderRadius: rs(12),
-                  borderWidth: 1.5,
-                  borderColor: draft.isNow ? accent : colors.border,
-                  backgroundColor: draft.isNow ? accent + "14" : colors.background,
+                  marginBottom: rs(12),
+                  height: rs(46),
+                  borderRadius: rs(13),
+                  backgroundColor: colors.background,
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  flexDirection: "row",
+                  padding: rs(4),
                 }}
               >
-                <Text style={{ fontSize: rf(15), fontWeight: "800", color: draft.isNow ? accent : colors.foreground }}>Now</Text>
-                <Text style={{ fontSize: rf(11), color: colors.mutedForeground, marginTop: 3 }}>Starts right away</Text>
-              </TouchableOpacity>
+                {segW > 0 && (
+                  <Animated.View
+                    style={{
+                      position: "absolute",
+                      top: rs(4),
+                      left: rs(4),
+                      bottom: rs(4),
+                      width: (segW - rs(8)) / 2,
+                      borderRadius: rs(10),
+                      backgroundColor: accent,
+                      transform: [{
+                        translateX: segAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0, (segW - rs(8)) / 2],
+                        }),
+                      }],
+                    }}
+                  />
+                )}
+                <TouchableOpacity
+                  onPress={selectNow}
+                  activeOpacity={0.8}
+                  style={{ flex: 1, alignItems: "center", justifyContent: "center", zIndex: 1 }}
+                >
+                  <Text style={{ fontSize: rf(13.5), fontWeight: "800", color: draft.isNow ? "#000" : colors.foreground }}>
+                    Now
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={switchToScheduled}
+                  activeOpacity={0.8}
+                  style={{ flex: 1, alignItems: "center", justifyContent: "center", zIndex: 1 }}
+                >
+                  <Text style={{ fontSize: rf(13.5), fontWeight: "800", color: !draft.isNow ? "#000" : colors.foreground }}>
+                    Schedule
+                  </Text>
+                </TouchableOpacity>
+              </View>
             )}
 
             <Text style={{
@@ -464,10 +532,19 @@ export default function StartTimePickerModal({
               fontWeight: "800",
               color: accent,
               textAlign: "center",
-              marginBottom: rs(12),
+              marginBottom: rs(4),
               letterSpacing: 0.3,
             }}>
               {displayLabel}
+            </Text>
+
+            <Text style={{
+              fontSize: rf(11.5),
+              color: colors.mutedForeground,
+              textAlign: "center",
+              marginBottom: rs(12),
+            }}>
+              {draft.isNow && isToday ? "Starts right away" : "Scheduled start time"}
             </Text>
 
             {showWheels ? (
@@ -525,23 +602,24 @@ export default function StartTimePickerModal({
                 </View>
               </View>
             ) : (
-              <TouchableOpacity
-                onPress={switchToScheduled}
-                activeOpacity={0.85}
-                style={{
-                  marginHorizontal: rs(16),
-                  marginBottom: rs(10),
-                  paddingVertical: rs(14),
-                  borderRadius: rs(12),
-                  borderWidth: 1,
-                  borderColor: colors.border,
-                  alignItems: "center",
-                }}
-              >
-                <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.mutedForeground }}>
-                  Tap to schedule a future time
+              <View style={{ marginBottom: rs(6) }} />
+            )}
+
+            {error && (
+              <View style={{
+                marginHorizontal: rs(16),
+                marginBottom: rs(10),
+                paddingVertical: rs(9),
+                paddingHorizontal: rs(12),
+                borderRadius: rs(10),
+                backgroundColor: "#FF3B3018",
+                borderWidth: 1,
+                borderColor: "#FF3B3055",
+              }}>
+                <Text style={{ fontSize: rf(12), fontWeight: "600", color: "#FF5A50", textAlign: "center" }}>
+                  {error}
                 </Text>
-              </TouchableOpacity>
+              </View>
             )}
 
             <View style={{ flexDirection: "row", gap: rs(10), paddingHorizontal: rs(16), paddingTop: rs(4) }}>

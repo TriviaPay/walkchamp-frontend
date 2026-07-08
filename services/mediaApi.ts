@@ -38,13 +38,31 @@ export function profileAvatarImageUri(userId: string, avatarVersion = 0): string
   return `${getApiBase()}/api/profile/avatar/${userId}?v=${avatarVersion}`;
 }
 
+// ── Session-level "already decoded" avatar registry ──────────────────────────
+// Once an avatar URI has been loaded (rendered or prefetched) during this app
+// session, expo-image holds it in its memory/disk cache. Tracking the URIs lets
+// avatar components trust the cache on re-mount and paint the photo immediately
+// instead of flashing initials / the local preview while waiting for onLoad.
+const loadedAvatarUris = new Set<string>();
+
+export function isAvatarUriLoaded(uri: string | null | undefined): boolean {
+  return !!uri && loadedAvatarUris.has(uri);
+}
+
+export function markAvatarUriLoaded(uri: string | null | undefined): void {
+  if (uri) loadedAvatarUris.add(uri);
+}
+
 /** Warm disk cache for avatars — call after login or list fetch. */
 export function prefetchProfileAvatar(userId: string, avatarVersion = 0): void {
   if (!userId) return;
+  const uri = profileAvatarImageUri(userId, avatarVersion);
   void import("expo-image").then(({ Image }) => {
-    void Image.prefetch(profileAvatarImageUri(userId, avatarVersion), {
-      cachePolicy: "memory-disk",
-    });
+    void Image.prefetch(uri, { cachePolicy: "memory-disk" })
+      .then((ok) => {
+        if (ok) markAvatarUriLoaded(uri);
+      })
+      .catch(() => {});
   });
 }
 

@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { setHapticsEnabled } from "@/utils/haptics";
 
 const STORAGE_KEY = "@walkchamp/vibrationEnabled";
@@ -33,8 +33,10 @@ export function SoundProvider({ children }: { children: React.ReactNode }) {
     AsyncStorage.setItem(STORAGE_KEY, String(v)).catch(() => {});
   }, []);
 
+  const value = useMemo(() => ({ soundEnabled, setSoundEnabled }), [soundEnabled, setSoundEnabled]);
+
   return (
-    <SoundContext.Provider value={{ soundEnabled, setSoundEnabled }}>
+    <SoundContext.Provider value={value}>
       {children}
     </SoundContext.Provider>
   );

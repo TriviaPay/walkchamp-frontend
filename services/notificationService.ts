@@ -11,7 +11,7 @@ import {
   ensureNotificationsForPush,
   isPushNotificationAccessGranted,
 } from "@/services/permissions/notificationGate";
-import { pushLog } from "@/services/pushLog";
+import { pushLog, notificationLog } from "@/services/pushLog";
 
 /**
  * In Expo Go, TurboModuleRegistry.getEnforcing() throws an Invariant Violation
@@ -640,6 +640,19 @@ export async function setupNotificationClickHandler(
         : rawData
     ) as Record<string, unknown>;
     const launchUrl = notif.launchURL ?? notif.launchUrl;
+    const type = String(data.type ?? "unknown");
+    const eventType = String(data.eventType ?? data.event_type ?? "");
+    if (type === "race_starting_soon") {
+      notificationLog(`opened payload=${JSON.stringify(data)}`);
+      notificationLog(`eventType=${eventType || "unknown"}`);
+      const deepLink = String(data.deepLink ?? data.deep_link ?? launchUrl ?? "");
+      if (deepLink) notificationLog(`deepLink=${deepLink}`);
+      if (eventType === "sponsored_event") {
+        notificationLog(`navigatingToSponsoredEvent eventId=${String(data.eventId ?? data.event_id ?? "")}`);
+      } else {
+        notificationLog(`navigatingToRace raceId=${String(data.raceId ?? data.race_id ?? data.roomId ?? "")}`);
+      }
+    }
     const route = resolveNotificationRoute(data, launchUrl);
     if (route) {
       pushLog(`notification click route=${route} type=${String(data.type ?? "unknown")}`);
@@ -675,6 +688,11 @@ export async function setupForegroundHandler(): Promise<() => void> {
     const type = String(data.type ?? "unknown");
     const title = fgEvent.notification.title ?? "";
     pushLog(`foreground received type=${type} title=${title}`);
+    if (type === "race_starting_soon") {
+      const eventType = String(data.eventType ?? data.event_type ?? "unknown");
+      notificationLog(`received type=race_starting_soon`);
+      notificationLog(`eventType=${eventType}`);
+    }
     // OneSignal v5: preventDefault + display() required to show system banner while app is open.
     fgEvent.preventDefault();
     fgEvent.notification.display();

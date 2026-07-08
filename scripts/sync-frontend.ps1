@@ -92,7 +92,20 @@ $files = @(
     "components\PushPermissionPrompt.tsx",
     "utils\deepLinkUtils.ts",
     "app\_layout.tsx",
-    "app\public-profile\[userId].tsx"
+    "app\public-profile\[userId].tsx",
+    # Wallet deposits — Phase C payments (Stripe/Razorpay UX)
+    "config\paymentsConfig.ts",
+    "services\depositSession.ts",
+    "utils\walletLedger.ts",
+    "utils\storage.ts",
+    "utils\mockData.ts",
+    "context\AppContext.tsx",
+    "app\(tabs)\wallet.tsx",
+    "app\payment-complete.tsx",
+    "plugins\withPaymentAppLinks.js",
+    "app.json",
+    "docs\PAYMENTS_BACKEND_HANDOFF.md",
+    "docs\STRIPE_RAZORPAY_SETUP.md"
 )
 
 function Sync-OneWay([string]$from, [string]$to) {

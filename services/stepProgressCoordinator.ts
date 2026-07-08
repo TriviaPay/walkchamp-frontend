@@ -32,7 +32,7 @@ import {
 } from "@/utils/stepScopedStorage";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { mergeWalkStepsWithNative } from "@/services/stepDisplayMerge";
-import { shouldIgnoreLegacyPhantomBump, sanitizeLegacyProviderSteps, stepEngineLog, stepDebugVerboseLog, resolveTodayDisplaySteps } from "@/utils/stepAccuracy";
+import { shouldIgnoreLegacyPhantomBump, sanitizeLegacyProviderSteps, stepEngineLog, stepDebugVerboseLog, resolveTodayDisplaySteps, filterLegacyStepIncrease, suppressLegacyStepBumps } from "@/utils/stepAccuracy";
 
 let notificationTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingNotification = false;
@@ -166,17 +166,25 @@ export async function resolveAuthoritativeTodaySteps(
   opts?: { mergeNative?: boolean },
 ): Promise<number> {
   const today = getLocalDateStr();
-  let steps = Math.max(0, store.getState().raceProgress.todaySteps);
+  let accepted = Math.max(0, store.getState().raceProgress.todaySteps);
+  const backendSynced =
+    (await storageGet<number>(stepScopedKeys(userId, today).lastSyncedStepsCount)) ?? 0;
 
   const localCached = await readDailyStepsForUserDate(userId, today);
-  steps = Math.max(steps, localCached);
+  accepted = filterLegacyStepIncrease(accepted, localCached, {
+    backendSteps: backendSynced,
+  });
 
   if (Platform.OS === "android") {
     const native = await stepTrackingNotificationService.getNativeStepState(userId);
     const nativeMatchesUser = !native?.userId || native.userId === userId;
     const nativeStale = !!(native?.localDate && native.localDate !== today);
     if (nativeMatchesUser && !nativeStale) {
-      steps = Math.max(steps, native?.todaySteps ?? 0);
+      accepted = filterLegacyStepIncrease(
+        accepted,
+        native?.todaySteps ?? 0,
+        { backendSteps: backendSynced },
+      );
     }
   }
 
@@ -193,24 +201,22 @@ export async function resolveAuthoritativeTodaySteps(
       }
       const resolved = resolveTodayDisplaySteps({
         providerSteps,
-        backendSteps: steps,
-        previousProviderSteps: steps,
+        backendSteps: accepted,
+        previousProviderSteps: accepted,
       });
-      steps = Math.max(steps, resolved);
+      accepted = filterLegacyStepIncrease(accepted, resolved, {
+        backendSteps: backendSynced,
+      });
     }
   } catch {
     // keep accumulated steps
   }
 
-  if (lastWalkNotificationSteps >= 0) {
-    steps = Math.max(steps, lastWalkNotificationSteps);
-  }
-
   stepEngineLog(
     "StepEngine",
-    `canonicalTodaySteps=${steps} userId=${userId} localDate=${today}`,
+    `canonicalTodaySteps=${accepted} userId=${userId} localDate=${today}`,
   );
-  return steps;
+  return accepted;
 }
 
 /**
@@ -232,43 +238,11 @@ export async function pushWalkNotificationFromCanonicalStore(
     return;
   }
 
-  let steps = Math.max(0, Math.floor(s.todaySteps));
+  let steps = Math.max(0, Math.floor(store.getState().raceProgress.todaySteps));
   const now = Date.now();
   const cfg = STEP_TRACKING_NOTIFICATION_CONFIG;
-  const today = getLocalDateStr();
 
-  // Reconcile with provider + native before notification push.
-  steps = await resolveAuthoritativeTodaySteps(userId, { mergeNative: true });
-
-  // Never push stale JS/Redux values over a higher native FGS count for the same user.
-  if (Platform.OS === "android") {
-    const native = await stepTrackingNotificationService.getNativeStepState(userId);
-    const nativeMatchesUser =
-      !native?.userId || native.userId === userId;
-    const nativeStale = !!(
-      native?.localDate && native.localDate !== today
-    );
-    const nativeSteps =
-      nativeMatchesUser && !nativeStale ? Math.max(0, native?.todaySteps ?? 0) : 0;
-    if (nativeSteps > steps) {
-      steps = nativeSteps;
-    }
-    if (!nativeMatchesUser && native?.userId && __DEV__) {
-      console.log(
-        `[OngoingNotification] native user mismatch native=${native.userId} active=${userId} — pushing steps=${steps}`,
-      );
-    }
-  }
-
-  // Keep Redux + Walk UI in sync with the same count shown on the notification.
-  const currentToday = store.getState().raceProgress.todaySteps;
-  if (steps > currentToday) {
-    updateStepProgressFromRealSource({
-      todaySteps: steps,
-      stepSource: mapProviderSource(),
-      updatedAt: new Date().toISOString(),
-    });
-  }
+  // Notification mirrors canonical Redux only — never reconcile provider/native on push.
 
   // Notification display is monotonic within the day — never regress and cause flicker.
   if (lastWalkNotificationSteps >= 0 && steps < lastWalkNotificationSteps) {
@@ -442,6 +416,8 @@ export function updateStepProgressFromRealSource(input: {
   atTarget?: boolean;
   isSimulated?: boolean;
   isFake?: boolean;
+  /** Live sensor / FGS tick — skip poll-only phantom guards. */
+  fromWatch?: boolean;
 }): void {
   const source = input.stepSource ?? mapProviderSource();
 
@@ -504,7 +480,7 @@ export function updateStepProgressFromRealSource(input: {
         current.todaySteps,
       );
     }
-    if (shouldIgnoreLegacyPhantomBump(current.todaySteps, next)) {
+    if (shouldIgnoreLegacyPhantomBump(current.todaySteps, next, { fromWatch: input.fromWatch })) {
       if (__DEV__) {
         console.log(
           `[StepEngine] rejected phantom bump previous=${current.todaySteps} incoming=${next} source=${source}`,
@@ -635,6 +611,7 @@ export function initStepProgressCoordinator(): void {
 
   void waitForAppStartupReady().then(async () => {
     try {
+      suppressLegacyStepBumps(12_000);
       const userId = await storageGet<string>(STORAGE_KEYS.LAST_STEP_USER_ID);
       lastKnownTrackingDate = userId
         ? (await storageGet<string>(stepScopedKeys(userId).currentLocalDate)) ?? null
@@ -647,10 +624,9 @@ export function initStepProgressCoordinator(): void {
         const bootSteps = await readDailyStepsForUserDate(userId, today);
         let seedSteps = bootSteps;
         try {
-          seedSteps = await resolveAuthoritativeTodaySteps(userId, { mergeNative: true });
-          lastWalkNotificationSteps = seedSteps;
+          seedSteps = await resolveAuthoritativeTodaySteps(userId, { mergeNative: false });
         } catch {
-          lastWalkNotificationSteps = bootSteps;
+          seedSteps = bootSteps;
         }
         store.dispatch(
           raceProgressActions.initializeStepsForUserDate({
@@ -659,6 +635,7 @@ export function initStepProgressCoordinator(): void {
             bootTodaySteps: seedSteps,
           }),
         );
+        lastWalkNotificationSteps = store.getState().raceProgress.todaySteps;
         startWalkBackgroundStepPoll();
         void tickWalkBackgroundStepPoll("resume");
         stepEngineLog(
@@ -732,12 +709,13 @@ export async function tickWalkBackgroundStepPoll(
       previousProviderSteps: current,
     });
 
-    const stepsChanged = display > current;
-    if (stepsChanged) {
+    const stepsBefore = store.getState().raceProgress.todaySteps;
+    if (display > stepsBefore) {
       updateStepProgressFromRealSource({
         todaySteps: display,
         stepSource: mapProviderSource(),
         updatedAt: new Date().toISOString(),
+        fromWatch: reason === "fgs_tick",
       });
       stepEngineLog(
         "StepEngine",
@@ -745,9 +723,10 @@ export async function tickWalkBackgroundStepPoll(
       );
     }
 
-    if (stepsChanged) {
+    const stepsAfter = store.getState().raceProgress.todaySteps;
+    if (stepsAfter > stepsBefore) {
       await pushWalkNotificationFromCanonicalStore(true, s.userId);
-      notificationBgLog(`notifyUpdated id=91002 steps=${display} reason=${reason}`);
+      notificationBgLog(`notifyUpdated id=91002 steps=${stepsAfter} reason=${reason}`);
     }
   } catch (err) {
     notificationBgLog(`skippedReason=error err=${String(err)}`);
@@ -843,7 +822,7 @@ function initNativeStepEventListener(): void {
       const currentToday = s.todaySteps;
       const incomingToday = Math.max(0, Math.floor(state.todaySteps ?? 0));
       if (incomingToday <= currentToday) return;
-      if (shouldIgnoreLegacyPhantomBump(currentToday, incomingToday)) {
+      if (shouldIgnoreLegacyPhantomBump(currentToday, incomingToday, { fromWatch: true })) {
         stepEngineLog(
           "StepEngine",
           `rejected native phantom todaySteps incoming=${incomingToday} current=${currentToday}`,
@@ -861,6 +840,7 @@ function initNativeStepEventListener(): void {
         raceSteps: typeof state.raceSteps === "number" ? state.raceSteps : undefined,
         stepSource: mapNativeStepSource(source),
         updatedAt,
+        fromWatch: true,
       });
     },
   );
@@ -1573,7 +1553,12 @@ export async function bindStepSessionToUser(userId: string): Promise<boolean> {
     console.log(`[StepService] started for new user userId=${userId}`);
   }
   const today = getLocalDateStr();
-  const bootSteps = switched ? 0 : await resolveAuthoritativeTodaySteps(userId, { mergeNative: true }).catch(() => readDailyStepsForUserDate(userId, today));
+  suppressLegacyStepBumps(12_000);
+  const bootSteps = switched
+    ? 0
+    : await resolveAuthoritativeTodaySteps(userId, { mergeNative: false }).catch(() =>
+        readDailyStepsForUserDate(userId, today),
+      );
   store.dispatch(
     raceProgressActions.initializeStepsForUserDate({
       userId,
