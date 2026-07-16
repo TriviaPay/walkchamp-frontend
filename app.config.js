@@ -49,7 +49,10 @@ module.exports = () => {
   expo.plugins = patchAdMobPlugin(expo.plugins, androidAppId, iosAppId);
   expo.extra = {
     ...(expo.extra || {}),
-    appEnv: process.env.EXPO_PUBLIC_APP_ENV || (__DEV__ ? "development" : "production"),
+    // Node evaluates this file during Gradle — `__DEV__` is not defined there.
+    appEnv:
+      process.env.EXPO_PUBLIC_APP_ENV ||
+      (process.env.NODE_ENV === "production" ? "production" : "development"),
   };
   return { expo };
 };
