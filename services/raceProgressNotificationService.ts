@@ -51,16 +51,17 @@ let healthKitWakeSubscription: { remove: () => void } | null = null;
 function getNativeModule(): NativeModule | null {
   if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return null;
   if (nativeModule !== undefined) return nativeModule;
-  nativeModule = null;
   try {
-    const { requireOptionalNativeModule } =
-      require("expo-modules-core") as typeof import("expo-modules-core");
-    nativeModule = requireOptionalNativeModule<NativeModule>("WalkChampRaceProgress");
+    const { isAppStartupReady } = require("@/services/appStartup") as typeof import("@/services/appStartup");
+    // Do not cache null before startup — bridge may not be ready yet.
+    if (!isAppStartupReady()) return null;
+    const { requireOptionalExpoNativeModule } = require("@/utils/expoNativeModule") as typeof import("@/utils/expoNativeModule");
+    nativeModule = requireOptionalExpoNativeModule<NativeModule>("WalkChampRaceProgress");
   } catch (err) {
     if (__DEV__) console.warn("[RaceProgressNotif] native module unavailable", err);
     nativeModule = null;
   }
-  return nativeModule;
+  return nativeModule ?? null;
 }
 
 async function checkAndroidNotificationPermission(): Promise<boolean> {

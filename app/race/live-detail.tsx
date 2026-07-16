@@ -33,6 +33,7 @@ import Animated, {
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useParticipantStepAnimator } from "@/hooks/useParticipantStepAnimator";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { formatRaceSteps, resolveLiveRaceDisplaySteps } from "@/utils/liveRaceDisplay";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
@@ -222,9 +223,8 @@ function fmtCountdown(seconds: number) {
   return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`; }
 
 function formatSteps(n: number): string {
-  if (n < 1000) return n.toLocaleString();
-  const k = Math.round((n / 1000) * 10) / 10;
-  return `${k % 1 === 0 ? k.toFixed(0) : k}k`; }
+  return formatRaceSteps(n);
+}
 
 type RaceCommentPayload = Partial<RaceComment> & { comment?: Partial<RaceComment>; timestamp?: string };
 
@@ -1219,7 +1219,7 @@ export default function LiveRaceDetailScreen() {
   const { resumeStepWatching, refreshTodaySteps } = useWalkContext();
   const raceProgress = useRaceProgress();
   const canonicalRaceSteps = raceProgress.raceSteps;
-  const liveRaceSteps = Math.max(0, Math.max(canonicalRaceSteps, userRaceSteps ?? 0));
+  const liveRaceSteps = resolveLiveRaceDisplaySteps(canonicalRaceSteps, userRaceSteps);
   const canonicalRank = raceProgress.rank;
   const localStepsRef = useRef(liveRaceSteps);
   localStepsRef.current = liveRaceSteps;

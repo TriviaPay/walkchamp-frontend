@@ -776,6 +776,8 @@ function initNativeStepEventListener(): void {
       ).toISOString();
 
       // During an active race, native sensor race steps update UI + notification immediately.
+      // Verified HC/HealthKit: do NOT feed sensor into Redux on open/reload (avoids fake bumps);
+      // FGS still updates the ongoing race notification natively.
       if (raceActive && typeof state.raceSteps === "number") {
         if (stepProviderManager.usesVerifiedStepSource() && isDeviceSensorSource(source)) {
           if (__DEV__) {
@@ -885,9 +887,17 @@ async function hydrateFromNativeStepState(): Promise<void> {
     !!current.activeRaceId &&
     (!native.activeRaceId || native.activeRaceId === current.activeRaceId);
 
+  // HC / HealthKit own on-screen steps. Never adopt FGS TYPE_STEP_COUNTER counts
+  // into Redux on open/resume — that caused fake step jumps. Notification stays native.
+  if (stepProviderManager.usesVerifiedStepSource()) {
+    if (__DEV__) {
+      console.log("[AppResume] skip native hydrate — verified step source owns UI");
+    }
+    return;
+  }
+
   if (
     isVerifiedSource(stepSource) &&
-    stepProviderManager.usesVerifiedStepSource() &&
     !raceActive
   ) {
     if (__DEV__) {
@@ -931,9 +941,11 @@ async function hydrateFromNativeStepState(): Promise<void> {
   }
 
   const nativeToday = Math.max(0, Math.floor(native.todaySteps ?? 0));
-  const sanitizedToday = stepProviderManager.usesVerifiedStepSource()
-    ? current.todaySteps
-    : sanitizeLegacyProviderSteps(nativeToday, current.todaySteps, current.todaySteps);
+  const sanitizedToday = sanitizeLegacyProviderSteps(
+    nativeToday,
+    current.todaySteps,
+    current.todaySteps,
+  );
 
   updateStepProgressFromRealSource({
     todaySteps: raceActive ? current.todaySteps : sanitizedToday,
@@ -954,6 +966,13 @@ async function hydrateFromNativeStepState(): Promise<void> {
 
 async function hydrateFromNativeRaceService(): Promise<void> {
   const current = store.getState().raceProgress;
+  // Verified providers must not inherit FGS sensor race counts on open/reload.
+  if (stepProviderManager.usesVerifiedStepSource()) {
+    if (__DEV__) {
+      console.log("[StepStore] skip native race hydrate — verified step source owns UI");
+    }
+    return;
+  }
   const nativeWalk = await stepTrackingNotificationService.getNativeStepState();
   if (
     nativeWalk?.notificationMode === "race_live" &&

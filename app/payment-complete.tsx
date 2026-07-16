@@ -1,21 +1,14 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect } from "react";
-import { ActivityIndicator, View } from "react-native";
 import {
   clearPendingDeposit,
-  depositStatusToUiResult,
-  fetchDepositStatus,
-  isTerminalDepositStatus,
+  resolveDepositUiFromTransaction,
   savePaymentResult,
 } from "@/services/depositSession";
 
 /**
- * Handles payment return from:
- * - Custom scheme: globalwalkerleague://payment-complete?...
- * - Universal Link: https://walkchamp.app/payment-complete?...
- * - API done page (when backend links App Link): .../api/wallet/deposit/done?...
- *
- * Verifies status with backend, stores result for wallet tab modal, then redirects.
+ * Legacy payment return route — immediately forwards to wallet.
+ * UI result comes from backend deposit status (not URL query params).
  */
 export default function PaymentCompleteScreen() {
   const router = useRouter();
@@ -30,43 +23,17 @@ export default function PaymentCompleteScreen() {
     void (async () => {
       const transactionId =
         typeof params.transaction_id === "string" ? params.transaction_id : undefined;
-      const urlStatus = typeof params.status === "string" ? params.status : undefined;
-
-      let uiStatus: "success" | "failed" | "cancelled" | "verification_failed" | null = null;
 
       if (transactionId) {
-        try {
-          const backendStatus = await fetchDepositStatus(transactionId);
-          if (!cancelled) {
-            uiStatus = depositStatusToUiResult(backendStatus);
-            if (!uiStatus && isTerminalDepositStatus(backendStatus)) {
-              uiStatus = "failed";
-            }
-            if (!uiStatus && urlStatus === "processing") {
-              uiStatus = "verification_failed";
-            }
-          }
-        } catch {
-          // fall through to URL status
+        const ui = await resolveDepositUiFromTransaction(transactionId);
+        if (ui) {
+          await clearPendingDeposit();
+          await savePaymentResult({
+            status: ui,
+            transactionId,
+            resolvedAt: new Date().toISOString(),
+          });
         }
-      }
-
-      if (!uiStatus && urlStatus) {
-        if (urlStatus === "success" || urlStatus === "succeeded") uiStatus = "success";
-        else if (urlStatus === "cancelled") uiStatus = "cancelled";
-        else if (urlStatus === "processing") uiStatus = "verification_failed";
-        else if (urlStatus === "requires_review" || urlStatus === "settlement_error") {
-          uiStatus = "verification_failed";
-        } else uiStatus = "failed";
-      }
-
-      if (uiStatus && transactionId) {
-        await clearPendingDeposit();
-        await savePaymentResult({
-          status: uiStatus,
-          transactionId,
-          resolvedAt: new Date().toISOString(),
-        });
       }
 
       if (!cancelled) {
@@ -77,11 +44,7 @@ export default function PaymentCompleteScreen() {
     return () => {
       cancelled = true;
     };
-  }, [params.status, params.transaction_id, router]);
+  }, [params.transaction_id, router]);
 
-  return (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-      <ActivityIndicator size="large" />
-    </View>
-  );
+  return null;
 }

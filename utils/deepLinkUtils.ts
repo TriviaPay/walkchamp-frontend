@@ -6,14 +6,8 @@
 function resolvePaymentHttpsUrl(url: URL): string | null {
   const path = url.pathname.replace(/\/+$/, "") || "/";
   if (path.endsWith("/payment-complete") || path.endsWith("/api/wallet/deposit/done")) {
-    const params = url.searchParams;
-    const status = params.get("status");
-    const transactionId = params.get("transaction_id") ?? params.get("transactionId");
-    const qs = new URLSearchParams();
-    if (status) qs.set("status", status);
-    if (transactionId) qs.set("transaction_id", transactionId);
-    const q = qs.toString();
-    return q ? `/payment-complete?${q}` : "/payment-complete";
+    // Wallet tab handles the stored payment result — skip intermediate screen.
+    return "/(tabs)/wallet";
   }
   return null;
 }
@@ -108,12 +102,8 @@ export function resolveDeepLink(raw: string | undefined | null): string | null {
       return "/(tabs)/walk";
     case "wallet":
       return "/(tabs)/wallet";
-    case "payment-complete": {
-      const [base, inlineQuery] = segment.split("?");
-      void base;
-      const query = inlineQuery ?? (rest.length > 0 ? rest.join("&") : "");
-      return query ? `/payment-complete?${query}` : "/payment-complete";
-    }
+    case "payment-complete":
+      return "/(tabs)/wallet";
     case "settings":
       if (rest[0] === "step-tracking") return "/(tabs)/walk?section=step-tracking";
       return "/(tabs)/profile";

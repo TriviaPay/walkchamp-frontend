@@ -14,8 +14,11 @@
 
 import { Platform } from "react-native";
 import Constants from "expo-constants";
-
-const ADS_ENABLED = process.env.EXPO_PUBLIC_ADS_ENABLED !== "false";
+import {
+  ADS_ENABLED,
+  areAdsConfiguredForCurrentEnv,
+  getRewardedAdUnitId,
+} from "@/config/adsConfig";
 
 /**
  * In Expo Go, TurboModuleRegistry.getEnforcing() throws an Invariant Violation
@@ -24,11 +27,7 @@ const ADS_ENABLED = process.env.EXPO_PUBLIC_ADS_ENABLED !== "false";
  */
 const IS_EXPO_GO = (Constants.executionEnvironment as string) === "storeClient";
 
-const REWARDED_AD_UNIT_ID =
-  Platform.select({
-    ios:     "ca-app-pub-3940256099942544/1712485313",
-    android: "ca-app-pub-3940256099942544/5224354917",
-  }) ?? "ca-app-pub-3940256099942544/5224354917";
+const REWARDED_AD_UNIT_ID = getRewardedAdUnitId();
 
 type AdMobModule = typeof import("react-native-google-mobile-ads");
 
@@ -99,7 +98,12 @@ function _createAndLoadRewarded(): void {
 
 export async function initializeAds(): Promise<void> {
   if (!ADS_ENABLED || Platform.OS === "web") return;
+  if (!areAdsConfiguredForCurrentEnv()) {
+    if (__DEV__) console.log("[AdMob] skipped — ads not configured for this env");
+    return;
+  }
   if (_initialized) return;
+  if (!REWARDED_AD_UNIT_ID) return;
 
   const mod = getAdsModule();
   if (!mod) return;

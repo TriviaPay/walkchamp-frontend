@@ -31,6 +31,7 @@ import { ensureActiveRaceInStore } from "@/services/stepProgressCoordinator";
 import { stepEngineLog } from "@/utils/stepAccuracy";
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import { formatRaceSteps, resolveLiveRaceDisplaySteps } from "@/utils/liveRaceDisplay";
 import {
   liveRaceFetchAllowed,
   markLiveRaceFetched,
@@ -151,9 +152,8 @@ function fmtTime(seconds: number) {
   return `${Math.floor(safe / 60).toString().padStart(2, "0")}:${(safe % 60).toString().padStart(2, "0")}`; }
 
 function formatSteps(n: number): string {
-  if (n < 1000) return n.toLocaleString();
-  const k = Math.round((n / 1000) * 10) / 10;
-  return `${k % 1 === 0 ? k.toFixed(0) : k}k`; }
+  return formatRaceSteps(n);
+}
 
 function normalizeCounts(counts: ReactionCount[]) {
   return counts.reduce<Record<string, number>>((acc, item) => {
@@ -409,7 +409,7 @@ export default function LiveTrackTab() {
   } = useRace();
   const raceProgress = useRaceProgress();
   const canonicalRaceSteps = raceProgress.raceSteps;
-  const liveRaceSteps = Math.max(0, Math.max(canonicalRaceSteps, userRaceSteps ?? 0));
+  const liveRaceSteps = resolveLiveRaceDisplaySteps(canonicalRaceSteps, userRaceSteps);
   const canonicalRank = raceProgress.rank;
   const { width: screenW } = useWindowDimensions();
   const isTablet = screenW >= 768;

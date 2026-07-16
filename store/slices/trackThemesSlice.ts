@@ -20,12 +20,17 @@ export interface TrackTheme {
 export interface TrackThemesResponse {
   themes: TrackTheme[];
   coinBalance: number;
+  /** Persisted user selection from backend (preferred). */
+  selectedThemeCode?: string | null;
+  /** Global fallback when user has no saved selection. */
+  defaultThemeCode?: string | null;
 }
 
 interface TrackThemesState {
   themes: TrackTheme[];
   coinBalance: number;
   selectedThemeCode: string;
+  defaultThemeCode: string;
   loading: boolean;
   purchaseLoading: string | null; // theme code being purchased
   error: string | null;
@@ -36,11 +41,29 @@ const initialState: TrackThemesState = {
   themes: [],
   coinBalance: 0,
   selectedThemeCode: "bg",
+  defaultThemeCode: "bg",
   loading: false,
   purchaseLoading: null,
   error: null,
   purchaseError: null,
 };
+
+/**
+ * Auto-select order for race/host UI:
+ * 1) selectedThemeCode from GET /api/track-themes
+ * 2) defaultThemeCode from the same response
+ * 3) equipped theme (older backends)
+ * 4) "bg"
+ */
+export function resolveSelectedThemeCode(payload: TrackThemesResponse): string {
+  const selected = String(payload.selectedThemeCode ?? "").trim();
+  if (selected) return selected;
+  const fallback = String(payload.defaultThemeCode ?? "").trim();
+  if (fallback) return fallback;
+  const equipped = payload.themes?.find((t) => t.isEquipped)?.code?.trim();
+  if (equipped) return equipped;
+  return "bg";
+}
 
 export const fetchTrackThemes = createAsyncThunk("trackThemes/fetch", async () => {
   const { session } = await getStoredSession();
@@ -80,7 +103,10 @@ export const equipTrackTheme = createAsyncThunk(
       headers: { Authorization: `Bearer ${session}`, "Content-Type": "application/json" },
     });
     if (!res.ok) return rejectWithValue("Failed to equip theme");
-    return themeCode;
+    const json = (await res.json().catch(() => null)) as
+      | { success?: boolean; equippedCode?: string }
+      | null;
+    return (json?.equippedCode ?? themeCode).trim() || themeCode;
   },
 );
 
@@ -103,13 +129,12 @@ const trackThemesSlice = createSlice({
       })
       .addCase(fetchTrackThemes.fulfilled, (state, action) => {
         state.loading = false;
-        state.themes = action.payload.themes;
-        state.coinBalance = action.payload.coinBalance;
-        // Auto-select equipped theme if no selection yet
-        const equipped = action.payload.themes.find((t) => t.isEquipped);
-        if (equipped && state.selectedThemeCode === "bg") {
-          state.selectedThemeCode = equipped.code;
-        }
+        state.themes = action.payload.themes ?? [];
+        state.coinBalance = action.payload.coinBalance ?? 0;
+        const defaultCode =
+          String(action.payload.defaultThemeCode ?? "").trim() || "bg";
+        state.defaultThemeCode = defaultCode;
+        state.selectedThemeCode = resolveSelectedThemeCode(action.payload);
       })
       .addCase(fetchTrackThemes.rejected, (state, action) => {
         state.loading = false;
@@ -132,6 +157,7 @@ const trackThemesSlice = createSlice({
         state.purchaseError = (action.payload as string) ?? "Purchase failed";
       })
       .addCase(equipTrackTheme.fulfilled, (state, action) => {
+        state.selectedThemeCode = action.payload;
         state.themes = state.themes.map((t) => ({
           ...t,
           isEquipped: t.code === action.payload,

@@ -10,6 +10,7 @@ import React, {
 import { AppState } from "react-native";
 import { useAuth } from "@/context/AuthContext";
 import { authFetch } from "@/utils/authFetch";
+import { fetchChatSummary } from "@/services/api/hotReads";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
 
@@ -47,12 +48,14 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
     if (fetchingRef.current) return;
     fetchingRef.current = true;
     try {
-      const res = await authFetch("/api/chat/summary");
-      if (!res.ok) return;
-      const data: { privateUnread: number; requestCount: number } = await res.json();
+      const { ok, data } = await fetchChatSummary<{
+        privateUnread: number;
+        requestCount: number;
+      }>();
+      if (!ok || !data) return;
       setPrivateUnread(data.privateUnread ?? 0);
       setPendingRequests(data.requestCount ?? 0);
-    } catch { /* silent */ } finally {
+    } catch { /* silent — preserve prior badge values */ } finally {
       fetchingRef.current = false;
     }
   }, [user?.id]);

@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { Alert, AppState, AppStateStatus, Platform } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 import { store } from "@/store";
+import type { AppDispatch, RootState } from "@/store";
 import {
   authActions,
   restoreSession,
@@ -31,6 +32,7 @@ import { waitForAppStartupReady } from "@/services/appStartup";
 import { stepPollingService } from "@/services/StepPollingService";
 import { clearStepSessionForLogout, bindStepSessionToUser } from "@/services/stepProgressCoordinator";
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
+import { setCrashReportingUser } from "@/services/monitoring/sentry";
 
 export type { UserProfile };
 
@@ -60,6 +62,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const user = useSelector((s: RootState) => s.auth.user);
   const sessionToken = useSelector((s: RootState) => s.auth.sessionToken);
   const isRestoringSession = useSelector((s: RootState) => s.auth.isRestoringSession);
+
+  useEffect(() => {
+    setCrashReportingUser(user?.id ?? null);
+  }, [user?.id]);
 
   // Held true while login() is completing — gates index.tsx from evaluating
   // routing conditions before the caller's router.replace() has fired.
@@ -132,6 +138,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     if (__DEV__) console.log("[Auth] logout started");
     const userId = user?.id;
+    setCrashReportingUser(null);
     cancelProactiveTokenRefresh();
     stepPollingService.stopPolling("logout");
     raceStepSyncService.cancelPending();

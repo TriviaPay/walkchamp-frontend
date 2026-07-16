@@ -38,3 +38,9 @@ export const TRACK_LAYOUT_OPTIONS = [
 export type TrackLayoutId = (typeof TRACK_LAYOUT_OPTIONS)[number]["id"];
 
 export const FREE_TRACK_CODES = new Set<string>(["bg", "daylightStadium"]);
+
+/** True when `code` is a known client track layout id. */
+export function isTrackLayoutId(code: string | null | undefined): code is TrackLayoutId {
+  if (!code) return false;
+  return TRACK_LAYOUT_OPTIONS.some((o) => o.id === code);
+}

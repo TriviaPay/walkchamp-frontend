@@ -206,6 +206,10 @@ export default function SignupScreen() {
 
       const userProfile = dbProfileToUserProfile(profile);
       await login(userProfile, authData.sessionJwt, authData.refreshJwt ?? "");
+      try {
+        const { trackEvent } = await import("@/services/analytics");
+        trackEvent("signup_completed");
+      } catch { /* analytics must never block signup */ }
       router.replace("/(tabs)/walk");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";

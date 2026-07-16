@@ -38,8 +38,15 @@ const TERMINAL = new Set<string>([
   "settlement_error",
 ]);
 
+/** Statuses that mean checkout polling can stop and show a final UI result. */
+const POLL_COMPLETE = new Set<string>(["succeeded", "failed", "cancelled", "expired"]);
+
 export function isTerminalDepositStatus(status: string): boolean {
   return TERMINAL.has(status);
+}
+
+export function isPollCompleteDepositStatus(status: string): boolean {
+  return POLL_COMPLETE.has(status);
 }
 
 export async function savePendingDeposit(session: PendingDepositSession): Promise<void> {
@@ -73,6 +80,11 @@ export async function consumePaymentResult(): Promise<PaymentResultPayload | nul
   return row;
 }
 
+/** Read stored payment result without removing (for resume routing). */
+export async function peekPaymentResult(): Promise<PaymentResultPayload | null> {
+  return storageGet<PaymentResultPayload>(STORAGE_KEYS.PAYMENT_RESULT);
+}
+
 export async function fetchDepositStatus(transactionId: string): Promise<DepositPollStatus> {
   const res = await authFetch(PAYMENT_API_PATHS.depositStatus(transactionId));
   if (!res.ok) return "pending";
@@ -86,6 +98,114 @@ export function depositStatusToUiResult(status: DepositPollStatus): PaymentResul
   if (status === "failed" || status === "expired") return "failed";
   if (status === "requires_review" || status === "settlement_error") return "verification_failed";
   return null;
+}
+
+function urlStatusToUiResult(status: string | null | undefined): PaymentResultStatus | null {
+  if (!status) return null;
+  if (status === "success" || status === "succeeded") return "success";
+  if (status === "cancelled") return "cancelled";
+  // processing/pending — URL is ahead of DB; always confirm via API before showing UI
+  if (status === "processing" || status === "pending") return null;
+  if (status === "requires_review" || status === "settlement_error") return "verification_failed";
+  if (status === "failed" || status === "expired") return "failed";
+  return null;
+}
+
+/** Extract transaction id from any payment return URL without trusting status query params. */
+export function extractPaymentTransactionId(raw: string): string | null {
+  try {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+
+    let params: URLSearchParams;
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      const url = new URL(trimmed);
+      const path = url.pathname.replace(/\/+$/, "") || "/";
+      const isPaymentPath =
+        path.endsWith("/payment-complete") || path.endsWith("/api/wallet/deposit/done");
+      if (!isPaymentPath) return null;
+      params = url.searchParams;
+    } else {
+      const withoutScheme = trimmed.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+      const qIdx = withoutScheme.indexOf("?");
+      const pathPart = qIdx >= 0 ? withoutScheme.slice(0, qIdx) : withoutScheme;
+      const isPaymentPath =
+        pathPart.includes("payment-complete") || pathPart.includes("wallet/deposit/done");
+      if (!isPaymentPath) return null;
+      params = new URLSearchParams(qIdx >= 0 ? withoutScheme.slice(qIdx + 1) : "");
+    }
+
+    return params.get("transaction_id") ?? params.get("transactionId");
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve modal UI from backend deposit status (source of truth). */
+export async function resolveDepositUiFromTransaction(
+  transactionId: string,
+): Promise<PaymentResultStatus | null> {
+  const status = await fetchDepositStatus(transactionId);
+  return depositStatusToUiResult(status);
+}
+
+/** Parse payment return URL (deep link, universal link, or done page). */
+export function parsePaymentReturnUrl(raw: string): PaymentResultPayload | null {
+  try {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+
+    let params: URLSearchParams;
+    let isPaymentPath = false;
+
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      const url = new URL(trimmed);
+      const path = url.pathname.replace(/\/+$/, "") || "/";
+      isPaymentPath =
+        path.endsWith("/payment-complete") || path.endsWith("/api/wallet/deposit/done");
+      if (!isPaymentPath) return null;
+      params = url.searchParams;
+    } else {
+      const withoutScheme = trimmed.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+      const qIdx = withoutScheme.indexOf("?");
+      const pathPart = qIdx >= 0 ? withoutScheme.slice(0, qIdx) : withoutScheme;
+      isPaymentPath =
+        pathPart.includes("payment-complete") || pathPart.includes("wallet/deposit/done");
+      if (!isPaymentPath) return null;
+      params = new URLSearchParams(qIdx >= 0 ? withoutScheme.slice(qIdx + 1) : "");
+    }
+
+    const transactionId = params.get("transaction_id") ?? params.get("transactionId");
+    if (!transactionId) return null;
+
+    const ui = urlStatusToUiResult(params.get("status"));
+    if (!ui) return null;
+
+    return {
+      status: ui,
+      transactionId,
+      resolvedAt: new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Save payment result from return URL — returns true if this was a payment URL. */
+export async function ingestPaymentReturnUrl(raw: string): Promise<boolean> {
+  const transactionId = extractPaymentTransactionId(raw);
+  if (!transactionId) return false;
+
+  const ui = await resolveDepositUiFromTransaction(transactionId);
+  if (!ui) return true;
+
+  await clearPendingDeposit();
+  await savePaymentResult({
+    status: ui,
+    transactionId,
+    resolvedAt: new Date().toISOString(),
+  });
+  return true;
 }
 
 /** Poll until terminal status or timeout. Used while browser checkout is open. */

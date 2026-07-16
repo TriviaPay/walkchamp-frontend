@@ -259,7 +259,10 @@ export default function WearableSetupModal({
         onPress={async () => {
           setLimitedLoading(true);
           try {
-            await grantAndroidSteps();
+            await enableLimitedSensorTracking();
+            setPermStatus("granted");
+            setAndroidPhase("setup");
+            setStep(TOTAL_ANDROID - 1);
           } finally {
             setLimitedLoading(false);
           }
@@ -347,7 +350,10 @@ export default function WearableSetupModal({
           onPress={async () => {
             setLimitedLoading(true);
             try {
-              await grantAndroidSteps();
+              await enableLimitedSensorTracking();
+              setPermStatus("granted");
+              setAndroidPhase("setup");
+              setStep(TOTAL_ANDROID - 1);
             } finally {
               setLimitedLoading(false);
             }

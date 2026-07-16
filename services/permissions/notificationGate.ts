@@ -76,10 +76,32 @@ export function onStepTrackingNotificationDismiss(): void {
   }
 }
 
+function getAndroidSdk(): number {
+  if (Platform.OS !== "android") return 0;
+  return typeof Platform.Version === "number" ? Platform.Version : 0;
+}
+
+/** Android 13+ requires runtime POST_NOTIFICATIONS; older devices do not. */
+export function androidSupportsPostNotificationsPermission(): boolean {
+  return getAndroidSdk() >= 33;
+}
+
 /** Check-only — never shows modal or system prompt. */
 export async function checkNotificationStatus(): Promise<boolean> {
   if (Platform.OS !== "android") return true;
-  return areAppNotificationsEnabled();
+  const sdk = getAndroidSdk();
+  const appEnabled = await areAppNotificationsEnabled();
+  if (sdk < 33) {
+    return appEnabled;
+  }
+  try {
+    const postGranted = await PermissionsAndroid.check(
+      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+    );
+    return postGranted && appEnabled;
+  } catch {
+    return false;
+  }
 }
 
 /** Alias used by step-tracking startup / FGS service. */
@@ -158,34 +180,73 @@ export async function isPushNotificationAccessGranted(): Promise<boolean> {
   }
 }
 
+export type NotificationGateMode = "strict" | "auto";
+
 /**
  * Full gate before enabling step tracking.
- * Android ≤12: skips POST_NOTIFICATIONS; proceeds when app notifications are on.
- * Android 13+: requests POST_NOTIFICATIONS if needed, then verifies app toggle.
+ *
+ * Modes (matches historical platform behavior):
+ * - strict — Health Connect / verified Android: ask Allow Notifications (API 33+),
+ *   show settings modal if still off; tracking enable fails when denied.
+ * - auto — unsupported / legacy sensor / Android ≤12: never block tracking;
+ *   still requests POST_NOTIFICATIONS once on API 33+ when useful for FGS.
  */
-export async function ensureNotificationsForStepTracking(): Promise<NotificationGateResult> {
+export async function ensureNotificationsForStepTracking(
+  mode: NotificationGateMode = "strict",
+): Promise<NotificationGateResult> {
   if (Platform.OS !== "android") {
     return { granted: true, requestedNow: false, blockedBySettings: false };
   }
 
-  let requestedNow = false;
+  const sdk = getAndroidSdk();
 
-  if (typeof Platform.Version === "number" && Platform.Version >= 33) {
-    const asked = await requestPostNotificationsOnApi33();
-    if (asked) requestedNow = true;
+  // Android ≤12: no POST_NOTIFICATIONS — notifications auto-enable for step tracking.
+  if (sdk < 33) {
+    const enabled = await areAppNotificationsEnabled();
+    console.log(
+      `[NotificationGate] SDK=${sdk} auto-enable path mode=${mode} appNotificationsEnabled=${enabled}`,
+    );
+    return { granted: true, requestedNow: false, blockedBySettings: false };
   }
 
+  // Android 13+: request POST_NOTIFICATIONS.
+  let requestedNow = false;
+  const asked = await requestPostNotificationsOnApi33();
+  if (asked) requestedNow = true;
+
   const enabled = await areAppNotificationsEnabled();
+  let postGranted = false;
+  try {
+    postGranted = await PermissionsAndroid.check(
+      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+    );
+  } catch {
+    postGranted = false;
+  }
+
   console.log(
-    `[NotificationGate] SDK=${Platform.Version} appNotificationsEnabled=${enabled} requestedPostNoti=${requestedNow}`,
+    `[NotificationGate] SDK=${sdk} mode=${mode} appNotificationsEnabled=${enabled} postGranted=${postGranted} requestedPostNoti=${requestedNow}`,
   );
 
-  if (enabled) {
+  if (enabled && postGranted) {
     return { granted: true, requestedNow, blockedBySettings: false };
   }
 
+  // Legacy / unsupported path: never block step tracking on notification denial.
+  if (mode === "auto") {
+    console.log(
+      "[NotificationGate] auto mode — continuing without blocking (polling-only if needed)",
+    );
+    return {
+      granted: true,
+      requestedNow,
+      blockedBySettings: false,
+    };
+  }
+
+  // Strict (Health Connect / supported): guide user to enable notifications.
   if (!modalHost) {
-    console.log("[NotificationGate] modal host not mounted — blocking step tracking");
+    console.log("[NotificationGate] modal host not mounted — blocking verified enable");
     return {
       granted: false,
       requestedNow,

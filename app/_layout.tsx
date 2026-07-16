@@ -21,6 +21,7 @@ import { Provider as ReduxProvider } from "react-redux";
 import { store } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AlertHost } from "@/components/AppAlert";
+import { OfflineBanner } from "@/components/OfflineBanner";
 import { AuthProvider } from "@/context/AuthContext";
 import { AppProvider } from "@/context/AppContext";
 import { WalkProvider } from "@/context/WalkContext";
@@ -30,6 +31,7 @@ import { AvatarVersionProvider } from "@/context/AvatarVersionContext";
 import { ThemeProvider, useTheme } from "@/context/ThemeContext";
 import { SoundProvider } from "@/context/SoundContext";
 import { UnreadProvider } from "@/context/UnreadContext";
+import { NetworkProvider } from "@/context/NetworkContext";
 import CoinRewardToast from "@/components/CoinRewardToast";
 import { CoinRealtimeSync } from "@/components/CoinRealtimeSync";
 import { RoomInvitationModal, type RoomInvitation } from "@/components/RoomInvitationModal";
@@ -42,6 +44,8 @@ import { initDynamicIconService } from "@/services/dynamicIconService";
 import { initStepProgressCoordinator } from "@/services/stepProgressCoordinator";
 import { scheduleAppStartupReady, waitForAppStartupReady } from "@/services/appStartup";
 import { perf } from "@/utils/perfLogger";
+import { initCrashReporting, setCrashReportingUser } from "@/services/monitoring/sentry";
+import { loadRemoteFeatureFlags } from "@/services/remoteFeatureFlags";
 import {
   ensureOneSignalInitialized,
   ensurePushRegistration,
@@ -50,12 +54,14 @@ import {
   setupForegroundHandler,
 } from "@/services/notificationService";
 import { resolveDeepLink } from "@/utils/deepLinkUtils";
+import { ingestPaymentReturnUrl, getPendingDeposit, peekPaymentResult } from "@/services/depositSession";
 import * as Linking from "expo-linking";
 import { queryClient } from "@/services/queryClient";
 import { PushPermissionPrompt } from "@/components/PushPermissionPrompt";
 import { StepTrackingNotificationPrompt } from "@/components/StepTrackingNotificationPrompt";
 
 // ── App startup diagnostics ────────────────────────────────────────────────
+initCrashReporting();
 perf.appStartStart();
 if (__DEV__) {
   console.log(`[AppStart] platform: ${Platform.OS}`);
@@ -203,12 +209,15 @@ function PushNotificationSetup() {
   const { user } = useAuth();
   const prevUserIdRef = useRef<string | null>(null);
 
-  const navigateFromRoute = useRef((route: string) => {
+  const navigateFromRoute = useRef((route: string, opts?: { replace?: boolean }) => {
     try {
-      const { router } = require("expo-router") as { router: { push: (r: string) => void } };
+      const { router } = require("expo-router") as {
+        router: { push: (r: string) => void; replace: (r: string) => void };
+      };
       InteractionManager.runAfterInteractions(() => {
         try {
-          router.push(route as never);
+          if (opts?.replace) router.replace(route as never);
+          else router.push(route as never);
         } catch {
           // Ignore routing errors
         }
@@ -217,6 +226,20 @@ function PushNotificationSetup() {
       // Ignore routing errors
     }
   }).current;
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next !== "active") return;
+      void (async () => {
+        const pending = await getPendingDeposit();
+        const stored = await peekPaymentResult();
+        if (pending || stored) {
+          navigateFromRoute("/(tabs)/wallet", { replace: true });
+        }
+      })();
+    });
+    return () => sub.remove();
+  }, [navigateFromRoute]);
 
   useEffect(() => {
     let cleanupClick: (() => void) | undefined;
@@ -231,8 +254,14 @@ function PushNotificationSetup() {
 
         const handleDeepLink = (url: string | null) => {
           if (!url) return;
-          const route = resolveDeepLink(url);
-          if (route) navigateFromRoute(route);
+          void ingestPaymentReturnUrl(url).then((isPaymentReturn) => {
+            if (isPaymentReturn) {
+              navigateFromRoute("/(tabs)/wallet", { replace: true });
+              return;
+            }
+            const route = resolveDeepLink(url);
+            if (route) navigateFromRoute(route);
+          });
         };
 
         const initialUrl = await Linking.getInitialURL();
@@ -357,6 +386,7 @@ export default function RootLayout() {
   useEffect(() => {
     void waitForAppStartupReady().then(() => {
       void initializeAds().catch(() => {});
+      void loadRemoteFeatureFlags().catch(() => {});
     });
   }, []);
 
@@ -375,6 +405,7 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ErrorBoundary>
           <QueryClientProvider client={queryClient}>
+            <NetworkProvider>
             <AuthProvider>
               <AppProvider>
                 <WalkProvider>
@@ -387,6 +418,7 @@ export default function RootLayout() {
                               <TopBannerProvider>
                               <TitleUnlockProvider>
                                 <RootLayoutNav />
+                                <OfflineBanner />
                                 <AlertHost />
                                 <CoinRealtimeSync />
                                 <CoinRewardToast />
@@ -404,6 +436,7 @@ export default function RootLayout() {
                 </WalkProvider>
               </AppProvider>
             </AuthProvider>
+            </NetworkProvider>
           </QueryClientProvider>
         </ErrorBoundary>
       </SafeAreaProvider>

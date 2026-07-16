@@ -560,10 +560,20 @@ export const stepProviderManager = {
 };
 
 // Re-select provider when app returns to foreground (HC install / permission change).
+// Guarded: never touch HC/native until JS runtime is ready (avoids reload NPE).
 if (Platform.OS === "android") {
   AppState.addEventListener("change", (state) => {
-    if (state === "active") {
-      void stepProviderManager.initialize(true);
-    }
+    if (state !== "active") return;
+    void (async () => {
+      try {
+        const { waitForAppStartupReady } = await import("@/services/appStartup");
+        await waitForAppStartupReady();
+        await stepProviderManager.initialize(true);
+      } catch (e) {
+        if (__DEV__) {
+          console.warn("[StepProvider] foreground reselect skipped", e);
+        }
+      }
+    })();
   });
 }

@@ -722,7 +722,8 @@ class WalkChampRaceForegroundService : Service() {
   }
 
   private fun mergeNativeRaceStepsIntoState(state: RaceNotificationState): RaceNotificationState {
-    if (RaceNotificationState.isVerifiedStepSource(state.stepSource)) return state
+    // Always merge ahead sensor race steps into the live notification while FGS is alive.
+    // JS/HC stay canonical when the app is open; hardware fills open/background/closed gaps.
     val native = sensorEngine?.currentState() ?: return state
     if (native.activeRaceId != state.raceId || native.raceSteps < 0) return state
     if (native.raceSteps <= state.raceSteps) return state
@@ -738,36 +739,35 @@ class WalkChampRaceForegroundService : Service() {
     val raceActive = activeRace != null && isActiveRace(activeRace)
 
     if (raceActive && state.activeRaceId == activeRace!!.raceId && state.raceSteps >= 0) {
-      val verifiedRace = RaceNotificationState.isVerifiedStepSource(activeRace.stepSource)
-      if (!verifiedRace) {
-        val updated = activeRace.copy(
-          raceSteps = maxOf(activeRace.raceSteps, state.raceSteps),
-          rank = if (state.rank > 0) state.rank else activeRace.rank,
-          totalParticipants = if (state.totalParticipants > 0) state.totalParticipants else activeRace.totalParticipants,
-          goalSteps = if (state.goalSteps > 0) state.goalSteps else activeRace.goalSteps,
-          timeLeftSeconds = if (state.timeLeftSeconds > 0) state.timeLeftSeconds else activeRace.timeLeftSeconds,
-          lastUpdatedAt = state.updatedAt,
-        ).withComputedTimeLeft()
-        val stepsChanged = updated.raceSteps != raceState?.raceSteps
-        val metaChanged =
-          updated.rank != raceState?.rank ||
-            updated.timeLeftSeconds != raceState?.timeLeftSeconds
-        if (stepsChanged || metaChanged) {
-          raceState = updated
-          RaceNotificationState.save(this, updated)
-          publishRaceNotification()
-          Log.d(
-            TAG,
-            "[RaceNotification] update source=canonical raceSteps=${updated.raceSteps} rank=${updated.rank}",
-          )
-        }
-        if (stepsChanged) {
-          persistRaceNativeMode(updated)
-          enqueueRaceBackendSync(force = false)
-          val goal = updated.goalSteps
-          if (goal > 0 && updated.raceSteps >= goal) {
-            enqueueRaceBackendSync(force = true)
-          }
+      // Live race ongoing notification: sensor advances steps in open / background / closed
+      // (same keep-alive path as daily walk). Monotonic max avoids HC/JS regressions.
+      val updated = activeRace.copy(
+        raceSteps = maxOf(activeRace.raceSteps, state.raceSteps),
+        rank = if (state.rank > 0) state.rank else activeRace.rank,
+        totalParticipants = if (state.totalParticipants > 0) state.totalParticipants else activeRace.totalParticipants,
+        goalSteps = if (state.goalSteps > 0) state.goalSteps else activeRace.goalSteps,
+        timeLeftSeconds = if (state.timeLeftSeconds > 0) state.timeLeftSeconds else activeRace.timeLeftSeconds,
+        lastUpdatedAt = state.updatedAt,
+      ).withComputedTimeLeft()
+      val stepsChanged = updated.raceSteps != raceState?.raceSteps
+      val metaChanged =
+        updated.rank != raceState?.rank ||
+          updated.timeLeftSeconds != raceState?.timeLeftSeconds
+      if (stepsChanged || metaChanged) {
+        raceState = updated
+        RaceNotificationState.save(this, updated)
+        publishRaceNotification()
+        Log.d(
+          TAG,
+          "[RaceNotification] update source=canonical raceSteps=${updated.raceSteps} rank=${updated.rank}",
+        )
+      }
+      if (stepsChanged) {
+        persistRaceNativeMode(updated)
+        enqueueRaceBackendSync(force = false)
+        val goal = updated.goalSteps
+        if (goal > 0 && updated.raceSteps >= goal) {
+          enqueueRaceBackendSync(force = true)
         }
       }
     }
@@ -909,7 +909,9 @@ class WalkChampRaceForegroundService : Service() {
         lastBackendSyncMs = 0L
       }
       val engine = ensureSensorEngine()
-      engine.updateMetadata(merged.userId, "race_live", merged.stepSource)
+      // Active live race always arms TYPE_STEP_COUNTER so the race notification
+      // keeps updating when the app is backgrounded or closed (HC has no native stream).
+      engine.updateMetadata(merged.userId, "race_live", "android_step_counter")
       if (isNewRace || merged.raceSteps <= 0) {
         engine.startRace(merged.raceId)
         merged = merged.copy(
@@ -1157,7 +1159,11 @@ class WalkChampRaceForegroundService : Service() {
     Log.d(TAG, "[DailyStepsNotification] update todaySteps=$steps")
     safeStartForeground(NOTIFICATION_ID_WALK, notification)
     postOngoingNotification(NOTIFICATION_ID_WALK, notification)
-    persistWalkState(body, "walkchamp://walk", "Walk Champ", steps, null, "health_connect")
+    val walkSource =
+      prefs().getString("walk_step_source", null)
+        ?: sensorEngine?.currentState()?.stepSource
+        ?: "android_step_counter"
+    persistWalkState(body, "walkchamp://walk", "Walk Champ", steps, null, walkSource)
     startWalkLoopsIfNeeded()
   }
 
@@ -1198,13 +1204,24 @@ class WalkChampRaceForegroundService : Service() {
     val body = p.getString("walk_body", null) ?: return false
     val deepLink = p.getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
     val title = p.getString("walk_title", "Walk Champ") ?: "Walk Champ"
+    val stepSource = p.getString("walk_step_source", "android_step_counter") ?: "android_step_counter"
+    val userId = p.getString("walk_user_id", null)
+    val parsedSteps = parseStepsFromWalkBody(body)
     lastWalkNotification = buildWalkNotification(this, body, deepLink, title)
     walkRunning = true
     if (promoteForeground) {
       safeStartForeground(NOTIFICATION_ID_WALK, lastWalkNotification!!)
     }
     postOngoingNotification(NOTIFICATION_ID_WALK, lastWalkNotification!!)
-    Log.d(TAG, "[RaceService] restored walk notification from storage promoteFg=$promoteForeground")
+    // Re-arm hardware sensor so notification keeps updating after swipe-away / process death.
+    val engine = ensureSensorEngine()
+    engine.updateMetadata(userId, "daily_steps", stepSource)
+    engine.setPendingKnownTodaySteps(parsedSteps.coerceAtLeast(0))
+    if (parsedSteps > 0) {
+      engine.seedDailyBaselineFromKnownSteps(parsedSteps, stepSource = stepSource)
+    }
+    startSensorTrackingIfNeeded()
+    Log.d(TAG, "[RaceService] restored walk notification from storage promoteFg=$promoteForeground source=$stepSource")
     startWalkLoopsIfNeeded()
     return true
   }
@@ -1241,7 +1258,7 @@ class WalkChampRaceForegroundService : Service() {
     }
     if (usesDeviceSensor(loaded.stepSource) || isActiveRace(loaded)) {
       val engine = ensureSensorEngine()
-      engine.updateMetadata(loaded.userId, "race_live", loaded.stepSource)
+      engine.updateMetadata(loaded.userId, "race_live", "android_step_counter")
       val engineState = engine.currentState()
       when {
         engineState.activeRaceId == loaded.raceId && engineState.raceBaseline != null -> engine.start()
@@ -1289,12 +1306,23 @@ class WalkChampRaceForegroundService : Service() {
       workerHandler?.post {
         if (raceState == null) restoreRaceFromStorage(promoteForeground = !foregroundRacePromoted)
         if (raceState == null && !walkRunning) restoreWalkFromStorage(promoteForeground = !foregroundWalkPromoted)
+        // Early promote above may set walkRunning without re-arming the sensor — fix that.
+        if (raceState == null && walkRunning) {
+          val p = prefs()
+          val stepSource = p.getString("walk_step_source", "android_step_counter") ?: "android_step_counter"
+          val userId = p.getString("walk_user_id", null)
+          val body = p.getString("walk_body", "") ?: ""
+          val parsedSteps = parseStepsFromWalkBody(body)
+          val engine = ensureSensorEngine()
+          engine.updateMetadata(userId, "daily_steps", stepSource)
+          if (parsedSteps > 0) {
+            engine.seedDailyBaselineFromKnownSteps(parsedSteps, stepSource = stepSource)
+          }
+          startWalkLoopsIfNeeded()
+        }
         raceState?.let {
           if (!foregroundRacePromoted) publishRaceNotification()
           startRaceLoops()
-        }
-        if (raceState == null && walkRunning) {
-          startWalkBackendSyncLoop()
         }
         startSensorTrackingIfNeeded()
       }

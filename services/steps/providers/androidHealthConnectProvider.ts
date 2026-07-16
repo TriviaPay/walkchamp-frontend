@@ -4,6 +4,7 @@
 
 import { Platform } from "react-native";
 import { androidHCService } from "../androidHealthConnectService";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import {
   emptyStepResult,
   getLocalDateKey,
@@ -124,5 +125,43 @@ export const androidHealthConnectProvider: StepProvider = {
 
   async createRaceBaseline(_raceId: string, _userId: string): Promise<number> {
     return androidHCService.getCachedTodaySteps();
+  },
+
+  /**
+   * Health Connect has no native step stream — poll range reads so Walk/Race
+   * get the same liveSteps callbacks as the legacy sensor / HealthKit watch.
+   */
+  async startWatchingSteps(
+    callback: (result: StepReadResult) => void,
+  ): Promise<() => void> {
+    let stopped = false;
+    let inFlight = false;
+
+    const tick = async () => {
+      if (stopped || inFlight) return;
+      inFlight = true;
+      try {
+        const result = await this.getTodaySteps();
+        if (!stopped) callback(result);
+      } catch (e) {
+        if (__DEV__) console.log("[StepProvider] Health Connect watch tick error", e);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void tick();
+    const id = setInterval(() => {
+      void tick();
+    }, STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_POLL_MS);
+
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  },
+
+  stopWatchingSteps(): void {
+    // Interval cleared by the stop handle returned from startWatchingSteps.
   },
 };

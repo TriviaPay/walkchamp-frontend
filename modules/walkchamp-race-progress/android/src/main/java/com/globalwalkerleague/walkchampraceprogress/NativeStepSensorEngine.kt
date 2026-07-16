@@ -146,8 +146,9 @@ class NativeStepSensorEngine(
     val source = stepSource ?: state.stepSource
     val verified = !isDeviceSensorSource(source)
     if (verified) {
+      val known = knownTodaySteps.coerceAtLeast(0)
       state = state.copy(
-        todaySteps = knownTodaySteps.coerceAtLeast(0),
+        todaySteps = known,
         localDate = NativeStepState.localDateString(),
         stepSource = source,
         sensorSupported = true,
@@ -155,7 +156,11 @@ class NativeStepSensorEngine(
       )
       if (total != null && total >= 0f) {
         lastSensorTotal = total
-        state = state.copy(sensorTotal = total)
+        // Seed baseline so hardware events keep updating the notification when JS is idle.
+        val baseline = (total - known).coerceAtLeast(0f)
+        state = state.copy(sensorTotal = total, dailyBaseline = baseline)
+      } else {
+        setPendingKnownTodaySteps(known)
       }
       Log.d(TAG, "[WalkChampFGS] verified source todaySteps=${state.todaySteps} source=$source")
       persistAndEmit(state, force = true)
@@ -261,23 +266,44 @@ class NativeStepSensorEngine(
 
   fun mergeJsWalkUpdate(todaySteps: Int, stepSource: String) {
     // Health Connect / HealthKit from JS — reconcile only when JS value is ahead.
-    // Never regress native notification counts while backgrounded.
+    // Seed sensor baseline so TYPE_STEP_COUNTER can keep the ongoing notification
+    // updating while the app is backgrounded or closed (JS polls stop).
     if (!isDeviceSensorSource(stepSource)) {
       val next = todaySteps.coerceAtLeast(0)
       if (next > state.todaySteps) {
-        state = state.copy(
-          todaySteps = next,
-          stepSource = stepSource,
-          notificationMode = if (state.activeRaceId != null) "race_live" else "daily_steps",
-          updatedAt = System.currentTimeMillis(),
-        )
-        persistAndEmit(state, force = true)
+        val total = lastSensorTotal.takeIf { it >= 0f }
+        if (total != null && total >= 0f) {
+          seedDailyBaselineFromKnownSteps(next, total, stepSource)
+        } else {
+          setPendingKnownTodaySteps(next)
+          state = state.copy(
+            todaySteps = next,
+            stepSource = stepSource,
+            notificationMode = if (state.activeRaceId != null) "race_live" else "daily_steps",
+            updatedAt = System.currentTimeMillis(),
+          )
+          NativeStepState.save(context, state)
+        }
       } else {
-        state = state.copy(
-          stepSource = stepSource,
-          notificationMode = if (state.activeRaceId != null) "race_live" else "daily_steps",
-          updatedAt = System.currentTimeMillis(),
-        )
+        // Keep verified label, but ensure a baseline exists so hardware events
+        // can still advance the notification after JS goes idle.
+        val total = lastSensorTotal.takeIf { it >= 0f }
+        if (total != null && state.dailyBaseline == null && state.todaySteps >= 0) {
+          val baseline = (total - state.todaySteps).coerceAtLeast(0f)
+          state = state.copy(
+            dailyBaseline = baseline,
+            sensorTotal = total,
+            stepSource = stepSource,
+            notificationMode = if (state.activeRaceId != null) "race_live" else "daily_steps",
+            updatedAt = System.currentTimeMillis(),
+          )
+        } else {
+          state = state.copy(
+            stepSource = stepSource,
+            notificationMode = if (state.activeRaceId != null) "race_live" else "daily_steps",
+            updatedAt = System.currentTimeMillis(),
+          )
+        }
         NativeStepState.save(context, state)
       }
       return
@@ -362,23 +388,17 @@ class NativeStepSensorEngine(
     }
     lastSensorTotal = sensorTotal
 
-    // Health Connect / HealthKit owns daily steps — sensor must not inflate the notification.
-    if (!isDeviceSensorSource(state.stepSource)) {
-      if (state.sensorTotal == sensorTotal) return
-      state = state.copy(
-        sensorTotal = sensorTotal,
-        sensorSupported = true,
-        updatedAt = System.currentTimeMillis(),
-      )
-      NativeStepState.save(context, state)
-      return
-    }
-
+    // Always advance walk notification steps from TYPE_STEP_COUNTER while FGS is alive.
+    // Health Connect / HealthKit remain canonical in JS when the app is open; when the app
+    // is backgrounded/closed JS polls stop, so the hardware sensor must keep the ongoing
+    // notification live (previous working behavior before verified-source early-return).
     var dailyBaseline = state.dailyBaseline
     if (dailyBaseline == null) {
       val known = pendingKnownTodaySteps
       dailyBaseline = if (known != null) {
         (sensorTotal - known).coerceAtLeast(0f)
+      } else if (state.todaySteps > 0) {
+        (sensorTotal - state.todaySteps).coerceAtLeast(0f)
       } else {
         sensorTotal
       }
@@ -387,7 +407,11 @@ class NativeStepSensorEngine(
       Log.d(TAG, "[StepFGS] dailyBaseline=$dailyBaseline todaySteps=${(sensorTotal - dailyBaseline).toInt().coerceAtLeast(0)}")
     }
 
-    val todaySteps = (sensorTotal - dailyBaseline).toInt().coerceAtLeast(0)
+    // Never regress below the last known (e.g. HC) total within the same day.
+    val todaySteps = maxOf(
+      (sensorTotal - dailyBaseline).toInt().coerceAtLeast(0),
+      state.todaySteps,
+    )
 
     val raceSteps = if (!state.activeRaceId.isNullOrBlank()) {
       var raceBaseline = state.raceBaseline
@@ -411,18 +435,20 @@ class NativeStepSensorEngine(
       return
     }
 
+    val keepVerifiedLabel = !isDeviceSensorSource(state.stepSource)
     state = state.copy(
       sensorTotal = sensorTotal,
       todaySteps = todaySteps,
       raceSteps = raceSteps,
-      stepSource = "android_step_counter",
+      // Keep HC/HealthKit label for metadata; sensor still drives notification counts.
+      stepSource = if (keepVerifiedLabel) state.stepSource else "android_step_counter",
       sensorSupported = true,
       updatedAt = System.currentTimeMillis(),
     )
     persistAndEmit(state, force = false)
     Log.d(
       TAG,
-      "[WalkChampFGS] todaySteps=$todaySteps raceSteps=$raceSteps sensorTotal=$sensorTotal",
+      "[WalkChampFGS] todaySteps=$todaySteps raceSteps=$raceSteps sensorTotal=$sensorTotal source=${state.stepSource}",
     )
   }
 

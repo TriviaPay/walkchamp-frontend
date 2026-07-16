@@ -162,6 +162,37 @@ Keep `globalwalkerleague://payment-complete?...` as fallback.
 
 ---
 
+## Coolify cash env (current deploy)
+
+Sandbox testing (preferred until legal/provider done):
+
+```env
+CASH_FEATURES_ENABLED=true
+FEATURE_CASH_FEATURES=true
+ENABLE_BULLMQ_WEBHOOK_PROCESSING=true
+PAYMENTS_LIVE_MODE=false
+REAL_MONEY_PROVIDER_SANDBOX_TESTED=true
+REAL_MONEY_PRODUCTION_APPROVED=false
+REAL_MONEY_LEGAL_APPROVED=false
+REAL_MONEY_KYC_TAX_READY=false
+REAL_MONEY_WITHDRAWAL_CONTROLS_READY=false
+```
+
+**Backend request:** require full `REAL_MONEY_*=true` only when `PAYMENTS_LIVE_MODE=true`, so sandbox card testing does not require fake legal approvals.
+
+Live money (only after Stripe verification, Razorpay KYC, provider + legal signoff):
+
+```env
+PAYMENTS_LIVE_MODE=true
+REAL_MONEY_PRODUCTION_APPROVED=true
+REAL_MONEY_LEGAL_APPROVED=true
+REAL_MONEY_KYC_TAX_READY=true
+REAL_MONEY_PROVIDER_SANDBOX_TESTED=true
+REAL_MONEY_WITHDRAWAL_CONTROLS_READY=true
+```
+
+Frontend mirrors live mode with `EXPO_PUBLIC_PAYMENTS_LIVE_MODE`.
+
 ## Phase D — Launch gates (backend + ops)
 
 ### D1. Feature flags (extend `feature_flags` table)

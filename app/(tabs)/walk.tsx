@@ -58,6 +58,7 @@ import { useIncrementalStepDisplay } from "@/hooks/useIncrementalStepDisplay";
 import { useWalkContext, TrackingStatus } from "@/context/WalkContext";
 import { useStepSourceGuard } from "@/hooks/useStepSourceGuard";
 import { ENABLE_CASH_CHALLENGES, ENABLE_LEGACY_CASH_RACE_CARDS } from "@/config/featureFlags";
+import { resolveDisplayTodaySteps } from "@/utils/liveRaceDisplay";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import { useRace } from "@/context/RaceContext";
@@ -87,7 +88,12 @@ import { rf, rs } from "@/utils/responsive";
 import { useDispatch, useSelector } from "react-redux";
 import type { RootState, AppDispatch } from "@/store";
 import { fetchTrackThemes, purchaseTrackTheme, clearPurchaseError } from "@/store/slices/trackThemesSlice";
-import { TRACK_LAYOUT_OPTIONS, type TrackLayoutId, FREE_TRACK_CODES } from "@/constants/trackLayouts";
+import {
+  TRACK_LAYOUT_OPTIONS,
+  type TrackLayoutId,
+  FREE_TRACK_CODES,
+  isTrackLayoutId,
+} from "@/constants/trackLayouts";
 import { fetchCoinBalance } from "@/store/slices/coinsSlice";
 import CoinsInfoModal from "@/components/CoinsInfoModal";
 import CoinsStoreModal from "@/components/CoinsStoreModal";
@@ -213,8 +219,11 @@ function cashChallengeBlockedMessage(serverError?: string): string {
   if (serverError?.includes("Coin-entry challenges are disabled")) {
     return "Coin-entry challenges are turned off on the API server. Enable FEATURE_COIN_ENTRY_CHALLENGES on the backend deployment.";
   }
+  if (serverError?.includes("Cash features are disabled") || serverError?.includes("CASH_FEATURES_DISABLED")) {
+    return "Cash features are disabled on the API. Set CASH_FEATURES_ENABLED=true and FEATURE_CASH_FEATURES=true (plus REAL_MONEY_* / PAYMENTS_LIVE_MODE per Coolify checklist).";
+  }
   if (serverError?.includes("disabled for this build")) {
-    return "Cash challenges are turned off on the API server. The app is using your OVH URL — enable cash challenges on the backend deployment (ENABLE_CASH_CHALLENGES).";
+    return "Cash challenges are turned off on the API server. Enable cash challenges on the backend deployment (CASH_FEATURES_ENABLED / FEATURE_CASH_FEATURES).";
   }
   return serverError ?? "Please try again.";
 }
@@ -846,7 +855,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
   const { safeBottom } = useSafeLayout();
   const { refreshUserProfile, updateUser } = useAuth();
   const { beginLocalAvatarPick, applyAvatarUploadSuccess, applyAvatarRemoved } = useAvatarCache();
-  const { requestStepPermission } = useWalkContext();
+  const { requestStepPermission, completeStepSetup } = useWalkContext();
   const ac = user?.avatarColor ?? colors.primary;
 
   // Avatar + server stats
@@ -1576,7 +1585,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
         onComplete={(platform, permissionStatus) => {
           setStepSourceInfo({ platform, permissionStatus, setupCompleted: permissionStatus === "connected" });
           if (permissionStatus === "connected") {
-            void requestStepPermission();
+            void completeStepSetup();
           }
         }}
       />
@@ -1700,6 +1709,7 @@ function WalkScreenContent() {
     stepPermissionStatus,
     hcAvailability,
     requestStepPermission,
+    completeStepSetup,
     todayActiveMinutes,
     todayDailyRank,
     todayDailyGoal: contextDailyGoal,
@@ -1734,16 +1744,15 @@ function WalkScreenContent() {
   const themes = useSelector((s: RootState) => s.trackThemes.themes);
   const themeCoinBalance = useSelector((s: RootState) => s.trackThemes.coinBalance);
   const themesPurchaseLoading = useSelector((s: RootState) => s.trackThemes.purchaseLoading);
+  const serverSelectedThemeCode = useSelector((s: RootState) => s.trackThemes.selectedThemeCode);
+  const themesLoading = useSelector((s: RootState) => s.trackThemes.loading);
   const coinBalance = useSelector((s: RootState) => s.coins.balance?.currentBalance ?? themeCoinBalance);
   const canonicalTodaySteps = useSelector((s: RootState) =>
     s.raceProgress.userId === user?.id
       ? Math.max(0, Math.floor(s.raceProgress.todaySteps))
       : 0,
   );
-  const liveTodaySteps = Math.max(
-    Number.isFinite(contextTodaySteps) ? contextTodaySteps : 0,
-    canonicalTodaySteps,
-  );
+  const liveTodaySteps = resolveDisplayTodaySteps(contextTodaySteps, canonicalTodaySteps);
   const [purchaseConfirmModal, setPurchaseConfirmModal] = useState<{ code: string; name: string; price: number } | null>(null);
   const [showCoinsInfo, setShowCoinsInfo] = useState(false);
   const [showCoinStore, setShowCoinStore] = useState(false);
@@ -1858,11 +1867,13 @@ function WalkScreenContent() {
   const [walkCacheReady, setWalkCacheReady] = useState(false);
 
   const userReady = authReady && !!sessionToken && !!user?.id && stepsHydrated;
+  const isAutoTrackingOn =
+    stepPermissionStatus === "granted" || usingRealTracking;
   const stepsInitializing =
     stepsHydrated &&
     !stepsSourceReady &&
     liveTodaySteps <= 0 &&
-    (stepPermissionStatus === "granted" || usingRealTracking);
+    isAutoTrackingOn;
   const confirmedWalkSteps =
     userReady && Number.isFinite(liveTodaySteps) ? liveTodaySteps : 0;
   const displayedWalkSteps = useIncrementalStepDisplay(confirmedWalkSteps);
@@ -1993,18 +2004,16 @@ function WalkScreenContent() {
       }
       return;
     }
-    void (async () => {
-      await refreshTodayRank();
-      void refetchDbWalk();
-      if (usingRealTracking) {
-        await refreshTodaySteps({
-          rehydrateBackend: true,
-          mergeNative: false,
-          applyDisplay: false,
-        });
-        await resumeStepWatching();
-      }
-    })();
+    void refreshTodayRank();
+    void refetchDbWalk();
+    if (usingRealTracking) {
+      void refreshTodaySteps({
+        rehydrateBackend: true,
+        mergeNative: false,
+        applyDisplay: false,
+      });
+      void resumeStepWatching();
+    }
     if (!showCoinStoreRef.current) {
       dispatch(fetchTrackThemes());
       dispatch(fetchCoinBalance());
@@ -2280,6 +2289,17 @@ function WalkScreenContent() {
   const [selectedTargetSteps, setSelectedTargetSteps] = useState(1000);
   const [selectedTrackLayout, setSelectedTrackLayout] = useState<TrackLayoutId>("bg");
   const [challengeTrackLayout, setChallengeTrackLayout] = useState<TrackLayoutId>("bg");
+  // Apply server-persisted track selection once per distinct selectedThemeCode
+  // so a later purchase local-select is not overwritten by a stale refetch.
+  const lastAppliedServerThemeRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (themesLoading) return;
+    if (!isTrackLayoutId(serverSelectedThemeCode)) return;
+    if (lastAppliedServerThemeRef.current === serverSelectedThemeCode) return;
+    lastAppliedServerThemeRef.current = serverSelectedThemeCode;
+    setSelectedTrackLayout(serverSelectedThemeCode);
+    setChallengeTrackLayout(serverSelectedThemeCode);
+  }, [serverSelectedThemeCode, themesLoading]);
   const [activeRaceModal, setActiveRaceModal] = useState<ActiveRaceInfo | null>(null);
   const [scheduledRoomResult, setScheduledRoomResult] = useState<{
     inviteCode: string | null;
@@ -2882,7 +2902,7 @@ function WalkScreenContent() {
           >
             <View style={styles.trackingHeader}>
               <View style={styles.trackingLeft}>
-                {stepPermissionStatus === "granted" ? (
+                {isAutoTrackingOn ? (
                   <>
                     <View style={[styles.trackingBadge, { backgroundColor: `${statusConf.color}20`, borderColor: `${statusConf.color}40` }]}>
                       <Animated.View style={[styles.statusDot, { backgroundColor: statusConf.color, opacity: trackingStatus === "walking" ? dotAnim : 1 }]} />
@@ -2922,7 +2942,7 @@ function WalkScreenContent() {
                   </>
                 )}
               </View>
-              {stepPermissionStatus === "granted" ? (
+              {isAutoTrackingOn ? (
                 <TouchableOpacity
                   style={[styles.pauseBtn, { backgroundColor: trackingStatus === "walking" ? colors.warning + "20" : colors.primary + "20", borderColor: trackingStatus === "walking" ? colors.warning + "40" : colors.primary + "40" }]}
                   onPress={(e) => { e.stopPropagation(); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); router.push("/walk/step-history"); }}
@@ -4869,7 +4889,7 @@ function WalkScreenContent() {
         onComplete={(_platform, permissionStatus) => {
           setShowStepSetup(false);
           if (permissionStatus === "connected") {
-            void resumeStepWatching();
+            void completeStepSetup();
           }
         }}
       />

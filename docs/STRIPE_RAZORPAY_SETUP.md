@@ -8,11 +8,13 @@ Complete checklist to connect payments professionally.
 
 ## 1. Backend environment (Coolify / server)
 
+### Sandbox / test cards (recommended first)
+
 ```env
 APP_BASE_URL=https://api.walkchamp.miragaming.com
 ALLOWED_ORIGINS=<your-app-origins>
 
-STRIPE_SECRET_KEY=sk_test_...          # live: sk_live_...
+STRIPE_SECRET_KEY=sk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 
 RAZORPAY_KEY_ID=rzp_test_...
@@ -21,13 +23,47 @@ RAZORPAY_WEBHOOK_SECRET=...
 
 CASH_FEATURES_ENABLED=true
 FEATURE_CASH_FEATURES=true
+ENABLE_BULLMQ_WEBHOOK_PROCESSING=true
+
+# Prefer this path once backend supports it — sandbox without false legal claims:
+PAYMENTS_LIVE_MODE=false
+
+# If the deployed API still requires ALL REAL_MONEY_* when cash is on,
+# either wait for PAYMENTS_LIVE_MODE backend change, or only set these true
+# when they are actually completed (do not fake approvals for live keys).
+REAL_MONEY_PRODUCTION_APPROVED=false
+REAL_MONEY_LEGAL_APPROVED=false
+REAL_MONEY_KYC_TAX_READY=false
+REAL_MONEY_PROVIDER_SANDBOX_TESTED=true
+REAL_MONEY_WITHDRAWAL_CONTROLS_READY=false
 ```
 
-Mobile app:
+### Going live (real cards)
+
+Finish Stripe business verification, Razorpay KYC, provider approval, and legal/accountant signoff, then:
+
+```env
+STRIPE_SECRET_KEY=sk_live_...
+STRIPE_WEBHOOK_SECRET=whsec_...   # live endpoint secret
+RAZORPAY_KEY_ID=rzp_live_...
+RAZORPAY_KEY_SECRET=...
+RAZORPAY_WEBHOOK_SECRET=...
+
+PAYMENTS_LIVE_MODE=true
+REAL_MONEY_PRODUCTION_APPROVED=true
+REAL_MONEY_LEGAL_APPROVED=true
+REAL_MONEY_KYC_TAX_READY=true
+REAL_MONEY_PROVIDER_SANDBOX_TESTED=true
+REAL_MONEY_WITHDRAWAL_CONTROLS_READY=true
+```
+
+### Mobile app
 
 ```env
 EXPO_PUBLIC_API_URL=https://api.walkchamp.miragaming.com
 EXPO_PUBLIC_WEB_URL=https://walkchamp.app
+EXPO_PUBLIC_ENABLE_CASH_CHALLENGES=true
+EXPO_PUBLIC_PAYMENTS_LIVE_MODE=false   # true only with live keys + approvals
 ```
 
 ---

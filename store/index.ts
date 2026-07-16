@@ -1,24 +1,17 @@
 import { configureStore, combineReducers } from "@reduxjs/toolkit";
 import type { UnknownAction } from "@reduxjs/toolkit";
 import authReducer from "./slices/authSlice";
-import profileReducer from "./slices/profileSlice";
-import walkReducer from "./slices/walkSlice";
-import racesReducer from "./slices/racesSlice";
-import liveReducer from "./slices/liveSlice";
-import chatReducer from "./slices/chatSlice";
-import walletReducer from "./slices/walletSlice";
 import coinsReducer from "./slices/coinsSlice";
 import trackThemesReducer from "./slices/trackThemesSlice";
 import raceProgressReducer from "./slices/raceProgressSlice";
 
+/**
+ * Store of record for auth, coins, themes, and canonical step progress.
+ * Legacy walk/races/live/chat/wallet/profile slices were unused by UI and removed.
+ * See docs/STEP_SOURCE_OF_TRUTH.md.
+ */
 const appReducer = combineReducers({
   auth: authReducer,
-  profile: profileReducer,
-  walk: walkReducer,
-  races: racesReducer,
-  live: liveReducer,
-  chat: chatReducer,
-  wallet: walletReducer,
   coins: coinsReducer,
   trackThemes: trackThemesReducer,
   raceProgress: raceProgressReducer,

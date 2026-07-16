@@ -1,7 +1,9 @@
 /**
  * Ordered, crash-safe step tracking enablement for fresh install / first enable.
  *
- * Android order: notifications → activity recognition → step source (HC / sensor).
+ * Android order (matches git): notifications → activity recognition → step source.
+ * Notifications are requested but never block step polling (same as WalkContext cold start).
+ * iOS: HealthKit only.
  */
 
 import { Platform } from "react-native";
@@ -67,21 +69,23 @@ export async function activateStepTracking(options: {
       console.log("[Steps] enable requested");
       setStepProgressUser(userId, username ?? null);
 
+      let notificationBlocked = false;
+      let notificationMessage: string | undefined;
+
+      // Ask for notifications (Android 13+ prompts; ≤12 auto). Never abort step enable —
+      // cold start already polls without FGS when notifications are off.
       if (Platform.OS === "android" && !skipOngoingNotificationPermission) {
-        const notif = await ensureNotificationPermissionForOngoingTracking();
+        const notifMode = limitedSensorOnly ? "auto" : "strict";
+        const notif = await ensureNotificationPermissionForOngoingTracking(notifMode);
         console.log(
-          `[Steps] notification gate granted=${notif.granted} requestedNow=${notif.requestedNow} blockedBySettings=${notif.blockedBySettings ?? false}`,
+          `[Steps] notification gate mode=${notifMode} granted=${notif.granted} requestedNow=${notif.requestedNow} blockedBySettings=${notif.blockedBySettings ?? false}`,
         );
         if (!notif.granted) {
-          const status = await stepProviderManager.refreshStatus();
-          return {
-            success: false,
-            permission: status.permission as PermissionStatus,
-            providerId: status.providerId,
-            ongoingNotificationEnabled: false,
-            notificationBlocked: true,
-            message: notif.message,
-          };
+          notificationBlocked = true;
+          notificationMessage = notif.message;
+          console.log(
+            "[Steps] notifications unavailable — continuing with polling-only tracking",
+          );
         }
       }
 
@@ -139,6 +143,7 @@ export async function activateStepTracking(options: {
             permission,
             providerId,
             ongoingNotificationEnabled: false,
+            notificationBlocked,
             message: result.message,
           };
         }
@@ -147,44 +152,47 @@ export async function activateStepTracking(options: {
         const status = await stepProviderManager.refreshStatus();
         permission = status.permission as PermissionStatus;
         providerId = status.providerId;
+        console.log(
+          `[Steps] existing permission=${permission} provider=${providerId ?? "none"}`,
+        );
         if (permission !== "granted") {
           return {
             success: false,
             permission,
             providerId,
             ongoingNotificationEnabled: false,
+            notificationBlocked,
           };
         }
       }
 
-      let ongoingNotificationEnabled = true;
+      let ongoingNotificationEnabled = Platform.OS !== "android";
       if (Platform.OS === "android" && !skipOngoingNotificationPermission) {
         ongoingNotificationEnabled = await hasOngoingNotificationAccess();
         console.log(
           `[Steps] final notification access for FGS enabled=${ongoingNotificationEnabled}`,
         );
         if (!ongoingNotificationEnabled) {
-          return {
-            success: false,
-            permission: "granted",
-            providerId,
-            ongoingNotificationEnabled: false,
-            notificationBlocked: true,
-            message:
-              "Notifications are still turned off. Please enable them to use ongoing step tracking.",
-          };
+          notificationBlocked = true;
+          notificationMessage =
+            notificationMessage ??
+            "Notifications are still turned off. Steps still track; enable notifications for the ongoing tracker.";
         }
       }
 
       await stepProviderManager.initialize(true);
       await stepProviderManager.getTodaySteps().catch(() => null);
 
-      console.log("[Steps] tracking activated successfully");
+      console.log(
+        `[Steps] tracking activated successfully provider=${providerId ?? "none"} fgs=${ongoingNotificationEnabled}`,
+      );
       return {
         success: true,
         permission: "granted",
         providerId,
         ongoingNotificationEnabled,
+        notificationBlocked: notificationBlocked || undefined,
+        message: notificationBlocked ? notificationMessage : undefined,
       };
     } catch (error) {
       console.log("[Steps] failed to enable step tracking", error);

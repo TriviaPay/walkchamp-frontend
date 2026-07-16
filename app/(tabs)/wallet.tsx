@@ -1,6 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import {
@@ -24,26 +24,39 @@ import { useColors } from "@/hooks/useColors";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
+import { useNetwork } from "@/context/NetworkContext";
+import { canStartCashPaymentFlow } from "@/config/featureFlags";
+import { isPaymentsLiveMode } from "@/config/env";
 import { formatCurrency, formatWalletAmount } from "@/utils/format";
 import { rf, rs } from "@/utils/responsive";
 import type { WalletTransaction } from "@/utils/mockData";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { authFetch } from "@/utils/authFetch";
-import { PAYMENT_DEEP_LINK_SCHEME } from "@/config/paymentsConfig";
+import { PAYMENT_DEEP_LINK_SCHEME, DEPOSIT_POLL_FIRST_MS, DEPOSIT_POLL_INTERVAL_MS } from "@/config/paymentsConfig";
 import {
   clearPendingDeposit,
   consumePaymentResult,
   depositStatusToUiResult,
   fetchDepositStatus,
+  isPollCompleteDepositStatus,
   isTerminalDepositStatus,
+  resolveDepositUiFromTransaction,
   resolvePendingDepositOnResume,
   savePendingDeposit,
   type PaymentResultStatus,
 } from "@/services/depositSession";
 import { ledgerTypeLabel } from "@/utils/walletLedger";
+import { readPaymentApiError } from "@/utils/paymentApiErrors";
 
 const PAYOUT_METHODS = ["PayPal", "Bank Transfer", "UPI (India)", "Gift Card"];
 const MIN_WITHDRAWAL = 5;
+
+const PAYMENT_RESULT_PRIORITY: Record<PaymentResultStatus, number> = {
+  success: 4,
+  cancelled: 3,
+  verification_failed: 2,
+  failed: 1,
+};
 
 const EARN_CARDS = [
   {
@@ -183,11 +196,13 @@ function TransactionRow({
 
 export default function WalletScreen() {
   useScreenMountPerf("Wallet");
+  const router = useRouter();
   const colors = useColors();
   const { insets, safeTop, safeBottom } = useSafeLayout();
   const { walletBalance, pendingBalance, walletCurrency, transactions, requestWithdrawal, refreshWallet } =
     useApp();
   const { user } = useAuth();
+  const { requireOnline } = useNetwork();
 
   // Silent background refresh when wallet tab is focused (cached data stays visible).
   useFocusEffect(
@@ -237,6 +252,8 @@ export default function WalletScreen() {
   const [customMode, setCustomMode] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<{ label: string; cents?: number; paise?: number } | null>(null);
   const processingRef = useRef(false);
+  const appliedPaymentResultRef = useRef<string | null>(null);
+  const paymentResultDismissedRef = useRef(false);
 
   // ── Payment result modal state ─────────────────────────────────────────────
   const [paymentResult, setPaymentResult] = useState<PaymentResultState>("hidden");
@@ -244,6 +261,16 @@ export default function WalletScreen() {
   const tabBarHeight = useTabBarHeight();
 
   const handleWithdraw = async () => {
+    if (!requireOnline("Reconnect to request a withdrawal.")) return;
+    if (!canStartCashPaymentFlow()) {
+      AppAlert.alert(
+        "Withdrawals unavailable",
+        isPaymentsLiveMode()
+          ? "Cash withdrawals are disabled until live payment keys and real-money approvals are configured."
+          : "Cash withdrawals are disabled in this build. Enable cash features on the API, or set EXPO_PUBLIC_ENABLE_CASH_CHALLENGES=true.",
+      );
+      return;
+    }
     const amount = parseFloat(withdrawAmount);
     if (!amount || amount < MIN_WITHDRAWAL) {
       AppAlert.alert(
@@ -298,14 +325,33 @@ export default function WalletScreen() {
   };
 
   const closePaymentResult = () => {
+    if (paymentResultDismissedRef.current) return;
+    paymentResultDismissedRef.current = true;
     setPaymentResult("hidden");
   };
 
-  const applyPaymentResult = useCallback(async (ui: PaymentResultStatus) => {
+  const applyPaymentResult = useCallback((ui: PaymentResultStatus, transactionId?: string) => {
+    if (paymentResultDismissedRef.current) return;
+
+    const dedupeKey = transactionId ? `${transactionId}:${ui}` : ui;
+    if (appliedPaymentResultRef.current === dedupeKey) return;
+
+    const prevKey = appliedPaymentResultRef.current;
+    if (prevKey) {
+      const prevUi = (
+        prevKey.includes(":") ? prevKey.split(":")[1] : prevKey
+      ) as PaymentResultStatus;
+      if ((PAYMENT_RESULT_PRIORITY[prevUi] ?? 0) > (PAYMENT_RESULT_PRIORITY[ui] ?? 0)) return;
+    }
+
+    appliedPaymentResultRef.current = dedupeKey;
+
+    router.replace("/(tabs)/wallet");
+
     if (ui === "success") {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await refreshWallet();
       setPaymentResult("success");
+      void refreshWallet().catch(() => {});
       return;
     }
     if (ui === "cancelled") {
@@ -313,21 +359,22 @@ export default function WalletScreen() {
       return;
     }
     if (ui === "verification_failed") {
-      await refreshWallet().catch(() => {});
       setPaymentResult("verification_failed");
+      void refreshWallet().catch(() => {});
       return;
     }
-    await refreshWallet().catch(() => {});
     setPaymentResult("failed");
-  }, [refreshWallet]);
+    void refreshWallet().catch(() => {});
+  }, [refreshWallet, router]);
 
-  // Show result saved by payment-complete / Universal Link handler.
+  // Show result saved by Universal Link / payment return handler.
   useFocusEffect(
     useCallback(() => {
       void (async () => {
+        if (paymentResultDismissedRef.current) return;
         const stored = await consumePaymentResult();
         if (stored) {
-          await applyPaymentResult(stored.status);
+          applyPaymentResult(stored.status, stored.transactionId);
         }
       })();
     }, [applyPaymentResult]),
@@ -338,9 +385,13 @@ export default function WalletScreen() {
     const onAppState = (next: AppStateStatus) => {
       if (next !== "active") return;
       void (async () => {
+        if (paymentResultDismissedRef.current || appliedPaymentResultRef.current) {
+          await refreshWallet({ silent: true }).catch(() => {});
+          return;
+        }
         const resolved = await resolvePendingDepositOnResume();
         if (resolved) {
-          await applyPaymentResult(resolved.status);
+          applyPaymentResult(resolved.status, resolved.transactionId);
         } else {
           await refreshWallet({ silent: true }).catch(() => {});
         }
@@ -353,6 +404,15 @@ export default function WalletScreen() {
   // Pay button fires this — uses selectedPreset or custom text input
   const handleDeposit = async () => {
     if (processingRef.current) return;
+    if (!requireOnline("Reconnect to make a deposit.")) return;
+    if (!canStartCashPaymentFlow()) {
+      setDepositError(
+        isPaymentsLiveMode()
+          ? "Deposits are disabled until live payment keys are configured for this build."
+          : "Deposits are disabled. Set EXPO_PUBLIC_ENABLE_CASH_CHALLENGES=true and ensure the API has cash features enabled (sandbox keys OK when PAYMENTS_LIVE_MODE=false).",
+      );
+      return;
+    }
 
     let checkoutCents = 0;
     let checkoutPaise = 0;
@@ -385,6 +445,8 @@ export default function WalletScreen() {
     }
 
     setDepositError("");
+    paymentResultDismissedRef.current = false;
+    appliedPaymentResultRef.current = null;
     processingRef.current = true;
     setDepositStatus("creating");
 
@@ -399,8 +461,7 @@ export default function WalletScreen() {
           body: JSON.stringify({ amountCents: checkoutCents }),
         });
         if (!res.ok) {
-          const err = (await res.json().catch(() => ({}))) as { error?: string };
-          throw new Error(err.error ?? "Failed to create Stripe payment.");
+          throw new Error(await readPaymentApiError(res, "Failed to create Stripe payment."));
         }
         const data = (await res.json()) as { checkoutUrl: string; transactionId: string };
         checkoutUrl = data.checkoutUrl;
@@ -413,8 +474,7 @@ export default function WalletScreen() {
           body: JSON.stringify({ amountPaise: checkoutPaise }),
         });
         if (!res.ok) {
-          const err = (await res.json().catch(() => ({}))) as { error?: string };
-          throw new Error(err.error ?? "Failed to create Razorpay payment.");
+          throw new Error(await readPaymentApiError(res, "Failed to create Razorpay payment."));
         }
         const data = (await res.json()) as { checkoutUrl: string; transactionId: string };
         checkoutUrl = data.checkoutUrl;
@@ -432,53 +492,75 @@ export default function WalletScreen() {
       });
 
       // ── Background poll ────────────────────────────────────────────────────
-      // Poll the deposit status every 2 s while the browser is open.
-      // This is the primary result mechanism on Android Expo Go where Chrome
-      // Custom Tabs cannot intercept the globalwalkerleague:// deep link.
-      // When a terminal status is detected we call dismissBrowser() so the
-      // Custom Tab closes and openAuthSessionAsync resolves immediately.
+      // Poll while checkout is open. As soon as backend reports a terminal status,
+      // show the wallet result immediately — do not wait for the browser session to end.
       let polledStatus: string | null = null;
-      const pollInterval = setInterval(() => {
-        void (async () => {
-          try {
-            const s = await fetchDepositStatus(transactionId);
-            if (isTerminalDepositStatus(s)) {
-              polledStatus = s;
-              clearInterval(pollInterval);
-              if (__DEV__) console.log("[WalletDeposit] poll detected:", s, "— dismissing browser");
-              // Stripe's return page calls window.close() itself, so the browser
-              // may already be gone by the time the poll fires. dismissBrowser()
-              // returns a Promise — must use .catch() not try/catch to suppress
-              // the async "no web browser to dismiss" rejection.
-              void WebBrowser.dismissBrowser().catch(() => { /* already closed */ });
-            }
-          } catch {
-            // ignore transient network errors, keep polling
+      let pollStopped = false;
+      let pollInterval: ReturnType<typeof setInterval> | null = null;
+      let flowHandled = false;
+
+      const completeDepositUi = async (source: string, fallbackUi?: PaymentResultStatus | null) => {
+        if (flowHandled) return;
+
+        const resolved = await resolveDepositUiFromTransaction(transactionId);
+        const ui = resolved ?? fallbackUi ?? null;
+        if (!ui) {
+          if (__DEV__) console.log("[WalletDeposit] still settling:", source);
+          return;
+        }
+        if (ui === "verification_failed" && !resolved) return;
+
+        flowHandled = true;
+        pollStopped = true;
+        if (pollInterval) clearInterval(pollInterval);
+
+        setShowDeposit(false);
+        resetDeposit();
+        void clearPendingDeposit();
+        applyPaymentResult(ui, transactionId);
+        void WebBrowser.dismissBrowser().catch(() => { /* already closed */ });
+        if (__DEV__) console.log("[WalletDeposit] complete:", ui, `(${source})`);
+      };
+
+      const runPoll = async () => {
+        if (pollStopped || polledStatus || flowHandled) return;
+        try {
+          const s = await fetchDepositStatus(transactionId);
+          if (isPollCompleteDepositStatus(s)) {
+            polledStatus = s;
+            await completeDepositUi("poll", depositStatusToUiResult(s));
           }
-        })();
-      }, 2000);
+        } catch {
+          // ignore transient network errors, keep polling
+        }
+      };
 
-      // openAuthSessionAsync on iOS uses SFAuthenticationSession which auto-closes
-      // when the redirect URL starts with globalwalkerleague://.
-      // On Android it opens a Chrome Custom Tab; the poll above closes it.
-      const result = await WebBrowser.openAuthSessionAsync(
-        checkoutUrl,
-        PAYMENT_DEEP_LINK_SCHEME,
-        {
-          dismissButtonStyle: "close",
-          presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
-        },
-      );
+      pollInterval = setInterval(() => void runPoll(), DEPOSIT_POLL_INTERVAL_MS);
+      setTimeout(() => void runPoll(), DEPOSIT_POLL_FIRST_MS);
+      void runPoll();
 
-      clearInterval(pollInterval);
+      // Android: openBrowserAsync + poll (avoids stuck "Return to WalkChamp" done page).
+      // iOS: openAuthSessionAsync intercepts the custom-scheme redirect.
+      const result =
+        Platform.OS === "android"
+          ? await WebBrowser.openBrowserAsync(checkoutUrl)
+          : await WebBrowser.openAuthSessionAsync(checkoutUrl, PAYMENT_DEEP_LINK_SCHEME, {
+              dismissButtonStyle: "close",
+              presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
+            });
+
+      clearInterval(pollInterval!);
+      pollStopped = true;
+
+      if (flowHandled) {
+        return;
+      }
 
       // ── Final status check ─────────────────────────────────────────────────
-      // Covers the race where the browser closed (deep link / user tap) before
-      // the 2 s poll tick fired.  One extra round-trip, always up-to-date.
       if (!polledStatus) {
         try {
           const s = await fetchDepositStatus(transactionId);
-          if (isTerminalDepositStatus(s)) {
+          if (isPollCompleteDepositStatus(s)) {
             polledStatus = s;
             if (__DEV__) console.log("[WalletDeposit] final status check:", s);
           }
@@ -492,37 +574,15 @@ export default function WalletScreen() {
       resetDeposit();
 
       // ── Resolve result ─────────────────────────────────────────────────────
-      const polledUi = polledStatus ? depositStatusToUiResult(polledStatus) : null;
-      if (polledUi) {
-        await clearPendingDeposit();
-        if (__DEV__) console.log("[WalletDeposit] modal state:", polledUi, "(poll)");
-        await applyPaymentResult(polledUi);
-      } else if (result.type === "success" && result.url) {
-        // iOS-only path: SFAuthenticationSession returned the deep-link URL
-        // before any poll tick fired (extremely fast payment, < 2 s).
+      if (!flowHandled && polledStatus) {
+        await completeDepositUi("post-browser", depositStatusToUiResult(polledStatus));
+      } else if (!flowHandled && result.type === "success" && "url" in result && result.url) {
         if (__DEV__) console.log("[WalletDeposit] modal state: from deep link URL:", result.url);
-        try {
-          const parsed = new URL(result.url);
-          const status = parsed.searchParams.get("status");
-          await clearPendingDeposit();
-          if (status === "success" || status === "succeeded") {
-            await applyPaymentResult("success");
-          } else if (status === "cancelled") {
-            await applyPaymentResult("cancelled");
-          } else if (status === "processing") {
-            setPaymentResult("verifying");
-          } else if (status === "requires_review" || status === "settlement_error") {
-            await applyPaymentResult("verification_failed");
-          } else {
-            await applyPaymentResult("failed");
-          }
-        } catch {
-          await applyPaymentResult("failed");
-        }
-      } else {
+        await completeDepositUi("deep-link");
+      } else if (!flowHandled && (result.type === "cancel" || result.type === "dismiss")) {
         // Browser closed before payment completed (user manually dismissed)
         if (__DEV__) console.log("[WalletDeposit] modal state: cancelled (browser dismissed)");
-        setPaymentResult("cancelled");
+        await completeDepositUi("browser-dismiss", "cancelled");
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Payment failed. Please try again.";
@@ -940,7 +1000,13 @@ export default function WalletScreen() {
       </Modal>
 
       {/* ── Payment Result Modal ───────────────────────────────────────────── */}
-      <Modal visible={paymentResult !== "hidden"} animationType="fade" transparent statusBarTranslucent>
+      <Modal
+        visible={paymentResult !== "hidden"}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        onRequestClose={closePaymentResult}
+      >
         <View style={styles.resultOverlay}>
           <View style={[styles.resultCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             {paymentResult === "verifying" && (

@@ -22,9 +22,10 @@ import CoinsStoreModal from "@/components/CoinsStoreModal";
 import { getApiBase } from "@/utils/apiUrl";
 import { getLocalDateStr } from "@/utils/timezone";
 import { useOwnedTrackLayouts } from "@/hooks/useOwnedTrackLayouts";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { fetchTrackThemes } from "@/store/slices/trackThemesSlice";
-import type { AppDispatch } from "@/store";
+import type { AppDispatch, RootState } from "@/store";
+import { isTrackLayoutId } from "@/constants/trackLayouts";
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
@@ -237,6 +238,10 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
   const { safeTop, safeBottom } = useSafeLayout();
   const dispatch = useDispatch<AppDispatch>();
   const { layouts: ownedLayouts } = useOwnedTrackLayouts();
+  const serverSelectedThemeCode = useSelector(
+    (s: RootState) => s.trackThemes.selectedThemeCode,
+  );
+  const defaultThemeCode = useSelector((s: RootState) => s.trackThemes.defaultThemeCode);
   const { width: SCREEN_W } = useWindowDimensions();
   const [coinEntry, setCoinEntry] = useState(1000);
   const [playerCount, setPlayerCount] = useState(10);
@@ -246,6 +251,7 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCoinsStore, setShowCoinsStore] = useState(false);
+  const lastAppliedServerThemeRef = useRef<string | null>(null);
 
   const shakeAnim = useRef(new Animated.Value(0)).current;
 
@@ -267,17 +273,34 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
     if (visible) {
       fetchBalance();
       setError(null);
-      // Refresh owned tracks so newly-purchased skins appear immediately
+      // Refresh owned tracks + persisted selectedThemeCode
       void dispatch(fetchTrackThemes());
+    } else {
+      lastAppliedServerThemeRef.current = null;
     }
   }, [visible, fetchBalance, dispatch]);
 
-  // If currently-selected track is no longer owned, reset to default
+  // Auto-select persisted track when modal opens / themes refresh.
+  useEffect(() => {
+    if (!visible) return;
+    if (!isTrackLayoutId(serverSelectedThemeCode)) return;
+    if (lastAppliedServerThemeRef.current === serverSelectedThemeCode) return;
+    lastAppliedServerThemeRef.current = serverSelectedThemeCode;
+    setTrackLayout(serverSelectedThemeCode);
+  }, [visible, serverSelectedThemeCode]);
+
+  // If currently-selected track is no longer owned, fall back to server default / bg
   useEffect(() => {
     if (ownedLayouts.length > 0 && !ownedLayouts.find((l) => l.id === trackLayout)) {
-      setTrackLayout("bg");
+      const fallback = isTrackLayoutId(serverSelectedThemeCode)
+        ? serverSelectedThemeCode
+        : isTrackLayoutId(defaultThemeCode)
+          ? defaultThemeCode
+          : "bg";
+      const ownedFallback = ownedLayouts.find((l) => l.id === fallback)?.id ?? ownedLayouts[0]?.id ?? "bg";
+      setTrackLayout(ownedFallback);
     }
-  }, [ownedLayouts, trackLayout]);
+  }, [ownedLayouts, trackLayout, serverSelectedThemeCode, defaultThemeCode]);
 
   const prize = calcPrize(coinEntry, playerCount);
   const hasEnough = coinBalance !== null && coinBalance >= coinEntry;

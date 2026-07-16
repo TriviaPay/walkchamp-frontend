@@ -8,14 +8,11 @@
 import React, { memo } from "react";
 import { Platform, Text, View } from "react-native";
 import Constants from "expo-constants";
+import { areAdsConfiguredForCurrentEnv, getBannerAdUnitId } from "@/config/adsConfig";
 
 type AdModule = typeof import("react-native-google-mobile-ads");
 
-const BANNER_AD_UNIT_ID =
-  Platform.select({
-    ios:     "ca-app-pub-3940256099942544/2934735716",
-    android: "ca-app-pub-3940256099942544/6300978111",
-  }) ?? "ca-app-pub-3940256099942544/6300978111";
+const BANNER_AD_UNIT_ID = getBannerAdUnitId();
 
 /** Standard AdMob banner height (320×50) on iOS and Android. */
 export const BANNER_SLOT_HEIGHT = 50;
@@ -49,7 +46,7 @@ function BannerAdView({ style }: { style?: object }) {
     overflow: "hidden" as const,
   };
 
-  if (adMod && !isExpoGo) {
+  if (adMod && !isExpoGo && BANNER_AD_UNIT_ID && areAdsConfiguredForCurrentEnv()) {
     const { BannerAd, BannerAdSize } = adMod;
     return (
       <View style={[slotStyle, style]} collapsable={false}>

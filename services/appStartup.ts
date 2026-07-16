@@ -25,7 +25,20 @@ export function waitForAppStartupReady(): Promise<void> {
 
 /** Call once after fonts/splash — before touching HC, FGS, OneSignal, or step native APIs. */
 export function scheduleAppStartupReady(): void {
+  // Fast Refresh / Metro reload can leave ready=true while the native JS context
+  // is torn down — force a short re-arm so native module access stays gated.
+  if (ready && __DEV__) {
+    ready = false;
+    readyPromise = null;
+    resolveReady = null;
+  }
   if (ready) return;
+
+  if (!readyPromise) {
+    readyPromise = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+  }
 
   InteractionManager.runAfterInteractions(() => {
     const markReady = () => {
@@ -36,9 +49,10 @@ export function scheduleAppStartupReady(): void {
       resolveReady = null;
     };
 
-    // Release APK / EAS cold install: bridge + native modules need extra time.
+    // Release APK / EAS cold install: short gate so Walk/Live can hydrate faster
+    // while still avoiding bridgeless JavaScriptContextHolder NPEs on first frame.
     if (Platform.OS === "android") {
-      setTimeout(markReady, __DEV__ ? 800 : 2000);
+      setTimeout(markReady, __DEV__ ? 400 : 800);
     } else {
       requestAnimationFrame(markReady);
     }

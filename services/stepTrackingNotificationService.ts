@@ -93,8 +93,12 @@ function resolveNativeModule(): NativeModule | null {
 function getNativeModule(forceRefresh = false): NativeModule | null {
   if (!FEATURE_FLAGS.ENABLE_STEP_TRACKING_NOTIFICATIONS) return null;
   if (nativeModuleResolved && !forceRefresh) return nativeModule;
+  // resolveNativeModule / requireOptionalExpoNativeModule already gate on startup ready.
+  // Do not cache null — otherwise a cold-start miss permanently disables FGS updates.
   nativeModule = resolveNativeModule();
-  nativeModuleResolved = true;
+  if (nativeModule != null) {
+    nativeModuleResolved = true;
+  }
   return nativeModule;
 }
 

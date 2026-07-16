@@ -7,7 +7,7 @@
 import { PermissionsAndroid, Platform } from "react-native";
 import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
 import { areAppNotificationsEnabled } from "@/services/permissions/androidNotificationAccess";
-import { ensureNotificationsForStepTracking } from "@/services/permissions/notificationGate";
+import { ensureNotificationsForStepTracking, type NotificationGateMode } from "@/services/permissions/notificationGate";
 import { pushLog } from "@/services/pushLog";
 
 function isPushFlow(reason: string): boolean {
@@ -163,9 +163,12 @@ export async function hasNotificationPermissionGranted(): Promise<boolean> {
 
 /**
  * Ensure notifications are enabled before starting ongoing FGS (Android).
- * Uses custom modal + settings when app-level notifications are off.
+ * Uses custom modal + settings when app-level notifications are off (strict mode).
+ * Auto mode (legacy / unsupported) never blocks tracking.
  */
-export async function ensureNotificationPermissionForOngoingTracking(): Promise<{
+export async function ensureNotificationPermissionForOngoingTracking(
+  mode: NotificationGateMode = "strict",
+): Promise<{
   granted: boolean;
   requestedNow: boolean;
   blockedBySettings?: boolean;
@@ -175,7 +178,7 @@ export async function ensureNotificationPermissionForOngoingTracking(): Promise<
     return { granted: true, requestedNow: false };
   }
 
-  const result = await ensureNotificationsForStepTracking();
+  const result = await ensureNotificationsForStepTracking(mode);
   return {
     granted: result.granted,
     requestedNow: result.requestedNow,

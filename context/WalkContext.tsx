@@ -69,7 +69,7 @@ import {
   stopWalkBackgroundStepPoll,
   tickWalkBackgroundStepPoll,
 } from "@/services/stepProgressCoordinator";
-import { activateStepTracking } from "@/services/stepTrackingStartup";
+import { activateStepTracking, type StepTrackingEnableResult } from "@/services/stepTrackingStartup";
 import { mergeWalkStepsWithNative } from "@/services/stepDisplayMerge";
 import { waitForAppStartupReady, isAppStartupReady } from "@/services/appStartup";
 import { subscribeMidnightRollover } from "@/services/walkMidnightEvents";
@@ -165,6 +165,8 @@ interface WalkContextType {
   clearMilestone: () => void;
   /** Request pedometer / Health Connect permission from the user. */
   requestStepPermission: () => Promise<void>;
+  /** Activate tracking after wearable setup when permission may already be granted. */
+  completeStepSetup: () => Promise<void>;
   /** Enable limited device sensor tracking (TYPE_STEP_COUNTER). Sets verificationLevel = limited. */
   enableLimitedSensorTracking: () => Promise<void>;
   /** Re-fetch today's rank + active minutes from the backend. Safe to call at any time. */
@@ -255,6 +257,12 @@ async function submitStepsToBackend(
     body.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     body.timestampUtc = new Date().toISOString();
 
+    if (__DEV__) {
+      console.log(
+        `[API] request started: /api/walk/steps delta=${steps} total=${totalSteps ?? "n/a"} source=${source ?? "n/a"}`,
+      );
+    }
+
     const res = await fetch(`${API_BASE}/api/walk/steps`, {
       method: "POST",
       signal: timeoutSignal(STEP_SYNC_TIMEOUT),
@@ -264,6 +272,11 @@ async function submitStepsToBackend(
       },
       body: JSON.stringify(body),
     });
+    if (__DEV__) {
+      console.log(
+        `[API] request completed: /api/walk/steps ${res.status} delta=${steps} total=${totalSteps ?? "n/a"} source=${source ?? "n/a"}`,
+      );
+    }
     if (!res.ok) return null;
     const data = await res.json();
     return {
@@ -631,6 +644,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         // Show scoped local cache immediately — do not wait for backend/API.
         let displaySteps = await readDailyStepsForUserDate(user.id, today);
         const cachedAtStart = displaySteps;
+        // Unblock Walk tab immediately; backend/provider reconcile continues below.
+        setStepsHydrated(true);
         if (displaySteps > 0) {
           setTodaySteps(displaySteps);
           todayStepsRef.current = displaySteps;
@@ -685,8 +700,9 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
               backendSteps,
             });
             lastProviderPollRef.current = displaySteps;
+            // Prefer backend total as lastSynced — never mark provider-only steps as synced.
             lastSyncedStepsRef.current = Math.min(
-              parsed?.todaySteps ?? displaySteps,
+              Math.max(0, parsed?.todaySteps ?? 0),
               displaySteps,
             );
             await storageSet(keys.lastSyncedStepsCount, lastSyncedStepsRef.current);
@@ -819,10 +835,22 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       const syncedCount = await storageGet<number>(
         keys.lastSyncedStepsCount,
       );
+      // lastSynced must never exceed what the backend already has — otherwise a
+      // local-only reading (e.g. HC=1, API=0) permanently blocks /api/walk/steps.
+      const backendFloor = Math.max(0, backendTodayStepsRef.current);
       if (syncedCount !== null) {
-        lastSyncedStepsRef.current = syncedCount;
+        lastSyncedStepsRef.current = Math.min(
+          Math.max(0, syncedCount),
+          backendFloor,
+          todayStepsRef.current,
+        );
       } else {
-        lastSyncedStepsRef.current = 0;
+        lastSyncedStepsRef.current = Math.min(backendFloor, todayStepsRef.current);
+      }
+      if (__DEV__) {
+        console.log(
+          `[WalkContext] lastSynced=${lastSyncedStepsRef.current} backend=${backendFloor} ui=${todayStepsRef.current} storedSynced=${syncedCount ?? "null"}`,
+        );
       }
 
       trackingDayRef.current = getTodayKey();
@@ -954,7 +982,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         lastProviderPollRef.current = displaySteps;
       }
       lastSyncedStepsRef.current = Math.min(
-        backendSteps > 0 ? backendSteps : displaySteps,
+        Math.max(0, backendSteps),
         displaySteps,
       );
       await storageSet(keys.lastSyncedStepsCount, lastSyncedStepsRef.current);
@@ -1044,7 +1072,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
   // ── Backend delta sync ────────────────────────────────────────────────────────
 
-  const syncDeltaToBackend = useCallback(async () => {
+  const syncDeltaToBackend = useCallback(async (opts?: { force?: boolean }) => {
     if (!user?.id) return;
     if (isWalkBackendSyncPaused()) return;
     const rawCurrent = todayStepsRef.current;
@@ -1065,12 +1093,21 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     }
     const lastSynced = lastSyncedStepsRef.current;
     const delta = current - lastSynced;
-    if (delta <= 0) return;
+    if (delta <= 0) {
+      if (__DEV__ && opts?.force) {
+        console.log(
+          `[StepSync] force skipped delta=${delta} current=${current} lastSynced=${lastSynced}`,
+        );
+      }
+      return;
+    }
 
     const verified = stepProviderManager.usesVerifiedStepSource();
-    const minDelta = verified
-      ? STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MIN_DELTA_VERIFIED
-      : STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MIN_DELTA_LEGACY;
+    const minDelta = opts?.force
+      ? 1
+      : verified
+        ? STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MIN_DELTA_VERIFIED
+        : STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MIN_DELTA_LEGACY;
     if (delta < minDelta) {
       if (__DEV__) {
         stepEngineLog(
@@ -1440,10 +1477,21 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         startRealPollInterval();
         if (!backendSyncRef.current) {
           backendSyncRef.current = setInterval(
-            syncDeltaToBackend,
+            () => {
+              void syncDeltaToBackend();
+            },
             BACKEND_SYNC_INTERVAL_MS,
           );
         }
+        if (__DEV__) {
+          console.log(
+            `[WalkContext] poll+sync started provider=${stepProviderManager.getActiveProviderId() ?? "none"} ui=${todayStepsRef.current} lastSynced=${lastSyncedStepsRef.current}`,
+          );
+        }
+        // Catch up backend immediately after enable (even small deltas).
+        startupSyncFiredRef.current = false;
+        void syncDeltaToBackend({ force: true });
+        void tickWalkBackgroundStepPoll("resume");
         if (ongoingNotificationEnabled && user?.id) {
           try {
             setStepProgressUser(user.id, user.username ?? null);
@@ -1761,6 +1809,62 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
   // ── Permission request helper ─────────────────────────────────────────────────
 
+  const handleStepActivationResult = useCallback(
+    async (result: StepTrackingEnableResult) => {
+      const status = result.permission as PermissionStatus;
+      if (__DEV__) {
+        console.log(
+          `[WalkContext] Permission result: ${status} provider=${result.providerId ?? "none"} success=${result.success}`,
+        );
+      }
+
+      setStepPermissionStatus(status);
+      setActiveStepSource(providerToActiveSource(result.providerId));
+      setVerificationLevel(providerToVerification(result.providerId));
+
+      if (result.success) {
+        await applyTrackingActivation(result.ongoingNotificationEnabled);
+        // Soft reminder only — steps already tracking via poll/watch.
+        if (
+          result.notificationBlocked &&
+          Platform.OS === "android" &&
+          shouldShowOngoingNotificationDeniedMessage()
+        ) {
+          Alert.alert(
+            "Notifications Disabled",
+            result.message ?? getOngoingNotificationDeniedMessage(),
+          );
+        }
+        return;
+      }
+
+      if (result.notificationBlocked) {
+        Alert.alert(
+          "Notifications Required",
+          result.message ?? NOTIFICATION_STILL_DISABLED_MESSAGE,
+        );
+      } else if (result.activityRecognitionBlocked) {
+        Alert.alert(
+          "Permission Required",
+          result.message ?? "Physical activity permission is required to track steps.",
+        );
+      } else if (status === "denied") {
+        Alert.alert(
+          "Permission Required",
+          Platform.OS === "ios"
+            ? "Allow Steps access in Apple Health to track your walks."
+            : "Allow Steps access in Walk Champ or Health Connect to track your walks.",
+        );
+      } else if (status === "unavailable") {
+        Alert.alert(
+          "Step Tracking Unavailable",
+          result.message ?? "Step tracking is not available on this device.",
+        );
+      }
+    },
+    [applyTrackingActivation],
+  );
+
   const requestStepPermission = useCallback(async () => {
     if (permissionRequestInFlightRef.current) {
       if (__DEV__) {
@@ -1795,42 +1899,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         requestPermission: needPrompt,
       });
 
-      const status = result.permission as PermissionStatus;
-      if (__DEV__) {
-        console.log(
-          `[WalkContext] Permission result: ${status} provider=${result.providerId ?? "none"}`,
-        );
-      }
-
-      setStepPermissionStatus(status);
-      setActiveStepSource(providerToActiveSource(result.providerId));
-      setVerificationLevel(providerToVerification(result.providerId));
-
-      if (result.success) {
-        await applyTrackingActivation(result.ongoingNotificationEnabled);
-      } else if (result.notificationBlocked) {
-        Alert.alert(
-          "Notifications Required",
-          result.message ?? NOTIFICATION_STILL_DISABLED_MESSAGE,
-        );
-      } else if (result.activityRecognitionBlocked) {
-        Alert.alert(
-          "Permission Required",
-          result.message ?? "Physical activity permission is required to track steps.",
-        );
-      } else if (status === "denied") {
-        Alert.alert(
-          "Permission Required",
-          Platform.OS === "ios"
-            ? "Allow Steps access in Apple Health to track your walks."
-            : "Allow Steps access in Walk Champ or Health Connect to track your walks.",
-        );
-      } else if (status === "unavailable") {
-        Alert.alert(
-          "Step Tracking Unavailable",
-          result.message ?? "Step tracking is not available on this device.",
-        );
-      }
+      await handleStepActivationResult(result);
     } catch (e) {
       if (__DEV__) console.log("[WalkContext] requestStepPermission error", e);
       Alert.alert(
@@ -1843,8 +1912,43 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   }, [
     user?.id,
     user?.username,
-    applyTrackingActivation,
+    handleStepActivationResult,
   ]);
+
+  const completeStepSetup = useCallback(async () => {
+    if (!user?.id) return;
+    if (permissionRequestInFlightRef.current) return;
+
+    permissionRequestInFlightRef.current = true;
+    try {
+      await stepProviderManager.initialize(true);
+      const providerStatus = await stepProviderManager.refreshStatus();
+
+      if (providerStatus.permission !== "granted") {
+        permissionRequestInFlightRef.current = false;
+        await requestStepPermission();
+        return;
+      }
+
+      const isLegacy =
+        providerStatus.providerId === "android_legacy_sensor" ||
+        providerStatus.verificationLevel === "legacy";
+
+      const result = await activateStepTracking({
+        userId: user.id,
+        username: user.username,
+        requestPermission: false,
+        limitedSensorOnly: isLegacy && Platform.OS === "android",
+      });
+      await handleStepActivationResult(result);
+    } catch (e) {
+      if (__DEV__) console.log("[WalkContext] completeStepSetup error", e);
+      permissionRequestInFlightRef.current = false;
+      await requestStepPermission();
+    } finally {
+      permissionRequestInFlightRef.current = false;
+    }
+  }, [user?.id, user?.username, handleStepActivationResult, requestStepPermission]);
 
   // ── Real session tracking ─────────────────────────────────────────────────────
 
@@ -1991,7 +2095,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     if (todaySteps <= 0) return;
     if (todaySteps <= lastSyncedStepsRef.current) return;
     startupSyncFiredRef.current = true;
-    syncDeltaToBackend().catch(() => {});
+    syncDeltaToBackend({ force: true }).catch(() => {});
   }, [todaySteps, syncDeltaToBackend]);
 
   // ── Periodic save ─────────────────────────────────────────────────────────────
@@ -2030,6 +2134,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       togglePause,
       clearMilestone,
       requestStepPermission,
+      completeStepSetup,
       enableLimitedSensorTracking,
       refreshTodayRank: fetchTodayFromBackend,
       refreshTodaySteps: refreshRealSteps,
@@ -2044,7 +2149,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       currentStreak, activeDurationMinutes, milestoneReached, autoTrackingEnabled, usingRealTracking,
       stepPermissionStatus, hcAvailability, activeStepSource, verificationLevel, todayActiveMinutes,
       todayDailyRank, todayDailyGoal, setTrackingStatus, togglePause, clearMilestone,
-      requestStepPermission, enableLimitedSensorTracking, fetchTodayFromBackend, refreshRealSteps,
+      requestStepPermission, completeStepSetup, enableLimitedSensorTracking, fetchTodayFromBackend, refreshRealSteps,
       resumeStepWatching, syncDeltaToBackend, stepsHydrated, stepsSourceReady, authReady,
     ],
   );

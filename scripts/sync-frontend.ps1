@@ -94,18 +94,25 @@ $files = @(
     "app\_layout.tsx",
     "app\public-profile\[userId].tsx",
     # Wallet deposits — Phase C payments (Stripe/Razorpay UX)
+    "config\env.ts",
+    "config\featureFlags.ts",
     "config\paymentsConfig.ts",
     "services\depositSession.ts",
+    "services\remoteFeatureFlags.ts",
     "utils\walletLedger.ts",
+    "utils\paymentApiErrors.ts",
     "utils\storage.ts",
     "utils\mockData.ts",
     "context\AppContext.tsx",
-    "app\(tabs)\wallet.tsx",
     "app\payment-complete.tsx",
     "plugins\withPaymentAppLinks.js",
     "app.json",
+    "eas.json",
     "docs\PAYMENTS_BACKEND_HANDOFF.md",
-    "docs\STRIPE_RAZORPAY_SETUP.md"
+    "docs\STRIPE_RAZORPAY_SETUP.md",
+    "docs\PRODUCTION_EAS_SECRETS.md"
+    # Note: wallet.tsx / walk.tsx may diverge between C:\wc and Downloads
+    # (NetworkContext etc.) — sync those surgically after payment changes.
 )
 
 function Sync-OneWay([string]$from, [string]$to) {

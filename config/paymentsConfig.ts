@@ -6,11 +6,40 @@
  *
  * Marketing / Universal Link domain (optional, recommended):
  *   EXPO_PUBLIC_WEB_URL → e.g. https://walkchamp.app
+ *
+ * Public client keys only (EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY /
+ * EXPO_PUBLIC_RAZORPAY_KEY_ID). Secret keys must never ship in the app.
  */
+
+import {
+  getRazorpayKeyId,
+  getStripePublishableKey,
+  isRazorpayKeyLive,
+  isRazorpayKeyTest,
+  isStripePublishableKeyLive,
+  isStripePublishableKeyTest,
+} from "@/config/env";
 
 const API_BASE = (process.env.EXPO_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 const WEB_BASE = (process.env.EXPO_PUBLIC_WEB_URL ?? "https://walkchamp.app").replace(/\/$/, "");
 
+export { getRazorpayKeyId, getStripePublishableKey };
+
+export function stripePublishableKeyStatus(): "live" | "test" | "missing" | "unknown" {
+  const key = getStripePublishableKey();
+  if (!key) return "missing";
+  if (isStripePublishableKeyLive(key)) return "live";
+  if (isStripePublishableKeyTest(key)) return "test";
+  return "unknown";
+}
+
+export function razorpayKeyStatus(): "live" | "test" | "missing" | "unknown" {
+  const key = getRazorpayKeyId();
+  if (!key) return "missing";
+  if (isRazorpayKeyLive(key)) return "live";
+  if (isRazorpayKeyTest(key)) return "test";
+  return "unknown";
+}
 function hostFromUrl(url: string): string | null {
   try {
     return new URL(url).hostname;
@@ -52,7 +81,10 @@ export const PAYMENT_API_PATHS = {
 } as const;
 
 /** Poll interval while checkout browser is open or deposit is pending verification. */
-export const DEPOSIT_POLL_INTERVAL_MS = 2000;
+export const DEPOSIT_POLL_INTERVAL_MS = 400;
+
+/** First status check shortly after checkout opens (before interval polling). */
+export const DEPOSIT_POLL_FIRST_MS = 150;
 
 /** Stop resume-polling a pending deposit after this duration (24 h). */
 export const DEPOSIT_PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000;

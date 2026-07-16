@@ -129,11 +129,14 @@ async function getAppliedMilestoneForToday(userId?: string): Promise<number | nu
   }
 }
 
+let appStateSub: { remove: () => void } | null = null;
+
 function ensureAppStateListener(): void {
   if (appStateListenerAttached || Platform.OS !== "android") return;
   appStateListenerAttached = true;
 
-  AppState.addEventListener("change", (state: AppStateStatus) => {
+  appStateSub?.remove();
+  appStateSub = AppState.addEventListener("change", (state: AppStateStatus) => {
     if (state === "background" || state === "inactive") {
       scheduleAndroidBackgroundApply();
     }

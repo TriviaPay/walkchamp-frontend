@@ -339,15 +339,22 @@ class RaceStepSyncBuffer {
 
 export const raceStepSyncBuffer = new RaceStepSyncBuffer();
 
-AppState.addEventListener("change", (next: AppStateStatus) => {
-  if (next === "active") {
-    void raceStepSyncBuffer.flushRaceSteps({ force: true, reason: "resume" });
-    return;
-  }
-  if (
-    (next === "background" || next === "inactive") &&
-    LIVE_RACE_SYNC_CONFIG.flushOnAppBackground
-  ) {
-    void raceStepSyncBuffer.flushRaceSteps({ reason: "background" });
-  }
-});
+let raceStepSyncAppStateSub: { remove: () => void } | null = null;
+
+function ensureRaceStepSyncAppStateListener(): void {
+  if (raceStepSyncAppStateSub) return;
+  raceStepSyncAppStateSub = AppState.addEventListener("change", (next: AppStateStatus) => {
+    if (next === "active") {
+      void raceStepSyncBuffer.flushRaceSteps({ force: true, reason: "resume" });
+      return;
+    }
+    if (
+      (next === "background" || next === "inactive") &&
+      LIVE_RACE_SYNC_CONFIG.flushOnAppBackground
+    ) {
+      void raceStepSyncBuffer.flushRaceSteps({ reason: "background" });
+    }
+  });
+}
+
+ensureRaceStepSyncAppStateListener();
