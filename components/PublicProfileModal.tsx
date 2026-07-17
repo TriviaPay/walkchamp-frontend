@@ -495,52 +495,55 @@ export function PublicProfileModal({
             />
           )}
 
-          {/* Avatar */}
-          <View style={s.avatarWrap}>
-            <ProfileAvatar
-              userId={userId ?? ""}
-              profileImageUrl={p?.avatarUrl ?? null}
-              avatarVersion={p?.avatarVersion ?? 0}
-              avatarColor={p?.avatarColor ?? colors.primary}
-              displayName={p?.username ?? ""}
-              size={80}
-              borderWidth={p?.isHost ? 2.5 : 2}
-            />
-            {p?.isHost && (
-              <View style={[s.hostBadge, { backgroundColor: colors.gold }]}>
-                <Feather name="star" size={10} color="#000" />
-                <Text style={s.hostBadgeText}>Host</Text>
-              </View>
-            )}
-            {isSelf && !p?.isHost && (
-              <View style={[s.youBadge, { backgroundColor: colors.primary }]}>
-                <Text style={s.youBadgeText}>You</Text>
-              </View>
-            )}
-          </View>
-
-          {/* Username */}
-          {p?.username ? (
-            <Text style={[s.username, { color: colors.foreground }]}>@{p.username}</Text>
-          ) : (
-            <View style={[s.skeleton, { width: 120, backgroundColor: colors.border }]} />
-          )}
-
-          {/* Country */}
-          {(p?.countryFlag || p?.country) && (
-            <Text style={[s.country, { color: colors.mutedForeground }]}>
-              {p.countryFlag ?? ""}{p.countryFlag && p.country ? " " : ""}{p.country ?? ""}
-            </Text>
-          )}
-
-          {/* Active title badge */}
-          {p?.activeTitle && (
-            <View style={[s.titleBadge, { backgroundColor: colors.accent + "20", borderColor: colors.accent + "40" }]}>
-              <Text style={[s.titleText, { color: colors.accent }]}>
-                🏅 {p.activeTitle.title}
-              </Text>
+          {/* Header: avatar left + name/title right (as in design) */}
+          <View style={s.headerRow}>
+            <View style={s.avatarWrap}>
+              <ProfileAvatar
+                userId={userId ?? ""}
+                profileImageUrl={p?.avatarUrl ?? null}
+                avatarVersion={p?.avatarVersion ?? 0}
+                avatarColor={p?.avatarColor ?? colors.primary}
+                displayName={p?.username ?? ""}
+                size={72}
+                borderWidth={p?.isHost ? 2.5 : 2}
+              />
+              {p?.isHost && (
+                <View style={[s.hostBadge, { backgroundColor: colors.gold }]}>
+                  <Feather name="star" size={10} color="#000" />
+                  <Text style={s.hostBadgeText}>Host</Text>
+                </View>
+              )}
+              {isSelf && !p?.isHost && (
+                <View style={[s.youBadge, { backgroundColor: colors.primary }]}>
+                  <Text style={s.youBadgeText}>You</Text>
+                </View>
+              )}
             </View>
-          )}
+
+            <View style={s.identityBlock}>
+              {p?.username ? (
+                <Text style={[s.username, { color: colors.foreground }]} numberOfLines={1}>
+                  @{p.username}
+                </Text>
+              ) : (
+                <View style={[s.skeleton, { width: 140, backgroundColor: colors.border }]} />
+              )}
+
+              {(p?.countryFlag || p?.country) && (
+                <Text style={[s.country, { color: colors.mutedForeground }]} numberOfLines={1}>
+                  {p.countryFlag ?? ""}{p.countryFlag && p.country ? " " : ""}{p.country ?? ""}
+                </Text>
+              )}
+
+              {p?.activeTitle && (
+                <View style={[s.titleBadge, { backgroundColor: colors.accent + "20", borderColor: colors.accent + "40" }]}>
+                  <Text style={[s.titleText, { color: colors.accent }]} numberOfLines={1}>
+                    🏅 {p.activeTitle.title}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
 
           {/* ── Public stats section ─────────────────────────────────── */}
           <StatsSection
@@ -672,7 +675,7 @@ const s = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 1,
     padding: 24,
-    alignItems: "center",
+    alignItems: "stretch",
     gap: 10,
   },
   closeBtn: {
@@ -684,15 +687,30 @@ const s = StyleSheet.create({
     borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
+    zIndex: 2,
   },
   fetchingSpinner: {
     position: "absolute",
     top: 14,
     left: 14,
   },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    marginTop: 8,
+    paddingLeft: 10,
+    paddingRight: 28,
+    width: "100%",
+  },
   avatarWrap: {
     alignItems: "center",
-    marginTop: 8,
+  },
+  identityBlock: {
+    flex: 1,
+    justifyContent: "center",
+    gap: 4,
+    minWidth: 0,
   },
   hostBadge: {
     flexDirection: "row",
@@ -720,7 +738,7 @@ const s = StyleSheet.create({
     color: "#000",
   },
   username: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "800",
     letterSpacing: -0.3,
   },
@@ -730,16 +748,18 @@ const s = StyleSheet.create({
     opacity: 0.4,
   },
   country: {
-    fontSize: 14,
+    fontSize: 13,
   },
   titleBadge: {
+    alignSelf: "flex-start",
     borderRadius: 8,
     borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 4,
+    marginTop: 2,
   },
   titleText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "600",
   },
   divider: {

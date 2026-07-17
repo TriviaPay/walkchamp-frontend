@@ -1,6 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getTodayKey } from "@/utils/format";
-import { STORAGE_KEYS, storageGet, storageRemove, storageSet, storageSetDebounced } from "@/utils/storage";
+import { STORAGE_KEYS, storageGet, storageRemove, storageSet } from "@/utils/storage";
+
+/** Local debounce — avoids Metro/circular-import cases where storageSetDebounced is undefined. */
+const pendingDailyWrites = new Map<string, ReturnType<typeof setTimeout>>();
 
 const LEGACY_UNSCOPED_STEP_KEYS = [
   STORAGE_KEYS.DAILY_STEPS,
@@ -56,11 +59,16 @@ export async function writeDailyStepsForUserDate(
   localDate: string,
   steps: number,
 ): Promise<void> {
-  // Debounce hot step writes; latest value always wins. Flush on background separately.
-  storageSetDebounced(
-    stepScopedKeys(userId, localDate).steps,
-    Math.max(0, Math.floor(steps)),
-    750,
+  const key = stepScopedKeys(userId, localDate).steps;
+  const value = Math.max(0, Math.floor(steps));
+  const existing = pendingDailyWrites.get(key);
+  if (existing) clearTimeout(existing);
+  pendingDailyWrites.set(
+    key,
+    setTimeout(() => {
+      pendingDailyWrites.delete(key);
+      void storageSet(key, value);
+    }, 750),
   );
 }
 

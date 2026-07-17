@@ -34,6 +34,7 @@ import {
   resetRaceStepBuffer,
   setActiveRaceProgress,
   setStepProgressUser,
+  restoreActiveLiveRaceNotificationForUser,
 } from "@/services/stepProgressCoordinator";
 import { mergeRaceStepsWithNative } from "@/services/stepDisplayMerge";
 import { sanitizeLegacyProviderSteps } from "@/utils/stepAccuracy";
@@ -484,6 +485,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         goalSteps: raceTargetStepsRef.current,
         totalParticipants: Math.max(1, participantsRef.current.length),
         bootSteps: userStepsRef.current,
+        participantConfirmed: true,
       });
       const safeServer = Math.max(0, Math.floor(serverSteps));
       const optimistic = Math.max(safeServer, userStepsRef.current);
@@ -870,6 +872,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         totalParticipants: Math.max(1, allParticipants.length),
         bootSteps,
         freshStart: !options?.isRejoin,
+        participantConfirmed: true,
       });
     }
 
@@ -1393,6 +1396,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         goalSteps: raceTargetStepsRef.current,
         totalParticipants: realPlayerCount,
         bootSteps: floor,
+        participantConfirmed: true,
       });
 
       if (
@@ -1499,23 +1503,73 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Reset race UI when the signed-in user changes so Walk tab never shows stale race steps.
+  // Then immediately restore this account's live race notification if they are a participant
+  // (do not wait until they open live-detail).
   const prevAuthUserIdRef = useRef<string | null>(user?.id ?? null);
   useEffect(() => {
     const prev = prevAuthUserIdRef.current;
     const next = user?.id ?? null;
-    if (prev !== next) {
+    let cancelled = false;
+
+    const run = async () => {
+      const accountChanged = prev !== next;
+      if (accountChanged) {
+        if (__DEV__) {
+          console.log(
+            `[AuthSwitch] oldUserId=${prev ?? "none"} newUserId=${next ?? "none"} resetting race context`,
+          );
+        }
+        resetRace();
+        setWalkRaceStepsDisplay(0);
+        raceStepSyncService.cancelPending();
+        stepPollingService.stopPolling("account_switch");
+      }
+      prevAuthUserIdRef.current = next;
+
+      if (!next) return;
+      // Already tracking this account's live race — don't restart on effect re-runs.
+      if (
+        !accountChanged &&
+        racePhaseRef.current === "in_race" &&
+        raceIdRef.current
+      ) {
+        return;
+      }
+
+      await waitForAppStartupReady();
+      if (cancelled) return;
+
+      const restored = await restoreActiveLiveRaceNotificationForUser(
+        next,
+        userProfileRef.current.username,
+      );
+      if (cancelled || !restored) return;
+
+      const { race, bootSteps } = restored;
+      setActiveRace(race.id, !!race.isHost);
+      setRaceTargetSteps(
+        typeof race.targetSteps === "number" && race.targetSteps > 0
+          ? race.targetSteps
+          : raceTargetStepsRef.current,
+      );
+      // Full participant tracking + keeps ongoing race notification updating.
+      resumeLiveRace(
+        Math.max(1, race.currentPlayers ?? 1),
+        new Date(race.startedAt ?? Date.now()),
+        bootSteps,
+      );
       if (__DEV__) {
         console.log(
-          `[AuthSwitch] oldUserId=${prev ?? "none"} newUserId=${next ?? "none"} resetting race context`,
+          `[AuthSwitch] resumed live race tracking raceId=${race.id} without opening race screen`,
         );
       }
-      resetRace();
-      setWalkRaceStepsDisplay(0);
-      raceStepSyncService.cancelPending();
-      stepPollingService.stopPolling("account_switch");
-    }
-    prevAuthUserIdRef.current = next;
-  }, [user?.id, resetRace]);
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, resetRace, setActiveRace, setRaceTargetSteps, resumeLiveRace]);
 
   // ── AppState listener: flush steps on background + on foreground resume ───────
   // Background flush lets other participants see step progress when this user closes

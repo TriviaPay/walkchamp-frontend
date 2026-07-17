@@ -28,7 +28,9 @@ import { useAuth } from "@/context/AuthContext";
 import { useFocusEffect } from "expo-router";
 import { useRace } from "@/context/RaceContext";
 import { useRaceProgress } from "@/hooks/useRaceProgress";
-import { ensureActiveRaceInStore } from "@/services/stepProgressCoordinator";
+import { ensureActiveRaceInStore, clearActiveRaceProgress, suppressLiveRaceNotification, suppressSpectatorLiveRaceNotifications } from "@/services/stepProgressCoordinator";
+import { findEligibleLiveRaceParticipant } from "@/utils/raceNotificationEligibility";
+import { store } from "@/store";
 import { stepEngineLog } from "@/utils/stepAccuracy";
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
@@ -463,30 +465,31 @@ export default function LiveTrackTab() {
       setRace(detail.race ?? null);
       setParticipants(parts);
       if (detail.race?.status === "in_progress" && user?.id) {
-        setActiveRace(raceId, false);
-        const me = parts.find(
-          (p) =>
-            p.userId === user.id ||
-            (!!user.username && p.username.toLowerCase() === user.username.toLowerCase()),
-        );
-        ensureActiveRaceInStore({
-          raceId,
-          raceStartTime: new Date(detail.race.startedAt ?? Date.now()).toISOString(),
-          userId: user.id,
-          username: user.username ?? "Runner",
-          goalSteps: typeof detail.race.targetSteps === "number" ? detail.race.targetSteps : DEFAULT_TARGET_STEPS,
-          totalParticipants: detail.race.currentPlayers ?? parts.length,
-          bootSteps: me?.currentSteps ?? 0,
-        });
-        if (!raceResumedRef.current) {
-          raceResumedRef.current = true;
-          resumeLiveRace(
-            detail.race.currentPlayers ?? parts.length,
-            new Date(detail.race.startedAt ?? Date.now()),
-            me?.currentSteps ?? 0,
-          );
+        const me = findEligibleLiveRaceParticipant(parts, user);
+        if (me) {
+          setActiveRace(raceId, false);
+          ensureActiveRaceInStore({
+            raceId,
+            raceStartTime: new Date(detail.race.startedAt ?? Date.now()).toISOString(),
+            userId: user.id,
+            username: user.username ?? "Runner",
+            goalSteps: typeof detail.race.targetSteps === "number" ? detail.race.targetSteps : DEFAULT_TARGET_STEPS,
+            totalParticipants: detail.race.currentPlayers ?? parts.length,
+            bootSteps: me.currentSteps ?? 0,
+            participantConfirmed: true,
+          });
+          if (!raceResumedRef.current) {
+            raceResumedRef.current = true;
+            resumeLiveRace(
+              detail.race.currentPlayers ?? parts.length,
+              new Date(detail.race.startedAt ?? Date.now()),
+              me.currentSteps ?? 0,
+            );
+          }
+          void catchUpLiveRaceSteps(me.currentSteps ?? 0, true);
+        } else {
+          void suppressSpectatorLiveRaceNotifications(raceId);
         }
-        void catchUpLiveRaceSteps(me?.currentSteps ?? 0, true);
       }
       // Apply track layout from DB — shared for all users in the race
       if (isTrackLayoutId(detail.race?.trackLayout)) {
@@ -538,11 +541,15 @@ export default function LiveTrackTab() {
 
   useFocusEffect(useCallback(() => {
     if (!activeRaceId || !isActive || !user?.id) return;
-    const me = participants.find(
-      (p) =>
-        p.userId === user.id ||
-        (!!user.username && p.username.toLowerCase() === user.username.toLowerCase()),
-    );
+    const me = findEligibleLiveRaceParticipant(participants, user);
+    if (!me) {
+      void suppressSpectatorLiveRaceNotifications(activeRaceId);
+      stepEngineLog(
+        "LiveScreen",
+        `live-track focus raceId=${activeRaceId} participantNotifications=false`,
+      );
+      return;
+    }
     ensureActiveRaceInStore({
       raceId: activeRaceId,
       raceStartTime: new Date(race?.startedAt ?? Date.now()).toISOString(),
@@ -550,13 +557,14 @@ export default function LiveTrackTab() {
       username: user.username ?? "Runner",
       goalSteps: targetSteps,
       totalParticipants: race?.currentPlayers ?? participants.length,
-      bootSteps: Math.max(me?.currentSteps ?? 0, liveRaceSteps),
+      bootSteps: Math.max(me.currentSteps ?? 0, liveRaceSteps),
+      participantConfirmed: true,
     });
     stepEngineLog(
       "LiveScreen",
-      `live-track focus raceId=${activeRaceId} renderedSteps=${liveRaceSteps}`,
+      `live-track focus raceId=${activeRaceId} renderedSteps=${liveRaceSteps} participantNotifications=true`,
     );
-    void catchUpLiveRaceSteps(me?.currentSteps ?? 0, true);
+    void catchUpLiveRaceSteps(me.currentSteps ?? 0, true);
   }, [activeRaceId, isActive, user?.id, user?.username, participants, race?.startedAt, race?.currentPlayers, targetSteps, liveRaceSteps, catchUpLiveRaceSteps]));
 
   useEffect(() => {

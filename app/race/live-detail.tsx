@@ -33,14 +33,17 @@ import { useParticipantStepAnimator } from "@/hooks/useParticipantStepAnimator";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { formatRaceSteps, resolveLiveRaceDisplaySteps } from "@/utils/liveRaceDisplay";
 import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
+import { ChallengeEndsPillLabel } from "@/components/ChallengeEndsPillLabel";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useRace } from "@/context/RaceContext";
 import { useWalkContext } from "@/context/WalkContext";
 import { useRaceProgress } from "@/hooks/useRaceProgress";
-import { updateRankFromBackend, ensureActiveRaceInStore, clearActiveRaceProgress } from "@/services/stepProgressCoordinator";
+import { updateRankFromBackend, ensureActiveRaceInStore, clearActiveRaceProgress, suppressLiveRaceNotification, suppressSpectatorLiveRaceNotifications } from "@/services/stepProgressCoordinator";
+import { findEligibleLiveRaceParticipant } from "@/utils/raceNotificationEligibility";
 import { stepEngineLog } from "@/utils/stepAccuracy";
+import { store } from "@/store";
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import {
@@ -1684,6 +1687,15 @@ export default function LiveRaceDetailScreen() {
     ) ?? null,
     [participants, user?.id, user?.username],
   );
+
+  // Leave / forfeit / DQ / complete: stop participant-only live race notification for this race.
+  useEffect(() => {
+    if (!raceId || !user?.id || !currentParticipant) return;
+    if (findEligibleLiveRaceParticipant([currentParticipant], user)) return;
+    void suppressLiveRaceNotification(raceId, `participant_${currentParticipant.status ?? "ineligible"}`);
+    stopRaceStepTracking(`participant_${currentParticipant.status ?? "ineligible"}`);
+  }, [raceId, user?.id, user?.username, currentParticipant, currentParticipant?.status, stopRaceStepTracking]);
+
   const winners = useMemo(() => {
     const nonForfeited = participants.filter((p) => p.status !== "forfeited");
     if (!nonForfeited.length) return [];
@@ -1763,12 +1775,25 @@ export default function LiveRaceDetailScreen() {
   ) => {
     if (!raceId || !raceData || raceData.status !== "in_progress" || !user?.id) return;
     raceAlreadyStartedRef.current = true;
+
+    // Spectators may view the race + Pusher updates, but must NOT enter participant
+    // race tracking or the live race progress notification.
+    const me = findEligibleLiveRaceParticipant(parts, user);
+    if (!me) {
+      void suppressSpectatorLiveRaceNotifications(raceId);
+      stopRaceStepTracking("spectator_or_ineligible");
+      stepEngineLog(
+        "LiveRace",
+        `backendHydrated=spectator raceId=${raceId} participantNotifications=false`,
+      );
+      for (const p of parts) {
+        setConfirmedSteps(p.userId, p.currentSteps, { instant: true });
+        prevStepsMapRef.current[p.userId] = p.currentSteps;
+      }
+      return;
+    }
+
     setActiveRace(raceId, false);
-    const me = parts.find(
-      (p) =>
-        p.userId === user.id ||
-        (!!user.username && p.username.toLowerCase() === user.username.toLowerCase()),
-    );
     ensureActiveRaceInStore({
       raceId,
       raceStartTime: new Date(raceData.startedAt ?? Date.now()).toISOString(),
@@ -1776,18 +1801,19 @@ export default function LiveRaceDetailScreen() {
       username: user.username ?? "Runner",
       goalSteps: typeof raceData.targetSteps === "number" ? raceData.targetSteps : 10_000,
       totalParticipants: raceData.currentPlayers ?? parts.length,
-      bootSteps: me?.currentSteps ?? 0,
+      bootSteps: me.currentSteps ?? 0,
+      participantConfirmed: true,
     });
     if (!raceResumedRef.current) {
       raceResumedRef.current = true;
       resumeLiveRace(
         raceData.currentPlayers ?? parts.length,
         new Date(raceData.startedAt ?? Date.now()),
-        me?.currentSteps ?? 0,
+        me.currentSteps ?? 0,
       );
     }
-    void catchUpLiveRaceSteps(me?.currentSteps ?? 0, true);
-    stepEngineLog("LiveRace", `backendHydrated=true raceId=${raceId}`);
+    void catchUpLiveRaceSteps(me.currentSteps ?? 0, true);
+    stepEngineLog("LiveRace", `backendHydrated=true raceId=${raceId} participantNotifications=true`);
     for (const p of parts) {
       const isMe =
         p.userId === user.id ||
@@ -1796,7 +1822,7 @@ export default function LiveRaceDetailScreen() {
       setConfirmedSteps(p.userId, p.currentSteps, { instant: true });
       prevStepsMapRef.current[p.userId] = p.currentSteps;
     }
-  }, [raceId, user?.id, user?.username, setActiveRace, resumeLiveRace, catchUpLiveRaceSteps, setConfirmedSteps]);
+  }, [raceId, user?.id, user?.username, setActiveRace, resumeLiveRace, catchUpLiveRaceSteps, setConfirmedSteps, stopRaceStepTracking]);
 
   const fetchRaceDetails = useCallback(async (
     force = false,
@@ -1853,28 +1879,34 @@ export default function LiveRaceDetailScreen() {
   useFocusEffect(useCallback(() => {
     if (!raceId || race?.status !== "in_progress" || raceCompletedRef.current || !user?.id) return;
 
-    const me = participantsOnFocusRef.current.find(
-      (p) =>
-        p.userId === user.id ||
-        (!!user.username && p.username.toLowerCase() === user.username.toLowerCase()),
-    );
-    ensureActiveRaceInStore({
-      raceId,
-      raceStartTime: new Date(race?.startedAt ?? Date.now()).toISOString(),
-      userId: user.id,
-      username: user.username ?? "Runner",
-      goalSteps: typeof race?.targetSteps === "number" ? race.targetSteps : 10_000,
-      totalParticipants: race?.currentPlayers ?? participantsOnFocusRef.current.length,
-      bootSteps: Math.max(me?.currentSteps ?? 0, localStepsRef.current),
-    });
-    stepEngineLog(
-      "LiveScreen",
-      `focus raceId=${raceId} userId=${user.id} renderedSteps=${localStepsRef.current}`,
-    );
-    void catchUpStepsRef.current(me?.currentSteps ?? 0, true);
+    const me = findEligibleLiveRaceParticipant(participantsOnFocusRef.current, user);
+    if (me) {
+      ensureActiveRaceInStore({
+        raceId,
+        raceStartTime: new Date(race?.startedAt ?? Date.now()).toISOString(),
+        userId: user.id,
+        username: user.username ?? "Runner",
+        goalSteps: typeof race?.targetSteps === "number" ? race.targetSteps : 10_000,
+        totalParticipants: race?.currentPlayers ?? participantsOnFocusRef.current.length,
+        bootSteps: Math.max(me.currentSteps ?? 0, localStepsRef.current),
+        participantConfirmed: true,
+      });
+      stepEngineLog(
+        "LiveScreen",
+        `focus raceId=${raceId} userId=${user.id} renderedSteps=${localStepsRef.current} participantNotifications=true`,
+      );
+      void catchUpStepsRef.current(me.currentSteps ?? 0, true);
+      stepEngineLog("LiveRace", `rejoinStart raceId=${raceId} cachedStateRendered=true`);
+    } else {
+      void suppressSpectatorLiveRaceNotifications(raceId);
+      stopRaceStepTracking("spectator_or_ineligible");
+      stepEngineLog(
+        "LiveScreen",
+        `focus raceId=${raceId} userId=${user.id} participantNotifications=false`,
+      );
+    }
     void fetchDetailsOnFocusRef.current(true);
     void refreshTodaySteps();
-    stepEngineLog("LiveRace", `rejoinStart raceId=${raceId} cachedStateRendered=true`);
 
     return () => {
       // Defer so back navigation paints first.
@@ -1882,7 +1914,7 @@ export default function LiveRaceDetailScreen() {
         void resumeStepWatching();
       }, 0);
     };
-  }, [raceId, race?.status, race?.startedAt, race?.targetSteps, race?.currentPlayers, user?.id, user?.username, resumeStepWatching, refreshTodaySteps]));
+  }, [raceId, race?.status, race?.startedAt, race?.targetSteps, race?.currentPlayers, user?.id, user?.username, resumeStepWatching, refreshTodaySteps, stopRaceStepTracking]));
 
   useEffect(() => {
     if (!raceId || !user?.id) return;
@@ -2626,6 +2658,10 @@ export default function LiveRaceDetailScreen() {
                     body: JSON.stringify({ reason: "user_quit" }),
                   });
                 } catch { /* best-effort */ }
+                if (raceId) {
+                  void suppressLiveRaceNotification(raceId, "user_forfeit");
+                  stopRaceStepTracking("user_forfeit");
+                }
                 router.back();
               }},
             ]) }>
@@ -2645,7 +2681,7 @@ export default function LiveRaceDetailScreen() {
           {showChallengeEndsLabel && challengeEndsLabel ? (
             <View style={s.endsPill}>
               <Feather name="calendar" size={13} color="#FFFFFF" />
-              <Text style={s.endsPillText} numberOfLines={1}>{challengeEndsLabel}</Text>
+              <ChallengeEndsPillLabel label={challengeEndsLabel} style={s.endsPillText} />
             </View>
           ) : (
             <Text style={s.subtitle} numberOfLines={2}>

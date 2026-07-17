@@ -34,6 +34,7 @@ import {
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { mergeWalkStepsWithNative } from "@/services/stepDisplayMerge";
 import { shouldIgnoreLegacyPhantomBump, sanitizeLegacyProviderSteps, stepEngineLog, stepDebugVerboseLog, resolveTodayDisplaySteps, filterLegacyStepIncrease, suppressLegacyStepBumps, markFreshLocalDay, isFreshLocalDay } from "@/utils/stepAccuracy";
+import { findEligibleLiveRaceParticipant } from "@/utils/raceNotificationEligibility";
 
 let notificationTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingNotification = false;
@@ -593,10 +594,25 @@ export async function hydrateOnAppResume(): Promise<void> {
       const raceActive = store.getState().raceProgress.raceStatus === "active";
       if (raceActive) {
         await hydrateFromNativeRaceService();
-      } else if (stepTrackingNotificationService.isActive()) {
-        await hydrateFromNativeStepState();
-        startWalkBackgroundStepPoll();
-        await tickWalkBackgroundStepPoll("resume");
+      } else {
+        // Kill stale native race_live leftovers when JS has no active race.
+        try {
+          const raw = await raceProgressNotificationService.getNativeRaceState();
+          if (raw) {
+            const json = JSON.parse(raw) as Record<string, unknown>;
+            const nativeRaceId = typeof json.raceId === "string" ? json.raceId : null;
+            if (nativeRaceId) {
+              await suppressLiveRaceNotification(nativeRaceId, "resume_orphan_race_live");
+            }
+          }
+        } catch {
+          /* non-fatal */
+        }
+        if (stepTrackingNotificationService.isActive()) {
+          await hydrateFromNativeStepState();
+          startWalkBackgroundStepPoll();
+          await tickWalkBackgroundStepPoll("resume");
+        }
       }
     }
     if (__DEV__) {
@@ -1141,7 +1157,19 @@ export function ensureActiveRaceInStore(params: {
   goalSteps: number;
   totalParticipants?: number;
   bootSteps?: number;
+  /**
+   * Required for live race progress notification.
+   * Callers must pass true only after confirming race_participants membership.
+   */
+  participantConfirmed: boolean;
 }): void {
+  if (!params.participantConfirmed) {
+    stepCoordDebug(
+      `[StepCoordinator] ensureActiveRaceInStore blocked — not a confirmed participant raceId=${params.raceId}`,
+    );
+    void suppressLiveRaceNotification(params.raceId, "not_confirmed_participant");
+    return;
+  }
   const boot = Math.max(0, Math.floor(params.bootSteps ?? 0));
   const s = store.getState().raceProgress;
 
@@ -1170,6 +1198,7 @@ export function ensureActiveRaceInStore(params: {
     ...params,
     bootSteps: boot,
     freshStart: false,
+    participantConfirmed: true,
   });
   stepCoordDebug(
     `[StepCoordinator] ensureActiveRaceInStore activated raceId=${params.raceId} bootSteps=${boot}`,
@@ -1186,7 +1215,19 @@ export function setActiveRaceProgress(params: {
   bootSteps?: number;
   /** When true (default), stale race steps from a previous match are discarded. */
   freshStart?: boolean;
+  /**
+   * Required for live race progress notification.
+   * Must be true only for confirmed race_participants.
+   */
+  participantConfirmed: boolean;
 }): void {
+  if (!params.participantConfirmed) {
+    stepCoordDebug(
+      `[StepCoordinator] setActiveRaceProgress blocked — not a confirmed participant raceId=${params.raceId}`,
+    );
+    void suppressLiveRaceNotification(params.raceId, "not_confirmed_participant");
+    return;
+  }
   const freshStart = params.freshStart !== false;
   const boot = freshStart ? 0 : Math.max(0, params.bootSteps ?? 0);
   raceStepSyncService.reset();
@@ -1209,6 +1250,96 @@ export function setActiveRaceProgress(params: {
     params.raceStartTime,
   );
   scheduleNotificationUpdate(true);
+}
+
+/**
+ * Force-stop the local live-race notification for a race (and clear Redux if it owns that race).
+ * Used for spectators and stale native FGS race_live leftovers.
+ */
+export async function suppressLiveRaceNotification(
+  raceId: string | null | undefined,
+  reason = "suppress",
+): Promise<void> {
+  if (!raceId) return;
+  const s = store.getState().raceProgress;
+  const todaySteps = s.todaySteps;
+  if (s.activeRaceId === raceId) {
+    store.dispatch(
+      raceProgressActions.clearActiveRace({
+        status: "cancelled",
+      }),
+    );
+  }
+  try {
+    await raceProgressNotificationService.stop(raceId, reason, todaySteps);
+    stepCoordDebug(
+      `[StepCoordinator] suppressLiveRaceNotification raceId=${raceId} reason=${reason}`,
+    );
+  } catch (err) {
+    if (__DEV__) console.warn("[StepCoordinator] suppressLiveRaceNotification failed", err);
+  }
+}
+
+/**
+ * Spectator opened a race: stop notification for that race, and clear any orphan
+ * native race_live if the user is not currently an active participant in Redux.
+ * Does not clear a different race the user is actually racing.
+ */
+export async function suppressSpectatorLiveRaceNotifications(
+  viewedRaceId: string,
+): Promise<void> {
+  await suppressLiveRaceNotification(viewedRaceId, "spectator_view");
+  const s = store.getState().raceProgress;
+  if (s.raceStatus === "active" && s.activeRaceId && s.activeRaceId !== viewedRaceId) {
+    return;
+  }
+  try {
+    const raw = await raceProgressNotificationService.getNativeRaceState();
+    if (!raw) return;
+    const json = JSON.parse(raw) as Record<string, unknown>;
+    const nativeRaceId = typeof json.raceId === "string" ? json.raceId : null;
+    if (nativeRaceId && nativeRaceId !== s.activeRaceId) {
+      await suppressLiveRaceNotification(nativeRaceId, "spectator_orphan_native");
+      if (s.userId) {
+        await switchDailyStepsNotification(Math.max(0, s.todaySteps));
+      }
+    }
+  } catch {
+    /* non-fatal */
+  }
+}
+
+/** Stop any native race_live notification when the user has no active race participation. */
+export async function suppressOrphanLiveRaceNotification(
+  reason = "orphan_native_race",
+): Promise<void> {
+  const s = store.getState().raceProgress;
+  const todaySteps = s.todaySteps;
+  try {
+    const raw = await raceProgressNotificationService.getNativeRaceState();
+    if (raw) {
+      const json = JSON.parse(raw) as Record<string, unknown>;
+      const nativeRaceId = typeof json.raceId === "string" ? json.raceId : null;
+      if (nativeRaceId) {
+        await raceProgressNotificationService.stop(nativeRaceId, reason, todaySteps);
+      }
+    }
+  } catch {
+    /* non-fatal */
+  }
+  if (s.activeRaceId) {
+    store.dispatch(
+      raceProgressActions.clearActiveRace({
+        status: "cancelled",
+      }),
+    );
+    await raceProgressNotificationService.stop(s.activeRaceId, reason, todaySteps);
+  } else {
+    await raceProgressNotificationService.stopAll(todaySteps, reason);
+  }
+  if (s.userId) {
+    await switchDailyStepsNotification(Math.max(0, todaySteps));
+  }
 }
 
 export function clearActiveRaceProgress(
@@ -1626,9 +1757,126 @@ export async function bindStepSessionToUser(userId: string): Promise<boolean> {
     }),
   );
   if (switched) {
-    void pushWalkNotificationFromCanonicalStore(true, userId);
+    // If the new account is in a live race, RaceContext restores the race
+    // notification immediately after reset — skip daily walk notif flash.
+    const live = await fetchMyActiveInProgressRace(userId);
+    if (!live) {
+      void pushWalkNotificationFromCanonicalStore(true, userId);
+    } else if (__DEV__) {
+      console.log(
+        `[AuthSwitch] new user has live race raceId=${live.id} — deferring walk notif for race restore`,
+      );
+    }
   }
   return switched;
+}
+
+export type MyActiveInProgressRace = {
+  id: string;
+  status: string;
+  startedAt: string | null;
+  targetSteps: number;
+  currentPlayers: number;
+  isHost?: boolean;
+  title?: string;
+};
+
+/** Fetch the signed-in user's in-progress race (participant only). */
+export async function fetchMyActiveInProgressRace(
+  userId: string,
+): Promise<MyActiveInProgressRace | null> {
+  if (!userId) return null;
+  try {
+    const { authFetch } = await import("@/utils/authFetch");
+    const res = await authFetch("/api/races/my-active");
+    if (!res.ok) return null;
+    const body = (await res.json()) as { race?: MyActiveInProgressRace | null };
+    const race = body.race;
+    if (!race?.id || race.status !== "in_progress") return null;
+    return race;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * After account switch / login: if the user is an active participant in a live
+ * race, start the ongoing race notification immediately (do not wait for
+ * live-detail open). Returns boot steps for RaceContext resume.
+ */
+export async function restoreActiveLiveRaceNotificationForUser(
+  userId: string,
+  username?: string,
+): Promise<{ race: MyActiveInProgressRace; bootSteps: number } | null> {
+  if (!userId) return null;
+  try {
+    await waitForAppStartupReady();
+    const race = await fetchMyActiveInProgressRace(userId);
+    if (!race) return null;
+
+    const { authFetch } = await import("@/utils/authFetch");
+    let bootSteps = 0;
+    const detailRes = await authFetch(`/api/races/${race.id}`);
+    if (detailRes.ok) {
+      const detail = (await detailRes.json()) as {
+        participants?: Array<{
+          userId: string;
+          username?: string;
+          currentSteps: number;
+          status?: string | null;
+        }>;
+      };
+      const me = findEligibleLiveRaceParticipant(detail.participants ?? [], {
+        id: userId,
+      });
+      if (!me) {
+        if (__DEV__) {
+          console.log(
+            `[AuthSwitch] my-active raceId=${race.id} but not eligible participant — skip race notif`,
+          );
+        }
+        return null;
+      }
+      bootSteps = Math.max(0, Math.floor(me.currentSteps ?? 0));
+    }
+
+    const displayName =
+      username ??
+      store.getState().auth.user?.username ??
+      "Runner";
+
+    ensureActiveRaceInStore({
+      raceId: race.id,
+      raceStartTime: new Date(race.startedAt ?? Date.now()).toISOString(),
+      userId,
+      username: displayName,
+      goalSteps:
+        typeof race.targetSteps === "number" && race.targetSteps > 0
+          ? race.targetSteps
+          : 10_000,
+      totalParticipants: Math.max(1, race.currentPlayers ?? 1),
+      bootSteps,
+      participantConfirmed: true,
+    });
+
+    await storageSet(STORAGE_KEYS.PENDING_RACE, {
+      raceId: race.id,
+      raceStartTimeUTC: new Date(race.startedAt ?? Date.now()).toISOString(),
+      status: "in_progress",
+    });
+
+    if (__DEV__) {
+      console.log(
+        `[AuthSwitch] restored live race notification raceId=${race.id} bootSteps=${bootSteps}`,
+      );
+    }
+    return { race, bootSteps };
+  } catch (err) {
+    if (__DEV__) {
+      console.warn("[AuthSwitch] restore live race notification failed", err);
+    }
+    return null;
+  }
 }
 
 /** Clear native + notification step session on logout so the next user cannot inherit counts. */

@@ -53,6 +53,8 @@ interface LeaderEntry {
   countryFlag: string;
   metric: number;      // steps OR wins OR coins
   metricLabel: string; // "steps" | "wins" | "coins won"
+  /** Lifetime cash winnings ($) — race tab only; same as profile Total Winning */
+  totalWinning?: number;
   rank: number;
   badge: string;
   rewardAmount: number;
@@ -102,6 +104,10 @@ function entryBadgeColor(badge: string): string {
 
 function fmtMetric(n: number, label: string): string {
   return label === "wins" ? `${n}` : formatSteps(n); }
+
+function fmtWinning(amount: number | undefined): string {
+  return `$${(amount ?? 0).toFixed(2)}`;
+}
 
 // ── Friend request helper ─────────────────────────────────────────────────────
 async function sendFriendRequest(targetId: string): Promise<"ok" | "already" | "error"> {
@@ -183,11 +189,19 @@ function Top3Card({
           </Text>
         </View>
       ) : (
-        <Text style={[st.top3Metric, { color: rColor, fontSize: isCenter ? 17 : 15 }]}>
-          {fmtMetric(entry.metric, entry.metricLabel)}
-        </Text>
+        <>
+          <View style={{ flexDirection: "row", alignItems: "baseline", gap: 4 }}>
+            <Text style={[st.top3Metric, { color: rColor, fontSize: isCenter ? 17 : 15 }]}>
+              {fmtMetric(entry.metric, entry.metricLabel)}
+            </Text>
+            <Text style={[st.top3MetricLabel, { color: colors.mutedForeground }]}>{entry.metricLabel}</Text>
+          </View>
+          <Text style={[st.top3Winning, { color: colors.gold }]}>{fmtWinning(entry.totalWinning)}</Text>
+        </>
       )}
-      <Text style={[st.top3MetricLabel, { color: colors.mutedForeground }]}>{entry.metricLabel}</Text>
+      {entry.metricLabel !== "wins" && (
+        <Text style={[st.top3MetricLabel, { color: colors.mutedForeground }]}>{entry.metricLabel}</Text>
+      )}
       {entry.rewardAmount > 0 ? (
         <View style={[st.top3Pill, { backgroundColor: colors.gold + "15" }]}>
           <Text style={[st.top3PillText, { color: colors.gold }]}>+{entry.rewardAmount * 100} coins</Text>
@@ -260,16 +274,22 @@ function ListRow({
             </Text>
           </View>
         ) : (
-          <Text style={[st.rowMetric, { color: isMe ? colors.primary : colors.foreground }]}>
-            {fmtMetric(entry.metric, entry.metricLabel)}
-          </Text>
+          <View style={{ flexDirection: "row", alignItems: "baseline", gap: 4 }}>
+            <Text style={[st.rowMetric, { color: isMe ? colors.primary : colors.foreground }]}>
+              {fmtMetric(entry.metric, entry.metricLabel)}
+            </Text>
+            <Text style={[st.rowMetricLabel, { color: colors.mutedForeground }]}>{entry.metricLabel}</Text>
+          </View>
         )}
-        {entry.rewardAmount > 0 ? (
+        {entry.metricLabel !== "wins" && entry.rewardAmount > 0 ? (
           <View style={[st.rowPill, { backgroundColor: colors.gold + "18" }]}>
             <Text style={[st.rowPillText, { color: colors.gold }]}>+{entry.rewardAmount * 100}</Text>
           </View>
-        ) : (
+        ) : entry.metricLabel !== "wins" ? (
           <Text style={[st.rowMetricLabel, { color: colors.mutedForeground }]}>{entry.metricLabel}</Text>
+        ) : null}
+        {entry.metricLabel === "wins" && (
+          <Text style={[st.rowWinning, { color: colors.gold }]}>{fmtWinning(entry.totalWinning)}</Text>
         )}
       </View>
     </View>
@@ -411,6 +431,7 @@ export default function LeaderboardScreen() {
   const [entries,    setEntries]    = useState<LeaderEntry[]>([]);
   const [userRank,   setUserRank]   = useState(9999);
   const [userWins,   setUserWins]   = useState(0);
+  const [userTotalWinning, setUserTotalWinning] = useState(0);
   const [loading,    setLoading]    = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error,      setError]      = useState<string | null>(null);
@@ -441,7 +462,7 @@ export default function LeaderboardScreen() {
 
   // Per-key data cache — keyed by `${mainTab}_${stepsSubTab}` or `race_${raceSubTab}`.
   // Lets us show cached data instantly when switching tabs while fresh data loads.
-  const dataCache = useRef<Map<string, { entries: LeaderEntry[]; userRank: number; userWins: number }>>(new Map());
+  const dataCache = useRef<Map<string, { entries: LeaderEntry[]; userRank: number; userWins: number; userTotalWinning?: number }>>(new Map());
 
   // On mount: warm the in-memory cache from AsyncStorage for the initially active tab.
   // This makes the leaderboard instant even after the user kills and relaunches the app.
@@ -450,12 +471,13 @@ export default function LeaderboardScreen() {
       ? `race_${raceSubTab}`
       : mainTab === "coins" ? "coins"
       : `${mainTab}_${stepsSubTab}`;
-    void screenCache.get<{ entries: LeaderEntry[]; userRank: number; userWins: number }>(`lb_${initialKey}`).then((cached) => {
+    void screenCache.get<{ entries: LeaderEntry[]; userRank: number; userWins: number; userTotalWinning?: number }>(`lb_${initialKey}`).then((cached) => {
       if (cached && !dataCache.current.has(initialKey)) {
         dataCache.current.set(initialKey, cached);
         setEntries(cached.entries);
         setUserRank(cached.userRank);
         setUserWins(cached.userWins);
+        setUserTotalWinning(cached.userTotalWinning ?? 0);
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -518,6 +540,7 @@ export default function LeaderboardScreen() {
       let newEntries: LeaderEntry[] = [];
       let newUserRank = 9999;
       let newUserWins = 0;
+      let newUserTotalWinning = 0;
 
       if (mainTab === "race") {
         const raceUrl = raceSubTab === "all"
@@ -526,13 +549,14 @@ export default function LeaderboardScreen() {
         const res = await authFetch(raceUrl);
         if (!res.ok) throw new Error(`${res.status}`);
         const data = (await res.json()) as {
-          leaderboard: Array<{ id: string; username: string; fullName: string; country: string; countryCode: string; countryFlag: string; wins: number; rank: number; badge: string; avatarColor: string; avatarUrl?: string | null; avatarVersion?: number | null }>;
-          userRank: number; userWins: number; };
+          leaderboard: Array<{ id: string; username: string; fullName: string; country: string; countryCode: string; countryFlag: string; wins: number; totalWinning?: number; rank: number; badge: string; avatarColor: string; avatarUrl?: string | null; avatarVersion?: number | null }>;
+          userRank: number; userWins: number; userTotalWinning?: number; };
         newEntries = (data.leaderboard ?? []).map((e) => ({
-          ...e, metric: e.wins, metricLabel: "wins", rewardAmount: 0,
+          ...e, metric: e.wins, metricLabel: "wins", rewardAmount: 0, totalWinning: e.totalWinning ?? 0,
         }));
         newUserRank = data.userRank ?? 9999;
         newUserWins = data.userWins ?? 0;
+        newUserTotalWinning = data.userTotalWinning ?? 0;
       } else if (mainTab === "coins") {
         const res = await authFetch(`/api/leaderboard/coins`);
         if (!res.ok) throw new Error(`${res.status}`);
@@ -569,11 +593,12 @@ export default function LeaderboardScreen() {
       }
 
       // Cache and display the fresh result (in-memory + disk)
-      dataCache.current.set(cacheKey, { entries: newEntries, userRank: newUserRank, userWins: newUserWins });
-      void screenCache.set(`lb_${cacheKey}`, { entries: newEntries, userRank: newUserRank, userWins: newUserWins });
+      dataCache.current.set(cacheKey, { entries: newEntries, userRank: newUserRank, userWins: newUserWins, userTotalWinning: newUserTotalWinning });
+      void screenCache.set(`lb_${cacheKey}`, { entries: newEntries, userRank: newUserRank, userWins: newUserWins, userTotalWinning: newUserTotalWinning });
       setEntries(newEntries);
       setUserRank(newUserRank);
       setUserWins(newUserWins);
+      setUserTotalWinning(newUserTotalWinning);
     } catch {
       // If we have cached data, keep it visible and don't show an error.
       // Only surface the error when there's nothing else to show.
@@ -593,6 +618,7 @@ export default function LeaderboardScreen() {
       setEntries(cached.entries);
       setUserRank(cached.userRank);
       setUserWins(cached.userWins);
+      setUserTotalWinning(cached.userTotalWinning ?? 0);
       void fetchData(true); // background refresh — no spinner
     } else {
       void fetchData(false); // first load — show spinner
@@ -1012,12 +1038,19 @@ export default function LeaderboardScreen() {
               </Text>
               <Text style={st.myFlag}>{user?.countryFlag ?? ""}</Text>
             </View>
-            <Text style={[st.myMetric, { color: colors.mutedForeground }]}>
-              {isRace ? `${userWins} wins` : myStepLabel}
-            </Text>
+            {!isRace && (
+              <Text style={[st.myMetric, { color: colors.mutedForeground }]}>
+                {myStepLabel}
+              </Text>
+            )}
+            {isRace && userEntry?.badge ? (
+              <Text style={[st.myMetric, { color: colors.mutedForeground }]} numberOfLines={1}>
+                {userEntry.badge}
+              </Text>
+            ) : null}
           </View>
 
-          {/* Next rank nudge / leading badge */}
+          {/* Next rank nudge / leading badge — steps/coins */}
           {!isRace && userRank === 1 && (
             // User is at the top — celebrate instead of showing a "to #0" pill
             <View style={[st.myNudge, { backgroundColor: colors.gold + "20" }]}>
@@ -1033,9 +1066,14 @@ export default function LeaderboardScreen() {
               </Text>
             </View>
           )}
-          {isRace && userEntry && (
-            <View style={[st.myNudge, { backgroundColor: colors.gold + "18" }]}>
-              <Text style={[st.myNudgeText, { color: colors.gold }]}>{userEntry.badge}</Text>
+          {/* Race tab: wins on the right — same layout as list rows / profile Race Wins */}
+          {isRace && (
+            <View style={st.myWinsRight}>
+              <View style={{ flexDirection: "row", alignItems: "baseline", gap: 4 }}>
+                <Text style={[st.myWinsNum, { color: colors.foreground }]}>{userWins}</Text>
+                <Text style={[st.myWinsLabel, { color: colors.mutedForeground }]}>wins</Text>
+              </View>
+              <Text style={[st.myWinningAmt, { color: colors.gold }]}>{fmtWinning(userTotalWinning)}</Text>
             </View>
           )}
         </LinearGradient>
@@ -1107,6 +1145,7 @@ const st = StyleSheet.create({
   top3Flag:     { fontSize: rf(12) },
   top3Metric:   { fontWeight: "800", marginTop: 2 },
   top3MetricLabel:{ fontSize: rf(10), marginTop: -2 },
+  top3Winning:  { fontSize: rf(11), fontWeight: "700", marginTop: 1 },
   top3Pill:     { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8, marginTop: 2, maxWidth: "100%" },
   top3PillText: { fontSize: rf(10), fontWeight: "700" },
   top3AddFriend:{ width: rs(28), height: rs(28), borderRadius: rs(14), borderWidth: 1, alignItems: "center", justifyContent: "center", marginTop: 2 },
@@ -1127,6 +1166,7 @@ const st = StyleSheet.create({
   rowRight:     { alignItems: "flex-end", gap: 4 },
   rowMetric:    { fontSize: rf(15), fontWeight: "700" },
   rowMetricLabel:{ fontSize: rf(11) },
+  rowWinning:   { fontSize: rf(11), fontWeight: "700" },
   rowPill:      { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8 },
   rowPillText:  { fontSize: rf(11), fontWeight: "700" },
   addFriendBtn: { width: rs(30), height: rs(30), borderRadius: rs(15), borderWidth: 1, alignItems: "center", justifyContent: "center" },
@@ -1145,4 +1185,9 @@ const st = StyleSheet.create({
   myFlag:      { fontSize: rf(14) },
   myMetric:    { fontSize: rf(12), marginTop: 2 },
   myNudge:     { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 10 },
-  myNudgeText: { fontSize: rf(11), fontWeight: "700" }, });
+  myNudgeText: { fontSize: rf(11), fontWeight: "700" },
+  myWinsRight: { alignItems: "flex-end", gap: 2 },
+  myWinsNum:   { fontSize: rf(15), fontWeight: "700" },
+  myWinsLabel: { fontSize: rf(11) },
+  myWinningAmt:{ fontSize: rf(11), fontWeight: "700" },
+});

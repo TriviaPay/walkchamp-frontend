@@ -27,6 +27,7 @@ import {
   type DateGroup,
 } from "@/utils/raceDateGrouping";
 import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
+import { ChallengeEndsPillLabel } from "@/components/ChallengeEndsPillLabel";
 import { AppAlert } from "@/components/AppAlert";
 import { Image } from "expo-image";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
@@ -568,7 +569,7 @@ function ChallengeEndsPill({ label }: { label: string }) {
   return (
     <View style={st.endsPill}>
       <Feather name="calendar" size={13} color="#FFFFFF" />
-      <Text style={st.endsPillText} numberOfLines={1}>{label}</Text>
+      <ChallengeEndsPillLabel label={label} style={st.endsPillText} />
     </View>
   );
 }

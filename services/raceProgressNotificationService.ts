@@ -200,6 +200,13 @@ class RaceProgressNotificationService {
 
   async start(payload: RaceProgressNotificationPayload, raceStartISO?: string): Promise<void> {
     if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    // Defensive: never start participant-only live race notification without identity.
+    if (!payload.raceId || !payload.userId) {
+      if (__DEV__) {
+        console.warn("[RaceProgressNotif] start blocked — missing raceId/userId");
+      }
+      return;
+    }
     const native = getNativeModule();
     if (!native) return;
 
