@@ -76,17 +76,7 @@ export function ChallengeCategoryCard({
       </View>
       <View style={cStyles.rightBlock}>
         {isActiveOther ? (
-          <>
-            <LiveBadge count={liveCount} />
-            <TouchableOpacity
-              onPress={onHostNew}
-              activeOpacity={0.82}
-              hitSlop={{ top: 6, bottom: 6, left: 8, right: 8 }}
-              accessibilityLabel="Host new challenge"
-            >
-              <Text style={cStyles.hostLink}>Host New</Text>
-            </TouchableOpacity>
-          </>
+          <LiveBadge count={liveCount} />
         ) : (
           <>
             <RaceJoinBadge
@@ -102,18 +92,38 @@ export function ChallengeCategoryCard({
     </LinearGradient>
   );
 
-  // Same outer card height as RACING — no Watch/Host row under the card.
   if (isActiveOther) {
     return (
-      <TouchableOpacity
-        onPress={onWatchLive}
-        activeOpacity={0.88}
-        style={cStyles.cardShellMb}
-        accessibilityLabel={liveCount > 0 ? `${liveCount} live, tap to watch` : "Live race, tap to watch"}
-      >
-        {cardInner}
-        <JoinProgressOverlay isJoining={isJoining} />
-      </TouchableOpacity>
+      <View style={cStyles.activeOtherWrap}>
+        <TouchableOpacity
+          onPress={onWatchLive}
+          activeOpacity={0.88}
+          style={cStyles.cardShell}
+          accessibilityLabel={liveCount > 0 ? `${liveCount} live, tap to watch` : "Live race, tap to watch"}
+        >
+          {cardInner}
+          <JoinProgressOverlay isJoining={isJoining} />
+        </TouchableOpacity>
+
+        <View style={cStyles.actionRow}>
+          <TouchableOpacity
+            onPress={onWatchLive}
+            activeOpacity={0.82}
+            style={cStyles.watchBtn}
+          >
+            <Feather name="eye" size={14} color="#FF5C5C" />
+            <Text style={cStyles.watchBtnText}>Watch Live</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={onHostNew}
+            activeOpacity={0.82}
+            style={cStyles.hostBtn}
+          >
+            <Feather name="plus-circle" size={14} color="rgba(255,255,255,0.85)" />
+            <Text style={cStyles.hostBtnText}>Host New</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
     );
   }
 
@@ -167,7 +177,9 @@ const lbStyles = StyleSheet.create({
 });
 
 const cStyles = StyleSheet.create({
+  cardShell:     { borderRadius: 18, overflow: "hidden" },
   cardShellMb:   { borderRadius: 18, overflow: "hidden", marginBottom: 10 },
+  activeOtherWrap: { marginBottom: 10 },
 
   gradient:  { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 18, paddingVertical: 18 },
   iconBox:   { width: 46, height: 46, borderRadius: 13, alignItems: "center", justifyContent: "center" },
@@ -176,5 +188,37 @@ const cStyles = StyleSheet.create({
   title:     { fontSize: 17, fontWeight: "800", color: "#FFF" },
   sub:       { fontSize: 12, color: "rgba(255,255,255,0.78)", marginTop: 2 },
   rightBlock:{ alignItems: "flex-end", gap: 6 },
-  hostLink:  { fontSize: 11, fontWeight: "800", color: "rgba(255,255,255,0.88)", letterSpacing: 0.2 },
+
+  actionRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 6,
+    paddingHorizontal: 2,
+  },
+  watchBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "rgba(255,92,92,0.65)",
+    backgroundColor: "rgba(255,92,92,0.12)",
+  },
+  watchBtnText: { fontSize: 13, fontWeight: "700", color: "#FF5C5C" },
+  hostBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.28)",
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  hostBtnText: { fontSize: 13, fontWeight: "700", color: "rgba(255,255,255,0.88)" },
 });

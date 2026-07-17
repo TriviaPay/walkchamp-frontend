@@ -13,6 +13,8 @@ import {
   clearRaceBaseline,
   getRaceBaseline,
   setRaceBaseline,
+  getRaceStepSeed,
+  setRaceStepSeed,
 } from "../raceBaselineStorage";
 import {
   emptyStepResult,
@@ -453,15 +455,52 @@ export const androidLegacySensorProvider: StepProvider = {
     userId: string,
   ): Promise<StepReadResult> {
     const to = new Date();
-    const baseline = await getRaceBaseline(
+    let baseline = await getRaceBaseline(
       raceId,
       userId,
       "android_legacy_sensor",
     );
-    if (baseline === null) {
-      return emptyStepResult("android_legacy_sensor", "legacy", raceStartAt, to);
-    }
     const today = await this.getTodaySteps();
+    const seed = await getRaceStepSeed(raceId, userId);
+
+    // Local midnight for mid-day race corruption check.
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const startedAfterMidnightMs = raceStartAt.getTime() - midnight.getTime();
+    const midDayRace = startedAfterMidnightMs > 5 * 60 * 1000;
+
+    // baseline=0 after re-login makes raceSteps == todaySteps. Repair or refuse.
+    if (baseline === 0 && midDayRace && today.steps > 0) {
+      if (seed != null) {
+        baseline = Math.max(0, today.steps - seed);
+        await setRaceBaseline(raceId, userId, "android_legacy_sensor", baseline);
+        if (__DEV__) {
+          console.log(
+            `[RaceSteps] repaired baseline=0 → ${baseline} seed=${seed} today=${today.steps}`,
+          );
+        }
+      } else {
+        if (__DEV__) {
+          console.log(
+            `[RaceSteps] refusing baseline=0 for mid-day race today=${today.steps} (no seed) — use server floor`,
+          );
+        }
+        return emptyStepResult("android_legacy_sensor", "legacy", raceStartAt, to);
+      }
+    }
+
+    if (baseline === null) {
+      if (seed != null && today.steps > 0) {
+        baseline = Math.max(0, today.steps - seed);
+        await setRaceBaseline(raceId, userId, "android_legacy_sensor", baseline);
+      } else if (seed != null) {
+        // Today not ready — report seed only so UI doesn't jump to daily total later.
+        return buildResult(seed, raceStartAt, to);
+      } else {
+        return emptyStepResult("android_legacy_sensor", "legacy", raceStartAt, to);
+      }
+    }
+
     const raceSteps = Math.max(0, today.steps - baseline);
     if (__DEV__) {
       console.log(
@@ -473,6 +512,7 @@ export const androidLegacySensorProvider: StepProvider = {
 
   async createRaceBaseline(raceId: string, userId: string): Promise<number> {
     const today = await this.getTodaySteps();
+    await setRaceStepSeed(raceId, userId, 0);
     await setRaceBaseline(
       raceId,
       userId,

@@ -1840,6 +1840,25 @@ export async function restoreActiveLiveRaceNotificationForUser(
       bootSteps = Math.max(0, Math.floor(me.currentSteps ?? 0));
     }
 
+    // Persist seed + repair baseline BEFORE starting notification so legacy
+    // getRaceSteps never treats today total as race progress after re-login.
+    try {
+      const { setRaceStepSeed } = await import(
+        "@/services/steps/raceBaselineStorage"
+      );
+      await setRaceStepSeed(race.id, userId, bootSteps);
+      if (stepProviderManager.usesRaceBaseline()) {
+        await stepProviderManager.ensureRaceBaseline(race.id, userId, bootSteps);
+        await stepProviderManager.alignRaceBaselineToRaceSteps(
+          race.id,
+          userId,
+          bootSteps,
+        );
+      }
+    } catch {
+      /* non-fatal */
+    }
+
     const displayName =
       username ??
       store.getState().auth.user?.username ??

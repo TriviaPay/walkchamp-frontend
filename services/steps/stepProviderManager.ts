@@ -15,6 +15,8 @@ import { androidHCService } from "./androidHealthConnectService";
 import {
   getRaceBaseline,
   setRaceBaseline,
+  getRaceStepSeed,
+  setRaceStepSeed,
 } from "./raceBaselineStorage";
 import type {
   StepPermissionResult,
@@ -366,6 +368,11 @@ export const stepProviderManager = {
    * Ensure a race step baseline exists for the active provider.
    * Returns the existing baseline if already stored, otherwise creates a fresh one.
    * For HC / HealthKit (range-based) this always returns 0 — no baseline needed.
+   *
+   * @param seedSteps Known race progress (e.g. server currentSteps on rejoin).
+   *   When provided (including 0), baseline is derived as todaySteps - seedSteps so
+   *   getRaceSteps() returns ~seedSteps. NEVER persist baseline while todaySteps is
+   *   still 0 after account switch — that makes the later daily total look like race steps.
    */
   async ensureRaceBaseline(
     raceId: string,
@@ -375,20 +382,54 @@ export const stepProviderManager = {
     if (!_activeProvider) return 0;
     if (_activeProvider.providerId !== "android_legacy_sensor") return 0;
 
+    if (typeof seedSteps === "number" && Number.isFinite(seedSteps)) {
+      await setRaceStepSeed(raceId, userId, seedSteps);
+    }
+
     const existing = await getRaceBaseline(raceId, userId, "android_legacy_sensor");
+    const seed =
+      typeof seedSteps === "number" && Number.isFinite(seedSteps)
+        ? Math.max(0, Math.floor(seedSteps))
+        : await getRaceStepSeed(raceId, userId);
+
     if (existing !== null) {
+      try {
+        const today = await _activeProvider.getTodaySteps();
+        const implied = Math.max(0, today.steps - existing);
+        // baseline=0 with mid-day today steps is almost always corrupt after re-login.
+        const seedVal = seed ?? 0;
+        if (
+          today.steps > 0 &&
+          existing === 0 &&
+          (implied > seedVal + 50 || (seed != null && implied !== seedVal))
+        ) {
+          const fixed = Math.max(0, today.steps - seedVal);
+          await setRaceBaseline(raceId, userId, "android_legacy_sensor", fixed);
+          devLog(
+            `ensureRaceBaseline repaired raceId=${raceId} was=0 now=${fixed} seed=${seedVal} today=${today.steps}`,
+          );
+          return fixed;
+        }
+      } catch (e) {
+        devLog("ensureRaceBaseline realign check failed", e);
+      }
       devLog(`ensureRaceBaseline raceId=${raceId} existing=${existing}`);
       return existing;
     }
 
-    // If caller already knows the baseline (e.g. server-seeded bootSteps), store it
-    // directly rather than reading device steps which may be behind.
-    if (typeof seedSteps === "number" && seedSteps > 0) {
+    if (seed != null) {
       const today = await _activeProvider.getTodaySteps();
-      // baseline = todaySteps - seedSteps → so getRaceSteps() returns seedSteps
-      const baseline = Math.max(0, today.steps - seedSteps);
+      if (today.steps <= 0) {
+        devLog(
+          `ensureRaceBaseline defer persist raceId=${raceId} today=0 seed=${seed}`,
+        );
+        return 0;
+      }
+      const baseline = Math.max(0, today.steps - seed);
       await setRaceBaseline(raceId, userId, "android_legacy_sensor", baseline);
-      devLog(`ensureRaceBaseline raceId=${raceId} created from seed=${seedSteps} baseline=${baseline}`);
+      devLog(
+        `ensureRaceBaseline raceId=${raceId} created from seed=${seed} today=${today.steps} baseline=${baseline}`,
+      );
       return baseline;
     }
 
@@ -411,12 +452,19 @@ export const stepProviderManager = {
     if (!this.usesRaceBaseline()) return;
     if (!_activeProvider) return;
     try {
+      const seed = Math.max(0, Math.floor(serverConfirmedSteps));
+      await setRaceStepSeed(raceId, userId, seed);
       const today = await _activeProvider.getTodaySteps();
-      // newBaseline = todaySteps - serverConfirmedSteps
-      const newBaseline = Math.max(0, today.steps - serverConfirmedSteps);
+      if (today.steps <= 0) {
+        devLog(
+          `alignRaceBaselineToRaceSteps defer raceId=${raceId} today=0 seed=${seed}`,
+        );
+        return;
+      }
+      const newBaseline = Math.max(0, today.steps - seed);
       await setRaceBaseline(raceId, userId, "android_legacy_sensor", newBaseline);
       devLog(
-        `alignRaceBaselineToRaceSteps raceId=${raceId} newBaseline=${newBaseline} todaySteps=${today.steps}`,
+        `alignRaceBaselineToRaceSteps raceId=${raceId} newBaseline=${newBaseline} todaySteps=${today.steps} seed=${seed}`,
       );
     } catch (e) {
       devLog("alignRaceBaselineToRaceSteps error", e);

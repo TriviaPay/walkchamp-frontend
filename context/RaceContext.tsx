@@ -39,6 +39,7 @@ import {
 import { mergeRaceStepsWithNative } from "@/services/stepDisplayMerge";
 import { sanitizeLegacyProviderSteps } from "@/utils/stepAccuracy";
 import type { StepProgressSource } from "@/store/slices/raceProgressSlice";
+import { store } from "@/store";
 import { setWalkBackendSyncPaused } from "@/services/walkSyncCoordinator";
 import {
   postRaceProgress,
@@ -505,14 +506,22 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         /* non-fatal */
       }
 
-      // Legacy sensor: realign baseline when server is ahead. HC uses time-range reads.
-      if (
-        safeServer > deviceSteps &&
-        stepProviderManager.usesRaceBaseline()
-      ) {
-        await stepProviderManager.alignRaceBaselineToRaceSteps(raceId, userId, safeServer);
-        const resnap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId);
-        if (resnap) deviceSteps = resnap.steps;
+      // Legacy sensor: realign baseline when server is ahead OR device looks like daily total.
+      if (stepProviderManager.usesRaceBaseline()) {
+        const todayTotal = store.getState().raceProgress.todaySteps;
+        const looksLikeDailyLeak =
+          todayTotal > 0 &&
+          deviceSteps >= todayTotal - 2 &&
+          deviceSteps > safeServer + 100;
+        if (safeServer > deviceSteps || looksLikeDailyLeak) {
+          await stepProviderManager.alignRaceBaselineToRaceSteps(
+            raceId,
+            userId,
+            Math.max(safeServer, userStepsRef.current),
+          );
+          const resnap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId);
+          if (resnap) deviceSteps = resnap.steps;
+        }
       }
 
       // Include any steps tracked by the native Android FGS while JS was asleep
@@ -912,6 +921,30 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           steps = MAX_FIRST_DELTA;
         }
 
+        // Never let daily total leak into race steps (common after re-login when
+        // race baseline was missing/0). Race and today counters stay separate.
+        const todayTotal = store.getState().raceProgress.todaySteps;
+        if (
+          stepProviderManager.usesRaceBaseline() &&
+          todayTotal > 0 &&
+          steps >= todayTotal - 2 &&
+          steps > userStepsRef.current + 100
+        ) {
+          if (__DEV__) {
+            console.log(
+              `[RaceStepsRealtime] rejected daily-total leak into race steps=${steps} today=${todayTotal} keeping=${userStepsRef.current}`,
+            );
+          }
+          if (raceIdRef.current) {
+            void stepProviderManager.alignRaceBaselineToRaceSteps(
+              raceIdRef.current,
+              userProfileRef.current.userId,
+              userStepsRef.current,
+            );
+          }
+          return;
+        }
+
         // Shared jump guard with daily path — reject OEM/glitch bursts on legacy sensor.
         if (
           stepProviderManager.usesRaceBaseline() &&
@@ -1074,13 +1107,31 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
             ? await stepProviderManager.ensureRaceBaseline(
                 raceIdRef.current,
                 userId,
-                bootSteps > 0 ? bootSteps : undefined,
+                // Rejoin/login restore: always seed with server race steps (incl. 0).
+                // Never omit seed on rejoin — that creates baseline=today and later
+                // treats the full daily total as race steps.
+                options?.isRejoin ? bootSteps : bootSteps > 0 ? bootSteps : undefined,
               )
             : 0;
+        if (subscriptionGenRef.current !== myGen || raceEndedRef.current) return;
+
+        // After re-login, today steps often hydrate after baseline create. Realign so
+        // raceSteps stays server/race-scoped and never equals daily total.
+        if (
+          options?.isRejoin &&
+          raceIdRef.current &&
+          stepProviderManager.usesRaceBaseline()
+        ) {
+          await stepProviderManager.alignRaceBaselineToRaceSteps(
+            raceIdRef.current,
+            userId,
+            bootSteps,
+          );
+        }
 
         if (providerId === "ios_healthkit") {
           // iOS race steps come from HealthKit range queries via stepPollingService only.
-          // watchStepCount is daily-cumulative since subscription — not used for races.
+          // Do NOT feed daily watchStepCount into race (that mixes total steps into race).
         }
 
         if (raceIdRef.current && baseline > 0 && providerId === "android_health_connect") {
@@ -1092,24 +1143,39 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           );
         }
 
-        if (providerId === "ios_healthkit") {
-          stepTracker.startLiveTracking((data) => {
-            if (subscriptionGenRef.current !== myGen || raceEndedRef.current) return;
-            applyRealSteps(data.steps);
-          });
-        }
-
         await restartRacePolling(userId, baseline);
 
         // Immediate read so UI shows 0+ steps without waiting for first poll tick.
         if (raceIdRef.current && raceStart) {
-          const snap = await stepProviderManager.getRaceSteps(
+          let snap = await stepProviderManager.getRaceSteps(
             raceIdRef.current,
             raceStart,
             userId,
           );
+          if (
+            options?.isRejoin &&
+            snap &&
+            stepProviderManager.usesRaceBaseline() &&
+            snap.steps > bootSteps + 100
+          ) {
+            await stepProviderManager.alignRaceBaselineToRaceSteps(
+              raceIdRef.current,
+              userId,
+              bootSteps,
+            );
+            snap = await stepProviderManager.getRaceSteps(
+              raceIdRef.current,
+              raceStart,
+              userId,
+            );
+          }
           if (snap && subscriptionGenRef.current === myGen && !raceEndedRef.current) {
-            applyRealSteps(Math.max(snap.steps, bootSteps, raceStepFloorRef.current));
+            // Rejoin: never adopt a device read that looks like daily totals.
+            const rejoinSafe =
+              options?.isRejoin && snap.steps > bootSteps + 150
+                ? Math.max(bootSteps, raceStepFloorRef.current)
+                : Math.max(snap.steps, bootSteps, raceStepFloorRef.current);
+            applyRealSteps(rejoinSafe);
           }
         }
       })();
@@ -1463,7 +1529,6 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     clearAllIntervals();
     raceEndedRef.current = false;
     stepTickRef.current = 0;
-    const resetRaceId = raceIdRef.current;
     raceIdRef.current = null;
     raceStartTimeRef.current = null;
     usingRealStepsRef.current = false;
@@ -1486,14 +1551,9 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     setRaceStartTimeUTC(null);
     // Clear pending race from storage after reset (user saw results)
     clearPendingRace();
-    if (resetRaceId) {
-      void stepProviderManager.clearRaceBaseline(
-        resetRaceId,
-        userProfileRef.current.userId,
-      );
-    }
-    stepProviderManager.stopWatchingSteps();
-
+    // Do NOT clear race step baseline here — logout/account-switch used to wipe it
+    // and after re-login raceSteps became todaySteps (baseline=0). Baseline is cleared
+    // only when a race truly ends (cancel / complete).
     deactivateRaceInStore("idle");
   }, []);
 
