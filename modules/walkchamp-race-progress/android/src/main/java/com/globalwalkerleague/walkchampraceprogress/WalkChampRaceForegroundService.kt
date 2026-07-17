@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.content.pm.ApplicationInfo
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -286,6 +287,66 @@ class WalkChampRaceForegroundService : Service() {
     getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
   /**
+   * Android 14+/15 health-type FGS requires ACTIVITY_RECOGNITION (or body/high-rate sensors)
+   * at promote time in addition to FOREGROUND_SERVICE_HEALTH in the manifest.
+   */
+  private fun hasHealthForegroundPrerequisite(): Boolean {
+    if (Build.VERSION.SDK_INT < 29) return true
+    val arGranted =
+      PermissionChecker.checkSelfPermission(
+        this,
+        android.Manifest.permission.ACTIVITY_RECOGNITION,
+      ) == PermissionChecker.PERMISSION_GRANTED
+    if (!arGranted) {
+      Log.w(
+        TAG,
+        "[WalkChampFGS] ACTIVITY_RECOGNITION not granted — cannot start health FGS (targetSdk 35)",
+      )
+    }
+    return arGranted
+  }
+
+  /**
+   * Typed health startForeground on API 34+; untyped on older APIs.
+   * Returns false when prerequisites missing or SecurityException — caller must not crash.
+   */
+  private fun startHealthForegroundService(notificationId: Int, notification: Notification): Boolean {
+    if (!hasHealthForegroundPrerequisite()) {
+      try {
+        notificationManager().notify(notificationId, notification)
+      } catch (_: Exception) {
+      }
+      return false
+    }
+    return try {
+      if (Build.VERSION.SDK_INT >= 34) {
+        startForeground(
+          notificationId,
+          notification,
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH,
+        )
+      } else {
+        startForeground(notificationId, notification)
+      }
+      true
+    } catch (e: SecurityException) {
+      Log.e(TAG, "[WalkChampFGS] startForeground SecurityException: ${e.message}")
+      try {
+        notificationManager().notify(notificationId, notification)
+      } catch (_: Exception) {
+      }
+      false
+    } catch (e: Exception) {
+      Log.e(TAG, "[WalkChampFGS] startForeground failed: ${e.message}")
+      try {
+        notificationManager().notify(notificationId, notification)
+      } catch (_: Exception) {
+      }
+      false
+    }
+  }
+
+  /**
    * Promote walk FGS immediately — must run on main thread before any slow work.
    */
   private fun promoteWalkForegroundNow(notification: Notification) {
@@ -303,10 +364,16 @@ class WalkChampRaceForegroundService : Service() {
       }
     }
     Log.d(TAG, "[WalkChampFGS] calling startForeground")
-    startForeground(NOTIFICATION_ID_WALK, notification)
-    foregroundWalkPromoted = true
-    Log.d(TAG, "[WalkChampFGS] startForeground called notificationId=$NOTIFICATION_ID_WALK")
-    Log.d(TAG, "[WalkChampFGS] service running mode=total_steps")
+    val promoted = startHealthForegroundService(NOTIFICATION_ID_WALK, notification)
+    foregroundWalkPromoted = promoted
+    if (promoted) {
+      Log.d(TAG, "[WalkChampFGS] startForeground called notificationId=$NOTIFICATION_ID_WALK")
+      Log.d(TAG, "[WalkChampFGS] service running mode=total_steps")
+    } else {
+      Log.w(TAG, "[WalkChampFGS] walk FGS not promoted — notify-only fallback; stopping to avoid FGS timeout crash")
+      // startForegroundService requires startForeground or stopSelf within the OS timeout.
+      stopSelf()
+    }
   }
 
   private fun promoteRaceForegroundNow(notification: Notification) {
@@ -314,10 +381,15 @@ class WalkChampRaceForegroundService : Service() {
     Log.d(TAG, "[WalkChampFGS] createNotificationChannel success")
     Log.d(TAG, "[WalkChampFGS] notification built")
     Log.d(TAG, "[WalkChampFGS] calling startForeground")
-    startForeground(NOTIFICATION_ID_RACE, notification)
-    foregroundRacePromoted = true
-    Log.d(TAG, "[WalkChampFGS] startForeground called notificationId=$NOTIFICATION_ID_RACE")
-    Log.d(TAG, "[WalkChampFGS] service running mode=live_race")
+    val promoted = startHealthForegroundService(NOTIFICATION_ID_RACE, notification)
+    foregroundRacePromoted = promoted
+    if (promoted) {
+      Log.d(TAG, "[WalkChampFGS] startForeground called notificationId=$NOTIFICATION_ID_RACE")
+      Log.d(TAG, "[WalkChampFGS] service running mode=live_race")
+    } else {
+      Log.w(TAG, "[WalkChampFGS] race FGS not promoted — notify-only fallback; stopping to avoid FGS timeout crash")
+      stopSelf()
+    }
   }
 
   private fun buildWalkNotificationFromIntent(intent: Intent): Notification {
@@ -393,7 +465,11 @@ class WalkChampRaceForegroundService : Service() {
           Log.w(TAG, "[WalkChampFGS] channel missing channelId=$channelId")
         }
       }
-      startForeground(notificationId, notification)
+      val ok = startHealthForegroundService(notificationId, notification)
+      if (!ok) {
+        Log.w(TAG, "[WalkChampFGS] start failed — health FGS prerequisites or SecurityException")
+        return false
+      }
       val mode =
         if (notificationId == NOTIFICATION_ID_RACE) "live_race" else "total_steps"
       Log.d(TAG, "[WalkChampFGS] startForeground called notificationId=$notificationId")

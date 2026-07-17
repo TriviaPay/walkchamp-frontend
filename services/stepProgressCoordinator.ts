@@ -1816,8 +1816,10 @@ export async function restoreActiveLiveRaceNotificationForUser(
 
     const { authFetch } = await import("@/utils/authFetch");
     let bootSteps = 0;
-    const detailRes = await authFetch(`/api/races/${race.id}`);
-    if (detailRes.ok) {
+    let detailOk = false;
+    const fetchDetail = async () => {
+      const detailRes = await authFetch(`/api/races/${race.id}`);
+      if (!detailRes.ok) return false;
       const detail = (await detailRes.json()) as {
         participants?: Array<{
           userId: string;
@@ -1838,6 +1840,24 @@ export async function restoreActiveLiveRaceNotificationForUser(
         return null;
       }
       bootSteps = Math.max(0, Math.floor(me.currentSteps ?? 0));
+      return true;
+    };
+
+    let detailResult = await fetchDetail().catch(() => false);
+    if (detailResult === null) return null;
+    if (!detailResult) {
+      await new Promise((r) => setTimeout(r, 600));
+      detailResult = await fetchDetail().catch(() => false);
+      if (detailResult === null) return null;
+    }
+    detailOk = detailResult === true;
+    if (!detailOk) {
+      if (__DEV__) {
+        console.warn(
+          `[AuthSwitch] race detail unavailable raceId=${race.id} — skip restore until live-detail hydrate`,
+        );
+      }
+      return null;
     }
 
     // Persist seed + repair baseline BEFORE starting notification so legacy

@@ -19,6 +19,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { BlueShoe } from "@/components/BlueShoe";
 import { RaceJoinBadge, JoinProgressOverlay } from "@/components/RaceJoinBadge";
+import { ensureMatchStepPermissionsReady } from "@/services/permissions/matchPermissionGate";
 import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
@@ -855,8 +856,8 @@ const spStyles = StyleSheet.create({
 });
 
 const AVATAR_COLORS = [
-  "#00E676", "#00B4FF", "#06B6D4", "#FFD700",
-  "#FF6B35", "#A855F7", "#F472B6", "#34D399",
+  "#00E676", "#00B4FF", "#FFD700",
+  "#FF6B35", "#A855F7", "#F472B6",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1038,7 +1039,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
         setUsername(p.username ?? "");
         setCountry(p.country ?? "");
         setCountryFlag(p.countryFlag ?? "");
-        if (p.avatarColor && AVATAR_COLORS.includes(p.avatarColor)) setAvatarColor(p.avatarColor); }
+        if (p.avatarColor) setAvatarColor(p.avatarColor); }
       setEditLoading(false); }); }, [isEditing]);
 
   const validateUsername = useCallback((val: string) => {
@@ -2485,6 +2486,17 @@ function WalkScreenContent() {
       return;
     }
 
+    // Permission gate — before any host/join API call (preserves HC / sensor / iOS logic)
+    if (user?.id) {
+      const gate = await ensureMatchStepPermissionsReady({
+        userId: user.id,
+        username: user.username ?? null,
+        requireVerified: setupModal.fee !== 0 && setupModal.fee !== -1,
+        actionLabel: setupModal.fee === 0 ? "host or join this free challenge" : "join this challenge",
+      });
+      if (!gate.allowed) return;
+    }
+
     setFreeJoining(true);
     try {
       let raceId: string;
@@ -2573,6 +2585,16 @@ function WalkScreenContent() {
   // Direct join: skips the player-count modal and immediately joins the existing open room
   const doDirectJoin = useCallback(async (raceId: string, fee: number, maxPlayers: number, entryKey: string) => {
     if (freeJoining || joiningEntryKey) return;
+    // Permission gate — before join API (no charge / no join until steps ready)
+    if (user?.id) {
+      const gate = await ensureMatchStepPermissionsReady({
+        userId: user.id,
+        username: user.username ?? null,
+        requireVerified: fee > 0 || entryKey === "coins_battle" || entryKey.startsWith("paid_"),
+        actionLabel: "join this challenge",
+      });
+      if (!gate.allowed) return;
+    }
     setFreeJoining(true);
     setJoiningEntryKey(entryKey);
     try {
@@ -2602,7 +2624,7 @@ function WalkScreenContent() {
       setFreeJoining(false);
       setJoiningEntryKey(null);
     }
-  }, [setActiveRace, joinRace, loadChallengeStatuses]);
+  }, [setActiveRace, joinRace, loadChallengeStatuses, user?.id, user?.username, freeJoining, joiningEntryKey]);
 
   // Paid joins use the same confirm → join flow as host create (no pre-join step-source gate).
   const handleDirectJoin = useCallback(async (raceId: string, fee: number, maxPlayers: number, entryKey: string): Promise<void> => {

@@ -331,10 +331,11 @@ export const stepProviderManager = {
     raceId: string,
     raceStartAt: Date,
     userId: string,
+    raceEndAt?: Date,
   ): Promise<StepReadResult | null> {
     await this.initialize();
     if (!_activeProvider) return null;
-    return _activeProvider.getRaceSteps(raceId, raceStartAt, userId);
+    return _activeProvider.getRaceSteps(raceId, raceStartAt, userId, raceEndAt);
   },
 
   async createRaceBaseline(raceId: string, userId: string): Promise<number> {

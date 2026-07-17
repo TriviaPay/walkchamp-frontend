@@ -1810,6 +1810,9 @@ export default function LiveRaceDetailScreen() {
         raceData.currentPlayers ?? parts.length,
         new Date(raceData.startedAt ?? Date.now()),
         me.currentSteps ?? 0,
+        raceData.type === "sponsored" && raceData.startedAt
+          ? new Date(new Date(raceData.startedAt).getTime() + 3 * 60 * 60 * 1000)
+          : null,
       );
     }
     void catchUpLiveRaceSteps(me.currentSteps ?? 0, true);

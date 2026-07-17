@@ -690,7 +690,7 @@ export default function LeaderboardScreen() {
 
   const subTabOptions = isRace ? RACE_SUB_TABS : STEPS_SUB_TABS;
   const activeSubTab  = isRace ? raceSubTab : stepsSubTab;
-  const showSubTabs   = !isCoins && !isGroups;
+  const showSubTabs   = !isCoins && !isGroups && !isRace;
 
   const userEntry    = entries.find((e) => e.id === userId);
   // Use the backend-returned metric for the active period when we have it.
@@ -839,7 +839,7 @@ export default function LeaderboardScreen() {
         <View style={st.contextRow}>
           {isRace ? (
             <Text style={[st.contextText, { color: colors.mutedForeground }]}>
-              Most race wins {activeSubTab === "free" ? "(Free races)" : `(${activeSubTab.replace("paid_","$")} entry)`}
+              Most race wins (all challenges)
             </Text>
           ) : isCoins ? (
             <Text style={[st.contextText, { color: colors.mutedForeground }]}>Coins won in races & challenges · all time</Text>

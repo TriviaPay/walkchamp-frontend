@@ -204,6 +204,16 @@ class StepTrackingNotificationService {
         logOngoing("abort app notifications disabled — foreground service not started");
         return false;
       }
+      // Android 15 (targetSdk 35) health FGS requires ACTIVITY_RECOGNITION at promote time.
+      const { ensureActivityRecognitionPermission } = await import(
+        "@/services/permissions/activityRecognitionPermissionService"
+      );
+      const arGranted = await ensureActivityRecognitionPermission();
+      logOngoing(`activityRecognitionPermission result granted=${arGranted}`);
+      if (!arGranted) {
+        logOngoing("abort ACTIVITY_RECOGNITION denied — health FGS not started");
+        return false;
+      }
     }
 
     active = true;

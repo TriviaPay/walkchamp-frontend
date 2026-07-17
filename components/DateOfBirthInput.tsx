@@ -3,6 +3,13 @@ import { StyleSheet, Text, TextInput, View } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { rf, rs } from "@/utils/responsive";
+import {
+  isDobFieldsFilled,
+  normalizeDayInput,
+  normalizeMonthInput,
+  normalizeYearInput,
+  parseDateOfBirth,
+} from "@/utils/dateOfBirth";
 
 interface Props {
   value: string;
@@ -24,40 +31,64 @@ export function DateOfBirthInput({ value, onChange }: Props) {
     if (value && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
       const [y, m, d] = value.split("-");
       setYear(y);
+      // Keep display as stored digits (may be zero-padded from API).
       setMonth(m);
       setDay(d);
     }
   }, []);
 
+  /**
+   * Emit ISO YYYY-MM-DD when year + day + month form a real calendar date.
+   * Accepts single-digit month/day (5 / 8 → 1993-05-08).
+   * Clears parent while incomplete or definitely invalid so submit still shows required.
+   */
   function notify(y: string, m: string, d: string) {
-    if (y.length === 4 && m.length === 2 && d.length === 2) {
-      onChange(`${y}-${m}-${d}`);
+    const parsed = parseDateOfBirth(d, m, y);
+    if (parsed.ok) {
+      onChange(parsed.iso);
     } else {
       onChange("");
     }
   }
 
   function handleYear(text: string) {
-    const clean = text.replace(/\D/g, "").slice(0, 4);
+    const clean = normalizeYearInput(text);
     setYear(clean);
     notify(clean, month, day);
     if (clean.length === 4) monthRef.current?.focus();
   }
 
   function handleMonth(text: string) {
-    const clean = text.replace(/\D/g, "").slice(0, 2);
+    const clean = normalizeMonthInput(text);
+    // Reject impossible mid-entry only when two digits and out of range (e.g. 13).
+    if (clean.length === 2) {
+      const n = Number(clean);
+      if (n < 1 || n > 12) {
+        setMonth(clean.slice(0, 1));
+        notify(year, clean.slice(0, 1), day);
+        return;
+      }
+    }
     setMonth(clean);
     notify(year, clean, day);
     if (clean.length === 2) dayRef.current?.focus();
   }
 
   function handleDay(text: string) {
-    const clean = text.replace(/\D/g, "").slice(0, 2);
+    const clean = normalizeDayInput(text);
+    if (clean.length === 2) {
+      const n = Number(clean);
+      if (n < 1 || n > 31) {
+        setDay(clean.slice(0, 1));
+        notify(year, month, clean.slice(0, 1));
+        return;
+      }
+    }
     setDay(clean);
     notify(year, month, clean);
   }
 
-  const filled = year.length === 4 && month.length === 2 && day.length === 2;
+  const filled = isDobFieldsFilled(year, month, day);
 
   return (
     <View

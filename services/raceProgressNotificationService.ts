@@ -226,6 +226,16 @@ class RaceProgressNotificationService {
             "[RaceProgressNotif] POST_NOTIFICATIONS denied — FGS still starting",
           );
         }
+        const { ensureActivityRecognitionPermission } = await import(
+          "@/services/permissions/activityRecognitionPermissionService"
+        );
+        const arGranted = await ensureActivityRecognitionPermission();
+        if (!arGranted) {
+          console.warn(
+            "[RaceProgressNotif] ACTIVITY_RECOGNITION denied — health FGS not started",
+          );
+          return;
+        }
         const startFn =
           native.startRaceBackgroundService ?? native.startRaceProgressNotification;
         if (startFn) {

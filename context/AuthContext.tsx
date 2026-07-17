@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, AppStateStatus, Platform } from "react-native";
+import { AppState, AppStateStatus, Platform } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 import { store } from "@/store";
 import type { AppDispatch, RootState } from "@/store";
@@ -33,6 +33,15 @@ import { stepPollingService } from "@/services/StepPollingService";
 import { clearStepSessionForLogout, bindStepSessionToUser } from "@/services/stepProgressCoordinator";
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
 import { setCrashReportingUser } from "@/services/monitoring/sentry";
+import { registerActiveSession, validateActiveSession } from "@/services/authSessionService";
+import { clearActiveSessionMeta } from "@/services/authSessionMetadata";
+import {
+  handleSessionInvalidation,
+  onSessionInvalidation,
+} from "@/services/sessionInvalidation";
+import { disconnectPusher, unsubscribeAll } from "@/services/realtimeService";
+import { clearPendingMatchPermissionAction } from "@/services/permissions/pendingMatchAction";
+import NetInfo from "@react-native-community/netinfo";
 
 export type { UserProfile };
 
@@ -120,6 +129,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         prefetchProfileAvatar(profile.id, profile.avatarVersion ?? 0);
       }
       await bindStepSessionToUser(profile.id);
+      // Register this installation as the active session (backend revokes siblings when ready).
+      void registerActiveSession({
+        accessToken: sessionJwt,
+        userId: profile.id,
+      }).catch(() => {});
       // Give the caller's router.replace() time to be queued before
       // releasing the gate — prevents index.tsx from racing ahead.
       authTimerRef.current = setTimeout(() => setIsAuthenticating(false), 500);
@@ -144,6 +158,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     raceStepSyncService.cancelPending();
     // Clear in-memory screen cache so the next user never sees stale data.
     screenCache.clearAll();
+    try {
+      unsubscribeAll();
+      disconnectPusher();
+    } catch {
+      /* ignore */
+    }
+    void clearPendingMatchPermissionAction().catch(() => {});
+    void clearActiveSessionMeta().catch(() => {});
     // Optimistic logout: wipe Redux immediately so the TabLayout Redirect fires
     // right away — the user sees the login screen without any intermediate flash.
     // Native step cleanup + Descope API continue in the background.
@@ -198,6 +220,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         didPostRestoreRef.current = true;
         if (sessionToken) {
           void scheduleProactiveTokenRefresh();
+          // Re-bind active session metadata after cold start (backend status when available).
+          const uid = store.getState().auth.user?.id;
+          if (uid) {
+            void registerActiveSession({
+              accessToken: sessionToken,
+              userId: uid,
+            }).catch(() => {});
+          }
         }
       }
     } else {
@@ -207,9 +237,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // When the app comes back to foreground, sync the current user's profile so
   // stale avatarVersion / profileImageUrl values are never displayed.
+  // Also revalidate single-active-session status when online (deduped).
+  const sessionValidateInFlight = useRef(false);
+  const lastSessionValidateAt = useRef(0);
   useEffect(() => {
+    const revalidateSession = async () => {
+      if (sessionValidateInFlight.current) return;
+      if (!store.getState().auth.isAuthenticated) return;
+      const now = Date.now();
+      if (now - lastSessionValidateAt.current < 15_000) return;
+      const net = await NetInfo.fetch().catch(() => null);
+      if (net && net.isConnected === false) return;
+      sessionValidateInFlight.current = true;
+      lastSessionValidateAt.current = now;
+      try {
+        const token = await getValidSession().catch(() => null);
+        if (!token) return;
+        const status = await validateActiveSession(token);
+        if (status.active === false) {
+          await handleSessionInvalidation({
+            reason: status.reason,
+            sessionId: status.sessionId,
+            message: status.message,
+          });
+        }
+      } finally {
+        sessionValidateInFlight.current = false;
+      }
+    };
+
     const handleAppStateChange = (nextState: AppStateStatus) => {
       if (nextState === "active") {
+        void revalidateSession();
         if (!apiFetchAllowed("auth_profile_foreground", 60_000)) {
           perf.apiSkipped("profile_foreground_throttled");
           return;
@@ -221,7 +280,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
     const sub = AppState.addEventListener("change", handleAppStateChange);
-    return () => sub.remove();
+    const netSub = NetInfo.addEventListener((state) => {
+      if (state.isConnected && AppState.currentState === "active") {
+        void revalidateSession();
+      }
+    });
+    return () => {
+      sub.remove();
+      netSub();
+    };
   }, [refreshUserProfile]);
 
   // ── Auth event bus subscriptions ─────────────────────────────────────────
@@ -240,13 +307,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       stepPollingService.stopPolling("session_expired");
       raceStepSyncService.cancelPending();
       logout();
-      // Show a user-friendly alert so the user knows why they were signed out,
-      // rather than being silently dropped on the login screen.
-      Alert.alert(
-        "Session Expired",
-        "Your login session has expired. Please sign in again to continue.",
-        [{ text: "OK" }],
-      );
+      // Professional modal (not Alert) — same host as session-replaced.
+      void import("@/services/sessionNoticeBus").then(({ showSessionNotice }) => {
+        showSessionNotice({
+          reason: "SESSION_EXPIRED",
+          message:
+            "Your login session has expired. Please sign in again to continue.",
+        });
+      });
+    });
+    const offInvalidated = onSessionInvalidation(() => {
+      if (__DEV__) console.log("[Auth] session invalidated — forcing logout");
+      cancelProactiveTokenRefresh();
+      stepPollingService.stopPolling("session_invalidated");
+      raceStepSyncService.cancelPending();
+      // Modal already shown by handleSessionInvalidation via sessionNoticeBus
+      void logout();
     });
     const offRefreshed = authEvents.onTokenRefreshed(async (newToken) => {
       if (__DEV__) console.log("[Auth] token refreshed event received — updating Redux");
@@ -259,6 +335,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     return () => {
       offExpired();
+      offInvalidated();
       offRefreshed();
     };
   }, [logout, dispatch]);

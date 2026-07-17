@@ -8,16 +8,21 @@
  *   SESSION_EXPIRED — fired when both the access token AND refresh token are
  *                     unrecoverable. AuthContext listens and forces logout so
  *                     the routing guard redirects to the login screen.
+ *   SESSION_INVALIDATED — SESSION_REPLACED / REVOKED / etc. (single-device login)
  *   TOKEN_REFRESHED — fired when authFetch successfully exchanges a refresh
  *                     token for a new access token. AuthContext listens and
  *                     keeps the Redux sessionToken in sync with SecureStore.
  */
 
+import type { SessionInvalidationPayload } from "@/services/sessionInvalidation";
+
 type VoidListener = () => void;
 type TokenListener = (newSessionToken: string) => void;
+type InvalidationListener = (payload: SessionInvalidationPayload) => void;
 
 const sessionExpiredSet = new Set<VoidListener>();
 const tokenRefreshedSet = new Set<TokenListener>();
+const sessionInvalidatedSet = new Set<InvalidationListener>();
 
 // Guards against emitting SESSION_EXPIRED multiple times in rapid succession
 // (e.g. several concurrent requests all fail together).
@@ -40,6 +45,21 @@ export const authEvents = {
       sessionExpiredDebounceTimer = null;
       sessionExpiredSet.forEach((cb) => cb());
     }, 50);
+  },
+
+  onSessionInvalidated(cb: InvalidationListener): () => void {
+    sessionInvalidatedSet.add(cb);
+    return () => sessionInvalidatedSet.delete(cb);
+  },
+
+  emitSessionInvalidated(payload: SessionInvalidationPayload): void {
+    sessionInvalidatedSet.forEach((cb) => {
+      try {
+        cb(payload);
+      } catch {
+        /* ignore */
+      }
+    });
   },
 
   /** Subscribe to the TOKEN_REFRESHED event. Returns an unsubscribe function. */

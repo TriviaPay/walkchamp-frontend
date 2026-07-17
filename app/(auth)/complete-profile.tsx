@@ -25,7 +25,7 @@ import { rf, rs, MAX_CONTENT_WIDTH } from "@/utils/responsive";
 const USERNAME_RE = /^[a-zA-Z][a-zA-Z0-9_]{5,13}$/;
 const BLOCKED = ["admin","support","official","system","moderator","walkchamp","walk_champ","staff"];
 function usernameBlocked(u: string) { return BLOCKED.some((b) => u.toLowerCase().replace(/_/g,"").includes(b)); }
-const AVATAR_COLORS = ["#00E676","#00B4FF","#06B6D4","#FFD700","#FF6B35","#A855F7","#F472B6","#34D399"];
+const AVATAR_COLORS = ["#00E676","#00B4FF","#FFD700","#FF6B35","#A855F7","#F472B6"];
 
 function calcAge(dob: string): number {
   const birth = new Date(dob);

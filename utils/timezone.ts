@@ -148,3 +148,50 @@ export function formatLocalDate(utcIso: string): string {
     return "";
   }
 }
+
+/**
+ * Compact Sponsored Event start→end times for list/detail cards.
+ * Converts absolute backend instants to the device local timezone (display only).
+ * Dates are omitted — callers already show the event date separately.
+ *
+ * Same local day:  "Start time 6:30 PM · End time 9:30 PM"
+ * Cross midnight:  "Start time 11:30 PM · End time Jul 19 · 1:30 AM"
+ */
+export function formatSponsoredEventWindow(
+  startIso: string | null | undefined,
+  endIso: string | null | undefined,
+): string {
+  if (!startIso) return "";
+  try {
+    const start = new Date(startIso);
+    if (Number.isNaN(start.getTime())) return "";
+    const startTime = formatLocalTime(startIso);
+    if (!endIso) return `Start time ${startTime}`;
+
+    const end = new Date(endIso);
+    if (Number.isNaN(end.getTime())) return `Start time ${startTime}`;
+
+    const sameLocalDay =
+      start.getFullYear() === end.getFullYear() &&
+      start.getMonth() === end.getMonth() &&
+      start.getDate() === end.getDate();
+
+    const endTime = formatLocalTime(endIso);
+    if (sameLocalDay) return `Start time ${startTime} · End time ${endTime}`;
+    return `Start time ${startTime} · End time ${formatLocalDate(endIso)} · ${endTime}`;
+  } catch {
+    return "";
+  }
+}
+
+/** Inclusive start / exclusive end against canonical backend instants. */
+export function isWithinEventWindow(
+  timestampMs: number,
+  startIso: string,
+  endIso: string,
+): boolean {
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  return timestampMs >= start && timestampMs < end;
+}

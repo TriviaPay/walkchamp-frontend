@@ -59,6 +59,9 @@ import { ingestPaymentReturnUrl, getPendingDeposit, peekPaymentResult } from "@/
 import * as Linking from "expo-linking";
 import { queryClient } from "@/services/queryClient";
 import { PushPermissionPrompt } from "@/components/PushPermissionPrompt";
+import { FirstLaunchPermissionBootstrap } from "@/components/FirstLaunchPermissionBootstrap";
+import { SessionRealtimeGuard } from "@/components/SessionRealtimeGuard";
+import { SessionNoticeHost } from "@/components/SessionNoticeHost";
 import { StepTrackingNotificationPrompt } from "@/components/StepTrackingNotificationPrompt";
 
 // ── App startup diagnostics ────────────────────────────────────────────────
@@ -306,6 +309,9 @@ function PushNotificationSetup() {
   return (
     <>
       <PushPermissionPrompt />
+      <FirstLaunchPermissionBootstrap />
+      <SessionRealtimeGuard />
+      <SessionNoticeHost />
       <StepTrackingNotificationPrompt />
     </>
   );

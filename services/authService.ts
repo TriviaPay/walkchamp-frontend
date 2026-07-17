@@ -167,11 +167,17 @@ export async function signInWithEmail(
   email: string,
   password: string,
 ): Promise<JwtResponse> {
+  const { getDeviceSessionMetadata } = await import("@/services/deviceIdentity");
+  const device = await getDeviceSessionMetadata().catch(() => null);
   const res = await fetch(`${API_BASE}/api/auth/password/signin`, {
     method: "POST",
     signal: timeoutSignal(API_TIMEOUT_MS),
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ loginId: email.trim().toLowerCase(), password }),
+    body: JSON.stringify({
+      loginId: email.trim().toLowerCase(),
+      password,
+      ...(device ? { device } : {}),
+    }),
   });
   const body = (await res.json().catch(() => ({}))) as JwtResponse & {
     message?: string;
@@ -283,8 +289,31 @@ export async function refreshSession(refreshToken: string): Promise<string> {
   const body = (await res.json().catch(() => ({}))) as JwtResponse & {
     message?: string;
     error?: string;
+    code?: string;
+    sessionId?: string;
   };
   if (!res.ok) {
+    const code = (body.code ?? body.error ?? "").toString().toUpperCase();
+    if (
+      code === "SESSION_REPLACED" ||
+      code === "SESSION_REVOKED" ||
+      code === "SESSION_INVALID" ||
+      code === "SESSION_EXPIRED"
+    ) {
+      const { handleSessionInvalidation } = await import(
+        "@/services/sessionInvalidation"
+      );
+      await handleSessionInvalidation({
+        reason: code,
+        sessionId: body.sessionId,
+        message: body.message,
+      });
+      throw new DescopeRestError(
+        body.message ?? "Session replaced",
+        code,
+        res.status,
+      );
+    }
     throw new DescopeRestError(
       body.message ?? body.error ?? "Session refresh failed",
       body.error ?? String(res.status),
@@ -442,14 +471,22 @@ async function _executeRefresh(): Promise<RefreshOutcome> {
       // 4xx = refresh token invalid or session window expired — definitive.
       // This happens when:
       //   a) the Descope session timeout has been exceeded (user must re-login), OR
-      //   b) the refresh token was revoked.
-      // The Descope error message tells us which:
+      //   b) the refresh token was revoked / replaced on another device.
       if (__DEV__) console.log(
         "[Auth] refresh definitively rejected by Descope",
         err.httpStatus, err.code,
         // Print the human-readable description so the cause is visible in logs
         "—", err.message,
       );
+      const code = (err.code ?? "").toUpperCase();
+      if (
+        code === "SESSION_REPLACED" ||
+        code === "SESSION_REVOKED" ||
+        code === "SESSION_INVALID"
+      ) {
+        // handleSessionInvalidation already ran inside refreshSession — avoid duplicate SESSION_EXPIRED alert.
+        return { ok: false, definitive: true };
+      }
       await clearSession();
       authEvents.emitSessionExpired();
       return { ok: false, definitive: true };

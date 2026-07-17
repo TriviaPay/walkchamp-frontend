@@ -197,7 +197,13 @@ interface RaceContextType {
   /** Called when backend confirms race is in_progress. startedAt from server when available. */
   notifyRaceStarted: (realPlayerCount: number, startedAt?: Date) => void;
   /** Rejoin an in-progress race with server step count (no countdown). */
-  resumeLiveRace: (realPlayerCount: number, startedAt: Date, initialUserSteps?: number) => void;
+  resumeLiveRace: (
+    realPlayerCount: number,
+    startedAt: Date,
+    initialUserSteps?: number,
+    /** Sponsored: exclusive end instant so HC/HK/sensor freeze at window end. */
+    raceEndAt?: Date | null,
+  ) => void;
   cancelRace: () => void;
   resetRace: () => void;
   setActiveRace: (id: string | null, host: boolean) => void;
@@ -278,6 +284,8 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
   // This prevents old race steps from contaminating a new race started immediately after forfeit.
   const subscriptionGenRef = useRef(0);
   const raceStartTimeRef = useRef<Date | null>(null);
+  /** Exclusive end for Sponsored Events (canonical backend window). Null for normal races. */
+  const raceEndTimeRef = useRef<Date | null>(null);
   const stepTickRef = useRef(0);
   const pendingBotsRef = useRef<Omit<RaceParticipant, "raceSteps" | "isFinished">[]>([]);
   const playersJoinedRef = useRef(0);
@@ -287,6 +295,15 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
   const raceStepApplyRef = useRef<((steps: number, deviceTotalSteps?: number) => void) | null>(null);
   /** Server-synced floor — never show fewer steps than backend already recorded. */
   const raceStepFloorRef = useRef(0);
+  /**
+   * New-device / HC-HK rejoin: local health-store range may be far below server
+   * currentSteps. Continue as serverFloor + max(0, localNow − localAtResume).
+   * Legacy baseline math does not use this.
+   */
+  const deviceSwitchAnchorRef = useRef<{
+    serverFloor: number;
+    localAtResume: number;
+  } | null>(null);
   const raceDeviceBaselineRef = useRef(0);
   const goalFlushDoneRef = useRef(false);
   const catchUpInFlightRef = useRef(false);
@@ -353,6 +370,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     raceStepSyncService.cancelPending();
     racePollingConfigRef.current = null;
     raceStepFloorRef.current = 0;
+    deviceSwitchAnchorRef.current = null;
     goalFlushDoneRef.current = false;
   };
 
@@ -418,6 +436,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         userId,
         baseline,
         target: raceTargetStepsRef.current,
+        raceEndTime: raceEndTimeRef.current,
         onUpdate: (raceSteps, deviceTotal) => {
           if (subscriptionGenRef.current !== myGen || raceEndedRef.current) return;
           apply(raceSteps, deviceTotal);
@@ -434,7 +453,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
     if (!forceRestart && stepPollingService.isRacePolling(raceId ?? undefined)) {
       if (raceId && raceStart && userId && raceStepApplyRef.current) {
-        const snap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId);
+        const snap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId, raceEndTimeRef.current ?? undefined);
         if (snap && !raceEndedRef.current) {
           const baseline = raceDeviceBaselineRef.current || cfg.baseline;
           raceStepApplyRef.current(snap.steps, Math.max(baseline, baseline + snap.steps));
@@ -447,7 +466,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     stepPollingService.startPolling("race", cfg);
 
     if (raceId && raceStart && userId && raceStepApplyRef.current) {
-      const snap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId);
+      const snap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId, raceEndTimeRef.current ?? undefined);
       if (snap && !raceEndedRef.current) {
         const baseline = raceDeviceBaselineRef.current || cfg.baseline;
         raceStepApplyRef.current(snap.steps, Math.max(baseline, baseline + snap.steps));
@@ -499,7 +518,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       let deviceSteps = 0;
       try {
         if (await stepProviderManager.isTrackingReady()) {
-          const snap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId);
+          const snap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId, raceEndTimeRef.current ?? undefined);
           if (snap) deviceSteps = snap.steps;
         }
       } catch {
@@ -519,7 +538,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
             userId,
             Math.max(safeServer, userStepsRef.current),
           );
-          const resnap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId);
+          const resnap = await stepProviderManager.getRaceSteps(raceId, raceStart, userId, raceEndTimeRef.current ?? undefined);
           if (resnap) deviceSteps = resnap.steps;
         }
       }
@@ -608,8 +627,12 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         const pending = await storageGet<PendingRace>(STORAGE_KEYS.PENDING_RACE);
         if (!pending) return;
 
-        const { raceId: pendingRaceId, raceStartTimeUTC: startStr } = pending;
+        const { raceId: pendingRaceId, raceStartTimeUTC: startStr, raceEndTimeUTC: endStr } = pending;
         const raceStart = new Date(startStr);
+        const raceEnd = endStr ? new Date(endStr) : null;
+        if (raceEnd && !Number.isNaN(raceEnd.getTime())) {
+          raceEndTimeRef.current = raceEnd;
+        }
 
         const raceData = await fetchRaceStatus(pendingRaceId);
         if (!raceData) {
@@ -621,7 +644,9 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           if (Platform.OS === "ios") {
             const available = await stepTracker.isAvailable().catch(() => false);
             if (!available) return;
-            const data = await stepTracker.getStepsForTimeRange(raceStart, new Date()).catch(() => null);
+            const queryEnd =
+              raceEnd && raceEnd.getTime() < Date.now() ? raceEnd : new Date();
+            const data = await stepTracker.getStepsForTimeRange(raceStart, queryEnd).catch(() => null);
             if (__DEV__) console.log(`[RaceSteps] iOS recovery: device latest steps=${data?.steps ?? 0} raceStartedAt=${raceStart}`);
             if (data && data.steps > 0) {
               await postRaceProgress(pendingRaceId, data.steps, undefined, undefined, "healthkit");
@@ -633,6 +658,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
               pendingRaceId,
               raceStart,
               uid,
+              raceEndTimeRef.current ?? undefined,
             ).catch(() => null);
             if (__DEV__) console.log(`[RaceSteps] Android recovery: steps=${raceData2?.steps ?? 0}`);
             if (raceData2 && raceData2.steps > 0) {
@@ -844,12 +870,15 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     if (useRealSteps) {
       userStepsRef.current = bootSteps;
       raceStepFloorRef.current = bootSteps;
+      // Anchor set after first local snap on rejoin (HC/HK device-switch continuity).
+      deviceSwitchAnchorRef.current = null;
       raceStepSyncService.reset();
       if (bootSteps > 0) {
         raceStepSyncService.seedSyncedSteps(bootSteps);
       }
     } else {
       userStepsRef.current = bootSteps;
+      deviceSwitchAnchorRef.current = null;
       if (bootSteps === 0) {
         raceStepSyncService.reset();
       } else {
@@ -906,6 +935,18 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         if (raceEndedRef.current) return;
 
         let steps = Math.max(0, rawSteps);
+
+        // Cross-device rejoin (HC / HealthKit): continue from server floor using
+        // delta of local range since resume — prevents stalling at bootSteps.
+        const switchAnchor = deviceSwitchAnchorRef.current;
+        if (
+          switchAnchor &&
+          !stepProviderManager.usesRaceBaseline()
+        ) {
+          const delta = Math.max(0, rawSteps - switchAnchor.localAtResume);
+          steps = switchAnchor.serverFloor + delta;
+        }
+
         const raceElapsedMs = raceStart ? Date.now() - raceStart.getTime() : 0;
         const MAX_FIRST_DELTA = 60;
         if (
@@ -1046,6 +1087,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           userId,
           baseline,
           target: raceTargetStepsRef.current,
+          raceEndTime: raceEndTimeRef.current,
           onUpdate: (raceSteps, deviceTotal) => applyRealSteps(raceSteps, deviceTotal),
           onReadBlocked: () => {
             void (async () => {
@@ -1151,6 +1193,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
             raceIdRef.current,
             raceStart,
             userId,
+            raceEndTimeRef.current ?? undefined,
           );
           if (
             options?.isRejoin &&
@@ -1167,15 +1210,34 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
               raceIdRef.current,
               raceStart,
               userId,
+              raceEndTimeRef.current ?? undefined,
             );
           }
           if (snap && subscriptionGenRef.current === myGen && !raceEndedRef.current) {
-            // Rejoin: never adopt a device read that looks like daily totals.
-            const rejoinSafe =
-              options?.isRejoin && snap.steps > bootSteps + 150
-                ? Math.max(bootSteps, raceStepFloorRef.current)
-                : Math.max(snap.steps, bootSteps, raceStepFloorRef.current);
-            applyRealSteps(rejoinSafe);
+            // Capture local range at rejoin so later HC/HK deltas add onto server floor.
+            if (
+              options?.isRejoin &&
+              !stepProviderManager.usesRaceBaseline()
+            ) {
+              deviceSwitchAnchorRef.current = {
+                serverFloor: bootSteps,
+                localAtResume: Math.max(0, snap.steps),
+              };
+              if (__DEV__) {
+                console.log(
+                  `[RaceStepsRealtime] device-switch anchor floor=${bootSteps} localAtResume=${snap.steps}`,
+                );
+              }
+              // Pass raw local range — applyRealSteps adds onto server floor.
+              applyRealSteps(snap.steps);
+            } else {
+              // Rejoin legacy / fresh: never adopt a device read that looks like daily totals.
+              const rejoinSafe =
+                options?.isRejoin && snap.steps > bootSteps + 150
+                  ? Math.max(bootSteps, raceStepFloorRef.current)
+                  : Math.max(snap.steps, bootSteps, raceStepFloorRef.current);
+              applyRealSteps(rejoinSafe);
+            }
           }
         }
       })();
@@ -1314,6 +1376,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     setUserRaceSteps(0);
     userStepsRef.current = 0;
     raceStepFloorRef.current = 0;
+    deviceSwitchAnchorRef.current = null;
     raceStepSyncService.reset();
     resetRaceStepBuffer();
 
@@ -1392,6 +1455,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     realPlayerCount: number,
     startedAt: Date,
     initialUserSteps = 0,
+    raceEndAt?: Date | null,
   ) => {
     if (matchmakingRef.current) {
       clearInterval(matchmakingRef.current);
@@ -1400,6 +1464,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
     const steps = Math.max(0, initialUserSteps);
     raceStartTimeRef.current = startedAt;
+    raceEndTimeRef.current = raceEndAt ?? null;
     setRaceStartTimeUTC(startedAt);
     raceEndedRef.current = false;
 
@@ -1407,6 +1472,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       savePendingRace({
         raceId: raceIdRef.current,
         raceStartTimeUTC: startedAt.toISOString(),
+        ...(raceEndAt ? { raceEndTimeUTC: raceEndAt.toISOString() } : {}),
         status: "in_progress",
       });
     }
@@ -1493,6 +1559,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     setUserRaceSteps(0);
     userStepsRef.current = 0;
     raceStepFloorRef.current = 0;
+    deviceSwitchAnchorRef.current = null;
     raceStepSyncService.reset();
     resetRaceStepBuffer();
     setPlayersJoined(1);
@@ -1522,6 +1589,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     clearActiveRaceProgress("cancelled", { raceId: cancelledRaceId ?? undefined });
 
     raceStartTimeRef.current = null;
+    raceEndTimeRef.current = null;
     setRaceStartTimeUTC(null);
   }, []);
 
@@ -1531,6 +1599,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     stepTickRef.current = 0;
     raceIdRef.current = null;
     raceStartTimeRef.current = null;
+    raceEndTimeRef.current = null;
     usingRealStepsRef.current = false;
     setWalkBackendSyncPaused(false);
     setRacePhase("idle");

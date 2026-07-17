@@ -57,6 +57,8 @@ export interface StepProvider {
     raceId: string,
     raceStartAt: Date,
     userId: string,
+    /** Optional exclusive end — Sponsored Events pass event endsAt so HC/HK queries stop at window end. */
+    raceEndAt?: Date,
   ): Promise<StepReadResult>;
   createRaceBaseline?(
     raceId: string,

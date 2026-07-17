@@ -23,8 +23,8 @@ import { SkeletonEditForm } from '@/components/SkeletonRows';
 
 // Same palette used throughout the app. Not red by default (#00E676 is the first entry).
 const AVATAR_COLORS = [
-  "#00E676", "#00B4FF", "#06B6D4", "#FFD700",
-  "#FF6B35", "#A855F7", "#F472B6", "#34D399",
+  "#00E676", "#00B4FF", "#FFD700",
+  "#FF6B35", "#A855F7", "#F472B6",
 ];
 
 
@@ -84,7 +84,7 @@ export default function EditProfileScreen() {
     setBio(p.bio ?? "");
     setCountry(p.country ?? "");
     setFlag(p.countryFlag ?? "");
-    if (p.avatarColor && AVATAR_COLORS.includes(p.avatarColor)) {
+    if (p.avatarColor) {
       setAvatarColor(p.avatarColor);
     }
   }, []);

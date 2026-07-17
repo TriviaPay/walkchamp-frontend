@@ -67,7 +67,7 @@ function calcAge(dobStr: string): number {
   return age;
 }
 
-const AVATAR_COLORS = ["#00E676","#00B4FF","#06B6D4","#FFD700","#FF6B35","#A855F7","#F472B6","#34D399"];
+const AVATAR_COLORS = ["#00E676","#00B4FF","#FFD700","#FF6B35","#A855F7","#F472B6"];
 const RESEND_COOLDOWN = 60;
 
 // 5 steps: Email → Verify → Profile → Terms → Password

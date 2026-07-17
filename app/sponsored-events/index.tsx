@@ -21,6 +21,7 @@ import { Feather } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { isSponsoredRegistrationOpen, canOpenSponsoredWaitingRoom } from "@/utils/sponsoredEventRegistration";
+import { formatSponsoredEventWindow } from "@/utils/timezone";
 import {
   isSponsoredEventVisible,
   parseSponsoredEventsResponse,
@@ -129,7 +130,7 @@ function PrizeBanner() {
     Animated.timing(anim, { toValue: toVal, duration: 230, useNativeDriver: false }).start();
   };
 
-  const maxH = anim.interpolate({ inputRange: [0, 1], outputRange: [0, 260] });
+  const maxH = anim.interpolate({ inputRange: [0, 1], outputRange: [0, 300] });
 
   return (
     <View style={pb.wrap}>
@@ -191,6 +192,10 @@ function PrizeBanner() {
             <View style={pb.ruleRow}>
               <Text style={pb.ruleDot}>🔒</Text>
               <Text style={pb.ruleText}>Event needs ≥ 2 players to start — otherwise full coin refund</Text>
+            </View>
+            <View style={pb.ruleRow}>
+              <Text style={pb.ruleDot}>⏱️</Text>
+              <Text style={pb.ruleText}>Only steps taken between the event&apos;s Start Time and End Time will count toward this event</Text>
             </View>
           </View>
         </Animated.View>
@@ -553,11 +558,9 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
 
   const startDate = ev.scheduledStartAt ? new Date(ev.scheduledStartAt) : null;
   const dayStr    = startDate
-    ? startDate.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })
+    ? startDate.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })
     : "";
-  const timeStr   = startDate
-    ? startDate.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
-    : "";
+  const windowStr = formatSponsoredEventWindow(ev.scheduledStartAt, ev.endsAt);
 
   const displayTitle = ev.title.replace(/\s*\([A-Za-z]+\s+\d+\)\s*$/, "").trim();
 
@@ -572,7 +575,13 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
           <CalendarBadge iso={ev.scheduledStartAt} accentColor={pal.glow1} />
           <View style={{ flex: 1 }}>
             <Text style={card.title} numberOfLines={2}>{displayTitle}</Text>
-            {dayStr ? <Text style={card.dateText}>{dayStr}  ·  {timeStr}</Text> : null}
+            {dayStr ? <Text style={card.dateText}>{dayStr}</Text> : null}
+            {windowStr ? (
+              <View style={card.windowRow}>
+                <Feather name="clock" size={11} color="rgba(255,255,255,0.55)" />
+                <Text style={card.windowText} numberOfLines={2}>{windowStr}</Text>
+              </View>
+            ) : null}
           </View>
           <View style={card.headerRight}>
             <View style={[card.statusChip, { backgroundColor: sc.bg, borderColor: sc.color + "55" }]}>
@@ -606,6 +615,11 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
             <Text style={[card.pillVal, { color: "#FFB300" }]}>{ev.entryCoinFee.toLocaleString()}</Text>
             <Text style={card.pillLbl}>entry</Text>
           </View>
+        </View>
+
+        <View style={card.windowHintRow}>
+          <Feather name="info" size={11} color="rgba(255,255,255,0.4)" />
+          <Text style={card.windowHintText}>Only steps during the event window count.</Text>
         </View>
 
         {/* ── Countdown — prominent row ── */}
@@ -1273,6 +1287,17 @@ const card = StyleSheet.create({
   headerRight: { alignItems: "flex-end", gap: rs(7), flexShrink: 0 },
   title: { fontSize: rf(16), fontWeight: "800", color: "#FFF", lineHeight: 22 },
   dateText: { fontSize: rf(11.5), color: "rgba(255,255,255,0.5)", marginTop: 3 },
+  windowRow: {
+    flexDirection: "row", alignItems: "center", gap: 5, marginTop: 4, paddingRight: 4,
+  },
+  windowText: { flex: 1, fontSize: rf(11), fontWeight: "600", color: "rgba(255,255,255,0.72)", lineHeight: 15 },
+  windowHintRow: {
+    flexDirection: "row", alignItems: "flex-start", gap: 6,
+    marginBottom: rs(12), marginTop: -4,
+  },
+  windowHintText: {
+    flex: 1, fontSize: rf(10.5), color: "rgba(255,255,255,0.38)", lineHeight: 14,
+  },
   statusChip: {
     borderWidth: 1, borderRadius: 12, flexShrink: 0,
     paddingHorizontal: rs(8), paddingVertical: 4,

@@ -119,8 +119,16 @@ export const androidHealthConnectProvider: StepProvider = {
     _raceId: string,
     raceStartAt: Date,
     _userId: string,
+    raceEndAt?: Date,
   ): Promise<StepReadResult> {
-    return this.getStepsForRange(raceStartAt, new Date());
+    const endMs = raceEndAt
+      ? Math.min(Date.now(), raceEndAt.getTime())
+      : Date.now();
+    const end = new Date(endMs);
+    if (end.getTime() <= raceStartAt.getTime()) {
+      return emptyStepResult("android_health_connect", "verified", raceStartAt, end);
+    }
+    return this.getStepsForRange(raceStartAt, end);
   },
 
   async createRaceBaseline(_raceId: string, _userId: string): Promise<number> {

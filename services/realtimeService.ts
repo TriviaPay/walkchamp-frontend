@@ -189,6 +189,7 @@ export const EVENTS = {
   SPONSORED_EVENT_CANCELLED: "sponsored_event.cancelled",
   SPONSORED_EVENT_CREATED: "sponsored_event.created",
   SPONSORED_EVENT_COMPLETED: "sponsored_event.completed",
+  SESSION_INVALIDATED: "session-invalidated",
 };
 
 export const SPONSORED_EVENTS_CHANNEL = "public-sponsored-events";

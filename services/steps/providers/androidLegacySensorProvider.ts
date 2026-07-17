@@ -453,7 +453,26 @@ export const androidLegacySensorProvider: StepProvider = {
     raceId: string,
     raceStartAt: Date,
     userId: string,
+    raceEndAt?: Date,
   ): Promise<StepReadResult> {
+    // After the sponsored window ends, freeze — do not grow from further sensor ticks.
+    if (raceEndAt && Date.now() >= raceEndAt.getTime()) {
+      const frozenTo = raceEndAt;
+      const seed = await getRaceStepSeed(raceId, userId);
+      if (seed != null) {
+        return buildResult(Math.max(0, seed), raceStartAt, frozenTo);
+      }
+      const baseline = await getRaceBaseline(
+        raceId,
+        userId,
+        "android_legacy_sensor",
+      );
+      if (baseline != null) {
+        const today = await this.getTodaySteps();
+        return buildResult(Math.max(0, today.steps - baseline), raceStartAt, frozenTo);
+      }
+      return emptyStepResult("android_legacy_sensor", "legacy", raceStartAt, frozenTo);
+    }
     const to = new Date();
     let baseline = await getRaceBaseline(
       raceId,

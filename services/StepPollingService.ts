@@ -16,6 +16,8 @@ export interface RacePollingConfig {
   userId: string;
   baseline: number;
   target: number;
+  /** Exclusive end for Sponsored Events — HC/HK queries clamp to this instant. */
+  raceEndTime?: Date | null;
   onUpdate: (raceSteps: number, deviceTotal: number) => void;
   onReadBlocked?: () => void;
 }
@@ -105,6 +107,7 @@ class StepPollingService {
         ctx.raceId,
         ctx.raceStartTime,
         ctx.userId,
+        ctx.raceEndTime ?? undefined,
       );
 
       if (!result) {

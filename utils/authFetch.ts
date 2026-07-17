@@ -18,6 +18,11 @@
 
 import { getValidSession, refreshSessionSafely } from "@/services/authService";
 import { getApiBase } from "./apiUrl";
+import {
+  handleSessionInvalidation,
+  parseSessionErrorFromResponse,
+} from "@/services/sessionInvalidation";
+import { authEvents } from "@/utils/authEvents";
 
 // ── Timeout constants ─────────────────────────────────────────────────────────
 // Centralised here so every caller uses the same defaults.
@@ -174,6 +179,20 @@ export async function authFetch(
   }
 
   if (__DEV__) console.log("[API] request completed:", path, res.status);
+
+  // Machine-readable single-session / revocation errors (401 or 403).
+  if (res.status === 401 || res.status === 403) {
+    const sessionErr = await parseSessionErrorFromResponse(res);
+    if (sessionErr) {
+      if (__DEV__) {
+        console.log("[Auth] session error code=", sessionErr.reason, "path=", path);
+      }
+      // Do not refresh or retry a replaced/revoked session.
+      await handleSessionInvalidation(sessionErr);
+      authEvents.emitSessionInvalidated(sessionErr);
+      return res;
+    }
+  }
 
   if (res.status !== 401) return res;
 

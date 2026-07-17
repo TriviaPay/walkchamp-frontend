@@ -15,6 +15,7 @@ import { Feather } from "@expo/vector-icons";
 import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { parseSponsoredEventsResponse } from "@/utils/sponsoredEventsApi";
+import { formatSponsoredEventWindow } from "@/utils/timezone";
 import { authFetch } from "@/utils/authFetch";
 import { screenCache } from "@/utils/screenCache";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
@@ -350,6 +351,14 @@ export default function SponsoredWaitingRoom() {
                 ? "Navigating you to the live race…"
                 : "The race starts automatically — no action needed"}
             </Text>
+            {event?.scheduledStartAt ? (
+              <View style={s.windowBox}>
+                <Feather name="clock" size={12} color="rgba(255,255,255,0.55)" />
+                <Text style={s.windowText}>
+                  {formatSponsoredEventWindow(event.scheduledStartAt, event.endsAt ?? null)}
+                </Text>
+              </View>
+            ) : null}
           </LinearGradient>
         </View>
 
@@ -464,8 +473,7 @@ export default function SponsoredWaitingRoom() {
         <View style={s.infoBox}>
           <Feather name="info" size={14} color="rgba(255,255,255,0.25)" />
           <Text style={s.infoText}>
-            Stay on this screen and you'll be taken into the race automatically at the scheduled time.
-            Walking outside this app is tracked via your device's health data.
+            Only steps taken between the event&apos;s Start Time and End Time will count toward this event. Stay on this screen and you&apos;ll be taken into the race automatically at the scheduled time.
           </Text>
         </View>
 
@@ -513,6 +521,12 @@ const s = StyleSheet.create({
   countdownSub: { fontSize: rf(12), fontWeight: "700", color: "rgba(255,255,255,0.55)", letterSpacing: 0.5, marginBottom: rs(8) },
   countdownTime: { fontSize: rf(46), fontWeight: "900", letterSpacing: 2, lineHeight: 54, textAlign: "center" },
   countdownNote: { fontSize: rf(11.5), color: "rgba(255,255,255,0.35)", textAlign: "center", marginTop: rs(12), lineHeight: 18 },
+  windowBox: {
+    flexDirection: "row", alignItems: "center", gap: 6, marginTop: rs(14),
+    backgroundColor: "rgba(255,255,255,0.06)", borderRadius: 10,
+    paddingHorizontal: rs(12), paddingVertical: rs(8),
+  },
+  windowText: { flex: 1, fontSize: rf(11.5), fontWeight: "600", color: "rgba(255,255,255,0.7)", lineHeight: 16 },
 
   // Stats row
   statsRow: { flexDirection: "row", gap: rs(8) },

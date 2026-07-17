@@ -82,8 +82,15 @@ export const iosHealthKitProvider: StepProvider = {
     _raceId: string,
     raceStartAt: Date,
     _userId: string,
+    raceEndAt?: Date,
   ): Promise<StepReadResult> {
-    const to = new Date();
+    const endMs = raceEndAt
+      ? Math.min(Date.now(), raceEndAt.getTime())
+      : Date.now();
+    const to = new Date(endMs);
+    if (to.getTime() <= raceStartAt.getTime()) {
+      return emptyStepResult("ios_healthkit", "verified", raceStartAt, to);
+    }
     return this.getStepsForRange(raceStartAt, to);
   },
 
