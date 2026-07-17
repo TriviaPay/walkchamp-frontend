@@ -69,6 +69,13 @@ export const STEP_SYNC_CONFIG = {
 
   /** Set true in __DEV__ to log every poll/notification tick (very noisy). */
   STEP_DEBUG_VERBOSE: false,
+
+  /**
+   * Phase 1 false-step investigation — [StepAudit] logs.
+   * Defaults on in __DEV__; set false to silence without removing call sites.
+   * Production release builds should keep this false (or rely on __DEV__ gate).
+   */
+  STEP_AUDIT_ENABLED: typeof __DEV__ !== "undefined" && __DEV__,
 } as const;
 
 /** Live race backend sync buffer — used by raceStepSyncBuffer.ts */

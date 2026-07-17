@@ -34,6 +34,7 @@ import { UnreadProvider } from "@/context/UnreadContext";
 import { NetworkProvider } from "@/context/NetworkContext";
 import CoinRewardToast from "@/components/CoinRewardToast";
 import { CoinRealtimeSync } from "@/components/CoinRealtimeSync";
+import { CoinBalanceBootstrap } from "@/components/CoinBalanceBootstrap";
 import { RoomInvitationModal, type RoomInvitation } from "@/components/RoomInvitationModal";
 import { TitleUnlockProvider } from "@/context/TitleUnlockContext";
 import { TopBannerProvider } from "@/context/TopBannerContext";
@@ -420,6 +421,7 @@ export default function RootLayout() {
                                 <RootLayoutNav />
                                 <OfflineBanner />
                                 <AlertHost />
+                                <CoinBalanceBootstrap />
                                 <CoinRealtimeSync />
                                 <CoinRewardToast />
                                 <RoomInvitationOverlay />

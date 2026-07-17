@@ -1,46 +1,61 @@
+/**
+ * Bundled track theme fallbacks for rollout.
+ * Only `bg` and `daylightStadium` ship in the binary — all other themes load from R2.
+ */
+
+export const LOCAL_TRACK_FALLBACKS = {
+  bg: require("@/assets/images/bg.jpeg"),
+  daylightStadium: require("@/assets/images/daylightStadium.jpeg"),
+} as const;
+
+export type LocalTrackFallbackId = keyof typeof LOCAL_TRACK_FALLBACKS;
+
+/** Display labels for free / fallback themes (API name preferred when available). */
+export const TRACK_THEME_LABELS: Record<string, string> = {
+  bg: "Neon Finish",
+  daylightStadium: "Daylight Stadium",
+};
+
+/**
+ * Minimal local options used when Redux themes have not hydrated yet.
+ * Premium themes come from GET /api/track-themes (remote imageSet).
+ */
 export const TRACK_LAYOUT_OPTIONS = [
-  { id: "bg",           label: "Neon Finish",        source: require("@/assets/images/bg.png") },
-  { id: "bg1",          label: "Arcade Track",        source: require("@/assets/images/bg1.png") },
-  { id: "galaxy",       label: "Galaxy",              source: require("@/assets/images/galaxy.jpeg") },
-  { id: "daylightStadium", label: "Daylight Stadium", source: require("@/assets/images/daylightStadium.jpeg") },
-  { id: "forest",       label: "Forest",              source: require("@/assets/images/forest.jpeg") },
-  { id: "city",         label: "City",                source: require("@/assets/images/city.jpeg") },
-  { id: "lava",         label: "Lava",                source: require("@/assets/images/lava.jpeg") },
-  { id: "ice",          label: "Ice",                 source: require("@/assets/images/ice.jpeg") },
-  { id: "candy",        label: "Candy Land",          source: require("@/assets/images/candy.jpeg") },
-  { id: "farm",         label: "Farm",                source: require("@/assets/images/farm.jpeg") },
-  { id: "underwater",   label: "Underwater",          source: require("@/assets/images/underwater.jpeg") },
-  { id: "musicfest",    label: "Music Fest",          source: require("@/assets/images/musicfest.jpeg") },
-  { id: "barbie",       label: "Barbie",              source: require("@/assets/images/track_barbie.png") },
-  { id: "desert",       label: "Desert",              source: require("@/assets/images/track_desert.png") },
-  { id: "gold",         label: "Gold",                source: require("@/assets/images/track_gold.png") },
-  { id: "nightforest",  label: "Night Forest",        source: require("@/assets/images/track_nightforest.png") },
-  { id: "skykingdom",   label: "Sky Kingdom",         source: require("@/assets/images/track_skykingdom.png") },
-  { id: "rain",         label: "Rain",                source: require("@/assets/images/track_rain.png") },
-  { id: "storm",        label: "Storm",               source: require("@/assets/images/track_storm.png") },
-  { id: "mountain",     label: "Mountain",            source: require("@/assets/images/track_mountain.png") },
-  { id: "waterfall",    label: "Waterfall",           source: require("@/assets/images/track_waterfall.png") },
-  { id: "webcity",      label: "Web City",            source: require("@/assets/images/track_webcity.png") },
-  { id: "bridge",       label: "Bridge",              source: require("@/assets/images/track_bridge.png") },
-  { id: "newyork",      label: "New York",            source: require("@/assets/images/track_newyork.png") },
-  { id: "pirateisland", label: "Pirate Island",       source: require("@/assets/images/track_pirateisland.png") },
-  { id: "paradise",     label: "Paradise",            source: require("@/assets/images/track_paradise.png") },
-  { id: "musicfest2",   label: "Music Fest 2",        source: require("@/assets/images/track_musicfest2.png") },
-  { id: "chocolate",    label: "Chocolate Factory",   source: require("@/assets/images/track_chocolate.png") },
-  { id: "fireworks",    label: "Fireworks",           source: require("@/assets/images/track_fireworks.png") },
-  { id: "moon",         label: "Moon Base",           source: require("@/assets/images/track_moon.png") },
-  { id: "rainbow_road", label: "Rainbow Road",        source: require("@/assets/images/track_rainbow_road.png") },
-  { id: "runway",       label: "Runway",              source: require("@/assets/images/track_runway.png") },
-  { id: "toy_race",     label: "Toy Race",            source: require("@/assets/images/track_toy_race.png") },
-  { id: "water_park",   label: "Water Park",          source: require("@/assets/images/track_water_park.png") },
+  {
+    id: "bg" as const,
+    label: TRACK_THEME_LABELS.bg,
+    source: LOCAL_TRACK_FALLBACKS.bg,
+  },
+  {
+    id: "daylightStadium" as const,
+    label: TRACK_THEME_LABELS.daylightStadium,
+    source: LOCAL_TRACK_FALLBACKS.daylightStadium,
+  },
 ] as const;
 
-export type TrackLayoutId = (typeof TRACK_LAYOUT_OPTIONS)[number]["id"];
+/** @deprecated Prefer string theme codes from the API. Kept for gradual typing migration. */
+export type TrackLayoutId = string;
+
+/** Local-only background map (fallback assets). */
+export const TRACK_BACKGROUNDS: Record<string, number> = {
+  bg: LOCAL_TRACK_FALLBACKS.bg,
+  daylightStadium: LOCAL_TRACK_FALLBACKS.daylightStadium,
+};
 
 export const FREE_TRACK_CODES = new Set<string>(["bg", "daylightStadium"]);
 
-/** True when `code` is a known client track layout id. */
-export function isTrackLayoutId(code: string | null | undefined): code is TrackLayoutId {
-  if (!code) return false;
-  return TRACK_LAYOUT_OPTIONS.some((o) => o.id === code);
+/** True when `code` is a usable theme id (API owns the catalog). */
+export function isTrackLayoutId(code: string | null | undefined): code is string {
+  return typeof code === "string" && code.trim().length > 0;
+}
+
+/** Resolve a bundled fallback asset; unknown codes → bg. */
+export function getTrackBackground(id: string | null | undefined): number {
+  const key = (id ?? "bg").trim();
+  return TRACK_BACKGROUNDS[key] ?? TRACK_BACKGROUNDS.bg;
+}
+
+export function getTrackThemeLabel(code: string, apiName?: string | null): string {
+  if (apiName?.trim()) return apiName.trim();
+  return TRACK_THEME_LABELS[code] ?? code;
 }

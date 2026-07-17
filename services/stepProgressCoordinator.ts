@@ -17,6 +17,7 @@ import { stepTrackingNotificationService } from "@/services/stepTrackingNotifica
 import { RACE_PROGRESS_NOTIFICATION_CONFIG } from "@/config/raceProgressNotificationConfig";
 import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotificationConfig";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import { isJsAuthoritativeStepSession } from "@/services/steps/jsStepOwnership";
 import { AppState, type AppStateStatus, Platform } from "react-native";
 import { waitForAppStartupReady, isAppStartupReady } from "@/services/appStartup";
 import { getLocalDateStr, isStepSnapshotFromBeforeToday, msUntilNextLocalMidnight } from "@/utils/timezone";
@@ -32,7 +33,7 @@ import {
 } from "@/utils/stepScopedStorage";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { mergeWalkStepsWithNative } from "@/services/stepDisplayMerge";
-import { shouldIgnoreLegacyPhantomBump, sanitizeLegacyProviderSteps, stepEngineLog, stepDebugVerboseLog, resolveTodayDisplaySteps, filterLegacyStepIncrease, suppressLegacyStepBumps } from "@/utils/stepAccuracy";
+import { shouldIgnoreLegacyPhantomBump, sanitizeLegacyProviderSteps, stepEngineLog, stepDebugVerboseLog, resolveTodayDisplaySteps, filterLegacyStepIncrease, suppressLegacyStepBumps, markFreshLocalDay, isFreshLocalDay } from "@/utils/stepAccuracy";
 
 let notificationTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingNotification = false;
@@ -381,11 +382,21 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   store.dispatch(walkActions.setTodaySteps(0));
 
   lastWalkNotificationSteps = -1;
+  markFreshLocalDay(90_000);
 
   await writeDailyStepsForUserDate(activeUserId, today, 0);
   await storageSet(stepScopedKeys(activeUserId, today).lastSyncedStepsCount, 0);
   await storageSet(stepScopedKeys(activeUserId, today).currentLocalDate, today);
   await deleteLegacyUnscopedStepKeys();
+
+  // Drop cached API rows for the new local day so hydrate doesn't merge stale totals.
+  try {
+    queryClient.removeQueries({ queryKey: ["todaySteps", activeUserId] });
+    queryClient.removeQueries({ queryKey: ["walkStats", activeUserId] });
+    queryClient.removeQueries({ queryKey: ["stepProgress", activeUserId] });
+  } catch {
+    // non-fatal
+  }
 
   lastKnownTrackingDate = today;
   await pushWalkNotificationFromCanonicalStore(true);
@@ -721,6 +732,22 @@ export async function tickWalkBackgroundStepPoll(
         "StepEngine",
         `canonicalTodaySteps=${display} backgroundPoll reason=${reason}`,
       );
+      try {
+        const { stepAudit } = require("@/utils/stepAudit") as typeof import("@/utils/stepAudit");
+        stepAudit.noteSensorTick({
+          providerId: stepProviderManager.getActiveProviderId(),
+          calculatedDailySteps: display,
+          previousDailySteps: stepsBefore,
+          eventOrigin:
+            reason === "fgs_tick"
+              ? "fgs"
+              : reason === "resume"
+                ? "resume"
+                : "poll",
+        });
+      } catch {
+        /* optional */
+      }
     }
 
     const stepsAfter = store.getState().raceProgress.todaySteps;
@@ -775,15 +802,22 @@ function initNativeStepEventListener(): void {
         state.updatedAt ?? state.lastUpdatedAt ?? Date.now(),
       ).toISOString();
 
-      // During an active race, native sensor race steps update UI + notification immediately.
-      // Verified HC/HealthKit: do NOT feed sensor into Redux on open/reload (avoids fake bumps);
+      // During an active race, native sensor race steps update UI only when JS is NOT
+      // already polling/watching (dual-writer caused raceSteps to jump from FGS + JS).
       // FGS still updates the ongoing race notification natively.
       if (raceActive && typeof state.raceSteps === "number") {
-        if (stepProviderManager.usesVerifiedStepSource() && isDeviceSensorSource(source)) {
-          if (__DEV__) {
-            console.log("[StepStore] ignored native race sensor — verified source active");
+        if (isDeviceSensorSource(source)) {
+          if (
+            stepProviderManager.usesVerifiedStepSource() ||
+            isJsAuthoritativeStepSession()
+          ) {
+            if (__DEV__) {
+              console.log(
+                "[StepStore] ignored native race sensor — JS/verified session owns Redux",
+              );
+            }
+            return;
           }
-          return;
         }
         feedRaceStepsToStore({
           raceSteps: state.raceSteps,
@@ -798,7 +832,10 @@ function initNativeStepEventListener(): void {
         return;
       }
 
-      if (stepProviderManager.usesVerifiedStepSource() && isDeviceSensorSource(source)) {
+      if (
+        isDeviceSensorSource(source) &&
+        (stepProviderManager.usesVerifiedStepSource() || isJsAuthoritativeStepSession())
+      ) {
         return;
       }
       const today = getLocalDateStr();
@@ -819,6 +856,9 @@ function initNativeStepEventListener(): void {
         return;
       }
       if (stepProviderManager.usesVerifiedStepSource() && isDeviceSensorSource(source)) {
+        return;
+      }
+      if (isJsAuthoritativeStepSession() && isDeviceSensorSource(source)) {
         return;
       }
       const currentToday = s.todaySteps;

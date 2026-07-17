@@ -1,10 +1,10 @@
-import { PermissionsAndroid, Platform } from "react-native";
+import { PermissionsAndroid, Platform, AppState } from "react-native";
 import { requireOptionalExpoNativeModule } from "@/utils/expoNativeModule";
 import Constants from "expo-constants";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotificationConfig";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
-import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import { isJsAuthoritativeStepSession } from "@/services/steps/jsStepOwnership";
 import { getValidSession } from "@/services/authService";
 import {
   getNotificationPermissionStatus,
@@ -33,6 +33,8 @@ type NativeWalkStepState = {
   updatedAt?: number;
   sensorSupported?: boolean;
   sensorTotal?: number;
+  dailyBaseline?: number;
+  raceBaseline?: number;
 };
 
 type NativeModule = {
@@ -237,19 +239,25 @@ class StepTrackingNotificationService {
     let steps = Math.max(0, Math.floor(payload.todaySteps));
     if (Platform.OS === "android") {
       try {
-        const native = await this.getNativeStepState(payload.userId);
-        const today = new Date();
-        const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-        const nativeStale = !!(native?.localDate && native.localDate !== localDate);
-        if (
-          !nativeStale &&
-          native?.todaySteps != null &&
-          steps < native.todaySteps
-        ) {
-          logOngoing(
-            `skippedReason=belowNative incoming=${steps} native=${native.todaySteps}`,
-          );
-          return;
+        // While JS owns the session (foreground watch/race poll), notification follows
+        // Redux/JS — do not keep a higher FGS-only total locked on the tray.
+        const jsOwns =
+          AppState.currentState === "active" && isJsAuthoritativeStepSession();
+        if (!jsOwns) {
+          const native = await this.getNativeStepState(payload.userId);
+          const today = new Date();
+          const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+          const nativeStale = !!(native?.localDate && native.localDate !== localDate);
+          if (
+            !nativeStale &&
+            native?.todaySteps != null &&
+            steps < native.todaySteps
+          ) {
+            logOngoing(
+              `skippedReason=belowNative incoming=${steps} native=${native.todaySteps}`,
+            );
+            return;
+          }
         }
       } catch {
         // proceed with incoming steps
@@ -387,7 +395,27 @@ class StepTrackingNotificationService {
   ): (() => void) | null {
     const native = getNativeModule();
     if (!native?.addListener) return null;
-    const sub = native.addListener("WalkChampStepStateUpdated", handler);
+    const sub = native.addListener("WalkChampStepStateUpdated", (state: NativeWalkStepState) => {
+      try {
+        const { stepAudit } = require("@/utils/stepAudit") as typeof import("@/utils/stepAudit");
+        stepAudit.noteSensorTick({
+          providerId: "android_legacy_sensor",
+          calculatedDailySteps: state?.todaySteps ?? null,
+          calculatedRaceSteps: state?.raceSteps ?? null,
+          rawSensorTotal:
+            typeof state?.sensorTotal === "number" ? state.sensorTotal : null,
+          dailyBaseline:
+            typeof state?.dailyBaseline === "number" ? state.dailyBaseline : null,
+          raceBaseline:
+            typeof state?.raceBaseline === "number" ? state.raceBaseline : null,
+          raceId: state?.activeRaceId ?? null,
+          eventOrigin: "fgs",
+        });
+      } catch {
+        /* optional */
+      }
+      handler(state);
+    });
     return () => sub.remove();
   }
 

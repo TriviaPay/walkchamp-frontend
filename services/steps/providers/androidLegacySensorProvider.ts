@@ -7,6 +7,7 @@ import { Platform } from "react-native";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { storageGet, storageRemove, storageSet } from "@/utils/storage";
 import { stepScopedKeys } from "@/utils/stepScopedStorage";
+import { stepAudit } from "@/utils/stepAudit";
 import { isExpoGo } from "../androidHealthConnectService";
 import {
   clearRaceBaseline,
@@ -56,7 +57,11 @@ let _rawAtSubscription = 0;
 let _userId: string | null = null;
 let _watchStartedAtMs = 0;
 let _ignoredInitialPhantom = false;
+/** Pedometer session steps already discarded as subscribe phantom (cumulative offset). */
+let _watchSessionFloor = 0;
 let _loadedDailyKey: string | null = null;
+/** Calendar day the in-memory counters belong to — prevents carrying yesterday into today. */
+let _boundLocalDate: string | null = null;
 
 function activeUserId(): string | null {
   return _userId;
@@ -76,6 +81,45 @@ function scoped(localDate = getLocalDateKey()) {
     throw new Error("legacy_sensor_unbound");
   }
   return stepScopedKeys(userId, localDate);
+}
+
+/**
+ * If the local calendar day changed, zero daily counters so midnight never
+ * carries yesterday's total into today's storage key.
+ * @returns true when a rollover happened
+ */
+function rollLocalDayIfNeeded(watchFloorHint?: number): boolean {
+  if (!requireBoundUser()) return false;
+  const today = getLocalDateKey();
+  if (_boundLocalDate === today) return false;
+
+  const rolled = _boundLocalDate != null && _boundLocalDate !== today;
+  _boundLocalDate = today;
+  _loadedDailyKey = `${_userId}:${today}`;
+
+  if (!rolled) {
+    // First bind for this process/day — loadDailyState fills from storage.
+    return false;
+  }
+
+  _dailyBaseline = 0;
+  _todaySteps = 0;
+  _rawAtSubscription = 0;
+  _watchSessionFloor =
+    typeof watchFloorHint === "number" && watchFloorHint > 0 ? watchFloorHint : 0;
+  _ignoredInitialPhantom = false;
+  _watchStartedAtMs = Date.now();
+  const keys = scoped(today);
+  void storageSet(keys.currentLocalDate, today);
+  void storageSet(keys.baseline, 0);
+  void storageSet(keys.steps, 0);
+  void storageSet(keys.stepSnapshot, 0);
+  if (__DEV__) {
+    console.log(
+      `[StepProvider] local midnight rollover — todaySteps reset to 0 date=${today}`,
+    );
+  }
+  return true;
 }
 
 export function isAndroidLegacySensorUserBound(): boolean {
@@ -155,6 +199,7 @@ async function loadDailyState(): Promise<void> {
   const keys = scoped(today);
   const dayKey = `${_userId}:${today}`;
   const firstLoadToday = _loadedDailyKey !== dayKey;
+  rollLocalDayIfNeeded();
   _loadedDailyKey = dayKey;
   const storedDate = await storageGet<string>(keys.currentLocalDate);
   const storedBaseline =
@@ -162,8 +207,9 @@ async function loadDailyState(): Promise<void> {
   const storedToday = (await storageGet<number>(keys.steps)) ?? 0;
 
   if (storedDate === today) {
-    _todaySteps = Math.max(_todaySteps, storedToday);
+    _todaySteps = Math.max(_todaySteps, Math.max(0, storedToday));
     _dailyBaseline = storedBaseline;
+    _boundLocalDate = today;
     if (__DEV__ && STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE && firstLoadToday) {
       console.log(
         `[StepBaseline] loaded existing baseline userId=${_userId} localDate=${today} baseline=${storedBaseline}`,
@@ -172,6 +218,7 @@ async function loadDailyState(): Promise<void> {
   } else {
     _dailyBaseline = 0;
     _todaySteps = 0;
+    _boundLocalDate = today;
     await storageSet(keys.currentLocalDate, today);
     await storageSet(keys.baseline, 0);
     await storageSet(keys.steps, 0);
@@ -185,11 +232,12 @@ async function loadDailyState(): Promise<void> {
 
 async function persistDaily(steps: number): Promise<void> {
   if (!requireBoundUser()) return;
+  rollLocalDayIfNeeded();
   const today = getLocalDateKey();
   const keys = scoped(today);
-  _todaySteps = steps;
+  _todaySteps = Math.max(0, Math.floor(steps));
   await storageSet(keys.currentLocalDate, today);
-  await storageSet(keys.steps, steps);
+  await storageSet(keys.steps, _todaySteps);
 }
 
 function alignDailyBaselineForWatch(): void {
@@ -212,24 +260,45 @@ function ensureSubscription(): boolean {
   alignDailyBaselineForWatch();
   _watchStartedAtMs = Date.now();
   _ignoredInitialPhantom = false;
+  _watchSessionFloor = 0;
 
   _sub = ped.watchStepCount((result) => {
     if (!requireBoundUser()) return;
-    const delta = Math.max(0, Math.floor(result.steps));
-    if (delta <= 0) return;
+    const rawDelta = Math.max(0, Math.floor(result.steps));
+    if (rawDelta <= 0) return;
+
+    // Midnight while watch is alive: zero today and re-floor — never persist yesterday's total under today's date.
+    if (rollLocalDayIfNeeded(rawDelta)) {
+      alignDailyBaselineForWatch();
+      if (_watchCallback) {
+        const now = new Date();
+        _watchCallback(buildResult(0, now, now));
+      }
+      return;
+    }
 
     const sinceSubscribeMs = Date.now() - _watchStartedAtMs;
-  // First ticks after subscribe are often phantom (Android reports a burst).
+    // First ticks after subscribe are often phantom (Android reports a burst).
+    // Remember the discarded cumulative value so later ticks don't re-apply it
+    // as todayTotal = baseline + 1 (the classic reload fake +1).
     if (!_ignoredInitialPhantom && sinceSubscribeMs < 5_000) {
       if (
-        delta > 1 ||
-        (delta === 1 && _todaySteps === 0 && _dailyBaseline === 0)
+        rawDelta > 1 ||
+        (rawDelta === 1 && _todaySteps === 0 && _dailyBaseline === 0)
       ) {
         _ignoredInitialPhantom = true;
+        _watchSessionFloor = rawDelta;
         alignDailyBaselineForWatch();
+        stepAudit.notePhantom({
+          providerId: "android_legacy_sensor",
+          eventOrigin: "subscribe",
+          previousDailySteps: _todaySteps,
+          calculatedDailySteps: _todaySteps,
+          reason: `ignored_initial_phantom delta=${rawDelta}`,
+        });
         if (__DEV__) {
           console.log(
-            `[StepProvider] ignored initial phantom delta=${delta} after subscribe`,
+            `[StepProvider] ignored initial phantom delta=${rawDelta} after subscribe`,
           );
         }
         return;
@@ -239,21 +308,40 @@ function ensureSubscription(): boolean {
     // Single +1 phantom within a few seconds of subscribe.
     if (
       !_ignoredInitialPhantom &&
-      delta === 1 &&
+      rawDelta === 1 &&
       sinceSubscribeMs < 4_000
     ) {
       _ignoredInitialPhantom = true;
+      _watchSessionFloor = rawDelta;
       alignDailyBaselineForWatch();
+      stepAudit.notePhantom({
+        providerId: "android_legacy_sensor",
+        eventOrigin: "subscribe",
+        previousDailySteps: _todaySteps,
+        calculatedDailySteps: _todaySteps,
+        reason: "ignored_initial_phantom delta=1",
+      });
       if (__DEV__) {
         console.log("[StepProvider] ignored initial phantom delta=1 after subscribe");
       }
       return;
     }
 
+    const delta = Math.max(0, rawDelta - _watchSessionFloor);
+    if (delta <= 0) return;
+
     const todayTotal = _dailyBaseline + delta;
     if (todayTotal <= _todaySteps) return;
 
     void persistDaily(todayTotal);
+    stepAudit.noteSensorTick({
+      providerId: "android_legacy_sensor",
+      rawSensorTotal: rawDelta,
+      dailyBaseline: _dailyBaseline,
+      calculatedDailySteps: todayTotal,
+      eventOrigin: "watch",
+      phantomEventDetected: false,
+    });
     if (__DEV__) {
       console.log(
         `[StepProvider] legacy sensor delta=${delta} today=${todayTotal} (base=${_dailyBaseline})`,
@@ -418,6 +506,27 @@ export const androidLegacySensorProvider: StepProvider = {
     ensureSubscription();
   },
 
+  /**
+   * Drop a reload/subscribe phantom (+1) that already landed in storage so race
+   * math (today - raceBaseline) does not keep a fake race step.
+   */
+  async discardPhantomTodayBump(confirmedSteps: number): Promise<void> {
+    if (!requireBoundUser()) return;
+    await loadDailyState();
+    const confirmed = Math.max(0, Math.floor(confirmedSteps));
+    const previous = _todaySteps;
+    const ahead = previous - confirmed;
+    if (ahead <= 0 || ahead > STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP) return;
+    await persistDaily(confirmed);
+    _dailyBaseline = confirmed;
+    await storageSet(scoped().baseline, confirmed);
+    if (__DEV__) {
+      console.log(
+        `[StepProvider] discarded phantom today bump ${previous}->${confirmed}`,
+      );
+    }
+  },
+
   async startWatchingSteps(
     callback: (result: StepReadResult) => void,
   ): Promise<() => void> {
@@ -470,9 +579,14 @@ export const androidLegacySensorProvider: StepProvider = {
     if (!requireBoundUser()) return;
     const today = getLocalDateKey();
     const keys = scoped(today);
+    _boundLocalDate = today;
+    _loadedDailyKey = `${_userId}:${today}`;
     _dailyBaseline = 0;
     _todaySteps = 0;
     _rawAtSubscription = 0;
+    _watchSessionFloor = 0;
+    _ignoredInitialPhantom = false;
+    _watchStartedAtMs = Date.now();
     await storageSet(keys.currentLocalDate, today);
     await storageSet(keys.baseline, 0);
     await storageSet(keys.steps, 0);

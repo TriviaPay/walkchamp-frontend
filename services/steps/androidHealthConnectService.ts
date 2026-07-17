@@ -26,6 +26,7 @@
 import type { Permission } from "react-native-health-connect";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { storageGet, storageSet } from "@/utils/storage";
+import { stepAudit } from "@/utils/stepAudit";
 
 const HC_MANIFEST_BLOCKED_KEY = "hc_manifest_read_steps_blocked" as never;
 
@@ -626,6 +627,18 @@ export const androidHCService = {
       hcLog(
         `readStepsForRange ${start.toISOString()} → ${end.toISOString()} = ${steps} method=${readMethod} records=${recordCount} origins=${dataOrigins?.length ?? 0}`,
       );
+
+      try {
+        stepAudit.noteHealthConnectRead({
+          method: readMethod,
+          steps,
+          recordCount,
+          dataOrigins: dataOrigins ?? null,
+          eventOrigin: "poll",
+        });
+      } catch {
+        /* audit optional */
+      }
 
       _cachedTodaySteps = steps;
 

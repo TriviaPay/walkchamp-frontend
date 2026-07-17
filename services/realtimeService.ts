@@ -1,5 +1,7 @@
 import type { Channel } from "pusher-js";
 import { getStoredSession } from "./authService";
+import { markPusherConnected, markPusherEvent } from "./pusherHealth";
+import { perf } from "@/utils/perfLogger";
 
 type PusherClass = typeof import("pusher-js").default;
 type PusherInstance = InstanceType<PusherClass>;
@@ -14,6 +16,7 @@ let _client: PusherInstance | null = null;
 // Thin wrapper so call sites don't need to change when we swap Pusher internals.
 export class ChannelAdapter {
   private _channel: Channel;
+  private _wrappers = new WeakMap<(data: unknown) => void, (data: unknown) => void>();
 
   constructor(channel: Channel) {
     this._channel = channel;
@@ -21,13 +24,24 @@ export class ChannelAdapter {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   bind(eventName: string, handler: (data: any) => void): this {
-    this._channel.bind(eventName, handler);
+    const wrapped = (data: unknown) => {
+      markPusherEvent(eventName);
+      handler(data);
+    };
+    this._wrappers.set(handler, wrapped);
+    this._channel.bind(eventName, wrapped);
     return this;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   unbind(eventName: string, handler?: (data: any) => void): this {
-    this._channel.unbind(eventName, handler);
+    if (handler) {
+      const wrapped = this._wrappers.get(handler) ?? handler;
+      this._channel.unbind(eventName, wrapped);
+      this._wrappers.delete(handler);
+    } else {
+      this._channel.unbind(eventName);
+    }
     return this;
   }
 }
@@ -81,6 +95,19 @@ function getClient(): PusherInstance | null {
         }
       },
     }),
+  });
+
+  _client.connection.bind("connected", () => {
+    markPusherConnected(true);
+    perf.pusherConnected(true);
+  });
+  _client.connection.bind("disconnected", () => {
+    markPusherConnected(false);
+    perf.pusherConnected(false);
+  });
+  _client.connection.bind("unavailable", () => {
+    markPusherConnected(false);
+    perf.pusherConnected(false);
   });
 
   return _client;

@@ -24,6 +24,7 @@ import type {
   StepTrackingStatus,
 } from "./stepProviderTypes";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import { stepAudit } from "@/utils/stepAudit";
 
 const PROVIDER_LABELS: Record<StepProviderId, string> = {
   ios_healthkit: "HealthKit",
@@ -140,11 +141,16 @@ async function selectProvider(forceReselect = false): Promise<StepProvider | nul
   if (!FEATURE_FLAGS.REAL_STEP_TRACKING_ENABLED) return null;
   if (_activeProvider && !forceReselect) return _activeProvider;
 
+  const previousId = _activeProvider?.providerId ?? null;
+
   if (Platform.OS === "ios") {
     const ok = await iosHealthKitProvider.isAvailable();
     _activeProvider = ok ? iosHealthKitProvider : null;
     if (_activeProvider) devLog("selected ios_healthkit");
     if (_activeProvider) sourceLog("[StepSource] selected=healthkit");
+    if (previousId !== (_activeProvider?.providerId ?? null)) {
+      stepAudit.noteSourceSwitch(previousId, _activeProvider?.providerId ?? null);
+    }
     return _activeProvider;
   }
 
@@ -162,6 +168,10 @@ async function selectProvider(forceReselect = false): Promise<StepProvider | nul
     if (legacy?.providerId === "android_legacy_sensor") {
       _activeProvider = legacy;
     }
+  }
+
+  if (previousId !== (_activeProvider?.providerId ?? null)) {
+    stepAudit.noteSourceSwitch(previousId, _activeProvider?.providerId ?? null);
   }
 
   return _activeProvider;
@@ -229,6 +239,11 @@ export const stepProviderManager = {
 
   getActiveProvider(): StepProvider | null {
     return _activeProvider;
+  },
+
+  /** True while JS startWatchingSteps subscription is live (Walk live pipeline). */
+  isLiveWatchActive(): boolean {
+    return _watchStop != null;
   },
 
   getVerificationLevel(): "verified" | "legacy" | "unsupported" {
@@ -492,6 +507,8 @@ export const stepProviderManager = {
     await this.initialize();
     this.stopWatchingSteps();
     if (!_activeProvider?.startWatchingSteps) return () => {};
+    stepAudit.noteProviderStart(_activeProvider.providerId);
+    stepAudit.noteWatchListenerDelta(1, _activeProvider.providerId);
     _watchStop = await _activeProvider.startWatchingSteps(callback);
     return () => this.stopWatchingSteps();
   },
@@ -504,6 +521,8 @@ export const stepProviderManager = {
         if (__DEV__) devLog("stopWatchingSteps cleanup error", e);
       }
       _watchStop = null;
+      stepAudit.noteWatchListenerDelta(-1, _activeProvider?.providerId);
+      stepAudit.noteProviderStop(_activeProvider?.providerId);
     }
     _activeProvider?.stopWatchingSteps?.();
   },
@@ -512,6 +531,7 @@ export const stepProviderManager = {
   async switchToLegacyFallback(reason: string): Promise<boolean> {
     if (Platform.OS !== "android") return false;
     devLog(`switching to legacy fallback: ${reason}`);
+    const previousId = _activeProvider?.providerId ?? null;
     this.stopWatchingSteps();
     const legacyAvail = await androidLegacySensorProvider.isAvailable();
     if (!legacyAvail) return false;
@@ -521,6 +541,15 @@ export const stepProviderManager = {
       if (req.status !== "granted") return false;
     }
     _activeProvider = androidLegacySensorProvider;
+    stepAudit.noteSourceSwitch(previousId, "android_legacy_sensor");
+    stepAudit.log(
+      {
+        provider: "android_counter",
+        eventOrigin: "source_switch",
+        suspiciousIncreaseReason: `fallback:${reason}`,
+      },
+      true,
+    );
     devLog("selected android_legacy_sensor (fallback)");
     return true;
   },

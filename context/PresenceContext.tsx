@@ -1,8 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
-import { getValidSession } from "@/services/authService";
-import { timeoutSignal, PRESENCE_TIMEOUT } from "@/utils/authFetch";
+import { authFetch, PRESENCE_TIMEOUT } from "@/utils/authFetch";
 import { connectPusher, subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
+import { markPusherConnected, markPusherEvent } from "@/services/pusherHealth";
 
 export type UserStatus = "online" | "walking" | "racing" | "spectating" | "away" | "offline";
 
@@ -25,16 +25,9 @@ const PresenceContext = createContext<PresenceContextType | null>(null);
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const EMPTY_COUNTS: PresenceCounts = { online: 0, walking: 0, racing: 0, spectating: 0 };
 
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
-
 async function fetchPresenceSummary(): Promise<PresenceCounts | null> {
-  const session = await getValidSession();
-  if (!session) return null;
   try {
-    const res = await fetch(`${API_BASE}/api/presence/summary`, {
-      signal: timeoutSignal(PRESENCE_TIMEOUT),
-      headers: { Authorization: `Bearer ${session}` },
-    });
+    const res = await authFetch("/api/presence/summary", { timeoutMs: PRESENCE_TIMEOUT });
     if (!res.ok) return null;
     const data = await res.json();
     return data.counts ?? null;
@@ -44,13 +37,10 @@ async function fetchPresenceSummary(): Promise<PresenceCounts | null> {
 }
 
 async function sendHeartbeat(status: UserStatus): Promise<void> {
-  const session = await getValidSession();
-  if (!session) return;
   try {
-    await fetch(`${API_BASE}/api/presence/heartbeat`, {
+    await authFetch("/api/presence/heartbeat", {
       method: "POST",
-      signal: timeoutSignal(PRESENCE_TIMEOUT),
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session}` },
+      timeoutMs: PRESENCE_TIMEOUT,
       body: JSON.stringify({ status }),
     });
   } catch {
@@ -59,13 +49,10 @@ async function sendHeartbeat(status: UserStatus): Promise<void> {
 }
 
 async function sendOffline(): Promise<void> {
-  const session = await getValidSession();
-  if (!session) return;
   try {
-    await fetch(`${API_BASE}/api/presence/offline`, {
+    await authFetch("/api/presence/offline", {
       method: "POST",
-      signal: timeoutSignal(PRESENCE_TIMEOUT),
-      headers: { Authorization: `Bearer ${session}` },
+      timeoutMs: PRESENCE_TIMEOUT,
     });
   } catch {}
 }
@@ -126,10 +113,12 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
   // Pusher real-time presence updates
   useEffect(() => {
     connectPusher();
+    markPusherConnected(true);
     const channel = subscribeToChannel(CHANNELS.PRESENCE);
     if (!channel) return;
 
     channel.bind(EVENTS.PRESENCE_UPDATED, (data: { counts: PresenceCounts }) => {
+      markPusherEvent("presence");
       if (data?.counts) setCounts(data.counts);
     });
 
@@ -140,7 +129,7 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(
     () => ({ counts, userStatus, setUserStatus, formatCount }),
-    [counts, userStatus, setUserStatus, formatCount],
+    [counts, userStatus, setUserStatus],
   );
 
   return (

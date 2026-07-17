@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getTodayKey } from "@/utils/format";
-import { STORAGE_KEYS, storageGet, storageRemove, storageSet } from "@/utils/storage";
+import { STORAGE_KEYS, storageGet, storageRemove, storageSet, storageSetDebounced } from "@/utils/storage";
 
 const LEGACY_UNSCOPED_STEP_KEYS = [
   STORAGE_KEYS.DAILY_STEPS,
@@ -56,7 +56,12 @@ export async function writeDailyStepsForUserDate(
   localDate: string,
   steps: number,
 ): Promise<void> {
-  await storageSet(stepScopedKeys(userId, localDate).steps, Math.max(0, Math.floor(steps)));
+  // Debounce hot step writes; latest value always wins. Flush on background separately.
+  storageSetDebounced(
+    stepScopedKeys(userId, localDate).steps,
+    Math.max(0, Math.floor(steps)),
+    750,
+  );
 }
 
 export async function readWeeklyStepsForUser(

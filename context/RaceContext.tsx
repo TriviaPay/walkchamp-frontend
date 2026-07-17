@@ -36,6 +36,7 @@ import {
   setStepProgressUser,
 } from "@/services/stepProgressCoordinator";
 import { mergeRaceStepsWithNative } from "@/services/stepDisplayMerge";
+import { sanitizeLegacyProviderSteps } from "@/utils/stepAccuracy";
 import type { StepProgressSource } from "@/store/slices/raceProgressSlice";
 import { setWalkBackendSyncPaused } from "@/services/walkSyncCoordinator";
 import {
@@ -457,7 +458,13 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     if (racePhaseRef.current !== "in_race") return;
 
     const now = Date.now();
-    if (!force && now - lastCatchUpMsRef.current < 2500) return;
+    const safeServerEarly = Math.max(0, Math.floor(serverSteps));
+    // Even forced catch-ups debounce unless the server is actually ahead of local.
+    // Stops LiveRace re-enter spam from detail polls every few seconds.
+    if (now - lastCatchUpMsRef.current < 2500) {
+      if (!force) return;
+      if (safeServerEarly <= userStepsRef.current) return;
+    }
     if (catchUpInFlightRef.current) return;
     catchUpInFlightRef.current = true;
     lastCatchUpMsRef.current = now;
@@ -467,7 +474,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       const raceStart = raceStartTimeRef.current;
       const userId = userProfileRef.current.userId;
       if (__DEV__) {
-        console.log(`[LiveRace] re-enter raceId=${raceId} userId=${userId}`);
+        console.log(`[LiveRace] catchUp raceId=${raceId} force=${force} server=${safeServerEarly}`);
       }
       ensureActiveRaceInStore({
         raceId,
@@ -900,6 +907,18 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
             );
           }
           steps = MAX_FIRST_DELTA;
+        }
+
+        // Shared jump guard with daily path — reject OEM/glitch bursts on legacy sensor.
+        if (
+          stepProviderManager.usesRaceBaseline() &&
+          !stepProviderManager.usesVerifiedStepSource()
+        ) {
+          steps = sanitizeLegacyProviderSteps(
+            steps,
+            userStepsRef.current,
+            userStepsRef.current,
+          );
         }
 
         const antiReg = Math.max(userStepsRef.current, steps, raceStepFloorRef.current);

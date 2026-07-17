@@ -1350,7 +1350,7 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: rf(16), fontWeight: "800", marginBottom: 12 },
 
   // Settings list
-  settingsList: { borderRadius: 16, borderWidth: 1, overflow: "hidden", marginBottom: 20 },
+  settingsList: { borderRadius: 14, borderWidth: 1, overflow: "hidden", marginBottom: 20 },
   settingRow:   { flexDirection: "row", alignItems: "center", paddingHorizontal: rs(16), paddingVertical: rs(14), gap: 14 },
   settingIcon:  { width: rs(34), height: rs(34), borderRadius: 10, alignItems: "center", justifyContent: "center" },
   settingLabel:    { flex: 1, fontSize: rf(15), fontWeight: "500" },

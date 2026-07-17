@@ -2,7 +2,13 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AppState, InteractionManager, Platform, type AppStateStatus } from "react-native";
 import { type LeaderboardUser, type WalletTransaction } from "@/utils/mockData";
 import { formatRelativeDate, mapLedgerTypeToUi } from "@/utils/walletLedger";
-import { STORAGE_KEYS, storageGet, storageSet } from "@/utils/storage";
+import {
+  clearCachedWallet,
+  loadCachedWalletBalance,
+  loadCachedWalletTransactions,
+  persistWalletBalance,
+  persistWalletTransactions,
+} from "@/utils/walletCache";
 import { getValidSession } from "@/services/authService";
 import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
 import { getDeviceTimezone, getLocalDateStr, getLocalWeekStart, getLocalMonthStart } from "@/utils/timezone";
@@ -116,6 +122,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const { user, loading: authLoading, sessionToken } = useAuth();
   const hasWalletCacheRef = useRef(false);
   const hasLeaderboardCacheRef = useRef(false);
+  const walletUserIdRef = useRef<string | null>(null);
 
   const [walletBalance, setWalletBalance] = useState(0);
   const [pendingBalance, setPendingBalance] = useState(0);
@@ -127,6 +134,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
 
   const refreshWallet = useCallback(async (opts?: { silent?: boolean }) => {
+    const uid = user?.id;
     const silent = opts?.silent === true || hasWalletCacheRef.current;
     if (!silent) setWalletLoading(true);
     try {
@@ -136,7 +144,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setWalletBalance(data.wallet.availableBalance);
           setPendingBalance(data.wallet.pendingBalance);
           if (data.wallet.currency) setWalletCurrency(data.wallet.currency.toUpperCase());
-          storageSet(STORAGE_KEYS.WALLET, data.wallet.availableBalance);
+          if (uid) persistWalletBalance(uid, data.wallet.availableBalance);
           hasWalletCacheRef.current = true;
         }
 
@@ -186,18 +194,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         if (allTxs.length > 0 || walletTxs.length > 0) {
           setTransactions(allTxs);
-          storageSet(STORAGE_KEYS.TRANSACTIONS, allTxs);
+          if (uid) persistWalletTransactions(uid, allTxs);
         }
       });
     } catch {
-      const cached = await storageGet<number>(STORAGE_KEYS.WALLET);
-      if (cached !== null) setWalletBalance(cached);
-      const cachedTxs = await storageGet<WalletTransaction[]>(STORAGE_KEYS.TRANSACTIONS);
-      if (cachedTxs) setTransactions(cachedTxs);
+      if (uid) {
+        const cached = await loadCachedWalletBalance(uid);
+        if (cached !== null) setWalletBalance(cached);
+        const cachedTxs = await loadCachedWalletTransactions(uid);
+        if (cachedTxs) setTransactions(cachedTxs);
+      }
     } finally {
       setWalletLoading(false);
     }
-  }, []);
+  }, [user?.id]);
 
   const refreshLeaderboard = useCallback(async (
     period = "all_time",
@@ -236,19 +246,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (authLoading || !sessionToken || !user?.id) return;
+    if (authLoading) return;
+
+    const uid = user?.id ?? null;
+    const prev = walletUserIdRef.current;
+
+    // Account switch / logout — never leave previous user's wallet on screen.
+    if (prev && prev !== uid) {
+      setWalletBalance(0);
+      setPendingBalance(0);
+      setTransactions([]);
+      setLeaderboard([]);
+      setUserRank(9999);
+      hasWalletCacheRef.current = false;
+      hasLeaderboardCacheRef.current = false;
+    }
+    walletUserIdRef.current = uid;
+
+    if (!sessionToken || !uid) {
+      if (prev && !uid) clearCachedWallet();
+      return;
+    }
 
     const load = async () => {
-      const cachedWallet = await storageGet<number>(STORAGE_KEYS.WALLET);
+      const cachedWallet = await loadCachedWalletBalance(uid);
       if (cachedWallet !== null) {
         setWalletBalance(cachedWallet);
         hasWalletCacheRef.current = true;
         perf.cacheHit("wallet_balance");
       } else {
+        setWalletBalance(0);
+        hasWalletCacheRef.current = false;
         perf.cacheMiss("wallet_balance");
       }
-      const cachedTxs = await storageGet<WalletTransaction[]>(STORAGE_KEYS.TRANSACTIONS);
+      const cachedTxs = await loadCachedWalletTransactions(uid);
       if (cachedTxs) setTransactions(cachedTxs);
+      else setTransactions([]);
 
       const lbCacheKey = `app_lb_all_time_global_none`;
       const cachedLb = screenCache.getSync<{ leaderboard: LeaderboardUser[]; userRank: number }>(lbCacheKey)
@@ -297,7 +330,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }, __DEV__ ? 3000 : 8000);
       });
     };
-    load();
+    void load();
   }, [authLoading, sessionToken, user?.id, refreshWallet, refreshLeaderboard]);
 
   useEffect(() => {
@@ -340,7 +373,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const addReward = useCallback((amount: number, description: string) => {
     const newBalance = walletBalance + amount;
     setWalletBalance(newBalance);
-    storageSet(STORAGE_KEYS.WALLET, newBalance);
+    if (user?.id) persistWalletBalance(user.id, newBalance);
 
     const tx: WalletTransaction = {
       id: Date.now().toString(),
@@ -352,10 +385,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
     setTransactions((prev) => {
       const updated = [tx, ...prev];
-      storageSet(STORAGE_KEYS.TRANSACTIONS, updated);
+      if (user?.id) persistWalletTransactions(user.id, updated);
       return updated;
     });
-  }, [walletBalance]);
+  }, [walletBalance, user?.id]);
 
   const value = useMemo(
     () => ({

@@ -12,9 +12,11 @@ import { store } from "@/store";
 import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
 import { stepTrackingNotificationService } from "@/services/stepTrackingNotificationService";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import { isJsAuthoritativeStepSession } from "@/services/steps/jsStepOwnership";
 import { getLocalDateStr, isStepSnapshotFromBeforeToday } from "@/utils/timezone";
 import { sanitizeLegacyProviderSteps } from "@/utils/stepAccuracy";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import { stepAudit } from "@/utils/stepAudit";
 
 export function mergeMonotonic(current: number, incoming: number): number {
   return Math.max(Math.max(0, Math.floor(current)), Math.max(0, Math.floor(incoming)));
@@ -32,6 +34,25 @@ export async function mergeWalkStepsWithNative(providerSteps: number): Promise<n
         `[StepStore] skipped native walk merge — verified source=${stepProviderManager.getActiveProviderId()}`,
       );
     }
+    stepAudit.noteMerge({
+      providerId: stepProviderManager.getActiveProviderId(),
+      eventOrigin: "merge",
+      displayMergeInputs: `provider=${provider};native=skipped_verified`,
+      displayMergeResult: provider,
+      calculatedDailySteps: provider,
+    });
+    return provider;
+  }
+
+  // JS live watch / race poll owns UI — FGS is notification-only (no Redux adoption).
+  if (isJsAuthoritativeStepSession()) {
+    stepAudit.noteMerge({
+      providerId: stepProviderManager.getActiveProviderId(),
+      eventOrigin: "merge",
+      displayMergeInputs: `provider=${provider};native=skipped_js_owns`,
+      displayMergeResult: provider,
+      calculatedDailySteps: provider,
+    });
     return provider;
   }
 
@@ -81,6 +102,25 @@ export async function mergeWalkStepsWithNative(providerSteps: number): Promise<n
       `[StepStore] sanitized native walk merge provider=${provider} native=${nativeSteps} merged=${merged} final=${sanitized}`,
     );
   }
+  stepAudit.noteMerge({
+    providerId: stepProviderManager.getActiveProviderId(),
+    eventOrigin: "fgs",
+    displayMergeInputs: `provider=${provider};native=${nativeSteps};merged=${merged}`,
+    displayMergeResult: sanitized,
+    calculatedDailySteps: sanitized,
+  });
+  if (sanitized > provider) {
+    stepAudit.log(
+      {
+        provider: "android_counter",
+        eventOrigin: "fgs",
+        suspiciousIncreaseReason: "native_fgs_ahead_of_provider",
+        calculatedDailySteps: sanitized,
+        previousDailySteps: provider,
+      },
+      true,
+    );
+  }
   return sanitized;
 }
 
@@ -94,6 +134,13 @@ export async function mergeRaceStepsWithNative(providerSteps: number): Promise<n
       console.log(
         `[StepStore] skipped native race merge — verified source=${stepProviderManager.getActiveProviderId()}`,
       );
+    }
+    return provider;
+  }
+
+  if (isJsAuthoritativeStepSession()) {
+    if (__DEV__) {
+      console.log("[StepStore] skipped native race merge — JS session owns race steps");
     }
     return provider;
   }

@@ -10,6 +10,8 @@ import { getTodayKey } from "@/utils/format";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 
 let legacyBumpIgnoreUntilMs = Date.now() + 5_000;
+/** After local midnight, ignore local-cache revive for a short window so UI stays at 0. */
+let freshLocalDayUntilMs = 0;
 
 /** Suppress +1 legacy-sensor ticks after subscribe / tab focus (phantom steps). */
 export function suppressLegacyStepBumps(durationMs = 5_000): void {
@@ -21,6 +23,16 @@ export function suppressLegacyStepBumps(durationMs = 5_000): void {
 
 export function isLegacyStepBumpSuppressed(): boolean {
   return Date.now() < legacyBumpIgnoreUntilMs;
+}
+
+/** Mark that today just rolled over — don't resurrect yesterday's steps from cache. */
+export function markFreshLocalDay(durationMs = 90_000): void {
+  freshLocalDayUntilMs = Math.max(freshLocalDayUntilMs, Date.now() + durationMs);
+  suppressLegacyStepBumps(Math.min(durationMs, 12_000));
+}
+
+export function isFreshLocalDay(): boolean {
+  return Date.now() < freshLocalDayUntilMs;
 }
 
 /** Reject unconfirmed +1 bumps from legacy Android pedometer / native FGS on poll/open. */
@@ -40,12 +52,25 @@ export function shouldIgnoreLegacyPhantomBump(
 
   const inStartup =
     options?.inStartupWindow ?? isLegacyStepBumpSuppressed();
-  // Startup: only reject the classic cold-subscribe 0→1 phantom — not real walking.
-  if (inStartup && current === 0 && incoming > 0 && delta <= STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP) {
+  // Open/reload: reject classic +1 pedometer phantoms at any current count.
+  // (Previously only 0→1 was blocked, so 122→123 still landed as a "fake" step.)
+  if (inStartup && delta > 0 && delta <= STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP) {
     stepEngineLog(
       "StepEngine",
-      `ignoredPhantomBump=true delta=${delta} reason=startup_zero_phantom`,
+      `ignoredPhantomBump=true delta=${delta} reason=startup_reload_phantom current=${current}`,
     );
+    try {
+      const { stepAudit } = require("@/utils/stepAudit") as typeof import("@/utils/stepAudit");
+      stepAudit.notePhantom({
+        providerId: stepProviderManager.getActiveProviderId(),
+        eventOrigin: options?.fromWatch ? "watch" : "poll",
+        previousDailySteps: current,
+        calculatedDailySteps: incoming,
+        reason: "startup_reload_phantom",
+      });
+    } catch {
+      /* optional */
+    }
     return true;
   }
 
@@ -210,8 +235,18 @@ export function hydrateStepDisplayFromSources(params: {
   const verified =
     params.verifiedSource ?? stepProviderManager.usesVerifiedStepSource();
 
+  // Right after midnight: backend/provider 0 is correct — do not revive yesterday via cache.
+  if (isFreshLocalDay() && provider === 0 && backend === 0) {
+    stepEngineLog(
+      "StepEngine",
+      `hydrate freshDay keepZero=true ignoredLocal=${local}`,
+    );
+    return 0;
+  }
+
   // Verified HC/HealthKit may return 0 while still initializing — keep backend/local until provider confirms.
   if (verified && provider === 0) {
+    if (isFreshLocalDay() && backend === 0) return 0;
     const fallback = Math.max(backend, local);
     if (fallback > 0) {
       stepEngineLog(
@@ -223,6 +258,13 @@ export function hydrateStepDisplayFromSources(params: {
   }
 
   if (provider === 0 && backend === 0 && local > 0) {
+    if (isFreshLocalDay()) {
+      stepEngineLog(
+        "StepEngine",
+        `hydrate freshDay dropLocalCache=${local}`,
+      );
+      return 0;
+    }
     stepEngineLog(
       "StepEngine",
       `hydrate kept localCache=${local} pendingProvider=true`,

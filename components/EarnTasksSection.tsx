@@ -16,7 +16,7 @@ import CoinIcon from "@/components/CoinIcon";
 import { useColors } from "@/hooks/useColors";
 import { SkeletonEarnTaskCard } from "@/components/SkeletonRows";
 
-const blueShoe = require("../assets/images/blue-shoe.png") as number;
+const blueShoe = require("../assets/images/footstep.png") as number;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type TaskStatus = "available" | "in_progress" | "claimed";

@@ -1,5 +1,4 @@
 import { AnimatedTrackOverlay } from "@/components/race/AnimatedTrackOverlay";
-import { Asset } from "expo-asset";
 import { BlueShoe } from "@/components/BlueShoe";
 import { getApiBase } from "@/utils/apiUrl";
 import { LinearGradient } from "expo-linear-gradient";
@@ -9,7 +8,6 @@ import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 import { Alert,
   AppState,
   Image,
-  ImageBackground,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -34,6 +32,7 @@ import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useParticipantStepAnimator } from "@/hooks/useParticipantStepAnimator";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { formatRaceSteps, resolveLiveRaceDisplaySteps } from "@/utils/liveRaceDisplay";
+import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
@@ -63,48 +62,15 @@ import { useTopBanner } from "@/context/TopBannerContext";
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
 import { applyParticipantProgressEvent } from "@/services/liveRaceParticipantState";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
-
-
-// ── Track backgrounds ─────────────────────────────────────────────────────────
-
-const TRACK_BACKGROUNDS = {
-  bg:              require("../../assets/images/bg.png"),
-  bg1:             require("../../assets/images/bg1.png"),
-  galaxy:          require("../../assets/images/galaxy.jpeg"),
-  daylightStadium: require("../../assets/images/daylightStadium.jpeg"),
-  forest:          require("../../assets/images/forest.jpeg"),
-  city:            require("../../assets/images/city.jpeg"),
-  lava:            require("../../assets/images/lava.jpeg"),
-  ice:             require("../../assets/images/ice.jpeg"),
-  candy:           require("../../assets/images/candy.jpeg"),
-  farm:            require("../../assets/images/farm.jpeg"),
-  underwater:      require("../../assets/images/underwater.jpeg"),
-  musicfest:       require("../../assets/images/musicfest.jpeg"),
-  // ── New themes ──────────────────────────────────────────────────────────────
-  barbie:       require("../../assets/images/track_barbie.png"),
-  desert:       require("../../assets/images/track_desert.png"),
-  gold:         require("../../assets/images/track_gold.png"),
-  nightforest:  require("../../assets/images/track_nightforest.png"),
-  skykingdom:   require("../../assets/images/track_skykingdom.png"),
-  rain:         require("../../assets/images/track_rain.png"),
-  storm:        require("../../assets/images/track_storm.png"),
-  mountain:     require("../../assets/images/track_mountain.png"),
-  waterfall:    require("../../assets/images/track_waterfall.png"),
-  webcity:      require("../../assets/images/track_webcity.png"),
-  bridge:       require("../../assets/images/track_bridge.png"),
-  newyork:      require("../../assets/images/track_newyork.png"),
-  pirateisland: require("../../assets/images/track_pirateisland.png"),
-  paradise:     require("../../assets/images/track_paradise.png"),
-  musicfest2:   require("../../assets/images/track_musicfest2.png"),
-  // ── Premium race-track skins ────────────────────────────────────────────────
-  chocolate:    require("../../assets/images/track_chocolate.png"),
-  fireworks:    require("../../assets/images/track_fireworks.png"),
-  moon:         require("../../assets/images/track_moon.png"),
-  rainbow_road: require("../../assets/images/track_rainbow_road.png"),
-  runway:       require("../../assets/images/track_runway.png"),
-  toy_race:     require("../../assets/images/track_toy_race.png"),
-  water_park:   require("../../assets/images/track_water_park.png"), } as const;
-type TrackLayoutId = keyof typeof TRACK_BACKGROUNDS;
+import {
+  prefetchTrackTheme,
+  TrackThemeImageBackground,
+} from "@/components/TrackThemeImage";
+import type { TrackThemeImageSet } from "@/utils/trackThemeMedia";
+import {
+  isTrackLayoutId,
+  type TrackLayoutId,
+} from "@/constants/trackLayouts";
 
 const FALLBACK_COLORS = [
   "#FFD700","#C0C0C0","#00E676","#FF8C00","#A855F7",
@@ -153,6 +119,18 @@ interface RaceData {
   prizeTiers: number[];
   spectatorCount: number;
   trackLayout?: string;
+  imageSet?: TrackThemeImageSet | null;
+  imageUrl?: string | null;
+  assetVersion?: number;
+  width?: number;
+  height?: number;
+  challengeEndAt?: string | null;
+  challengeDurationDays?: number | null;
+  timeLeftSeconds?: number | null;
+  daysLeft?: number | null;
+  hoursLeft?: number | null;
+  timeLeftLabel?: string | null;
+  remainingLabel?: string | null;
   coinEntryAmount?: number;
   coinPrizePool?: number;
   coinWinnersPool?: number;
@@ -1341,9 +1319,30 @@ export default function LiveRaceDetailScreen() {
   const [heroHeight,           setHeroHeight]           = useState(400);
   const [isLeaderboardVisible, setIsLeaderboardVisible] = useState(true);
   const [showReactionPicker,   setShowReactionPicker]   = useState(false);
-  const [trackLayoutId, setTrackLayoutId] = useState<TrackLayoutId>(
-    () => (initialTrackLayout && initialTrackLayout in TRACK_BACKGROUNDS ? initialTrackLayout as TrackLayoutId : "bg"),
-  );
+  const [trackLayoutId, setTrackLayoutId] = useState<TrackLayoutId>(() => {
+    if (isTrackLayoutId(initialTrackLayout)) {
+      return initialTrackLayout;
+    }
+    const cachedLayout = initialCache?.race?.trackLayout;
+    if (isTrackLayoutId(cachedLayout)) {
+      return cachedLayout;
+    }
+    return "bg";
+  });
+
+  // Apply nav/cache theme immediately when re-entering (no wait for API).
+  useEffect(() => {
+    if (isTrackLayoutId(initialTrackLayout)) {
+      setTrackLayoutId(initialTrackLayout);
+      return;
+    }
+    if (!raceId || typeof raceId !== "string") return;
+    const cached = screenCache.getSync<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId));
+    const cachedLayout = cached?.race?.trackLayout;
+    if (isTrackLayoutId(cachedLayout)) {
+      setTrackLayoutId(cachedLayout);
+    }
+  }, [raceId, initialTrackLayout]);
 
   const scrollRef     = useRef<ScrollView>(null);
   const cheerScrollRef = useRef<ScrollView>(null);
@@ -1398,9 +1397,26 @@ export default function LiveRaceDetailScreen() {
     : Math.min(240, Math.max(200, screenW * 0.52));
   const leaderboardWShared = useSharedValue(leaderboardW);
 
-  // Pre-cache all track background images so they render instantly on first show
+  // Prefetch as soon as theme code is known (nav param) — don't wait for race JSON.
   useEffect(() => {
-    Asset.loadAsync(Object.values(TRACK_BACKGROUNDS)).catch(() => {}); }, []);
+    prefetchTrackTheme(
+      {
+        code: trackLayoutId,
+        trackLayout: trackLayoutId,
+        imageSet: race?.imageSet ?? null,
+        imageUrl: race?.imageUrl ?? null,
+        assetVersion: race?.assetVersion,
+      },
+      "full",
+    );
+  }, [trackLayoutId, race?.imageSet, race?.imageUrl, race?.assetVersion]);
+
+  // Kick off prefetch immediately on first paint for nav-param themes.
+  useEffect(() => {
+    if (isTrackLayoutId(initialTrackLayout)) {
+      prefetchTrackTheme({ code: initialTrackLayout, trackLayout: initialTrackLayout }, "full");
+    }
+  }, [initialTrackLayout]);
 
   useEffect(() => { leaderboardWShared.value = leaderboardW; }, [leaderboardW, leaderboardWShared]);
   useEffect(() => {
@@ -1541,6 +1557,48 @@ export default function LiveRaceDetailScreen() {
       : sponsoredRemaining < 60 * 60 ? "#FFAA00"
       : "#00E676"
     : undefined;
+
+  /** Multi-day end strip — alternates with tagline every 3s in the same slot. */
+  const challengeEndsLabel = useMemo(
+    () =>
+      getChallengeDaysLeftLabel(
+        {
+          challengeEndAt: race?.challengeEndAt,
+          challengeDurationDays: race?.challengeDurationDays,
+          startedAt: race?.startedAt ?? race?.createdAt,
+          targetSteps: race?.targetSteps,
+          timeLeftSeconds: race?.timeLeftSeconds,
+          daysLeft: race?.daysLeft,
+          hoursLeft: race?.hoursLeft,
+          timeLeftLabel: race?.timeLeftLabel ?? race?.remainingLabel,
+        },
+        now,
+      ),
+    [
+      race?.challengeEndAt,
+      race?.challengeDurationDays,
+      race?.startedAt,
+      race?.createdAt,
+      race?.targetSteps,
+      race?.timeLeftSeconds,
+      race?.daysLeft,
+      race?.hoursLeft,
+      race?.timeLeftLabel,
+      race?.remainingLabel,
+      now,
+    ],
+  );
+
+  const [showChallengeEndsLabel, setShowChallengeEndsLabel] = useState(true);
+  useEffect(() => {
+    if (!challengeEndsLabel || isCompleted) {
+      setShowChallengeEndsLabel(false);
+      return;
+    }
+    setShowChallengeEndsLabel(true);
+    const id = setInterval(() => setShowChallengeEndsLabel((v) => !v), 5000);
+    return () => clearInterval(id);
+  }, [challengeEndsLabel, isCompleted]);
 
   // Feed confirmed step values into the animator (local user + Pusher/backend).
   useEffect(() => {
@@ -1769,8 +1827,8 @@ export default function LiveRaceDetailScreen() {
         }
         setParticipants(Array.isArray(data.participants) ? data.participants : []);
         hydrateInProgressRace(data.race, Array.isArray(data.participants) ? data.participants : []);
-        if (data.race?.trackLayout && data.race.trackLayout in TRACK_BACKGROUNDS) {
-          setTrackLayoutId(data.race.trackLayout as TrackLayoutId);
+        if (isTrackLayoutId(data.race?.trackLayout)) {
+          setTrackLayoutId(data.race.trackLayout);
         }
         if (data.race) {
           void screenCache.set(liveRaceDetailCacheKey(raceId), {
@@ -1819,7 +1877,10 @@ export default function LiveRaceDetailScreen() {
     stepEngineLog("LiveRace", `rejoinStart raceId=${raceId} cachedStateRendered=true`);
 
     return () => {
-      void resumeStepWatching();
+      // Defer so back navigation paints first.
+      setTimeout(() => {
+        void resumeStepWatching();
+      }, 0);
     };
   }, [raceId, race?.status, race?.startedAt, race?.targetSteps, race?.currentPlayers, user?.id, user?.username, resumeStepWatching, refreshTodaySteps]));
 
@@ -1893,8 +1954,8 @@ export default function LiveRaceDetailScreen() {
         if (typeof data.race?.targetSteps === "number" && data.race.targetSteps > 0) {
           setRaceTargetStepsRef.current(data.race.targetSteps);
         }
-        if (data.race?.trackLayout && data.race.trackLayout in TRACK_BACKGROUNDS) {
-          setTrackLayoutId(data.race.trackLayout as TrackLayoutId);
+        if (isTrackLayoutId(data.race?.trackLayout)) {
+          setTrackLayoutId(data.race.trackLayout);
         }
         if (data.race) {
           void screenCache.set(liveRaceDetailCacheKey(raceId), { race: data.race, participants: parts });
@@ -1939,6 +2000,9 @@ export default function LiveRaceDetailScreen() {
       if (cached?.race) {
         setRace(cached.race);
         setParticipants(cached.participants);
+        if (isTrackLayoutId(cached.race.trackLayout)) {
+          setTrackLayoutId(cached.race.trackLayout);
+        }
         if (cached.race.status === "in_progress" || cached.race.status === "completed") {
           raceAlreadyStartedRef.current = true;
         }
@@ -2405,8 +2469,16 @@ export default function LiveRaceDetailScreen() {
       </View>
     ); }
 
-  const trackBackground = TRACK_BACKGROUNDS[trackLayoutId];
   const participantValue = `${participants.length || race.currentPlayers}/${race.maxPlayers}`;
+  const trackMedia = {
+    code: trackLayoutId,
+    trackLayout: trackLayoutId,
+    imageSet: race.imageSet ?? null,
+    imageUrl: race.imageUrl ?? null,
+    assetVersion: race.assetVersion,
+    width: race.width,
+    height: race.height,
+  };
 
   // ── Race Finished banner (shared) ─────────────────────────────────────────
   const allForfeited    = forfeitReason === "all_forfeited";
@@ -2529,7 +2601,13 @@ export default function LiveRaceDetailScreen() {
     >
       {/* ── Header ── */}
       <View style={[s.header, { paddingTop: safeTop + 6 }]}>
-        <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity
+          style={s.backBtn}
+          onPress={() => {
+            // Navigate immediately — do not await voice/step teardown (was causing multi-second lag).
+            router.back();
+          }}
+        >
           <Feather name="chevron-left" size={25} color="#fff" />
         </TouchableOpacity>
         <View style={s.hCenter}>
@@ -2561,10 +2639,21 @@ export default function LiveRaceDetailScreen() {
         )}
       </View>
 
-      {/* ── Subtitle ── */}
-      <View style={s.subtitleWrap}>
-        <Text style={s.subtitle}>Beat your friends. Hit your goal!</Text>
-      </View>
+      {/* ── Centered slot: time-left ↔ beat friends (every 3s) ── */}
+      {!isCompleted ? (
+        <View style={s.taglineSlot}>
+          {showChallengeEndsLabel && challengeEndsLabel ? (
+            <View style={s.endsPill}>
+              <Feather name="calendar" size={13} color="#FFFFFF" />
+              <Text style={s.endsPillText} numberOfLines={1}>{challengeEndsLabel}</Text>
+            </View>
+          ) : (
+            <Text style={s.subtitle} numberOfLines={2}>
+              Beat your friends. Hit your goal!
+            </Text>
+          )}
+        </View>
+      ) : null}
 
       {/* ── Info bar ── */}
       <View style={s.infoBar}>
@@ -2605,20 +2694,17 @@ export default function LiveRaceDetailScreen() {
             onLayout={(e) => setHeroHeight(Math.max(rs(240), e.nativeEvent.layout.height))}
           >
             <Animated.View style={[StyleSheet.absoluteFill, trackAnimatedStyle]}>
-              {/* Pre-render all backgrounds so switching is instant — no image reload */}
-              {(Object.entries(TRACK_BACKGROUNDS) as [TrackLayoutId, number][]).map(([id, src]) => (
-                <ImageBackground
-                  key={id}
-                  source={src}
-                  resizeMode="stretch"
-                  fadeDuration={0}
-                  style={[
-                    StyleSheet.absoluteFill,
-                    id === "bg1" && st.bg1Background,
-                    { opacity: id === trackLayoutId ? 1 : 0 },
-                  ]}
-                />
-              ))}
+              {/* Only the active theme — rendering every track bg made back-nav lag badly. */}
+              <TrackThemeImageBackground
+                key={`${trackLayoutId}:${race.assetVersion ?? 0}`}
+                media={trackMedia}
+                variant="full"
+                contentFit="fill"
+                style={[
+                  StyleSheet.absoluteFill,
+                  trackLayoutId === "bg1" && st.bg1Background,
+                ]}
+              />
               <LinearGradient
                 colors={["#02030A10", "#02030A00", "#02030A18"]}
                 style={StyleSheet.absoluteFill}
@@ -3191,8 +3277,42 @@ const s = StyleSheet.create({
   winnerPrize:  { fontSize: 11, fontWeight: "700", color: "#FFD700", marginTop: 2 },
   winnerBadge:  { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: "#FFD700" },
   winnerBadgeTxt: { fontSize: 10, fontWeight: "800", color: "#000" },
-  subtitleWrap: { paddingHorizontal: 16, paddingTop: 2, paddingBottom: 6 },
-  subtitle: { fontSize: 12, color: "#64748B", fontWeight: "500", textAlign: "center" },
+  taglineSlot: {
+    minHeight: 40,
+    marginTop: 4,
+    marginBottom: 4,
+    paddingHorizontal: 16,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  subtitle: {
+    fontSize: 12,
+    color: "#64748B",
+    fontWeight: "500",
+    textAlign: "center",
+    width: "100%",
+  },
+  endsPill: {
+    alignSelf: "center",
+    maxWidth: "100%",
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: "#1E1535",
+    borderWidth: 1,
+    borderColor: "#3D2A6B",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  endsPillText: {
+    color: "#F5F3FF",
+    fontSize: 11.5,
+    fontWeight: "600",
+    textAlign: "center",
+    flexShrink: 1,
+  },
 });
 
 const st = StyleSheet.create({

@@ -2,7 +2,6 @@ import { LinearGradient } from "expo-linear-gradient";
 import React, { useState, useEffect, useCallback, useMemo, useRef, memo } from "react";
 import {
   ActivityIndicator,
-  ImageBackground,
   InteractionManager,
   Modal,
   Platform,
@@ -11,7 +10,6 @@ import {
   StyleSheet,
   Text,
   View,
-  ImageSourcePropType,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
@@ -35,6 +33,7 @@ import {
 import {
   fetchCoinBalance,
   fetchPurchaseSummary,
+  setCoinBalance,
   type PurchaseHistoryItem,
 } from "@/store/slices/coinsSlice";
 import {
@@ -64,52 +63,9 @@ import {
 import { useColors } from "@/hooks/useColors";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
 import { rf, rs } from "@/utils/responsive";
+import { TrackThemeImageBackground } from "@/components/TrackThemeImage";
 
 const shopImage = require("@/assets/images/shop-icon.png");
-
-// ── Local asset map — same keys as live-detail.tsx ──────────────────────────
-const TRACK_ASSETS: Record<string, ImageSourcePropType> = {
-  bg:              require("@/assets/images/bg.png"),
-  bg1:             require("@/assets/images/bg1.png"),
-  galaxy:          require("@/assets/images/galaxy.jpeg"),
-  daylightStadium: require("@/assets/images/daylightStadium.jpeg"),
-  forest:          require("@/assets/images/forest.jpeg"),
-  city:            require("@/assets/images/city.jpeg"),
-  lava:            require("@/assets/images/lava.jpeg"),
-  ice:             require("@/assets/images/ice.jpeg"),
-  candy:           require("@/assets/images/candy.jpeg"),
-  farm:            require("@/assets/images/farm.jpeg"),
-  underwater:      require("@/assets/images/underwater.jpeg"),
-  musicfest:       require("@/assets/images/musicfest.jpeg"),
-  barbie:          require("@/assets/images/track_barbie.png"),
-  desert:          require("@/assets/images/track_desert.png"),
-  gold:            require("@/assets/images/track_gold.png"),
-  nightforest:     require("@/assets/images/track_nightforest.png"),
-  skykingdom:      require("@/assets/images/track_skykingdom.png"),
-  rain:            require("@/assets/images/track_rain.png"),
-  storm:           require("@/assets/images/track_storm.png"),
-  mountain:        require("@/assets/images/track_mountain.png"),
-  waterfall:       require("@/assets/images/track_waterfall.png"),
-  webcity:         require("@/assets/images/track_webcity.png"),
-  bridge:          require("@/assets/images/track_bridge.png"),
-  newyork:         require("@/assets/images/track_newyork.png"),
-  pirateisland:    require("@/assets/images/track_pirateisland.png"),
-  paradise:        require("@/assets/images/track_paradise.png"),
-  musicfest2:      require("@/assets/images/track_musicfest2.png"),
-  // ── Premium race-track skins ──────────────────────────────────────────────
-  chocolate:       require("@/assets/images/track_chocolate.png"),
-  fireworks:       require("@/assets/images/track_fireworks.png"),
-  moon:            require("@/assets/images/track_moon.png"),
-  rainbow_road:    require("@/assets/images/track_rainbow_road.png"),
-  runway:          require("@/assets/images/track_runway.png"),
-  toy_race:        require("@/assets/images/track_toy_race.png"),
-  water_park:      require("@/assets/images/track_water_park.png"),
-};
-
-function getAsset(key: string | null | undefined): ImageSourcePropType | null {
-  if (!key) return null;
-  return TRACK_ASSETS[key] ?? null;
-}
 
 // Fallback coin pack labels used only when store products haven't loaded yet
 const COIN_PACK_FALLBACKS = COIN_IAP_PRODUCTS.map((p) => ({
@@ -231,7 +187,6 @@ function ThemeCard({ theme, onUnlock, onEquip }: {
 }) {
   const c = useColors();
   const purchaseLoading = useAppSelector((s) => s.trackThemes.purchaseLoading);
-  const asset = getAsset(theme.assetKey ?? theme.code);
   const isLoading = purchaseLoading === theme.code;
 
   const tc = {
@@ -263,31 +218,37 @@ function ThemeCard({ theme, onUnlock, onEquip }: {
 
   const inner = (
     <View style={tc.card}>
-      {/* Image */}
+      {/* Image — remote thumb (or local fallback) */}
       <View style={tc.imgWrap}>
-        {asset ? (
-          <ImageBackground source={asset} style={tc.img} imageStyle={{ borderTopLeftRadius: 10, borderTopRightRadius: 10 }}>
-            {theme.isEquipped && (
-              <View style={tc.equippedBadge}>
-                <Feather name="check" size={10} color="#fff" />
-                <Text style={tc.equippedTxt}>Equipped</Text>
-              </View>
-            )}
-            {theme.locked && (
-              <View style={tc.lockOverlay}>
-                <View style={tc.lockBox}><Feather name="lock" size={13} color="#fff" /></View>
-              </View>
-            )}
-            {!theme.locked && !theme.isEquipped && theme.owned && (
-              <View style={tc.ownedBadge}><Text style={tc.ownedTxt}>Owned</Text></View>
-            )}
-          </ImageBackground>
-        ) : (
-          <View style={[tc.img, tc.imgFallback]}>
-            <Feather name="image" size={22} color="#3A3A5A" />
-            {theme.locked && <View style={[tc.lockBox, { marginTop: 6 }]}><Feather name="lock" size={13} color="#fff" /></View>}
-          </View>
-        )}
+        <TrackThemeImageBackground
+          media={{
+            code: theme.code,
+            trackLayout: theme.code,
+            imageSet: theme.imageSet ?? null,
+            imageUrl: theme.imageUrl ?? null,
+            assetVersion: theme.assetVersion,
+            width: theme.width,
+            height: theme.height,
+          }}
+          variant="thumb"
+          style={tc.img}
+          imageStyle={{ borderTopLeftRadius: 10, borderTopRightRadius: 10 }}
+        >
+          {theme.isEquipped && (
+            <View style={tc.equippedBadge}>
+              <Feather name="check" size={10} color="#fff" />
+              <Text style={tc.equippedTxt}>Equipped</Text>
+            </View>
+          )}
+          {theme.locked && (
+            <View style={tc.lockOverlay}>
+              <View style={tc.lockBox}><Feather name="lock" size={13} color="#fff" /></View>
+            </View>
+          )}
+          {!theme.locked && !theme.isEquipped && theme.owned && (
+            <View style={tc.ownedBadge}><Text style={tc.ownedTxt}>Owned</Text></View>
+          )}
+        </TrackThemeImageBackground>
       </View>
 
       {/* Info + action */}
@@ -348,8 +309,10 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
     }),
     [tabScrollPaddingBottom],
   );
-  const { themes, coinBalance, loading: themesLoading, error: themesError, purchaseError } = useAppSelector((st) => st.trackThemes);
+  const { themes, loading: themesLoading, error: themesError, purchaseError } = useAppSelector((st) => st.trackThemes);
   const { purchaseSummary, summaryLoading, balance: reduxBalance } = useAppSelector((st) => st.coins);
+  // Always prefer global coins slice — never trackThemes.coinBalance (defaults to 0).
+  const coinBalance = reduxBalance?.currentBalance ?? null;
 
   const [activeTab, setActiveTab] = useState<ShopTab>("coins");
   const [balance, setBalance]               = useState<number | null>(null);
@@ -716,7 +679,11 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
     const result = await dispatch(purchaseTrackTheme(code));
     if (purchaseTrackTheme.fulfilled.match(result)) {
       if (__DEV__) console.log("[ShopThemes] unlock success:", code, "balance:", result.payload.coinBalance);
-      setBalance(result.payload.coinBalance);
+      const next = result.payload.coinBalance;
+      if (typeof next === "number") {
+        setBalance(next);
+        dispatch(setCoinBalance(next));
+      }
     } else {
       if (__DEV__) console.log("[ShopThemes] unlock failed:", result.payload);
     }

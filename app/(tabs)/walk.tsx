@@ -21,7 +21,7 @@ import { BlueShoe } from "@/components/BlueShoe";
 import { RaceJoinBadge, JoinProgressOverlay } from "@/components/RaceJoinBadge";
 import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import DateTimePicker from "@react-native-community/datetimepicker";
+import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import {
   ActivityIndicator,
   Animated,
@@ -94,7 +94,7 @@ import {
   FREE_TRACK_CODES,
   isTrackLayoutId,
 } from "@/constants/trackLayouts";
-import { fetchCoinBalance } from "@/store/slices/coinsSlice";
+import { fetchCoinBalance, selectCurrentCoinBalance } from "@/store/slices/coinsSlice";
 import CoinsInfoModal from "@/components/CoinsInfoModal";
 import CoinsStoreModal from "@/components/CoinsStoreModal";
 import ActiveRaceModal, { type ActiveRaceInfo } from "@/components/ActiveRaceModal";
@@ -139,6 +139,16 @@ const SHOP_ON_WALK_TAB = true;
 /** User-scoped screenCache key for challenge/race card statuses. */
 function walkChallengeCacheKey(userId: string): string {
   return `screen_walk_challenges:${userId}`;
+}
+
+/** Instant track theme for live-detail re-entry (avoids default bg flash). */
+function liveRaceNavParams(raceId: string): { id: string; trackLayout?: string } {
+  const cached = screenCache.getSync<{ race?: { trackLayout?: string } }>(
+    `live-race-detail:v1:${raceId}`,
+  );
+  const layout = cached?.race?.trackLayout;
+  if (isTrackLayoutId(layout)) return { id: raceId, trackLayout: layout };
+  return { id: raceId };
 }
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
@@ -521,6 +531,11 @@ function buildScheduledStartAt(days: number, timeIdx: number): Date | null {
 
 function isSameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+/** Local calendar day at noon — avoids timezone edge cases shifting the selected day. */
+function toLocalCalendarDate(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0, 0);
 }
 
 function buildScheduledStartAtFromDate(startDate: Date, timeIdx: number): Date | null {
@@ -1667,15 +1682,15 @@ const pmStyles = StyleSheet.create({
   statCard:    { flex: 1, borderRadius: 12, borderWidth: 1, padding: 12, gap: 4 },
   statValue:   { fontSize: 18, fontWeight: "800" },
   statLabel:   { fontSize: 11 },
-  // Toggles
-  toggleRow:   { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 14, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 12 },
+  // Toggles (rows sit inside settingsList — no per-row border; list owns the card border)
+  toggleRow:   { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
   toggleIcon:  { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   toggleLabel: { flex: 1, fontSize: 15, fontWeight: "500" },
-  // Actions
+  // Actions — Setup Tracking reference card
   actionBtn:       { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 14, borderWidth: 1, padding: 16 },
   actionBtnText:   { flex: 1, fontSize: 15, fontWeight: "600" },
-  // Grouped settings list
-  settingsList:    { borderRadius: 16, borderWidth: 1, overflow: "hidden" },
+  // Grouped settings — same border/radius as Setup Tracking card
+  settingsList:    { borderRadius: 14, borderWidth: 1, overflow: "hidden" },
   // Challenge history
   historyCard:     { borderRadius: 16, borderWidth: 1, overflow: "hidden" },
   historyTitle:    { fontSize: 14, fontWeight: "700", paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10 },
@@ -1742,11 +1757,10 @@ function WalkScreenContent() {
   const { pendingGroupInvites } = useUnread();
   const dispatch = useDispatch<AppDispatch>();
   const themes = useSelector((s: RootState) => s.trackThemes.themes);
-  const themeCoinBalance = useSelector((s: RootState) => s.trackThemes.coinBalance);
   const themesPurchaseLoading = useSelector((s: RootState) => s.trackThemes.purchaseLoading);
   const serverSelectedThemeCode = useSelector((s: RootState) => s.trackThemes.selectedThemeCode);
   const themesLoading = useSelector((s: RootState) => s.trackThemes.loading);
-  const coinBalance = useSelector((s: RootState) => s.coins.balance?.currentBalance ?? themeCoinBalance);
+  const coinBalance = useSelector(selectCurrentCoinBalance);
   const canonicalTodaySteps = useSelector((s: RootState) =>
     s.raceProgress.userId === user?.id
       ? Math.max(0, Math.floor(s.raceProgress.todaySteps))
@@ -1802,7 +1816,7 @@ function WalkScreenContent() {
   const [createPaymentQuote, setCreatePaymentQuote] = useState<CashChallengePaymentQuote | null>(null);
   const [confirmPaymentQuote, setConfirmPaymentQuote] = useState<CashChallengePaymentQuote | null>(null);
   const [challengeGoalType, setChallengeGoalType] = useState<GoalPeriodType>("daily");
-  const [challengeStartDate, setChallengeStartDate] = useState<Date>(() => new Date());
+  const [challengeStartDate, setChallengeStartDate] = useState<Date>(() => toLocalCalendarDate(new Date()));
   const [challengeEndDate, setChallengeEndDate] = useState<Date | null>(null);
   const [challengeStartTimeIdx, setChallengeStartTimeIdx] = useState(0);
   const [challengeNowSetAt, setChallengeNowSetAt] = useState<number | null>(() => Date.now());
@@ -1810,6 +1824,38 @@ function WalkScreenContent() {
   const [showStartDatePicker, setShowStartDatePicker] = useState(false);
   const [showStartTimePicker, setShowStartTimePicker] = useState(false);
   const [showEndDatePicker, setShowEndDatePicker] = useState(false);
+
+  const applyChallengeStartDate = useCallback((raw: Date) => {
+    const today = toLocalCalendarDate(new Date());
+    let next = toLocalCalendarDate(raw);
+    if (next.getTime() < today.getTime()) next = today;
+    setChallengeStartDate(next);
+    // "Now" only applies to today — switch to a real clock slot for future dates
+    setChallengeStartTimeIdx((prev) => {
+      if (!isSameDay(next, new Date()) && TIME_PRESETS_WITH_NOW[prev]?.isNow) {
+        return getNextPresetIndexForNow(TIME_PRESETS_WITH_NOW);
+      }
+      return prev;
+    });
+    if (__DEV__) {
+      console.log(
+        "[CreateChallengeTime] start date selected:",
+        next.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }),
+      );
+    }
+  }, []);
+
+  const onStartDatePickerChange = useCallback((event: DateTimePickerEvent, date?: Date) => {
+    // Android: close the system dialog first so the selection is not lost to unmount races
+    if (Platform.OS === "android") {
+      setShowStartDatePicker(false);
+      if (event.type !== "set" || !date) return;
+      applyChallengeStartDate(date);
+      return;
+    }
+    if (date) applyChallengeStartDate(date);
+  }, [applyChallengeStartDate]);
+
   const challengeIsNowStart =
     challengeModal &&
     isSameDay(challengeStartDate, new Date()) &&
@@ -2360,7 +2406,7 @@ function WalkScreenContent() {
         text: block.target === "race" ? "Open Race" : "Open Waiting Room",
         onPress: () => {
           if (block.target === "race") {
-            router.push({ pathname: "/race/live-detail", params: { id: block.eventId } });
+            router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(block.eventId) });
           } else {
             openSponsoredWaitingRoom(block.eventId);
           }
@@ -2611,7 +2657,7 @@ function WalkScreenContent() {
     pendingRaceActionRef.current = null;
     if (!ar) return;
     if (ar.room_status === "in_progress") {
-      router.push({ pathname: "/race/live-detail", params: { id: ar.room_id } });
+      router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(ar.room_id) });
     } else {
       navToMatchmaking({
         raceId: ar.room_id,
@@ -2773,7 +2819,7 @@ function WalkScreenContent() {
           coinEntryAmount: data.race?.coinEntryAmount ?? 0,
         });
         setChallengeModal(false);
-        setChallengeStartDate(new Date());
+        setChallengeStartDate(toLocalCalendarDate(new Date()));
         setChallengeEndDate(null);
         setChallengeStartTimeIdx(0);
         setChallengeCreating(false);
@@ -2857,15 +2903,18 @@ function WalkScreenContent() {
             {/* Coin pill — tappable to open Coins Info */}
             <TouchableOpacity
               onPress={() => setShowCoinsInfo(true)}
-              style={[styles.coinPill, { backgroundColor: colors.gold + "18", borderColor: colors.gold + "40" }]}
+              style={[styles.coinPill, {
+                backgroundColor: isDark ? colors.gold + "18" : "#FFF4D6",
+                borderColor: isDark ? colors.gold + "40" : "#E6A000",
+              }]}
               activeOpacity={0.78}
               accessibilityLabel="View coin details"
             >
               <CoinIcon size="small" />
-              <Text style={[styles.coinPillText, { color: colors.gold }]}>
+              <Text style={[styles.coinPillText, { color: isDark ? colors.gold : "#B86E00" }]}>
                 {coinBalance != null ? coinBalance.toLocaleString() : "--"}
               </Text>
-              <Feather name="info" size={11} color={colors.gold} style={{ opacity: 0.8, marginLeft: 1 }} />
+              <Feather name="info" size={11} color={isDark ? colors.gold : "#B86E00"} style={{ opacity: 0.85, marginLeft: 1 }} />
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => { setShowProfile(true); }}
@@ -3123,7 +3172,7 @@ function WalkScreenContent() {
                   if (showSponsoredBlockAlert()) return;
                   const s = cs?.status;
                   if (s === "user_hosting_active" || s === "user_joined_active") {
-                    if (cs?.raceId) router.push({ pathname: "/race/live-detail", params: { id: cs.raceId } });
+                    if (cs?.raceId) router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(cs.raceId) });
                     return;
                   }
                   if (s === "user_hosting_waiting" || s === "user_joined_waiting") {
@@ -3184,7 +3233,7 @@ function WalkScreenContent() {
                 const role = cs?.isHost ? "host" : cs?.isParticipant ? "participant" : "none";
                 if (s === "user_hosting_active" || s === "user_joined_active") {
                   if (__DEV__) console.log(`[Walk] Opening challenge: mode=${modeLabel} entry_fee=${opt.fee} status=${s} role=${role} raceId=${cs?.raceId ?? "none"} route=live-detail defaultView=race_track`);
-                  if (cs?.raceId) router.push({ pathname: "/race/live-detail", params: { id: cs.raceId } });
+                  if (cs?.raceId) router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(cs.raceId) });
                   return;
                 }
                 if (s === "user_hosting_waiting" || s === "user_joined_waiting") {
@@ -3327,7 +3376,7 @@ function WalkScreenContent() {
               if (showSponsoredBlockAlert()) return;
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               if (premS === "user_hosting_active" || premS === "user_joined_active") {
-                if (premCs?.raceId) router.push({ pathname: "/race/live-detail", params: { id: premCs.raceId } });
+                if (premCs?.raceId) router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(premCs.raceId) });
                 return;
               }
               if (premS === "user_hosting_waiting" || premS === "user_joined_waiting") {
@@ -3404,10 +3453,10 @@ function WalkScreenContent() {
 
             const handleSponsoredPress = () => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-              if (isRacing && ss)     { router.push({ pathname: "/race/live-detail", params: { id: ss.eventId } }); return; }
+              if (isRacing && ss)     { router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(ss.eventId) }); return; }
               if (isJoinWin && ss)    { openSponsoredWaitingRoom(ss.eventId); return; }
               if (isRegistered && ss) { openSponsoredWaitingRoom(ss.eventId); return; }
-              if (isWatchLive && ss)  { router.push({ pathname: "/race/live-detail", params: { id: ss.eventId } }); return; }
+              if (isWatchLive && ss)  { router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(ss.eventId) }); return; }
               router.push("/sponsored-events");
             };
 
@@ -3964,7 +4013,7 @@ function WalkScreenContent() {
       </Modal>
 
       {/* ── Create Challenge Modal ── */}
-      <Modal visible={challengeModal} animationType={challengeModalAnimated ? "slide" : "none"} presentationStyle="pageSheet" transparent={false} onDismiss={() => { setChallengeModalAnimated(true); setActivePicker(null); setShowCreateConfirm(false); setCreateConfirmChecks([false, false, false]); setChallengeStartDate(new Date()); setChallengeEndDate(null); setChallengeStartTimeIdx(0); setShowStartDatePicker(false); setShowEndDatePicker(false); setChallengeEntryMode("free"); setChallengeGoalType("daily"); setChallengeTargetSteps(getDefaultTargetSteps("daily")); setStepsPickerDraft(getDefaultTargetSteps("daily")); setChallengeMaxPlayers(getDefaultPlayerCount()); setPlayersPickerDraft(getDefaultPlayerCount()); }}>
+      <Modal visible={challengeModal} animationType={challengeModalAnimated ? "slide" : "none"} presentationStyle="pageSheet" transparent={false} onDismiss={() => { setChallengeModalAnimated(true); setActivePicker(null); setShowCreateConfirm(false); setCreateConfirmChecks([false, false, false]); setChallengeStartDate(toLocalCalendarDate(new Date())); setChallengeEndDate(null); setChallengeStartTimeIdx(0); setShowStartDatePicker(false); setShowEndDatePicker(false); setChallengeEntryMode("free"); setChallengeGoalType("daily"); setChallengeTargetSteps(getDefaultTargetSteps("daily")); setStepsPickerDraft(getDefaultTargetSteps("daily")); setChallengeMaxPlayers(getDefaultPlayerCount()); setPlayersPickerDraft(getDefaultPlayerCount()); }}>
         <SafeAreaView edges={["top", "left", "right", "bottom"]} style={[styles.modalWrap, { backgroundColor: colors.background }]}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
@@ -4740,8 +4789,23 @@ function WalkScreenContent() {
           {/* ── Native Start Date Picker ── */}
           {showStartDatePicker && (() => {
             const accent = roomType === "public" ? colors.accent : "#A855F7";
-            const minDate = new Date();
-            const maxDate = new Date(); maxDate.setDate(maxDate.getDate() + 30);
+            const minDate = toLocalCalendarDate(new Date());
+            const maxDate = toLocalCalendarDate(new Date());
+            maxDate.setDate(maxDate.getDate() + 30);
+            // Android: system dialog only — nesting default picker inside a custom overlay
+            // inside RN Modal drops / reverts future date selections.
+            if (Platform.OS === "android") {
+              return (
+                <DateTimePicker
+                  value={toLocalCalendarDate(challengeStartDate)}
+                  mode="date"
+                  display="default"
+                  minimumDate={minDate}
+                  maximumDate={maxDate}
+                  onChange={onStartDatePickerChange}
+                />
+              );
+            }
             return (
               <Pressable
                 style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.65)", justifyContent: "flex-end" }}
@@ -4752,36 +4816,21 @@ function WalkScreenContent() {
                     <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: "center", marginTop: 14, marginBottom: 4 }} />
                     <Text style={{ fontSize: rf(17), fontWeight: "700", color: colors.foreground, textAlign: "center", paddingVertical: 12 }}>Select Start Date</Text>
                     <DateTimePicker
-                      value={challengeStartDate}
+                      value={toLocalCalendarDate(challengeStartDate)}
                       mode="date"
-                      display={Platform.OS === "ios" ? "inline" : "default"}
+                      display="inline"
                       minimumDate={minDate}
                       maximumDate={maxDate}
                       themeVariant={isDark ? "dark" : "light"}
                       accentColor={accent}
-                      onChange={(_, date) => {
-                        if (date) {
-                          setChallengeStartDate(date);
-                          // end date is fully handled by the useEffect — no manual recalc needed
-                          const isNowToday = isSameDay(date, new Date());
-                          if (!isNowToday && challengeStartTimeIdx === 0) {
-                            setChallengeStartTimeIdx(4);
-                          }
-                          if (__DEV__) {
-                            console.log("[CreateChallengeTime] start date selected:", date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }));
-                          }
-                        }
-                        if (Platform.OS === "android") setShowStartDatePicker(false);
-                      }}
+                      onChange={onStartDatePickerChange}
                     />
-                    {Platform.OS === "ios" && (
-                      <TouchableOpacity
-                        style={{ marginHorizontal: 24, paddingVertical: 15, backgroundColor: accent, borderRadius: 16, alignItems: "center" }}
-                        onPress={() => setShowStartDatePicker(false)}
-                      >
-                        <Text style={{ color: "#FFF", fontWeight: "700", fontSize: rf(16) }}>Done</Text>
-                      </TouchableOpacity>
-                    )}
+                    <TouchableOpacity
+                      style={{ marginHorizontal: 24, paddingVertical: 15, backgroundColor: accent, borderRadius: 16, alignItems: "center" }}
+                      onPress={() => setShowStartDatePicker(false)}
+                    >
+                      <Text style={{ color: "#FFF", fontWeight: "700", fontSize: rf(16) }}>Done</Text>
+                    </TouchableOpacity>
                   </View>
                 </Pressable>
               </Pressable>
@@ -4912,7 +4961,7 @@ function WalkScreenContent() {
           setAlreadyHostingModal(null);
           if (!info?.raceId) return;
           if (info.isActiveRace) {
-            router.push({ pathname: "/race/live-detail", params: { id: info.raceId } });
+            router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(info.raceId) });
           } else {
             setActiveRace(info.raceId, true);
             joinRace(entryKeyToFee(info.entryKey), 10, true);

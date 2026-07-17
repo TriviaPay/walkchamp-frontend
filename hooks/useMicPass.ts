@@ -108,9 +108,13 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
     return () => { cancelled = true; };
   }, []);
 
-  // Cleanup voice on unmount.
+  // Cleanup voice after unmount so back navigation is not blocked.
   useEffect(() => {
-    return () => { voiceService.cleanupVoice("unmount"); };
+    return () => {
+      setTimeout(() => {
+        voiceService.cleanupVoice("unmount");
+      }, 0);
+    };
   }, []);
 
   // Mute mic when app goes to background.

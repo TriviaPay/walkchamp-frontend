@@ -3,7 +3,6 @@ import { getTrackCalibration, type TrackCalibration } from "@/components/race/tr
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState,
-  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -12,6 +11,8 @@ import { AppState,
   TextInput,
   useWindowDimensions,
   View} from "react-native";
+import { TrackThemeImageBackground } from "@/components/TrackThemeImage";
+import type { TrackThemeImageSet } from "@/utils/trackThemeMedia";
 import { AppAlert } from "@/components/AppAlert";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
@@ -45,45 +46,11 @@ import {
 import { STORAGE_KEYS, storageGet } from "@/utils/storage";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { rf, rs } from "@/utils/responsive";
+import {
+  isTrackLayoutId,
+  type TrackLayoutId,
+} from "@/constants/trackLayouts";
 
-const TRACK_BACKGROUNDS = {
-  bg: require("../../assets/images/bg.png"),
-  bg1: require("../../assets/images/bg1.png"),
-  galaxy: require("../../assets/images/galaxy.jpeg"),
-  daylightStadium: require("../../assets/images/daylightStadium.jpeg"),
-  forest: require("../../assets/images/forest.jpeg"),
-  city: require("../../assets/images/city.jpeg"),
-  lava:       require("../../assets/images/lava.jpeg"),
-  ice:        require("../../assets/images/ice.jpeg"),
-  candy:      require("../../assets/images/candy.jpeg"),
-  farm:       require("../../assets/images/farm.jpeg"),
-  underwater: require("../../assets/images/underwater.jpeg"),
-  musicfest:  require("../../assets/images/musicfest.jpeg"),
-  // ── New themes ──────────────────────────────────────────────────────────────
-  barbie:       require("../../assets/images/track_barbie.png"),
-  desert:       require("../../assets/images/track_desert.png"),
-  gold:         require("../../assets/images/track_gold.png"),
-  nightforest:  require("../../assets/images/track_nightforest.png"),
-  skykingdom:   require("../../assets/images/track_skykingdom.png"),
-  rain:         require("../../assets/images/track_rain.png"),
-  storm:        require("../../assets/images/track_storm.png"),
-  mountain:     require("../../assets/images/track_mountain.png"),
-  waterfall:    require("../../assets/images/track_waterfall.png"),
-  webcity:      require("../../assets/images/track_webcity.png"),
-  bridge:       require("../../assets/images/track_bridge.png"),
-  newyork:      require("../../assets/images/track_newyork.png"),
-  pirateisland: require("../../assets/images/track_pirateisland.png"),
-  paradise:     require("../../assets/images/track_paradise.png"),
-  musicfest2:   require("../../assets/images/track_musicfest2.png"),
-  // ── Premium race-track skins ────────────────────────────────────────────────
-  chocolate:    require("../../assets/images/track_chocolate.png"),
-  fireworks:    require("../../assets/images/track_fireworks.png"),
-  moon:         require("../../assets/images/track_moon.png"),
-  rainbow_road: require("../../assets/images/track_rainbow_road.png"),
-  runway:       require("../../assets/images/track_runway.png"),
-  toy_race:     require("../../assets/images/track_toy_race.png"),
-  water_park:   require("../../assets/images/track_water_park.png"), } as const;
-type TrackLayoutId = keyof typeof TRACK_BACKGROUNDS;
 const DEFAULT_TARGET_STEPS = 500;
 const REACTIONS = ["🔥", "👏", "👑", "🏃", "🏆", "😮"];
 const FALLBACK_COLORS = ["#FFD700", "#C0C0C0", "#00E676", "#FF8C00", "#A855F7", "#00B4FF", "#FF5C93", "#35D0BA", "#F97316", "#8B5CF6"];
@@ -105,7 +72,13 @@ interface RaceData {
   prizePool?: number;
   prizeTiers?: number[];
   spectatorCount?: number;
-  trackLayout?: string; }
+  trackLayout?: string;
+  imageSet?: TrackThemeImageSet | null;
+  imageUrl?: string | null;
+  assetVersion?: number;
+  width?: number;
+  height?: number;
+}
 
 interface RaceParticipant {
   id: string;
@@ -444,7 +417,15 @@ export default function LiveTrackTab() {
   const isActive = race?.status === "in_progress";
   const isFinished = race?.status === "completed";
   const targetSteps = race?.targetSteps ?? DEFAULT_TARGET_STEPS;
-  const trackBackground = TRACK_BACKGROUNDS[trackLayoutId];
+  const trackMedia = {
+    code: trackLayoutId,
+    trackLayout: trackLayoutId,
+    imageSet: race?.imageSet ?? null,
+    imageUrl: race?.imageUrl ?? null,
+    assetVersion: race?.assetVersion,
+    width: race?.width,
+    height: race?.height,
+  };
 
   const progress = useSharedValue(0);
   const leaderboardProgress = useSharedValue(1);
@@ -508,8 +489,10 @@ export default function LiveTrackTab() {
         void catchUpLiveRaceSteps(me?.currentSteps ?? 0, true);
       }
       // Apply track layout from DB — shared for all users in the race
-      if (detail.race?.trackLayout && detail.race.trackLayout in TRACK_BACKGROUNDS) {
-        setTrackLayoutId(detail.race.trackLayout as TrackLayoutId); } }
+      if (isTrackLayoutId(detail.race?.trackLayout)) {
+        setTrackLayoutId(detail.race.trackLayout);
+      }
+    }
 
     if (commentsRes.ok) {
       const body = (await commentsRes.json()) as { comments?: RaceComment[] };
@@ -970,10 +953,11 @@ export default function LiveTrackTab() {
           onLayout={(e) => setHeroHeight(Math.max(rs(240), e.nativeEvent.layout.height))}
         >
           <Animated.View style={[StyleSheet.absoluteFill, trackAnimatedStyle]}>
-            <ImageBackground
-              source={trackBackground}
-              resizeMode="stretch"
-              fadeDuration={0}
+            <TrackThemeImageBackground
+              key={`${trackLayoutId}:${race?.assetVersion ?? 0}`}
+              media={trackMedia}
+              variant="full"
+              contentFit="fill"
               style={[StyleSheet.absoluteFill, trackLayoutId === "bg1" && st.bg1Background]}
             />
             <LinearGradient

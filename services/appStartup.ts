@@ -45,6 +45,12 @@ export function scheduleAppStartupReady(): void {
       if (ready) return;
       ready = true;
       console.log("[Startup] app ready");
+      try {
+        const { perf } = require("@/utils/perfLogger") as typeof import("@/utils/perfLogger");
+        perf.appStartupReady();
+      } catch {
+        /* optional */
+      }
       resolveReady?.();
       resolveReady = null;
     };

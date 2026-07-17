@@ -1,4 +1,4 @@
-import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import { createSlice, createAsyncThunk, type PayloadAction } from "@reduxjs/toolkit";
 import { getValidSession } from "@/services/authService";
 import { getLocalDateStr } from "@/utils/timezone";
 
@@ -50,7 +50,7 @@ export interface PurchaseSummary {
   purchaseHistory: PurchaseHistoryItem[];
 }
 
-interface CoinsState {
+export interface CoinsState {
   balance: CoinBalance | null;
   transactions: CoinTransaction[];
   purchaseSummary: PurchaseSummary | null;
@@ -136,6 +136,19 @@ const coinsSlice = createSlice({
   name: "coins",
   initialState,
   reducers: {
+    /** Wipe in-memory coins immediately on logout / account switch. */
+    resetCoinBalance(state) {
+      state.balance = null;
+      state.transactions = [];
+      state.purchaseSummary = null;
+      state.loading = false;
+      state.error = null;
+    },
+    /** Seed from THIS user's AsyncStorage — never overwrites a fresher in-memory balance. */
+    hydrateCoinBalance(state, action: PayloadAction<CoinBalance>) {
+      if (state.balance != null) return;
+      state.balance = action.payload;
+    },
     // Set the exact balance from the backend — use this when receiving a Pusher event
     // that includes the authoritative new balance to avoid drift from delta arithmetic.
     setCoinBalance(state, action: { payload: number }) {
@@ -175,7 +188,8 @@ const coinsSlice = createSlice({
   extraReducers: (builder) => {
     builder
       .addCase(fetchCoinBalance.pending, (state) => {
-        state.loading = true;
+        // Keep showing THIS user's cached balance — only mark loading when empty.
+        if (state.balance == null) state.loading = true;
         state.error = null;
       })
       .addCase(fetchCoinBalance.fulfilled, (state, action) => {
@@ -202,7 +216,6 @@ const coinsSlice = createSlice({
       .addCase(fetchPurchaseSummary.fulfilled, (state, action) => {
         state.summaryLoading = false;
         state.purchaseSummary = action.payload;
-        // Keep the simple balance in sync too
         state.balance = {
           currentBalance: action.payload.coinBalance.current,
           lifetimeEarned: action.payload.coinBalance.lifetimeEarned,
@@ -216,5 +229,17 @@ const coinsSlice = createSlice({
   },
 });
 
-export const { setCoinBalance, addEarnedCoins, deductSpentCoins } = coinsSlice.actions;
+export const {
+  resetCoinBalance,
+  hydrateCoinBalance,
+  setCoinBalance,
+  addEarnedCoins,
+  deductSpentCoins,
+} = coinsSlice.actions;
+
+/** Prefer this everywhere — never fall back to trackThemes.coinBalance (defaults to 0). */
+export function selectCurrentCoinBalance(state: { coins: CoinsState }): number | null {
+  return state.coins.balance?.currentBalance ?? null;
+}
+
 export default coinsSlice.reducer;

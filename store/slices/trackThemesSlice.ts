@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
 import { getStoredSession } from "@/services/authService";
+import type { TrackThemeImageSet } from "@/utils/trackThemeMedia";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -15,6 +16,13 @@ export interface TrackTheme {
   coinsNeeded: number;
   assetKey: string | null;
   sortOrder: number;
+  /** Remote R2 variants when configured; null during local-only rollout. */
+  imageSet?: TrackThemeImageSet | null;
+  /** Alias to imageSet.preview when R2 is configured. */
+  imageUrl?: string | null;
+  assetVersion?: number;
+  width?: number;
+  height?: number;
 }
 
 export interface TrackThemesResponse {

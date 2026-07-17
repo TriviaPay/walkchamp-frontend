@@ -150,6 +150,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     dispatch(authActions.localLogout());
     void clearStepSessionForLogout(userId).catch(() => {});
     void storageRemove(STORAGE_KEYS.USER);
+    void storageRemove(STORAGE_KEYS.COIN_BALANCE);
+    void storageRemove(STORAGE_KEYS.WALLET);
+    void storageRemove(STORAGE_KEYS.TRANSACTIONS);
     dynamicIconService.onLogout().catch(() => {});
     getStoredSession()
       .then(({ refresh }) => (refresh ? authLogout(refresh) : clearSession()))

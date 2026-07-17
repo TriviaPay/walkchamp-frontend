@@ -133,10 +133,15 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
   }
   if (isActiveJoined) {
     return (
-      <View style={[bjStyles.pill, { backgroundColor: "rgba(0,230,118,0.22)", borderColor: "rgba(0,230,118,0.55)" }]}>
-        <View style={[bjStyles.dot, { backgroundColor: "#00E676" }]} />
-        <Text style={[bjStyles.text, { color: "#00E676" }]}>RACING</Text>
-      </View>
+      <LinearGradient
+        colors={["#00E676", "#00C853"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+        style={bjStyles.racingPill}
+      >
+        <View style={bjStyles.racingDot} />
+        <Text style={bjStyles.racingText}>RACING</Text>
+      </LinearGradient>
     );
   }
   if (isForfeited) {
@@ -185,6 +190,11 @@ const bjStyles = StyleSheet.create({
   // Active HOSTING pill — solid amber gradient, compact
   activeHostPill: { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5 },
   activeHostText: { fontSize: 11, fontWeight: "800", color: "#1C0A00" },
+
+  // Active RACING pill — solid green (same weight as Join), only for racing
+  racingPill: { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5 },
+  racingDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: "#004D26" },
+  racingText: { fontSize: 11, fontWeight: "900", color: "#003820", letterSpacing: 0.3 },
 });
 
 // ── JoinProgressOverlay ───────────────────────────────────────────────────────

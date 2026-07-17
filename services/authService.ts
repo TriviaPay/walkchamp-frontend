@@ -38,6 +38,20 @@ async function secureDelete(key: string) {
 export const SESSION_KEY = "wc_session";
 export const REFRESH_KEY = "wc_refresh";
 
+/**
+ * In-memory session mirror — SecureStore remains source of truth on disk.
+ * authFetch / high-frequency sync must not hit SecureStore on every call.
+ * undefined = not warmed yet; null = explicitly empty after clear/load.
+ */
+let memSession: string | null | undefined = undefined;
+let memRefresh: string | null | undefined = undefined;
+let sessionWarmPromise: Promise<{ session: string | null; refresh: string | null }> | null = null;
+
+function setMemorySession(session: string | null, refresh: string | null): void {
+  memSession = session;
+  memRefresh = refresh;
+}
+
 export async function saveSession(sessionToken: string, refreshToken: string) {
   if (!refreshToken?.trim()) {
     if (__DEV__) {
@@ -46,6 +60,9 @@ export async function saveSession(sessionToken: string, refreshToken: string) {
       );
     }
   }
+  // Update memory first so concurrent authFetch callers see the new token
+  // without waiting for SecureStore I/O.
+  setMemorySession(sessionToken, refreshToken?.trim() ? refreshToken : null);
   await Promise.all([
     secureSet(SESSION_KEY, sessionToken),
     refreshToken?.trim() ? secureSet(REFRESH_KEY, refreshToken) : secureDelete(REFRESH_KEY),
@@ -68,14 +85,42 @@ export async function saveSession(sessionToken: string, refreshToken: string) {
 export async function clearSession() {
   const { cancelProactiveTokenRefresh } = await import("./tokenRefreshScheduler");
   cancelProactiveTokenRefresh();
+  setMemorySession(null, null);
+  sessionWarmPromise = null;
   await Promise.all([secureDelete(SESSION_KEY), secureDelete(REFRESH_KEY)]);
 }
 export async function getStoredSession() {
-  const [session, refresh] = await Promise.all([
-    secureGet(SESSION_KEY),
-    secureGet(REFRESH_KEY),
-  ]);
-  return { session, refresh };
+  // Fast path: warmed memory (including explicit nulls after logout).
+  if (memSession !== undefined && memRefresh !== undefined) {
+    try {
+      const { perf } = require("@/utils/perfLogger") as typeof import("@/utils/perfLogger");
+      perf.secureStoreRead("memory");
+    } catch {
+      /* perf optional */
+    }
+    return { session: memSession, refresh: memRefresh };
+  }
+
+  // Single-flight warm from SecureStore on cold start / first access.
+  if (!sessionWarmPromise) {
+    sessionWarmPromise = (async () => {
+      try {
+        const { perf } = require("@/utils/perfLogger") as typeof import("@/utils/perfLogger");
+        perf.secureStoreRead("disk");
+      } catch {
+        /* perf optional */
+      }
+      const [session, refresh] = await Promise.all([
+        secureGet(SESSION_KEY),
+        secureGet(REFRESH_KEY),
+      ]);
+      setMemorySession(session, refresh);
+      return { session, refresh };
+    })().finally(() => {
+      sessionWarmPromise = null;
+    });
+  }
+  return sessionWarmPromise;
 }
 
 // ── Errors ───────────────────────────────────────────────────────────────────

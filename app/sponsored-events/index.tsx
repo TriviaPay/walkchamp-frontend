@@ -27,7 +27,13 @@ import {
   type SponsoredEventDto,
 } from "@/utils/sponsoredEventsApi";
 import { useAppDispatch } from "@/store/hooks";
-import { fetchCoinBalance } from "@/store/slices/coinsSlice";
+import { useSelector } from "react-redux";
+import type { RootState } from "@/store";
+import {
+  fetchCoinBalance,
+  selectCurrentCoinBalance,
+  setCoinBalance as setReduxCoinBalance,
+} from "@/store/slices/coinsSlice";
 import { screenCache } from "@/utils/screenCache";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { perf } from "@/utils/perfLogger";
@@ -42,9 +48,9 @@ import { PublicProfileModal } from "@/components/PublicProfileModal";
 import type { PublicProfileInitialData } from "@/components/PublicProfileModal";
 
 const COIN_IMG     = require("@/assets/images/game-coin.png");
-const BLUE_SHOE_IMG = require("@/assets/images/blue-shoe.png");
+const BLUE_SHOE_IMG = require("@/assets/images/footstep.png");
 
-// ── Color palettes ─────────────────────────────────────────────────────────────
+// ── Color palettes (purple + teal only — alternate by card index) ─────────────
 const PALETTES = [
   {
     grad:   ["#0e0025", "#1d004e", "#091832"] as [string, string, string],
@@ -60,20 +66,10 @@ const PALETTES = [
     bar:    ["#00B4FF", "#00E5C8"] as [string, string],
     reg:    ["#007ACC", "#00B4FF", "#00E5C8"] as [string, string, string],
   },
-  {
-    grad:   ["#1a0e00", "#2e1800", "#0f100a"] as [string, string, string],
-    glow1:  "#FF8C00", glow2: "#FFD700",
-    border: "#FF8C0045", shadow: "#FF8C00",
-    bar:    ["#FF6B35", "#FFD700"] as [string, string],
-    reg:    ["#E06000", "#FF8C00", "#FFD700"] as [string, string, string],
-  },
 ];
-function paletteFor(scheduledStartAt: string | null): typeof PALETTES[0] {
-  if (!scheduledStartAt) return PALETTES[0];
-  const day = new Date(scheduledStartAt).getDay(); // 0=Sun, 6=Sat
-  if (day === 6) return PALETTES[0]; // Saturday → purple
-  if (day === 0) return PALETTES[1]; // Sunday  → teal/cyan
-  return PALETTES[0];
+/** Alternate purple / teal so consecutive cards stay distinct. */
+function paletteFor(index: number): typeof PALETTES[0] {
+  return PALETTES[Math.abs(index) % PALETTES.length];
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -535,7 +531,7 @@ const m = StyleSheet.create({
 interface CardProps {
   ev: SponsoredEvent;
   index: number;
-  coinBalance: number;
+  coinBalance: number | null;
   onRegister:    (id: string) => void;
   onLeave:       (id: string) => void;
   onShare:       (ev: SponsoredEvent) => void;
@@ -545,7 +541,7 @@ interface CardProps {
 
 function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAvatarPress, busy }: CardProps) {
   const router       = useRouter();
-  const pal          = paletteFor(ev.scheduledStartAt);
+  const pal          = paletteFor(index);
   const countdown    = useCountdown(ev.scheduledStartAt);
   const endCountdown = useCountdown(ev.endsAt ?? null);
   const sc           = statusConfig(ev);
@@ -553,7 +549,7 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
   const almostFull = slotPct >= 0.8 && slotPct < 1;
   const registrationOpen = isSponsoredRegistrationOpen(ev);
   const waitingRoomOpen = canOpenSponsoredWaitingRoom(ev);
-  const noCoins    = registrationOpen && coinBalance < ev.entryCoinFee;
+  const noCoins    = registrationOpen && coinBalance != null && coinBalance < ev.entryCoinFee;
 
   const startDate = ev.scheduledStartAt ? new Date(ev.scheduledStartAt) : null;
   const dayStr    = startDate
@@ -809,19 +805,20 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
             </View>
 
           ) : noCoins ? (
-            <View style={{ borderRadius: 14, overflow: "hidden", borderWidth: 1.5, borderColor: "#FF555560" }}>
+            <View style={card.registerBtn}>
               <LinearGradient
-                colors={["#FF22221F", "#88111128"]}
-                style={{ flexDirection: "row", alignItems: "center", gap: rs(10), paddingVertical: rs(13), paddingHorizontal: rs(14) }}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                colors={["#7A4A00", "#B8860B", "#C9A227"]}
+                style={card.registerGrad}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
               >
-                <Image source={COIN_IMG} style={{ width: 24, height: 24 }} resizeMode="contain" />
+                <Image source={COIN_IMG} style={{ width: 18, height: 18 }} resizeMode="contain" />
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: rf(14), fontWeight: "800", color: "#FF8888", letterSpacing: 0.1 }}>
-                    Need {(ev.entryCoinFee - coinBalance).toLocaleString()} more coins
+                  <Text style={card.registerText}>
+                    Need {(ev.entryCoinFee - (coinBalance ?? 0)).toLocaleString()} more coins
                   </Text>
+                  <Text style={card.registerSub}>Earn or buy coins to register</Text>
                 </View>
-                <Feather name="shopping-bag" size={15} color="#FF7777" />
               </LinearGradient>
             </View>
 
@@ -867,21 +864,54 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
 const SPONSORED_EVENTS_CACHE_KEY = "screen_sponsored_events";
 const SPONSORED_EVENTS_TTL_MS = 60_000;
 
-type SponsoredEventsCache = { events: SponsoredEvent[]; coinBalance: number };
+type SponsoredEventsCache = { userId: string; events: SponsoredEvent[] };
+
+function sponsoredCacheKey(userId: string | null | undefined): string {
+  return userId ? `${SPONSORED_EVENTS_CACHE_KEY}:${userId}` : SPONSORED_EVENTS_CACHE_KEY;
+}
 
 export default function SponsoredEventsScreen() {
   const router = useRouter();
   const dispatch = useAppDispatch();
   const { markContentReady } = useScreenMountPerf("SponsoredEvents");
-  const cachedSync = screenCache.getSync<SponsoredEventsCache>(SPONSORED_EVENTS_CACHE_KEY);
-  const [events, setEvents]               = useState<SponsoredEvent[]>(cachedSync?.events ?? []);
-  const [coinBalance, setCoinBalance]      = useState(cachedSync?.coinBalance ?? 0);
-  const [loading, setLoading]              = useState(cachedSync === null);
+  const userId = useSelector((s: RootState) => s.auth.user?.id ?? null);
+  // Coins: Redux only — never restore previous account from screen cache.
+  const coinBalance = useSelector(selectCurrentCoinBalance);
+  const cacheKey = sponsoredCacheKey(userId);
+  const cachedSync = userId
+    ? screenCache.getSync<SponsoredEventsCache>(cacheKey)
+    : null;
+  const initialEvents =
+    cachedSync && cachedSync.userId === userId ? cachedSync.events : [];
+  const [events, setEvents]               = useState<SponsoredEvent[]>(initialEvents);
+  const [loading, setLoading]              = useState(initialEvents.length === 0);
   const [refreshing, setRefreshing]        = useState(false);
   const [generating, setGenerating]        = useState(false);
   const [fetchError, setFetchError]        = useState<string | null>(null);
   const [registeringId, setRegisteringId]  = useState<string | null>(null);
   const [leavingId, setLeavingId]          = useState<string | null>(null);
+  const eventsUserIdRef = useRef<string | null>(userId);
+
+  // Account switch: drop previous user's event list instantly; coins come from Redux reset.
+  useEffect(() => {
+    if (eventsUserIdRef.current === userId) return;
+    eventsUserIdRef.current = userId;
+    screenCache.invalidate(SPONSORED_EVENTS_CACHE_KEY);
+    if (!userId) {
+      setEvents([]);
+      setLoading(false);
+      return;
+    }
+    const scoped = screenCache.getSync<SponsoredEventsCache>(sponsoredCacheKey(userId));
+    if (scoped && scoped.userId === userId) {
+      setEvents(scoped.events);
+      setLoading(false);
+    } else {
+      setEvents([]);
+      setLoading(true);
+    }
+    void dispatch(fetchCoinBalance());
+  }, [userId, dispatch]);
 
   // Modal state
   const [registerModal, setRegisterModal] = useState<{ visible: boolean; ev: SponsoredEvent | null }>({ visible: false, ev: null });
@@ -923,8 +953,11 @@ export default function SponsoredEventsScreen() {
       }
       const { events: list, coinBalance: balance } = parseSponsoredEventsResponse(raw);
       setEvents(list);
-      setCoinBalance(balance);
-      void screenCache.set(SPONSORED_EVENTS_CACHE_KEY, { events: list, coinBalance: balance });
+      // API balance is for the active session only — keep global Redux in sync.
+      if (typeof balance === "number") dispatch(setReduxCoinBalance(balance));
+      if (userId) {
+        void screenCache.set(sponsoredCacheKey(userId), { userId, events: list });
+      }
       markContentReady();
       if (__DEV__) {
         console.log(`[SponsoredEvents] fetched count=${list.length} coinBalance=${balance}`);
@@ -935,7 +968,7 @@ export default function SponsoredEventsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [markContentReady]);
+  }, [markContentReady, dispatch, userId]);
 
   const autoGenerate = useCallback(async () => {
     setGenerating(true);
@@ -947,24 +980,28 @@ export default function SponsoredEventsScreen() {
   }, [fetchEvents]);
 
   useFocusEffect(useCallback(() => {
-    void screenCache.get<SponsoredEventsCache>(SPONSORED_EVENTS_CACHE_KEY).then((cached) => {
-      if (!cached) return;
-      perf.cacheHit(SPONSORED_EVENTS_CACHE_KEY);
-      setEvents(cached.events);
-      setCoinBalance(cached.coinBalance);
-      setLoading(false);
-      markContentReady();
-    });
-    if (!apiFetchAllowed(SPONSORED_EVENTS_CACHE_KEY, SPONSORED_EVENTS_TTL_MS)) {
+    // Events only from THIS user's scoped cache — never push cached coins into Redux.
+    if (userId) {
+      void screenCache.get<SponsoredEventsCache>(sponsoredCacheKey(userId)).then((cached) => {
+        if (!cached || cached.userId !== userId) return;
+        perf.cacheHit(sponsoredCacheKey(userId));
+        setEvents(cached.events);
+        setLoading(false);
+        markContentReady();
+      });
+    }
+    void dispatch(fetchCoinBalance());
+    const throttleKey = sponsoredCacheKey(userId);
+    if (!apiFetchAllowed(throttleKey, SPONSORED_EVENTS_TTL_MS)) {
       perf.apiSkipped("sponsored_events_focus");
       return;
     }
-    markApiFetched(SPONSORED_EVENTS_CACHE_KEY);
-    if (screenCache.getSync(SPONSORED_EVENTS_CACHE_KEY) === null) {
+    markApiFetched(throttleKey);
+    if (userId && screenCache.getSync(sponsoredCacheKey(userId)) === null) {
       setLoading(true);
     }
     void fetchEvents();
-  }, [fetchEvents, markContentReady]));
+  }, [fetchEvents, markContentReady, dispatch, userId]));
 
   useEffect(() => {
     if (!loading && events.length === 0 && !fetchError) {
@@ -1054,7 +1091,7 @@ export default function SponsoredEventsScreen() {
         return;
       }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      if (data.coinBalance !== undefined) setCoinBalance(data.coinBalance);
+      if (data.coinBalance !== undefined) dispatch(setReduxCoinBalance(data.coinBalance));
       dispatch(fetchCoinBalance());
       fetchEvents();
       // Navigate to the right destination based on race state
@@ -1087,7 +1124,7 @@ export default function SponsoredEventsScreen() {
       const data = await res.json() as { success?: boolean; error?: string; coinBalance?: number };
       setLeaveModal({ visible: false, ev: null });
       if (!res.ok) { Alert.alert("Error", data.error ?? "Failed to leave."); return; }
-      if (data.coinBalance !== undefined) setCoinBalance(data.coinBalance);
+      if (data.coinBalance !== undefined) dispatch(setReduxCoinBalance(data.coinBalance));
       dispatch(fetchCoinBalance());
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       fetchEvents();
@@ -1118,7 +1155,9 @@ export default function SponsoredEventsScreen() {
         </View>
         <View style={sc.balancePill}>
           <Image source={COIN_IMG} style={{ width: 17, height: 17 }} resizeMode="contain" />
-          <Text style={sc.balanceText}>{coinBalance.toLocaleString()}</Text>
+          <Text style={sc.balanceText}>
+            {coinBalance != null ? coinBalance.toLocaleString() : "—"}
+          </Text>
         </View>
       </LinearGradient>
 

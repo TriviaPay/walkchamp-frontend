@@ -122,11 +122,11 @@ class StepPollingService {
       }
 
       if (raceSteps === this._lastEmittedSteps) {
-        if (__DEV__) console.log(`[RaceSync] unchanged raceSteps:${raceSteps} (re-emit)`);
-      } else {
-        this._unchangedTicks = 0;
+        if (__DEV__) console.log(`[RaceSync] unchanged raceSteps:${raceSteps}`);
+        return;
       }
 
+      this._unchangedTicks = 0;
       this._lastEmittedSteps = raceSteps;
       ctx.onUpdate(raceSteps, deviceTotal);
     } catch (e) {

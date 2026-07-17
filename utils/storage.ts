@@ -26,6 +26,8 @@ export const STORAGE_KEYS = {
   USER: "walkchamp_user",
   DAILY_STEPS: "walkchamp_daily_steps",
   WALLET: "walkchamp_wallet",
+  /** Last known coin balance (CoinBalance JSON) — seeds Redux before network. */
+  COIN_BALANCE: "walkchamp_coin_balance",
   TRANSACTIONS: "walkchamp_transactions",
   STREAK: "walkchamp_streak",
   TOTAL_STEPS: "walkchamp_total_steps",

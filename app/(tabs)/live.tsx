@@ -13,7 +13,6 @@ import {
   AppState,
   Dimensions,
   FlatList,
-  ImageBackground,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -27,6 +26,7 @@ import {
   getRoomCountLabel,
   type DateGroup,
 } from "@/utils/raceDateGrouping";
+import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
 import { AppAlert } from "@/components/AppAlert";
 import { Image } from "expo-image";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
@@ -42,25 +42,8 @@ import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf, rs } from "@/utils/responsive";
 import { PublicProfileModal } from "@/components/PublicProfileModal";
 import type { PublicProfileInitialData } from "@/components/PublicProfileModal";
-
-// ── Track background images (static requires — RN bundler requirement) ────────
-const TRACK_BG: Record<string, number> = {
-  bg:              require("../../assets/images/bg1.png") as number,
-  bg1:             require("../../assets/images/bg1.png") as number,
-  webcity:         require("../../assets/images/track_webcity.png") as number,
-  daylightStadium: require("../../assets/images/daylightStadium.jpeg") as number,
-  farm:            require("../../assets/images/farm.jpeg") as number,
-  forest:          require("../../assets/images/forest.jpeg") as number,
-  galaxy:          require("../../assets/images/galaxy.jpeg") as number,
-  candy:           require("../../assets/images/candy.jpeg") as number,
-  ice:             require("../../assets/images/ice.jpeg") as number,
-  lava:            require("../../assets/images/lava.jpeg") as number,
-  musicfest:       require("../../assets/images/musicfest.jpeg") as number,
-  underwater:      require("../../assets/images/underwater.jpeg") as number,
-};
-function getTrackBg(layout: string): number {
-  return TRACK_BG[layout] ?? (TRACK_BG["bg"] as number);
-}
+import { TrackThemeImageBackground, prefetchTrackThemes, prefetchTrackTheme } from "@/components/TrackThemeImage";
+import type { TrackThemeImageSet } from "@/utils/trackThemeMedia";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const NEON_PURPLE  = "#7C3AED";
@@ -139,8 +122,19 @@ export interface LiveRace {
   createdAt: string;
   players: LiveRacePlayer[];
   trackLayout: string;
+  imageSet?: TrackThemeImageSet | null;
+  imageUrl?: string | null;
+  assetVersion?: number;
+  width?: number;
+  height?: number;
   reactionCounts: Record<string, number>;
   elapsedSeconds: number;
+  challengeEndAt?: string | null;
+  challengeDurationDays?: number;
+  timeLeftSeconds?: number | null;
+  daysLeft?: number | null;
+  hoursLeft?: number | null;
+  timeLeftLabel?: string | null;
 }
 
 export function formatElapsed(seconds: number): string {
@@ -195,10 +189,41 @@ function mapRaceRow(r: Record<string, unknown>): LiveRace {
     createdAt: (r.createdAt as string) ?? new Date().toISOString(),
     players: (r.players as LiveRacePlayer[]) ?? [],
     trackLayout: (r.trackLayout as string) ?? "bg",
+    imageSet: (r.imageSet as TrackThemeImageSet | null | undefined) ?? null,
+    imageUrl: (r.imageUrl as string | null | undefined) ?? null,
+    assetVersion: (r.assetVersion as number | undefined) ?? (r.asset_version as number | undefined),
+    width: (r.width as number | undefined),
+    height: (r.height as number | undefined),
     prizePoolCents: (r.prizePoolCents as number) ?? 0,
     entryAmountCents: (r.entryAmountCents as number) ?? 0,
     reactionCounts: (r.reactionCounts as Record<string, number>) ?? {},
     elapsedSeconds: computeElapsed(r.startedAt as string | null, r.completedAt as string | null),
+    challengeEndAt:
+      (r.challengeEndAt as string | null | undefined) ??
+      (r.challenge_end_at as string | null | undefined) ??
+      null,
+    challengeDurationDays:
+      (r.challengeDurationDays as number | undefined) ??
+      (r.challenge_duration_days as number | undefined) ??
+      0,
+    timeLeftSeconds:
+      (r.timeLeftSeconds as number | undefined) ??
+      (r.time_left_seconds as number | undefined) ??
+      null,
+    daysLeft:
+      (r.daysLeft as number | undefined) ??
+      (r.days_left as number | undefined) ??
+      null,
+    hoursLeft:
+      (r.hoursLeft as number | undefined) ??
+      (r.hours_left as number | undefined) ??
+      null,
+    timeLeftLabel:
+      (r.timeLeftLabel as string | undefined) ??
+      (r.time_left_label as string | undefined) ??
+      (r.remainingLabel as string | undefined) ??
+      (r.remaining_label as string | undefined) ??
+      null,
   };
 }
 
@@ -292,7 +317,7 @@ const SPONSORED_PALETTES = [
   { grad: ["#1a0800", "#2e1200", "#0f0a00"] as [string, string, string], border: "#FF8C0045", bar: "#FF8C00", glow: "#FF8C00", btnGrad: ["#CC4400", "#FF6600", "#FFB000"] as [string, string, string] },
 ];
 const COIN_IMG_SRC = require("../../assets/images/game-coin.png");
-const BLUE_SHOE_SRC = require("../../assets/images/blue-shoe.png");
+const BLUE_SHOE_SRC = require("../../assets/images/footstep.png");
 
 // ── Sponsored event card (premium) ────────────────────────────────────────────
 function SponsoredEventRow({ evt, index }: { evt: ScheduledEvt; index: number }) {
@@ -538,6 +563,16 @@ function RankCircle({ rank, colors }: { rank: number; colors: ReturnType<typeof 
   );
 }
 
+/** Image-2 style purple strip on Live list cards — centered on the card. */
+function ChallengeEndsPill({ label }: { label: string }) {
+  return (
+    <View style={st.endsPill}>
+      <Feather name="calendar" size={13} color="#FFFFFF" />
+      <Text style={st.endsPillText} numberOfLines={1}>{label}</Text>
+    </View>
+  );
+}
+
 function RaceCardBase({
   race,
   colors,
@@ -579,7 +614,23 @@ function RaceCardBase({
     } catch { /* silent — optimistic count stays */ }
     sendingReaction.current = false;
   }, [race.id]);
-  const bgImg = getTrackBg(race.trackLayout);
+  const trackMedia = {
+    code: race.trackLayout,
+    trackLayout: race.trackLayout,
+    imageSet: race.imageSet ?? null,
+    imageUrl: race.imageUrl ?? null,
+    assetVersion: race.assetVersion,
+    width: race.width,
+    height: race.height,
+  };
+
+  const openLiveRace = useCallback(() => {
+    prefetchTrackTheme(trackMedia, "full");
+    router.push({
+      pathname: "/race/live-detail",
+      params: { id: race.id, trackLayout: race.trackLayout },
+    });
+  }, [race.id, race.trackLayout, race.imageSet, race.imageUrl, race.assetVersion, race.width, race.height]);
 
   const entryColor: Record<string, string> = {
     Free: NEON_GREEN,
@@ -612,6 +663,18 @@ function RaceCardBase({
     ? `${(race.coinEntryAmount * race.playerCount).toLocaleString()} coins`
     : race.prizePool > 0 ? `$${race.prizePool.toFixed(2)}` : null;
   const elapsedLabel = isFinished ? "Duration" : "Elapsed";
+  const challengeEndsLabel = !isFinished
+    ? getChallengeDaysLeftLabel({
+        challengeEndAt: race.challengeEndAt,
+        challengeDurationDays: race.challengeDurationDays,
+        startedAt: race.startedAt ?? race.createdAt,
+        targetSteps: race.targetSteps,
+        timeLeftSeconds: race.timeLeftSeconds,
+        daysLeft: race.daysLeft,
+        hoursLeft: race.hoursLeft,
+        timeLeftLabel: race.timeLeftLabel,
+      })
+    : null;
 
   // Mirror backend numWinners: 2 players→1 winner, 3→2, 4+→3
   const numWin = race.playerCount <= 2 ? 1 : race.playerCount === 3 ? 2 : 3;
@@ -637,8 +700,9 @@ function RaceCardBase({
       ]}
     >
       {/* ── Card hero image ─────────────────────────────────────────────── */}
-      <ImageBackground
-        source={bgImg}
+      <TrackThemeImageBackground
+        media={trackMedia}
+        variant="preview"
         style={st.cardHero}
         imageStyle={{ opacity: isDark ? 0.45 : 0.18, borderRadius: 0 }}
       >
@@ -710,7 +774,7 @@ function RaceCardBase({
             )}
           </View>
         </LinearGradient>
-      </ImageBackground>
+      </TrackThemeImageBackground>
 
       {/* ── Stats row ───────────────────────────────────────────────────── */}
       <View style={[st.statsRow, { borderBottomColor: colors.border }]}>
@@ -750,6 +814,10 @@ function RaceCardBase({
           </>
         )}
       </View>
+
+      {challengeEndsLabel ? (
+        <ChallengeEndsPill label={challengeEndsLabel} />
+      ) : null}
 
       {/* ── Players ─────────────────────────────────────────────────────── */}
       {top3.length > 0 && (
@@ -900,7 +968,7 @@ function RaceCardBase({
       {/* ── CTA button ──────────────────────────────────────────────────── */}
       {isFinished ? (
         <TouchableOpacity
-          onPress={() => router.push({ pathname: "/race/live-detail", params: { id: race.id, trackLayout: race.trackLayout } })}
+          onPress={openLiveRace}
           activeOpacity={0.85}
           style={st.ctaBtn}
         >
@@ -937,7 +1005,7 @@ function RaceCardBase({
         </TouchableOpacity>
       ) : isMyRace ? (
         <TouchableOpacity
-          onPress={() => router.push({ pathname: "/race/live-detail", params: { id: race.id, trackLayout: race.trackLayout } })}
+          onPress={openLiveRace}
           activeOpacity={0.85}
           style={st.ctaBtn}
         >
@@ -952,7 +1020,7 @@ function RaceCardBase({
         </TouchableOpacity>
       ) : (
         <TouchableOpacity
-          onPress={() => router.push({ pathname: "/race/live-detail", params: { id: race.id, trackLayout: race.trackLayout } })}
+          onPress={openLiveRace}
           activeOpacity={0.85}
           style={st.ctaBtn}
         >
@@ -1115,6 +1183,20 @@ export default function LiveTab() {
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const liveChallengesRef = useRef<LiveRace[]>([]);
   useEffect(() => { liveChallengesRef.current = liveChallenges; }, [liveChallenges]);
+
+  // Warm full-size theme images while browsing the list so live race opens instantly.
+  useEffect(() => {
+    prefetchTrackThemes(
+      liveChallenges.map((r) => ({
+        code: r.trackLayout,
+        trackLayout: r.trackLayout,
+        imageSet: r.imageSet ?? null,
+        imageUrl: r.imageUrl ?? null,
+        assetVersion: r.assetVersion,
+      })),
+      "full",
+    );
+  }, [liveChallenges]);
   const loadRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [profileInitialData, setProfileInitialData] = useState<PublicProfileInitialData | undefined>();
@@ -1658,6 +1740,28 @@ const st = StyleSheet.create({
 
   // Stats row
   statsRow:         { flexDirection: "row", alignItems: "center", paddingHorizontal: rs(14), paddingVertical: rs(12), borderBottomWidth: 1 },
+  endsPill: {
+    marginHorizontal: rs(14),
+    marginTop: rs(10),
+    marginBottom: rs(4),
+    paddingHorizontal: rs(14),
+    paddingVertical: rs(9),
+    borderRadius: 999,
+    backgroundColor: "#1E1535",
+    borderWidth: 1,
+    borderColor: "#3D2A6B",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  endsPillText: {
+    color: "#F5F3FF",
+    fontSize: rf(11.5),
+    fontWeight: "600",
+    textAlign: "center",
+    flexShrink: 1,
+  },
   statItem:         { flex: 1, alignItems: "center" },
   statValueRow:     { flexDirection: "row", alignItems: "center", gap: 4 },
   statValue:        { fontSize: rf(13), fontWeight: "800" },

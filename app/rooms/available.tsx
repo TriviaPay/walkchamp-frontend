@@ -32,6 +32,8 @@ import { JoinProgressOverlay } from "@/components/RaceJoinBadge";
 import JoinWithCodeModal, { type JoinWithCodeResult } from "@/components/JoinWithCodeModal";
 import { PublicProfileModal, type PublicProfileInitialData } from "@/components/PublicProfileModal";
 import { TRACK_LAYOUT_OPTIONS } from "@/constants/trackLayouts";
+import { TrackThemeImage } from "@/components/TrackThemeImage";
+import type { TrackThemeImageSet } from "@/utils/trackThemeMedia";
 import CoinIcon from "@/components/CoinIcon";
 import {
   CashChallengePaymentBreakdown,
@@ -71,6 +73,11 @@ interface UpcomingRoom {
   challenge_end_at: string | null;
   selected_track_theme_id: string;
   theme_name: string;
+  imageSet?: TrackThemeImageSet | null;
+  imageUrl?: string | null;
+  assetVersion?: number;
+  width?: number;
+  height?: number;
   is_private: boolean;
   requires_code: boolean;
   host_user_id: string;
@@ -103,6 +110,12 @@ interface Room {
   country_code: string | null;
   country_label: string;
   theme_name: string;
+  selected_track_theme_id?: string;
+  imageSet?: TrackThemeImageSet | null;
+  imageUrl?: string | null;
+  assetVersion?: number;
+  width?: number;
+  height?: number;
   is_private: boolean;
   requires_code: boolean;
   created_at: string;
@@ -177,8 +190,10 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
   const isCash = !isCoins && room.entry_fee > 0;
   const accent = isCash ? CASH_BLUE : isCoins ? GOLD : GREEN;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trackSource = (TRACK_LAYOUT_OPTIONS.find((t) => t.label === room.theme_name)?.source ?? require("@/assets/images/bg.png")) as any;
+  const trackCode =
+    room.selected_track_theme_id?.trim() ||
+    TRACK_LAYOUT_OPTIONS.find((t) => t.label === room.theme_name)?.id ||
+    "bg";
 
   const prizePoolDollars = isCash ? room.reward_pool : 0;
   const prizePoolCoins = isCoins ? (room.coin_entry_amount ?? 0) * room.current_players : 0;
@@ -197,7 +212,19 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
 
   return (
     <View style={[cc.wrap, { borderColor: accent + "50" }]}>
-      <Image source={trackSource} style={cc.bgImage} resizeMode="cover" />
+      <TrackThemeImage
+        media={{
+          code: trackCode,
+          trackLayout: trackCode,
+          imageSet: room.imageSet ?? null,
+          imageUrl: room.imageUrl ?? null,
+          assetVersion: room.assetVersion,
+          width: room.width,
+          height: room.height,
+        }}
+        variant="preview"
+        style={cc.bgImage}
+      />
       <View style={cc.overlay} />
       <LinearGradient colors={["transparent", "rgba(0,0,0,0.93)"]} style={cc.bottomGrad} />
       <LinearGradient colors={[accent + "DD", "transparent"]} style={cc.topGlow} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} />
@@ -280,7 +307,7 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
 
         <View style={[cc.chipsRow, { flexWrap: "wrap" }]}>
           <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4 }]}>
-            <Image source={require("@/assets/images/blue-shoe.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
+            <Image source={require("@/assets/images/footstep.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
             <Text style={cc.chipText}>{fmtSteps(room.target_steps)} steps</Text>
           </View>
           {!isCash && !isCoins && (
@@ -813,7 +840,7 @@ function UpcomingRoomCard({ room, currentUserId, onRegister, onCancel, onCancelR
       <View style={[ucard.statsRow, { borderColor: accent + "20" }]}>
         <View style={ucard.statChip}>
           <View style={[ucard.statIconWrap, { backgroundColor: GREEN + "18" }]}>
-            <Image source={require("@/assets/images/blue-shoe.png")} style={{ width: 14, height: 14 }} resizeMode="contain" />
+            <Image source={require("@/assets/images/footstep.png")} style={{ width: 14, height: 14 }} resizeMode="contain" />
           </View>
           <Text style={ucard.statValue}>{room.target_steps >= 1000 ? `${(room.target_steps / 1000).toFixed(0)}k` : room.target_steps}</Text>
           <Text style={ucard.statLabel}>steps</Text>
@@ -1013,8 +1040,7 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
   const isHost      = !isSponsored && !!currentUserId && currentUserId === room.host_user_id;
   const accent      = isSponsored ? "#7C3AFF" : isCash ? CASH_BLUE : isCoins ? GOLD : GREEN;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trackSource = (TRACK_LAYOUT_OPTIONS.find((t) => t.id === room.selected_track_theme_id)?.source ?? require("@/assets/images/bg.png")) as any;
+  const trackCode = room.selected_track_theme_id?.trim() || "bg";
 
   // Prize pool — full entry fees collected (no platform deduction from pool)
   const prizePoolDollars = isCash ? Math.round(room.entry_fee * room.registered_count) : 0;
@@ -1033,7 +1059,19 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
 
   return (
     <View style={[cc.wrap, { borderColor: accent + "50" }]}>
-      <Image source={trackSource} style={cc.bgImage} resizeMode="cover" />
+      <TrackThemeImage
+        media={{
+          code: trackCode,
+          trackLayout: trackCode,
+          imageSet: room.imageSet ?? null,
+          imageUrl: room.imageUrl ?? null,
+          assetVersion: room.assetVersion,
+          width: room.width,
+          height: room.height,
+        }}
+        variant="preview"
+        style={cc.bgImage}
+      />
       <View style={cc.overlay} />
       <LinearGradient colors={["transparent", "rgba(0,0,0,0.93)"]} style={cc.bottomGrad} />
       <LinearGradient colors={[accent + "DD", "transparent"]} style={cc.topGlow} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} />
@@ -1137,7 +1175,7 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
         <View style={[cc.chipsRow, { flexWrap: "wrap" }]}>
           {/* Steps — always shown */}
           <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4 }]}>
-            <Image source={require("@/assets/images/blue-shoe.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
+            <Image source={require("@/assets/images/footstep.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
             <Text style={cc.chipText}>{room.target_steps >= 1000 ? `${(room.target_steps / 1000).toFixed(0)}k` : room.target_steps} steps</Text>
           </View>
           {/* Reward split chip — free cards only; cash + coins fee moved to badge row */}

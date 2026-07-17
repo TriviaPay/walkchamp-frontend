@@ -24,6 +24,10 @@ import { getLocalDateStr } from "@/utils/timezone";
 import { useOwnedTrackLayouts } from "@/hooks/useOwnedTrackLayouts";
 import { useDispatch, useSelector } from "react-redux";
 import { fetchTrackThemes } from "@/store/slices/trackThemesSlice";
+import {
+  fetchCoinBalance,
+  selectCurrentCoinBalance,
+} from "@/store/slices/coinsSlice";
 import type { AppDispatch, RootState } from "@/store";
 import { isTrackLayoutId } from "@/constants/trackLayouts";
 
@@ -247,7 +251,7 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
   const [playerCount, setPlayerCount] = useState(10);
   const [targetSteps, setTargetSteps] = useState(1000);
   const [trackLayout, setTrackLayout] = useState("bg");
-  const [coinBalance, setCoinBalance] = useState<number | null>(null);
+  const coinBalance = useSelector(selectCurrentCoinBalance);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCoinsStore, setShowCoinsStore] = useState(false);
@@ -255,30 +259,16 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
 
   const shakeAnim = useRef(new Animated.Value(0)).current;
 
-  const fetchBalance = useCallback(async () => {
-    const session = await getValidSession();
-    if (!session) return;
-    try {
-      const res = await fetch(`${getApiBase()}/api/coins/balance?localDate=${getLocalDateStr()}`, {
-        headers: { Authorization: `Bearer ${session}` },
-      });
-      if (res.ok) {
-        const data = await res.json() as { currentBalance?: number };
-        setCoinBalance(data.currentBalance ?? 0);
-      }
-    } catch {}
-  }, []);
-
   useEffect(() => {
     if (visible) {
-      fetchBalance();
+      void dispatch(fetchCoinBalance());
       setError(null);
       // Refresh owned tracks + persisted selectedThemeCode
       void dispatch(fetchTrackThemes());
     } else {
       lastAppliedServerThemeRef.current = null;
     }
-  }, [visible, fetchBalance, dispatch]);
+  }, [visible, dispatch]);
 
   // Auto-select persisted track when modal opens / themes refresh.
   useEffect(() => {
@@ -564,8 +554,8 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
       {/* Coins Store — opened from "Go to Shop" */}
       <CoinsStoreModal
         visible={showCoinsStore}
-        onClose={() => { setShowCoinsStore(false); void fetchBalance(); }}
-        onCoinsAdded={() => { void fetchBalance(); }}
+        onClose={() => { setShowCoinsStore(false); void dispatch(fetchCoinBalance()); }}
+        onCoinsAdded={() => { void dispatch(fetchCoinBalance()); }}
       />
     </Modal>
   );

@@ -21,7 +21,8 @@ import { rf, rs } from "@/utils/responsive";
 import { useAuth } from "@/context/AuthContext";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { AppAlert } from "@/components/AppAlert";
-import { TRACK_LAYOUT_OPTIONS } from "@/constants/trackLayouts";
+import { TrackThemeImage } from "@/components/TrackThemeImage";
+import type { TrackThemeImageSet } from "@/utils/trackThemeMedia";
 import { PublicProfileModal, type PublicProfileInitialData } from "@/components/PublicProfileModal";
 import CoinIcon from "@/components/CoinIcon";
 import { useApp } from "@/context/AppContext";
@@ -54,6 +55,11 @@ interface UpcomingRoom {
   challenge_end_at: string | null;
   selected_track_theme_id: string;
   theme_name: string;
+  imageSet?: TrackThemeImageSet | null;
+  imageUrl?: string | null;
+  assetVersion?: number;
+  width?: number;
+  height?: number;
   is_private: boolean;
   requires_code: boolean;
   host_user_id: string;
@@ -110,8 +116,7 @@ function DetailCard({
   const isHost      = !isSponsored && !!currentUserId && currentUserId === room.host_user_id;
   const accent      = isSponsored ? "#7C3AFF" : isCash ? CASH_BLUE : isCoins ? GOLD : GREEN;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trackSource = (TRACK_LAYOUT_OPTIONS.find((t) => t.id === room.selected_track_theme_id)?.source ?? require("@/assets/images/bg.png")) as any;
+  const trackCode = room.selected_track_theme_id?.trim() || "bg";
 
   const entryLabel = isSponsored ? "Sponsored" : isCash ? `$${room.entry_fee.toFixed(2)}` : isCoins ? `${room.coin_entry_amount.toLocaleString()} coins` : "Free";
   const entryColor = isSponsored ? "#C47BFF" : isCash ? GOLD : isCoins ? GOLD : GREEN;
@@ -128,7 +133,19 @@ function DetailCard({
 
   return (
     <View style={[dc.wrap, { borderColor: accent + "50" }]}>
-      <Image source={trackSource} style={dc.bgImage} resizeMode="cover" />
+      <TrackThemeImage
+        media={{
+          code: trackCode,
+          trackLayout: trackCode,
+          imageSet: room.imageSet ?? null,
+          imageUrl: room.imageUrl ?? null,
+          assetVersion: room.assetVersion,
+          width: room.width,
+          height: room.height,
+        }}
+        variant="preview"
+        style={dc.bgImage}
+      />
       <View style={dc.overlay} />
       <LinearGradient colors={["transparent", "rgba(0,0,0,0.94)"]} style={dc.bottomGrad} />
       <LinearGradient colors={[accent + "DD", "transparent"]} style={dc.topGlow} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} />
@@ -229,7 +246,7 @@ function DetailCard({
         <View style={[dc.statsRow, { borderColor: accent + "22" }]}>
           <View style={dc.statChip}>
             <View style={[dc.statIconWrap, { backgroundColor: GREEN + "18" }]}>
-              <Image source={require("@/assets/images/blue-shoe.png")} style={{ width: 14, height: 14 }} resizeMode="contain" />
+              <Image source={require("@/assets/images/footstep.png")} style={{ width: 14, height: 14 }} resizeMode="contain" />
             </View>
             <Text style={dc.statValue}>{room.target_steps >= 1000 ? `${(room.target_steps / 1000).toFixed(0)}k` : room.target_steps}</Text>
             <Text style={dc.statLabel}>steps</Text>

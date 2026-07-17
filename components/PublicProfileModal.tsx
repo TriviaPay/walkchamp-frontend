@@ -27,7 +27,7 @@ import { useColors } from "@/hooks/useColors";
 import { authFetch } from "@/utils/authFetch";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const blueShoeImg = require("@/assets/images/blue-shoe.png") as number;
+const blueShoeImg = require("@/assets/images/footstep.png") as number;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const gameCoinImg = require("@/assets/images/game-coin.png") as number;
 
