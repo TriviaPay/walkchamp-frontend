@@ -84,6 +84,7 @@ interface PublicProfileStats {
   coinsBalance: number;
   racesPlayed: number;
   raceWins: number;
+  totalWinning: number;
   currentStreakDays: number;
 }
 
@@ -98,6 +99,12 @@ function formatStat(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, "") + "K";
   return n.toLocaleString();
+}
+
+function formatWinning(amount: number): string {
+  if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (amount >= 10_000) return `$${(amount / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  return `$${amount.toFixed(2)}`;
 }
 
 // ── Skeleton row ──────────────────────────────────────────────────────────────
@@ -144,7 +151,7 @@ function StatsSection({
   if (loading && !stats) {
     return (
       <View style={ss.wrap}>
-        {[0, 1, 2, 3, 4].map((i) => (
+        {[0, 1, 2, 3, 4, 5].map((i) => (
           <SkeletonRow key={i} borderColor={colors.border} />
         ))}
       </View>
@@ -184,6 +191,11 @@ function StatsSection({
       icon:  { kind: "emoji", char: "🏆" },
       label: "Race Wins",
       value: String(stats.raceWins),
+    },
+    {
+      icon:  { kind: "emoji", char: "💰" },
+      label: "Total Winning",
+      value: formatWinning(stats.totalWinning),
     },
     {
       icon:  { kind: "emoji", char: "🔥" },
@@ -309,6 +321,7 @@ export function PublicProfileModal({
             coinsBalance: number;
             racesPlayed: number;
             raceWins: number;
+            totalWinning: number;
             currentStreakDays: number;
           };
         };
@@ -332,6 +345,7 @@ export function PublicProfileModal({
             coinsBalance:     data.stats.coinsBalance,
             racesPlayed:      data.stats.racesPlayed,
             raceWins:         data.stats.raceWins,
+            totalWinning:     data.stats.totalWinning ?? 0,
             currentStreakDays: data.stats.currentStreakDays,
           };
           statsCache.set(userId, { stats: s, at: Date.now() });

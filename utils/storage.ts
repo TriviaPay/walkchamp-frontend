@@ -22,6 +22,37 @@ export async function storageRemove(key: string): Promise<void> {
   } catch {}
 }
 
+type DebouncedWrite = {
+  value: unknown;
+  timer: ReturnType<typeof setTimeout> | null;
+};
+
+const debouncedWrites = new Map<string, DebouncedWrite>();
+
+/** Coalesce rapid writes — latest value wins. Flush on background via storageFlushDebounced. */
+export function storageSetDebounced<T>(key: string, value: T, delayMs = 750): void {
+  const existing = debouncedWrites.get(key);
+  if (existing?.timer) clearTimeout(existing.timer);
+  const entry: DebouncedWrite = { value, timer: null };
+  entry.timer = setTimeout(() => {
+    debouncedWrites.delete(key);
+    void storageSet(key, value);
+  }, delayMs);
+  debouncedWrites.set(key, entry);
+}
+
+/** Persist all pending debounced writes immediately (e.g. app background). */
+export async function storageFlushDebounced(): Promise<void> {
+  const pending = Array.from(debouncedWrites.entries());
+  debouncedWrites.clear();
+  await Promise.all(
+    pending.map(async ([key, entry]) => {
+      if (entry.timer) clearTimeout(entry.timer);
+      await storageSet(key, entry.value);
+    }),
+  );
+}
+
 export const STORAGE_KEYS = {
   USER: "walkchamp_user",
   DAILY_STEPS: "walkchamp_daily_steps",

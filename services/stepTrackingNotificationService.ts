@@ -11,6 +11,7 @@ import {
 } from "@/services/permissions/notificationPermissionService";
 import { formatWalkOngoingNotificationBody } from "@/services/permissions/androidNotificationAccess";
 import { hasOngoingNotificationAccess } from "@/services/permissions/notificationGate";
+import { stepProviderManager } from "@/services/steps/stepProviderManager";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
