@@ -6,6 +6,7 @@ import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import {
   ActivityIndicator,
   AppState,
+  Image,
   Modal,
   Platform,
   ScrollView,
@@ -58,34 +59,36 @@ const PAYMENT_RESULT_PRIORITY: Record<PaymentResultStatus, number> = {
   failed: 1,
 };
 
+const REFERRAL_ART = require("../../assets/images/referal.png");
+
 const EARN_CARDS = [
   {
-    icon: "award" as const,
-    title: "Daily Top 10",
-    reward: "Coins + Badge",
-    sub: "Sponsor rewards when available",
-    color: "#FFD700",
+    icon: "flag" as const,
+    title: "Cash Challenges",
+    reward: "Win Cash Prizes",
+    sub: "Finish Top 3 to win your share of the prize pool.",
+    color: "#00E676",
+    fullWidth: false,
+    glow: "bottomLeft" as const,
   },
   {
-    icon: "zap" as const,
-    title: "Streak Bonus",
-    reward: "Bonus Coins",
-    sub: "Earn for daily walking streaks",
-    color: "#00E676",
+    icon: "gift" as const,
+    title: "Sponsored Events",
+    reward: "$5 Amazon gift card",
+    sub: "Available during sponsored events",
+    color: "#FF6B35",
+    fullWidth: false,
+    glow: "bottomRight" as const,
   },
   {
     icon: "users" as const,
     title: "Referral",
-    reward: "$1 Credit",
-    sub: "After referred user completes verified steps",
+    reward: "Both Get $3",
+    sub: "Invite friends. They join a Cash Challenge—you both earn $3.",
     color: "#00B4FF",
-  },
-  {
-    icon: "gift" as const,
-    title: "Sponsored Rewards",
-    reward: "Coupons / Bonuses",
-    sub: "Available during sponsored events",
-    color: "#FF6B35",
+    fullWidth: true,
+    glow: "center" as const,
+    showArt: true,
   },
 ];
 
@@ -735,33 +738,100 @@ export default function WalletScreen() {
           How to Earn Cash
         </Text>
         <View style={styles.earnGrid}>
-          {EARN_CARDS.map((card) => (
-            <View
-              key={card.title}
-              style={[
-                styles.earnCard,
-                { backgroundColor: colors.card, borderColor: colors.border },
-              ]}
-            >
+          {EARN_CARDS.map((card) => {
+            const glowColors =
+              card.glow === "bottomLeft"
+                ? [card.color + "00", card.color + "00", card.color + "55"]
+                : card.glow === "bottomRight"
+                  ? [card.color + "00", card.color + "00", card.color + "55"]
+                  : [card.color + "00", card.color + "28", card.color + "00"];
+            const glowStart =
+              card.glow === "bottomLeft"
+                ? { x: 0, y: 1 }
+                : card.glow === "bottomRight"
+                  ? { x: 1, y: 1 }
+                  : { x: 0.5, y: 0.5 };
+            const glowEnd =
+              card.glow === "bottomLeft"
+                ? { x: 0.85, y: 0.15 }
+                : card.glow === "bottomRight"
+                  ? { x: 0.15, y: 0.15 }
+                  : { x: 0.5, y: 0 };
+
+            return (
               <View
+                key={card.title}
                 style={[
-                  styles.earnIconBox,
-                  { backgroundColor: card.color + "18" },
+                  styles.earnCard,
+                  card.fullWidth && styles.earnCardFull,
+                  card.fullWidth && !card.showArt && styles.earnCardRow,
+                  card.showArt && styles.earnCardReferral,
+                  { backgroundColor: colors.card, borderColor: colors.border },
                 ]}
               >
-                <Feather name={card.icon} size={18} color={card.color} />
+                <LinearGradient
+                  colors={glowColors as [string, string, ...string[]]}
+                  start={glowStart}
+                  end={glowEnd}
+                  style={StyleSheet.absoluteFillObject}
+                  pointerEvents="none"
+                />
+                {card.showArt ? (
+                  <>
+                    <View style={styles.earnReferralLeft}>
+                      <View
+                        style={[
+                          styles.earnIconBox,
+                          styles.earnIconBoxRow,
+                          { backgroundColor: card.color + "18" },
+                        ]}
+                      >
+                        <Feather name={card.icon} size={20} color={card.color} />
+                      </View>
+                      <View style={styles.earnCardTextCol}>
+                        <Text style={[styles.earnCardTitleRow, { color: colors.foreground }]}>
+                          {card.title}
+                        </Text>
+                        <Text style={[styles.earnCardRewardRow, { color: card.color }]}>
+                          {card.reward}
+                        </Text>
+                        <Text style={[styles.earnCardSubRow, { color: colors.mutedForeground }]}>
+                          {card.sub}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.earnReferralArtWrap}>
+                      <Image
+                        source={REFERRAL_ART}
+                        style={styles.earnReferralArt}
+                        resizeMode="contain"
+                      />
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <View
+                      style={[
+                        styles.earnIconBox,
+                        { backgroundColor: card.color + "18" },
+                      ]}
+                    >
+                      <Feather name={card.icon} size={18} color={card.color} />
+                    </View>
+                    <Text style={[styles.earnCardTitle, { color: colors.foreground }]}>
+                      {card.title}
+                    </Text>
+                    <Text style={[styles.earnCardReward, { color: card.color }]}>
+                      {card.reward}
+                    </Text>
+                    <Text style={[styles.earnCardSub, { color: colors.mutedForeground }]}>
+                      {card.sub}
+                    </Text>
+                  </>
+                )}
               </View>
-              <Text style={[styles.earnCardTitle, { color: colors.foreground }]}>
-                {card.title}
-              </Text>
-              <Text style={[styles.earnCardReward, { color: card.color }]}>
-                {card.reward}
-              </Text>
-              <Text style={[styles.earnCardSub, { color: colors.mutedForeground }]}>
-                {card.sub}
-              </Text>
-            </View>
-          ))}
+            );
+          })}
         </View>
 
         {/* Withdrawal info */}
@@ -824,7 +894,7 @@ export default function WalletScreen() {
             { backgroundColor: colors.card, borderColor: colors.border },
           ]}
           nestedScrollEnabled
-          showsVerticalScrollIndicator={false}
+          showsVerticalScrollIndicator
         >
           {transactions.length === 0 ? (
             <View style={styles.emptyTx}>
@@ -1253,7 +1323,41 @@ const styles = StyleSheet.create({
   pendingNoteText: { flex: 1, fontSize: rf(12) },
   sectionTitle: { fontSize: rf(18), fontWeight: "700", marginBottom: 14 },
   earnGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 16 },
-  earnCard: { width: "47%", borderRadius: 14, borderWidth: 1, padding: rs(14), gap: 4 },
+  earnCard: {
+    width: "47%",
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: rs(14),
+    gap: 4,
+    overflow: "hidden",
+    position: "relative",
+  },
+  earnCardFull: { width: "100%" },
+  earnCardRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: rs(14),
+    paddingHorizontal: rs(14),
+  },
+  earnCardReferral: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: rs(12),
+    paddingLeft: rs(12),
+    paddingRight: rs(10),
+    gap: 8,
+    overflow: "hidden",
+  },
+  earnReferralLeft: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    minWidth: 0,
+    zIndex: 1,
+    paddingRight: rs(4),
+  },
   earnIconBox: {
     width: rs(40),
     height: rs(40),
@@ -1261,10 +1365,39 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 4,
+    zIndex: 1,
+  },
+  earnIconBoxRow: {
+    marginBottom: 0,
+    flexShrink: 0,
+  },
+  earnCardTextCol: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+    justifyContent: "center",
+    zIndex: 1,
   },
   earnCardTitle: { fontSize: rf(13), fontWeight: "700" },
+  earnCardTitleRow: { fontSize: rf(14), fontWeight: "700" },
   earnCardReward: { fontSize: rf(15), fontWeight: "800" },
+  earnCardRewardRow: { fontSize: rf(17), fontWeight: "800", marginTop: 1 },
   earnCardSub: { fontSize: rf(11), lineHeight: 15 },
+  earnCardSubRow: { fontSize: rf(12), lineHeight: 16, marginTop: 2 },
+  earnReferralArtWrap: {
+    width: rs(72),
+    height: rs(72),
+    flexShrink: 0,
+    overflow: "hidden",
+    borderRadius: 8,
+    zIndex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  earnReferralArt: {
+    width: rs(72),
+    height: rs(72),
+  },
   withdrawInfoCard: { borderRadius: 14, borderWidth: 1, padding: rs(14), gap: 10, marginBottom: 14 },
   withdrawInfoTitle: { fontSize: rf(15), fontWeight: "700" },
   withdrawInfoRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
@@ -1279,7 +1412,8 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   disclaimerText: { flex: 1, fontSize: rf(12), lineHeight: 18 },
-  txList: { borderRadius: 16, borderWidth: 1, overflow: "hidden", maxHeight: rs(320) },
+  // Same constrained box as before (~5 rows at 320); ~10 rows at 640, then scroll inside.
+  txList: { borderRadius: 16, borderWidth: 1, overflow: "hidden", maxHeight: rs(640) },
   txRow: {
     flexDirection: "row",
     alignItems: "center",

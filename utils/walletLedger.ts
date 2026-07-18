@@ -57,6 +57,19 @@ export function formatRelativeDate(isoOrDate: string | Date): string {
   return `${Math.floor(diffDays / 7)} week${Math.floor(diffDays / 7) > 1 ? "s" : ""} ago`;
 }
 
+/** Exact local date/time from backend ISO for wallet transaction history. */
+export function formatWalletTransactionDate(isoOrDate: string | Date): string {
+  const date = typeof isoOrDate === "string" ? new Date(isoOrDate) : isoOrDate;
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 export function ledgerTypeLabel(ledgerType?: string): string | null {
   if (!ledgerType) return null;
   const labels: Record<string, string> = {

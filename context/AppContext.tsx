@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, InteractionManager, Platform, type AppStateStatus } from "react-native";
 import { type LeaderboardUser, type WalletTransaction } from "@/utils/mockData";
-import { formatRelativeDate, mapLedgerTypeToUi } from "@/utils/walletLedger";
+import { formatWalletTransactionDate, mapLedgerTypeToUi } from "@/utils/walletLedger";
 import {
   clearCachedWallet,
   loadCachedWalletBalance,
@@ -112,7 +112,7 @@ function mapApiTransaction(tx: Record<string, unknown>): WalletTransaction {
     type: uiType,
     amount: Number(tx.amount ?? 0),
     description: String(tx.description ?? ""),
-    date: formatRelativeDate(dateIso),
+    date: formatWalletTransactionDate(dateIso),
     status,
     ledgerType,
   };
@@ -184,7 +184,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               type: "deposit" as const,
               amount: 0,
               description: `Deposit via ${providerLabel} (${currencySymbol}${amountLabel}) — verifying`,
-              date: formatRelativeDate(createdAt),
+              date: formatWalletTransactionDate(createdAt),
               status: "pending" as const,
               ledgerType: "deposit_pending",
             };
