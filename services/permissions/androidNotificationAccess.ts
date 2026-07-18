@@ -27,7 +27,8 @@ function getNativeModule(): AndroidNotificationNative | null {
 
 export function formatWalkOngoingNotificationBody(steps: number): string {
   const safe = Math.max(0, Math.floor(steps));
-  return `Tracking your steps • ${safe.toLocaleString("en-US")} steps today`;
+  // ASCII separator only — avoids mojibake on some Android OEM notification renderers.
+  return `Tracking your steps - ${safe.toLocaleString("en-US")} steps today`;
 }
 
 /** App-level notification master toggle (Samsung allowNoti, etc.). */

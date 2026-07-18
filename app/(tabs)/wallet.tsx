@@ -1,6 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import {
@@ -197,6 +197,7 @@ function TransactionRow({
 export default function WalletScreen() {
   useScreenMountPerf("Wallet");
   const router = useRouter();
+  const params = useLocalSearchParams<{ openDeposit?: string }>();
   const colors = useColors();
   const { insets, safeTop, safeBottom } = useSafeLayout();
   const { walletBalance, pendingBalance, walletCurrency, transactions, requestWithdrawal, refreshWallet } =
@@ -254,6 +255,15 @@ export default function WalletScreen() {
   const processingRef = useRef(false);
   const appliedPaymentResultRef = useRef<string | null>(null);
   const paymentResultDismissedRef = useRef(false);
+
+  // Deep-link / alert CTA: open deposit sheet when navigated with openDeposit=1
+  useEffect(() => {
+    const flag = Array.isArray(params.openDeposit) ? params.openDeposit[0] : params.openDeposit;
+    if (flag === "1" || flag === "true") {
+      setShowDeposit(true);
+      router.setParams({ openDeposit: undefined });
+    }
+  }, [params.openDeposit, router]);
 
   // ── Payment result modal state ─────────────────────────────────────────────
   const [paymentResult, setPaymentResult] = useState<PaymentResultState>("hidden");

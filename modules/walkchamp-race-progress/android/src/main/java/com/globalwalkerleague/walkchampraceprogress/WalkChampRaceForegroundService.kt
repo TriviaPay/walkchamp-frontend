@@ -52,10 +52,10 @@ class WalkChampRaceForegroundService : Service() {
     private const val TAG = "WalkChampFGS"
 
     fun formatWalkNotificationBody(steps: Int): String {
-      return "Tracking your steps • ${String.format("%,d", steps.coerceAtLeast(0))} steps today"
+      return "Tracking your steps - ${String.format("%,d", steps.coerceAtLeast(0))} steps today"
     }
     private const val NOTIFICATION_TICK_MS = 3_000L
-    /** Race progress backend sync — latest value only, not every sensor tick. */
+    /** Race progress backend sync â€” latest value only, not every sensor tick. */
     private const val BACKEND_SYNC_MS = 15_000L
     private const val RACE_SYNC_MIN_INTERVAL_MS = 10_000L
     private const val RACE_SYNC_MIN_STEP_DELTA = 3
@@ -69,7 +69,7 @@ class WalkChampRaceForegroundService : Service() {
     private var walkRunning = false
     private var lastWalkNotification: Notification? = null
 
-    /** Launcher/adaptive icons are invalid for status bar — use module drawable. */
+    /** Launcher/adaptive icons are invalid for status bar â€” use module drawable. */
     private fun notificationSmallIcon(ctx: Context): Int {
       val iconId = R.drawable.ic_walkchamp_notification
       return try {
@@ -132,10 +132,25 @@ class WalkChampRaceForegroundService : Service() {
     }
 
     fun buildRaceNotification(ctx: Context, state: RaceNotificationState): Notification {
-      return buildRaceNotification(ctx, state.raceId, state.toNotificationBody(), state.deepLink())
+      val anchored = state.ensureChronometerAnchors()
+      return buildRaceNotification(
+        ctx,
+        anchored.raceId,
+        anchored.toNotificationBody(),
+        anchored.deepLink(),
+        anchored.raceStartTimeMs,
+        anchored.challengeEndAtMs,
+      )
     }
 
-    fun buildRaceNotification(ctx: Context, raceId: String, body: String, deepLink: String): Notification {
+    fun buildRaceNotification(
+      ctx: Context,
+      raceId: String,
+      body: String,
+      deepLink: String,
+      raceStartTimeMs: Long = 0L,
+      challengeEndAtMs: Long = 0L,
+    ): Notification {
       ensureChannels(ctx)
       val uri = Uri.parse(deepLink.ifBlank { "walkchamp://race/$raceId" })
       val intent = Intent(Intent.ACTION_VIEW, uri).apply {
@@ -148,7 +163,7 @@ class WalkChampRaceForegroundService : Service() {
         intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
-      return NotificationCompat.Builder(ctx, CHANNEL_RACE)
+      val builder = NotificationCompat.Builder(ctx, CHANNEL_RACE)
         .setContentTitle("Live Race")
         .setContentText(body)
         .setSmallIcon(notificationSmallIcon(ctx))
@@ -160,10 +175,44 @@ class WalkChampRaceForegroundService : Service() {
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
         .setContentIntent(pending)
-        .build()
+
+      // Native chronometer: Android advances the visible timer without 1s rebuilds.
+      when {
+        challengeEndAtMs > 0L -> {
+          builder
+            .setWhen(challengeEndAtMs)
+            .setShowWhen(true)
+            .setUsesChronometer(true)
+            .setChronometerCountDown(true)
+          Log.d(
+            TAG,
+            "[OngoingNotification] trackingType=race chronometerEnabled=true mode=countdown endAt=$challengeEndAtMs",
+          )
+        }
+        raceStartTimeMs > 0L -> {
+          builder
+            .setWhen(raceStartTimeMs)
+            .setShowWhen(true)
+            .setUsesChronometer(true)
+          Log.d(
+            TAG,
+            "[OngoingNotification] trackingType=race chronometerEnabled=true mode=elapsed startAt=$raceStartTimeMs",
+          )
+        }
+        else -> {
+          Log.d(TAG, "[OngoingNotification] trackingType=race chronometerEnabled=false")
+        }
+      }
+      return builder.build()
     }
 
-    fun buildWalkNotification(ctx: Context, body: String, deepLink: String, title: String): Notification {
+    fun buildWalkNotification(
+      ctx: Context,
+      body: String,
+      deepLink: String,
+      title: String,
+      trackingStartedAtMs: Long = 0L,
+    ): Notification {
       ensureChannels(ctx)
       val uri = Uri.parse(deepLink.ifBlank { "walkchamp://walk" })
       val intent = Intent(Intent.ACTION_VIEW, uri).apply {
@@ -176,7 +225,7 @@ class WalkChampRaceForegroundService : Service() {
         intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
-      return NotificationCompat.Builder(ctx, CHANNEL_STEPS)
+      val builder = NotificationCompat.Builder(ctx, CHANNEL_STEPS)
         .setContentTitle(title.ifBlank { "Walk Champ" })
         .setContentText(body.lines().firstOrNull() ?: body)
         .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -189,10 +238,23 @@ class WalkChampRaceForegroundService : Service() {
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
         .setContentIntent(pending)
-        .build()
-        .also {
-          Log.d(TAG, "[WalkChampFGS] notification built channelId=$CHANNEL_STEPS")
-        }
+
+      if (trackingStartedAtMs > 0L) {
+        builder
+          .setWhen(trackingStartedAtMs)
+          .setShowWhen(true)
+          .setUsesChronometer(true)
+        Log.d(
+          TAG,
+          "[OngoingNotification] trackingType=daily chronometerEnabled=true trackingStartedAt=$trackingStartedAtMs elapsedMs=${System.currentTimeMillis() - trackingStartedAtMs}",
+        )
+      } else {
+        Log.d(TAG, "[OngoingNotification] trackingType=daily chronometerEnabled=false")
+      }
+
+      return builder.build().also {
+        Log.d(TAG, "[WalkChampFGS] notification built channelId=$CHANNEL_STEPS")
+      }
     }
   }
 
@@ -232,7 +294,7 @@ class WalkChampRaceForegroundService : Service() {
     }
   }
 
-  /** Native tick — keeps walk notification fresh while app is backgrounded (sensor + JS HC refresh). */
+  /** Native tick â€” keeps walk notification fresh while app is backgrounded (sensor + JS HC refresh). */
   private val walkStepRefreshRunnable = object : Runnable {
     override fun run() {
       if (!walkRunning) return
@@ -300,7 +362,7 @@ class WalkChampRaceForegroundService : Service() {
     if (!arGranted) {
       Log.w(
         TAG,
-        "[WalkChampFGS] ACTIVITY_RECOGNITION not granted — cannot start health FGS (targetSdk 35)",
+        "[WalkChampFGS] ACTIVITY_RECOGNITION not granted â€” cannot start health FGS (targetSdk 35)",
       )
     }
     return arGranted
@@ -308,7 +370,7 @@ class WalkChampRaceForegroundService : Service() {
 
   /**
    * Typed health startForeground on API 34+; untyped on older APIs.
-   * Returns false when prerequisites missing or SecurityException — caller must not crash.
+   * Returns false when prerequisites missing or SecurityException â€” caller must not crash.
    */
   private fun startHealthForegroundService(notificationId: Int, notification: Notification): Boolean {
     if (!hasHealthForegroundPrerequisite()) {
@@ -347,7 +409,7 @@ class WalkChampRaceForegroundService : Service() {
   }
 
   /**
-   * Promote walk FGS immediately — must run on main thread before any slow work.
+   * Promote walk FGS immediately â€” must run on main thread before any slow work.
    */
   private fun promoteWalkForegroundNow(notification: Notification) {
     ensureChannels(this)
@@ -370,7 +432,7 @@ class WalkChampRaceForegroundService : Service() {
       Log.d(TAG, "[WalkChampFGS] startForeground called notificationId=$NOTIFICATION_ID_WALK")
       Log.d(TAG, "[WalkChampFGS] service running mode=total_steps")
     } else {
-      Log.w(TAG, "[WalkChampFGS] walk FGS not promoted — notify-only fallback; stopping to avoid FGS timeout crash")
+      Log.w(TAG, "[WalkChampFGS] walk FGS not promoted â€” notify-only fallback; stopping to avoid FGS timeout crash")
       // startForegroundService requires startForeground or stopSelf within the OS timeout.
       stopSelf()
     }
@@ -387,7 +449,7 @@ class WalkChampRaceForegroundService : Service() {
       Log.d(TAG, "[WalkChampFGS] startForeground called notificationId=$NOTIFICATION_ID_RACE")
       Log.d(TAG, "[WalkChampFGS] service running mode=live_race")
     } else {
-      Log.w(TAG, "[WalkChampFGS] race FGS not promoted — notify-only fallback; stopping to avoid FGS timeout crash")
+      Log.w(TAG, "[WalkChampFGS] race FGS not promoted â€” notify-only fallback; stopping to avoid FGS timeout crash")
       stopSelf()
     }
   }
@@ -402,7 +464,7 @@ class WalkChampRaceForegroundService : Service() {
     val body =
       bodyFromIntent.takeIf { it.isNotBlank() }
         ?: formatWalkNotificationBody(parsedSteps)
-    return buildWalkNotification(this, body, deepLink, title)
+    return buildCurrentWalkNotification(body, deepLink, title)
   }
 
   private fun completeStartWalkWork(intent: Intent, isStart: Boolean) {
@@ -467,7 +529,7 @@ class WalkChampRaceForegroundService : Service() {
       }
       val ok = startHealthForegroundService(notificationId, notification)
       if (!ok) {
-        Log.w(TAG, "[WalkChampFGS] start failed — health FGS prerequisites or SecurityException")
+        Log.w(TAG, "[WalkChampFGS] start failed â€” health FGS prerequisites or SecurityException")
         return false
       }
       val mode =
@@ -619,7 +681,7 @@ class WalkChampRaceForegroundService : Service() {
   private fun startSensorTrackingIfNeeded() {
     if (!isTrackingActive()) return
     Log.d(TAG, "[WalkChampFGS] sensor registration starting")
-    Log.d(TAG, "[StepFGS] service started — registering hardware step sensor")
+    Log.d(TAG, "[StepFGS] service started â€” registering hardware step sensor")
     ensureSensorEngine().start()
     Log.d(TAG, "[WalkChampFGS] sensor registered")
   }
@@ -857,7 +919,7 @@ class WalkChampRaceForegroundService : Service() {
   private fun applyWalkNotificationFromNativeState(state: NativeStepState) {
     val verified = RaceNotificationState.isVerifiedStepSource(state.stepSource)
     if (!verified && !state.sensorSupported) {
-      Log.w(TAG, "[UnsupportedDevice] step sensor unavailable — keeping last known value")
+      Log.w(TAG, "[UnsupportedDevice] step sensor unavailable â€” keeping last known value")
       return
     }
     updateWalkNotificationToSteps(state.todaySteps, state.stepSource)
@@ -882,7 +944,7 @@ class WalkChampRaceForegroundService : Service() {
     val deepLink = prefs().getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
     val title = prefs().getString("walk_title", "Walk Champ") ?: "Walk Champ"
     val source = stepSource ?: prefs().getString("walk_step_source", "health_connect") ?: "health_connect"
-    lastWalkNotification = buildWalkNotification(this, body, deepLink, title)
+    lastWalkNotification = buildCurrentWalkNotification(body, deepLink, title)
     val nm = notificationManager()
     safeStartForeground(NOTIFICATION_ID_WALK, lastWalkNotification!!)
     nm.notify(NOTIFICATION_ID_WALK, lastWalkNotification!!)
@@ -1079,7 +1141,7 @@ class WalkChampRaceForegroundService : Service() {
       val body = p.getString("walk_body", null) ?: return
       val deepLink = p.getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
       val title = p.getString("walk_title", "Walk Champ") ?: "Walk Champ"
-      buildWalkNotification(this, body, deepLink, title)
+      buildCurrentWalkNotification(body, deepLink, title)
     }
     lastWalkNotification = notification
     walkRunning = true
@@ -1089,14 +1151,23 @@ class WalkChampRaceForegroundService : Service() {
 
   private fun publishRaceNotification() {
     val state = raceState ?: return
-    val body = state.toNotificationBody()
-    val notification = buildRaceNotification(this, state.raceId, body, state.deepLink())
+    val anchored = state.ensureChronometerAnchors()
+    if (anchored != state) {
+      raceState = anchored
+      RaceNotificationState.save(this, anchored)
+    }
+    val body = anchored.toNotificationBody()
+    val notification = buildRaceNotification(this, anchored)
     safeStartForeground(NOTIFICATION_ID_RACE, notification)
     postOngoingNotification(NOTIFICATION_ID_RACE, notification)
     ensureWalkNotificationVisible()
-    persistRaceNativeMode(state)
+    persistRaceNativeMode(anchored)
     Log.d(TAG, "[RaceNotification] content=\"$body\"")
-    Log.d(TAG, "[RaceNotification] update source=canonical raceSteps=${state.raceSteps}")
+    Log.d(TAG, "[RaceNotification] update source=canonical raceSteps=${anchored.raceSteps}")
+    Log.d(
+      TAG,
+      "[OngoingNotification] action=update trackingType=race notificationId=$NOTIFICATION_ID_RACE startAt=${anchored.raceStartTimeMs} endAt=${anchored.challengeEndAtMs}",
+    )
   }
 
   private fun persistRaceNativeMode(state: RaceNotificationState) {
@@ -1228,7 +1299,7 @@ class WalkChampRaceForegroundService : Service() {
   private fun switchToDailyStepsNotification(todaySteps: Int) {
     val steps = todaySteps.coerceAtLeast(0)
     val body = formatWalkNotificationBody(steps)
-    val notification = buildWalkNotification(this, body, "walkchamp://walk", "Walk Champ")
+    val notification = buildCurrentWalkNotification(body, "walkchamp://walk", "Walk Champ")
     lastWalkNotification = notification
     walkRunning = true
     Log.d(TAG, "[NotificationMode] switch -> daily_steps todaySteps=$steps")
@@ -1245,7 +1316,7 @@ class WalkChampRaceForegroundService : Service() {
 
   private fun refreshForegroundAfterRaceStop() {
     if (shouldKeepServiceAlive()) {
-      Log.d(TAG, "[RaceNotification] keepAlive appClosed=true — skip stopSelf")
+      Log.d(TAG, "[RaceNotification] keepAlive appClosed=true â€” skip stopSelf")
       deliverRestoreIntent()
       return
     }
@@ -1283,7 +1354,7 @@ class WalkChampRaceForegroundService : Service() {
     val stepSource = p.getString("walk_step_source", "android_step_counter") ?: "android_step_counter"
     val userId = p.getString("walk_user_id", null)
     val parsedSteps = parseStepsFromWalkBody(body)
-    lastWalkNotification = buildWalkNotification(this, body, deepLink, title)
+    lastWalkNotification = buildCurrentWalkNotification(body, deepLink, title)
     walkRunning = true
     if (promoteForeground) {
       safeStartForeground(NOTIFICATION_ID_WALK, lastWalkNotification!!)
@@ -1368,8 +1439,7 @@ class WalkChampRaceForegroundService : Service() {
       if (!foregroundWalkPromoted && prefs().getBoolean("walk_active", false)) {
         val body = prefs().getString("walk_body", null)
         if (!body.isNullOrBlank()) {
-          val notification = buildWalkNotification(
-            this,
+          val notification = buildCurrentWalkNotification(
             body,
             prefs().getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk",
             prefs().getString("walk_title", "Walk Champ") ?: "Walk Champ",
@@ -1382,7 +1452,7 @@ class WalkChampRaceForegroundService : Service() {
       workerHandler?.post {
         if (raceState == null) restoreRaceFromStorage(promoteForeground = !foregroundRacePromoted)
         if (raceState == null && !walkRunning) restoreWalkFromStorage(promoteForeground = !foregroundWalkPromoted)
-        // Early promote above may set walkRunning without re-arming the sensor — fix that.
+        // Early promote above may set walkRunning without re-arming the sensor â€” fix that.
         if (raceState == null && walkRunning) {
           val p = prefs()
           val stepSource = p.getString("walk_step_source", "android_step_counter") ?: "android_step_counter"
@@ -1493,7 +1563,7 @@ class WalkChampRaceForegroundService : Service() {
         val deepLink = intent.getStringExtra(EXTRA_DEEP_LINK) ?: "walkchamp://walk"
         val title = intent.getStringExtra(EXTRA_TITLE) ?: "Walk Champ"
         val body = formatWalkNotificationBody(safeSteps)
-        val notification = buildWalkNotification(this, body, deepLink, title)
+        val notification = buildCurrentWalkNotification(body, deepLink, title)
         lastWalkNotification = notification
         walkRunning = true
         val nm = notificationManager()
@@ -1573,7 +1643,7 @@ class WalkChampRaceForegroundService : Service() {
       }
       startSensorTrackingIfNeeded()
       deliverRestoreIntent()
-      // Do not call super — default implementation stops the service.
+      // Do not call super â€” default implementation stops the service.
       return
     }
     super.onTaskRemoved(rootIntent)
@@ -1583,7 +1653,7 @@ class WalkChampRaceForegroundService : Service() {
     Log.d(TAG, "[WalkChampFGS] onDestroy")
     val keepAlive = shouldKeepServiceAlive()
     if (keepAlive) {
-      Log.d(TAG, "[RaceService] onDestroy keepAlive=true — scheduling restore")
+      Log.d(TAG, "[RaceService] onDestroy keepAlive=true â€” scheduling restore")
       deliverRestoreIntent()
     } else {
       stopAllLoops()
@@ -1594,9 +1664,31 @@ class WalkChampRaceForegroundService : Service() {
     super.onDestroy()
   }
 
-  // ── Walk notification prefs (legacy) ───────────────────────────────────────
+  // â”€â”€ Walk notification prefs (legacy) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   private fun prefs() = getSharedPreferences("walkchamp_race_fgs_walk", MODE_PRIVATE)
+
+  /** Fixed daily-walk session start â€” set once, restored after service recreation. */
+  private fun ensureWalkTrackingStartedAt(): Long {
+    val existing = prefs().getLong("walk_tracking_started_at", 0L)
+    if (existing > 0L) return existing
+    val now = System.currentTimeMillis()
+    prefs().edit().putLong("walk_tracking_started_at", now).apply()
+    Log.d(TAG, "[OngoingNotification] action=start trackingType=daily trackingStartedAt=$now")
+    return now
+  }
+
+  private fun getWalkTrackingStartedAt(): Long =
+    prefs().getLong("walk_tracking_started_at", 0L)
+
+  private fun buildCurrentWalkNotification(
+    body: String,
+    deepLink: String,
+    title: String,
+  ): Notification {
+    val startedAt = ensureWalkTrackingStartedAt()
+    return buildWalkNotification(this, body, deepLink, title, startedAt)
+  }
 
   private fun persistWalkState(
     body: String,
@@ -1609,6 +1701,7 @@ class WalkChampRaceForegroundService : Service() {
     apiBaseUrl: String? = null,
     authToken: String? = null,
   ) {
+    ensureWalkTrackingStartedAt()
     val editor = prefs().edit()
       .putBoolean("walk_active", true)
       .putString("walk_body", body)
@@ -1621,7 +1714,7 @@ class WalkChampRaceForegroundService : Service() {
     if (counterBaseline != null && counterBaseline > 0L) {
       editor.putLong("walk_counter_baseline", counterBaseline)
     }
-    // Preserve existing credentials when not supplied — allows sensor ticks to persist
+    // Preserve existing credentials when not supplied â€” allows sensor ticks to persist
     // steps without accidentally clearing the auth data stored at notification start.
     if (!userId.isNullOrBlank()) editor.putString("walk_user_id", userId)
     if (!apiBaseUrl.isNullOrBlank()) editor.putString("walk_api_base_url", apiBaseUrl)
@@ -1664,6 +1757,8 @@ class WalkChampRaceForegroundService : Service() {
       .remove("walk_auth_token")
       .remove("walk_state_updated_at")
       .remove("walk_local_date")
+      .remove("walk_tracking_started_at")
       .apply()
+    Log.d(TAG, "[OngoingNotification] action=stop trackingType=daily")
   }
 }

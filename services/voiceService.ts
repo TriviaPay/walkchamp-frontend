@@ -61,6 +61,9 @@ function loadSDK(): ClientModule | null {
     rnModule.registerGlobals();
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     clientModule = require("livekit-client") as ClientModule;
+    // Hermes + livekit UMD can still surface orphan Closing rejections during
+    // abort/negotiate teardown. Swallow only that known noise.
+    installLiveKitClosingRejectionGuard();
     if (__DEV__) {
       if (__DEV__) console.log("[VoiceSDK] provider: livekit");
       if (__DEV__) console.log("[VoiceSDK] runtime supported: true");
@@ -70,6 +73,36 @@ function loadSDK(): ClientModule | null {
     if (__DEV__) console.log("[VoiceSDK] runtime supported: false", e);
     return null;
   }
+}
+
+let closingGuardInstalled = false;
+function installLiveKitClosingRejectionGuard(): void {
+  if (closingGuardInstalled) return;
+  closingGuardInstalled = true;
+  const isClosingNoise = (reason: unknown): boolean => {
+    const msg = reason instanceof Error ? reason.message : String(reason ?? "");
+    return (
+      msg.includes("Cannot read property 'Closing' of undefined") ||
+      msg.includes("Cannot read properties of undefined (reading 'Closing')")
+    );
+  };
+  // RN / Hermes: prevent redbox for known LiveKit UMD teardown noise.
+  // Metro ESM redirect is the real fix; this is a safety net.
+  const g = globalThis as typeof globalThis & {
+    HermesInternal?: unknown;
+    onunhandledrejection?: ((e: { reason?: unknown; preventDefault?: () => void }) => void) | null;
+  };
+  const prev = g.onunhandledrejection;
+  g.onunhandledrejection = (event) => {
+    if (isClosingNoise(event?.reason)) {
+      event?.preventDefault?.();
+      if (__DEV__) {
+        console.log("[VoiceSDK] ignored LiveKit Closing teardown rejection (Hermes/UMD)");
+      }
+      return;
+    }
+    if (typeof prev === "function") prev(event);
+  };
 }
 
 // ── Audio session helpers ─────────────────────────────────────────────────────

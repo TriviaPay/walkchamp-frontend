@@ -198,6 +198,32 @@ class StepTrackingNotificationService {
 
     if (Platform.OS === "android") {
       logOngoing("channelEnsure requested");
+      // Fast path: if FGS already running, push correct steps immediately without
+      // re-requesting permissions (avoids open-app notification lag).
+      try {
+        const existing = await this.getNativeStepState(payload.userId);
+        const walkAlready =
+          !!existing &&
+          (existing.walkActive === true ||
+            existing.notificationMode === "daily_steps" ||
+            existing.notificationMode === "total_steps");
+        if (walkAlready) {
+          active = true;
+          lastSteps = -1;
+          const nativePayload = await toNativePayload(payload);
+          if (native.updateWalkStepNotification) {
+            logOngoing(
+              `fastUpdate existing FGS steps=${payload.todaySteps}`,
+            );
+            await native.updateWalkStepNotification(nativePayload);
+            lastUpdateMs = Date.now();
+            lastSteps = payload.todaySteps;
+            return true;
+          }
+        }
+      } catch {
+        // fall through to full start
+      }
       const granted = await hasOngoingNotificationAccess();
       logOngoing(`notificationPermission result granted=${granted}`);
       if (!granted) {

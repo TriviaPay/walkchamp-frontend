@@ -2479,9 +2479,22 @@ function WalkScreenContent() {
     }
 
     if (setupModal.fee !== 0 && !canAfford) {
+      const isIndiaUser =
+        user?.countryCode === "IN" ||
+        user?.country?.toLowerCase() === "india";
+      const payLabel = isIndiaUser ? "Pay with Razorpay" : "Pay with Stripe";
       AppAlert.alert(
         "Insufficient Balance",
         `You need $${setupTotalPayable.toFixed(2)} to join. Add funds to your wallet.`,
+        [
+          {
+            text: payLabel,
+            onPress: () => {
+              router.push({ pathname: "/(tabs)/wallet", params: { openDeposit: "1" } });
+            },
+          },
+        ],
+        { showClose: true },
       );
       return;
     }
@@ -2749,9 +2762,22 @@ function WalkScreenContent() {
         }
         const required = createPaymentQuote?.totalPayable ?? challengeUsdAmount;
         if (walletBalance < required) {
+          const isIndiaUser =
+            user?.countryCode === "IN" ||
+            user?.country?.toLowerCase() === "india";
+          const payLabel = isIndiaUser ? "Pay with Razorpay" : "Pay with Stripe";
           AppAlert.alert(
             "Insufficient Balance",
             `You need $${required.toFixed(2)} to create this challenge. Add funds to your wallet first.`,
+            [
+              {
+                text: payLabel,
+                onPress: () => {
+                  router.push({ pathname: "/(tabs)/wallet", params: { openDeposit: "1" } });
+                },
+              },
+            ],
+            { showClose: true },
           );
           setChallengeCreating(false);
           return;

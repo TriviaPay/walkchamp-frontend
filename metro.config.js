@@ -1,3 +1,4 @@
+const path = require("path");
 const { getDefaultConfig } = require("expo/metro-config");
 
 const config = getDefaultConfig(__dirname);
@@ -18,6 +19,33 @@ config.resolver.blockList = [
   /[/\\]\.gradle[/\\]/,
   /[/\\]\.cxx[/\\]/,
 ];
+
+/**
+ * Force livekit-client ESM instead of the UMD main entry.
+ *
+ * Hermes bug (facebook/hermes#2104 / livekit#1952): the UMD minifier reuses
+ * `catch (e)` which shadows the module-namespace `e`. When negotiate() rejects
+ * while aborting, `finally` reads `e.EngineEvent.Closing` against the Error and
+ * throws: "Cannot read property 'Closing' of undefined".
+ *
+ * The ESM build keeps distinct identifiers and is safe on Hermes/RN.
+ */
+const livekitClientEsm = path.join(
+  path.dirname(require.resolve("livekit-client/package.json")),
+  "dist",
+  "livekit-client.esm.mjs",
+);
+
+const upstreamResolveRequest = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (moduleName === "livekit-client") {
+    return { type: "sourceFile", filePath: livekitClientEsm };
+  }
+  if (typeof upstreamResolveRequest === "function") {
+    return upstreamResolveRequest(context, moduleName, platform);
+  }
+  return context.resolveRequest(context, moduleName, platform);
+};
 
 config.watcher = {
   ...(config.watcher ?? {}),

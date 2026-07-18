@@ -20,6 +20,8 @@ export type RaceProgressNotificationPayload = {
   timeLeftSeconds: number;
   raceStatus?: string;
   lastSyncedAt?: string;
+  /** Absolute race end (ISO or epoch ms). Used once to seed native countdown chronometer. */
+  challengeEndAt?: string | number;
 };
 
 type NativeModule = {
@@ -77,7 +79,7 @@ async function toNativePayload(
   raceStartISO?: string,
 ): Promise<Record<string, unknown>> {
   const session = await getValidSession();
-  return {
+  const out: Record<string, unknown> = {
     raceId: payload.raceId,
     userId: payload.userId,
     username: payload.username,
@@ -94,6 +96,10 @@ async function toNativePayload(
     deepLink: `walkchamp://race/${payload.raceId}`,
     body: formatRaceNotificationBody(payload),
   };
+  if (payload.challengeEndAt != null && payload.challengeEndAt !== "") {
+    out.challengeEndAt = payload.challengeEndAt;
+  }
+  return out;
 }
 
 function formatGoalSteps(goalSteps: number): string {
@@ -103,19 +109,12 @@ function formatGoalSteps(goalSteps: number): string {
 }
 
 function formatRaceNotificationBody(payload: RaceProgressNotificationPayload): string {
-  const timeLeft =
-    payload.timeLeftSeconds > 0
-      ? formatTimeLeft(payload.timeLeftSeconds)
-      : "Open";
+  // Elapsed / countdown is owned by the Android notification chronometer.
+  // Do not embed a static "m:ss left" — it freezes between JS updates.
   const steps = payload.raceSteps.toLocaleString();
   const goal = formatGoalSteps(payload.goalSteps);
-  return `${steps} steps • #${payload.rank}/${payload.totalParticipants} • Goal ${goal} • ${timeLeft} left`;
-}
-
-function formatTimeLeft(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
+  const openHint = payload.timeLeftSeconds > 0 ? "" : " • Open";
+  return `${steps} steps • #${payload.rank}/${payload.totalParticipants} • Goal ${goal}${openHint}`;
 }
 
 class RaceProgressNotificationService {

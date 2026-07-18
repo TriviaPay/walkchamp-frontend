@@ -1764,12 +1764,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           }
           return;
         }
-        // Release APK / EAS cold start: defer FGS only — provider poll already running.
-        if (!__DEV__) {
-          await new Promise((resolve) => setTimeout(resolve, 2500));
-        } else {
-          await new Promise((resolve) => setTimeout(resolve, 1200));
-        }
+        // Show ongoing notification immediately with current steps (no artificial delay).
         if (!mounted) return;
         try {
           const started = await stepTrackingNotificationService.start({
@@ -1780,6 +1775,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           if (!started && __DEV__) {
             console.log("[OngoingNotification] direct start returned false");
           }
+          // Force tray to match canonical steps right away (fixes stale 0 / encoding).
           void pushWalkNotificationFromCanonicalStore(true, user.id);
         } catch (notifErr) {
           console.warn("[OngoingNotification] notification start error", notifErr);

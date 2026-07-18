@@ -75,8 +75,17 @@ data class RaceNotificationState(
       goalSteps = if (incoming.goalSteps > 0) incoming.goalSteps else goalSteps,
       timeLeftSeconds = incoming.timeLeftSeconds,
       raceStatus = incoming.raceStatus.ifBlank { raceStatus },
-      raceStartTimeMs = if (incoming.raceStartTimeMs > 0) incoming.raceStartTimeMs else raceStartTimeMs,
-      challengeEndAtMs = if (incoming.challengeEndAtMs > 0) incoming.challengeEndAtMs else challengeEndAtMs,
+      // Never overwrite session anchors once set — chronometer must not jump/reset.
+      raceStartTimeMs = when {
+        raceStartTimeMs > 0L -> raceStartTimeMs
+        incoming.raceStartTimeMs > 0L -> incoming.raceStartTimeMs
+        else -> 0L
+      },
+      challengeEndAtMs = when {
+        challengeEndAtMs > 0L -> challengeEndAtMs
+        incoming.challengeEndAtMs > 0L -> incoming.challengeEndAtMs
+        else -> 0L
+      },
       lastUpdatedAt = maxOf(lastUpdatedAt, incoming.lastUpdatedAt),
       apiBaseUrl = incoming.apiBaseUrl.ifBlank { apiBaseUrl },
       authToken = incoming.authToken.ifBlank { authToken },
@@ -95,9 +104,26 @@ data class RaceNotificationState(
   }
 
   fun withComputedTimeLeft(nowMs: Long = System.currentTimeMillis()): RaceNotificationState {
-    if (challengeEndAtMs <= 0) return this
-    val left = ((challengeEndAtMs - nowMs) / 1000L).toInt().coerceAtLeast(0)
-    return if (left == timeLeftSeconds) this else copy(timeLeftSeconds = left, lastUpdatedAt = nowMs)
+    val anchored = ensureChronometerAnchors(nowMs)
+    if (anchored.challengeEndAtMs <= 0) return anchored
+    val left = ((anchored.challengeEndAtMs - nowMs) / 1000L).toInt().coerceAtLeast(0)
+    return if (left == anchored.timeLeftSeconds) anchored
+    else anchored.copy(timeLeftSeconds = left, lastUpdatedAt = nowMs)
+  }
+
+  /**
+   * Lock session anchors once so chronometer never resets on update/restore.
+   * If end is missing but a positive timeLeft snapshot exists, derive end once.
+   */
+  fun ensureChronometerAnchors(nowMs: Long = System.currentTimeMillis()): RaceNotificationState {
+    var start = raceStartTimeMs
+    var end = challengeEndAtMs
+    if (start <= 0L) start = nowMs
+    if (end <= 0L && timeLeftSeconds > 0) {
+      end = nowMs + timeLeftSeconds * 1000L
+    }
+    if (start == raceStartTimeMs && end == challengeEndAtMs) return this
+    return copy(raceStartTimeMs = start, challengeEndAtMs = end)
   }
 
   fun toJson(): JSONObject = JSONObject().apply {
@@ -137,8 +163,10 @@ data class RaceNotificationState(
     ): String {
       val stepsText = String.format(Locale.US, "%,d", raceSteps.coerceAtLeast(0))
       val goalText = formatGoalSteps(goalSteps)
-      val timeLeft = formatTimeLeftLabel(timeLeftSeconds)
-      return "$stepsText steps • #$rank/$totalParticipants • Goal $goalText • $timeLeft left"
+      // Elapsed / countdown is owned by Android notification chronometer (setWhen).
+      // Keep body steps/rank/goal only so a frozen "m:ss left" string cannot stick.
+      val openHint = if (timeLeftSeconds <= 0) " - Open" else ""
+      return "$stepsText steps - #$rank/$totalParticipants - Goal $goalText$openHint"
     }
 
     private fun formatGoalSteps(goalSteps: Int): String {
@@ -146,13 +174,6 @@ data class RaceNotificationState(
       if (goal >= 10_000 && goal % 1000 == 0) return "${goal / 1000}K"
       if (goal >= 1000 && goal % 1000 == 0) return "${goal / 1000}K"
       return String.format(Locale.US, "%,d", goal)
-    }
-
-    private fun formatTimeLeftLabel(timeLeftSeconds: Int): String {
-      if (timeLeftSeconds <= 0) return "Open"
-      val m = timeLeftSeconds / 60
-      val s = timeLeftSeconds % 60
-      return String.format(Locale.US, "%d:%02d", m, s)
     }
 
     fun isVerifiedStepSource(stepSource: String): Boolean {
@@ -172,8 +193,13 @@ data class RaceNotificationState(
       val goal = (payload["goalSteps"] as? Number)?.toInt() ?: 0
       val timeLeft = (payload["timeLeftSeconds"] as? Number)?.toInt() ?: 0
       val status = payload["raceStatus"] as? String ?: "in_progress"
-      val raceStartMs = parseTimeMs(payload["raceStartTime"])
-      val challengeEndMs = parseTimeMs(payload["challengeEndAt"])
+      var raceStartMs = parseTimeMs(payload["raceStartTime"])
+      var challengeEndMs = parseTimeMs(payload["challengeEndAt"])
+      if (raceStartMs <= 0L) raceStartMs = nowMs
+      // Derive end once from remaining seconds when caller has no absolute end.
+      if (challengeEndMs <= 0L && timeLeft > 0) {
+        challengeEndMs = nowMs + timeLeft * 1000L
+      }
       val apiBase = payload["apiBaseUrl"] as? String ?: ""
       val token = payload["authToken"] as? String ?: ""
       val source = payload["stepSource"] as? String ?: "health_connect"
