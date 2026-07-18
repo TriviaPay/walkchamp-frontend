@@ -370,15 +370,17 @@ class WalkChampRaceForegroundService : Service() {
 
   /**
    * Typed health startForeground on API 34+; untyped on older APIs.
-   * Returns false when prerequisites missing or SecurityException â€” caller must not crash.
+   *
+   * IMPORTANT: After Context.startForegroundService(), this MUST attempt Service.startForeground()
+   * (or the process crashes with ForegroundServiceDidNotStartInTimeException). Never early-return
+   * with notify-only when a foreground start may be pending.
    */
   private fun startHealthForegroundService(notificationId: Int, notification: Notification): Boolean {
     if (!hasHealthForegroundPrerequisite()) {
-      try {
-        notificationManager().notify(notificationId, notification)
-      } catch (_: Exception) {
-      }
-      return false
+      Log.w(
+        TAG,
+        "[WalkChampFGS] ACTIVITY_RECOGNITION missing - still attempting startForeground to satisfy FGS contract",
+      )
     }
     return try {
       if (Build.VERSION.SDK_INT >= 34) {
@@ -432,8 +434,12 @@ class WalkChampRaceForegroundService : Service() {
       Log.d(TAG, "[WalkChampFGS] startForeground called notificationId=$NOTIFICATION_ID_WALK")
       Log.d(TAG, "[WalkChampFGS] service running mode=total_steps")
     } else {
-      Log.w(TAG, "[WalkChampFGS] walk FGS not promoted â€” notify-only fallback; stopping to avoid FGS timeout crash")
+      Log.w(TAG, "[WalkChampFGS] walk FGS not promoted - notify-only fallback; stopping to avoid FGS timeout crash")
       // startForegroundService requires startForeground or stopSelf within the OS timeout.
+      try {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+      } catch (_: Exception) {
+      }
       stopSelf()
     }
   }
@@ -449,7 +455,11 @@ class WalkChampRaceForegroundService : Service() {
       Log.d(TAG, "[WalkChampFGS] startForeground called notificationId=$NOTIFICATION_ID_RACE")
       Log.d(TAG, "[WalkChampFGS] service running mode=live_race")
     } else {
-      Log.w(TAG, "[WalkChampFGS] race FGS not promoted â€” notify-only fallback; stopping to avoid FGS timeout crash")
+      Log.w(TAG, "[WalkChampFGS] race FGS not promoted - notify-only fallback; stopping to avoid FGS timeout crash")
+      try {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+      } catch (_: Exception) {
+      }
       stopSelf()
     }
   }
@@ -1244,26 +1254,32 @@ class WalkChampRaceForegroundService : Service() {
   private fun clearSessionForUser(userId: String) {
     if (userId.isBlank()) return
     Log.d(TAG, "[Logout] clearing active step session userId=$userId")
-    if (raceState?.userId == userId) {
-      stopRaceLoops()
-      raceState = null
-      RaceNotificationState.clearForUser(this, userId)
-      notificationManager().cancel(NOTIFICATION_ID_RACE)
-    }
-    val walkUserId = prefs().getString("walk_user_id", null)
-    if (walkUserId == userId || walkUserId.isNullOrBlank()) {
-      walkRunning = false
-      lastWalkNotification = null
-      clearWalkState()
-      notificationManager().cancel(NOTIFICATION_ID_WALK)
-    }
+    stopRaceLoops()
+    raceState = null
+    RaceNotificationState.clearForUser(this, userId)
+    RaceNotificationState.save(this, null)
+    notificationManager().cancel(NOTIFICATION_ID_RACE)
+    // Always clear walk FGS state on logout so restore cannot re-launch startForegroundService
+    // after AuthSwitch (user=none) without ACTIVITY_RECOGNITION / within the FGS timeout.
+    walkRunning = false
+    foregroundWalkPromoted = false
+    foregroundRacePromoted = false
+    lastWalkNotification = null
+    clearWalkState()
+    notificationManager().cancel(NOTIFICATION_ID_WALK)
     NativeStepState.clearForUser(this, userId)
+    NativeStepState.save(this, null)
     RaceSyncCredentials.clearForUser(this, userId)
     RaceSyncOutboxItem.clearForUser(this, userId)
     sensorEngine?.stop()
     sensorEngine = null
     stopSensorTrackingIfIdle()
-    refreshForegroundAfterRaceStop()
+    // Force stop — never deliverRestoreIntent during logout (that path uses startForegroundService).
+    try {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+    } catch (_: Exception) {
+    }
+    stopSelf()
   }
 
   /**
@@ -1374,6 +1390,13 @@ class WalkChampRaceForegroundService : Service() {
   }
 
   private fun deliverRestoreIntent() {
+    if (!hasHealthForegroundPrerequisite()) {
+      Log.w(
+        TAG,
+        "[RaceNotification] skip restore startForegroundService - ACTIVITY_RECOGNITION missing",
+      )
+      return
+    }
     val restart = Intent(applicationContext, WalkChampRaceForegroundService::class.java).apply {
       action = ACTION_RESTORE
     }
@@ -1436,7 +1459,29 @@ class WalkChampRaceForegroundService : Service() {
 
     if (action == null || action == ACTION_RESTORE) {
       ensureWorker()
-      if (!foregroundWalkPromoted && prefs().getBoolean("walk_active", false)) {
+      val hasWalk = prefs().getBoolean("walk_active", false)
+      val storedRace = RaceNotificationState.load(this)
+      val hasRace = (raceState != null && isActiveRace(raceState!!)) ||
+        (storedRace != null && isActiveRace(storedRace))
+      if (!hasWalk && !hasRace) {
+        // startForegroundService(RESTORE) still requires startForeground within the OS timeout,
+        // even when logout already cleared walk/race state.
+        Log.w(TAG, "[WalkChampFGS] RESTORE with nothing to keep alive - promote then stop")
+        val placeholder = buildCurrentWalkNotification(
+          formatWalkNotificationBody(0),
+          "walkchamp://walk",
+          "Walk Champ",
+        )
+        startHealthForegroundService(NOTIFICATION_ID_WALK, placeholder)
+        try {
+          stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (_: Exception) {
+        }
+        notificationManager().cancel(NOTIFICATION_ID_WALK)
+        stopSelf()
+        return START_NOT_STICKY
+      }
+      if (!foregroundWalkPromoted && hasWalk) {
         val body = prefs().getString("walk_body", null)
         if (!body.isNullOrBlank()) {
           val notification = buildCurrentWalkNotification(
@@ -1452,7 +1497,7 @@ class WalkChampRaceForegroundService : Service() {
       workerHandler?.post {
         if (raceState == null) restoreRaceFromStorage(promoteForeground = !foregroundRacePromoted)
         if (raceState == null && !walkRunning) restoreWalkFromStorage(promoteForeground = !foregroundWalkPromoted)
-        // Early promote above may set walkRunning without re-arming the sensor â€” fix that.
+        // Early promote above may set walkRunning without re-arming the sensor — fix that.
         if (raceState == null && walkRunning) {
           val p = prefs()
           val stepSource = p.getString("walk_step_source", "android_step_counter") ?: "android_step_counter"
@@ -1653,7 +1698,7 @@ class WalkChampRaceForegroundService : Service() {
     Log.d(TAG, "[WalkChampFGS] onDestroy")
     val keepAlive = shouldKeepServiceAlive()
     if (keepAlive) {
-      Log.d(TAG, "[RaceService] onDestroy keepAlive=true â€” scheduling restore")
+      Log.d(TAG, "[RaceService] onDestroy keepAlive=true - scheduling restore")
       deliverRestoreIntent()
     } else {
       stopAllLoops()

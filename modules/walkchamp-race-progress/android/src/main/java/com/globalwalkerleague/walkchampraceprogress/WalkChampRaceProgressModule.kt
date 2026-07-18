@@ -502,6 +502,10 @@ class WalkChampRaceProgressModule : Module() {
   /**
    * Start/restart the service as a foreground service.
    * Only safe to call when the app is in the foreground (START actions).
+   *
+   * Health-type FGS on API 29+ requires ACTIVITY_RECOGNITION. If it is missing, use
+   * startService() instead of startForegroundService() so Android does not enforce the
+   * startForeground() deadline (ForegroundServiceDidNotStartInTimeException).
    */
   private fun startServiceForeground(ctx: android.content.Context, intent: Intent): Unit {
     WalkChampRaceForegroundService.ensureChannels(ctx)
@@ -509,7 +513,11 @@ class WalkChampRaceProgressModule : Module() {
       "WalkChampFGS",
       "[Notification] serviceStartRequested=true action=${intent.action}",
     )
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+    val canHealthFgs =
+      Build.VERSION.SDK_INT < 29 ||
+        ctx.checkSelfPermission(android.Manifest.permission.ACTIVITY_RECOGNITION) ==
+          PackageManager.PERMISSION_GRANTED
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && canHealthFgs) {
       try {
         ctx.startForegroundService(intent)
       } catch (e: Exception) {
@@ -520,7 +528,16 @@ class WalkChampRaceProgressModule : Module() {
         }
       }
     } else {
-      ctx.startService(intent)
+      if (!canHealthFgs) {
+        android.util.Log.w(
+          "WalkChampFGS",
+          "[RaceService] ACTIVITY_RECOGNITION missing - using startService (not startForegroundService)",
+        )
+      }
+      try {
+        ctx.startService(intent)
+      } catch (_: Exception) {
+      }
     }
   }
 

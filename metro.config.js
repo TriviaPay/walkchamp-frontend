@@ -28,11 +28,11 @@ config.resolver.blockList = [
  * while aborting, `finally` reads `e.EngineEvent.Closing` against the Error and
  * throws: "Cannot read property 'Closing' of undefined".
  *
- * The ESM build keeps distinct identifiers and is safe on Hermes/RN.
+ * Resolve via the package "main" file (UMD in dist/), then sibling ESM path —
+ * do NOT use livekit-client/package.json (blocked by package "exports").
  */
 const livekitClientEsm = path.join(
-  path.dirname(require.resolve("livekit-client/package.json")),
-  "dist",
+  path.dirname(require.resolve("livekit-client")),
   "livekit-client.esm.mjs",
 );
 
