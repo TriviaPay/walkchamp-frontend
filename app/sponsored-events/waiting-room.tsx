@@ -352,12 +352,17 @@ export default function SponsoredWaitingRoom() {
                 : "The race starts automatically — no action needed"}
             </Text>
             {event?.scheduledStartAt ? (
-              <View style={s.windowBox}>
-                <Feather name="clock" size={12} color="rgba(255,255,255,0.55)" />
-                <Text style={s.windowText}>
-                  {formatSponsoredEventWindow(event.scheduledStartAt, event.endsAt ?? null)}
+              <>
+                <Text style={s.windowHint}>
+                  Only steps taken between the event&apos;s Start Time and End Time will count toward this event.
                 </Text>
-              </View>
+                <View style={s.windowBox}>
+                  <Feather name="clock" size={12} color="rgba(255,255,255,0.55)" />
+                  <Text style={s.windowText}>
+                    {formatSponsoredEventWindow(event.scheduledStartAt, event.endsAt ?? null)}
+                  </Text>
+                </View>
+              </>
             ) : null}
           </LinearGradient>
         </View>
@@ -473,7 +478,7 @@ export default function SponsoredWaitingRoom() {
         <View style={s.infoBox}>
           <Feather name="info" size={14} color="rgba(255,255,255,0.25)" />
           <Text style={s.infoText}>
-            Only steps taken between the event&apos;s Start Time and End Time will count toward this event. Stay on this screen and you&apos;ll be taken into the race automatically at the scheduled time.
+            Stay on this screen and you&apos;ll be taken into the race automatically at the scheduled time.
           </Text>
         </View>
 
@@ -521,12 +526,34 @@ const s = StyleSheet.create({
   countdownSub: { fontSize: rf(12), fontWeight: "700", color: "rgba(255,255,255,0.55)", letterSpacing: 0.5, marginBottom: rs(8) },
   countdownTime: { fontSize: rf(46), fontWeight: "900", letterSpacing: 2, lineHeight: 54, textAlign: "center" },
   countdownNote: { fontSize: rf(11.5), color: "rgba(255,255,255,0.35)", textAlign: "center", marginTop: rs(12), lineHeight: 18 },
-  windowBox: {
-    flexDirection: "row", alignItems: "center", gap: 6, marginTop: rs(14),
-    backgroundColor: "rgba(255,255,255,0.06)", borderRadius: 10,
-    paddingHorizontal: rs(12), paddingVertical: rs(8),
+  windowHint: {
+    fontSize: rf(11),
+    color: "rgba(255,255,255,0.45)",
+    textAlign: "center",
+    marginTop: rs(12),
+    lineHeight: 16,
+    paddingHorizontal: rs(4),
   },
-  windowText: { flex: 1, fontSize: rf(11.5), fontWeight: "600", color: "rgba(255,255,255,0.7)", lineHeight: 16 },
+  windowBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "stretch",
+    gap: 6,
+    marginTop: rs(8),
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 10,
+    paddingHorizontal: rs(14),
+    paddingVertical: rs(8),
+  },
+  windowText: {
+    fontSize: rf(11.5),
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.7)",
+    lineHeight: 16,
+    textAlign: "center",
+    flexShrink: 1,
+  },
 
   // Stats row
   statsRow: { flexDirection: "row", gap: rs(8) },

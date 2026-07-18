@@ -717,9 +717,11 @@ export async function fetchNotifications(): Promise<
     });
     if (!res.ok) return [];
     const data = (await res.json()) as { notifications?: unknown[] };
-    return (data.notifications ?? []) as ReturnType<typeof fetchNotifications> extends Promise<infer T>
-      ? T
-      : never;
+    const list = Array.isArray(data.notifications) ? data.notifications : [];
+    // Sponsored lifecycle is push + ongoing race notification only — keep it out of the inbox.
+    return (list as Array<{ id: string; type: string; title: string; body: string; isRead: boolean; createdAt: string }>).filter(
+      (n) => !String(n.type ?? "").startsWith("sponsored_event"),
+    );
   } catch {
     return [];
   }

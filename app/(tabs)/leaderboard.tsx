@@ -974,15 +974,15 @@ export default function LeaderboardScreen() {
                 <ListRow key={e.id} entry={e} isMe={e.id === userId} colors={colors} meAvatarUrl={e.id === userId && user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` : null} onAvatarPress={handleAvatarPress} />
               ))}
 
-              {/* Info note */}
-              <View style={[st.infoNote, { backgroundColor: colors.gold + "10", borderColor: colors.gold + "25" }]}>
-                <Feather name="info" size={13} color={colors.gold} />
-                <Text style={[st.infoNoteText, { color: colors.mutedForeground }]}>
-                  {isRace
-                    ? "Rankings show total race wins. Only completed races where you finished #1 count as wins."
-                    : "Top walkers earn coins & badges. Rankings reflect verified activity and may be adjusted."}
-                </Text>
-              </View>
+              {/* Info note — hidden on Race tab */}
+              {!isRace && (
+                <View style={[st.infoNote, { backgroundColor: colors.gold + "10", borderColor: colors.gold + "25" }]}>
+                  <Feather name="info" size={13} color={colors.gold} />
+                  <Text style={[st.infoNoteText, { color: colors.mutedForeground }]}>
+                    Top walkers earn coins & badges. Rankings reflect verified activity and may be adjusted.
+                  </Text>
+                </View>
+              )}
 
               {rest.length > 0 && (
                 <Text style={[st.sectionLabel, { color: colors.mutedForeground }]}>Rank 4 onwards</Text>

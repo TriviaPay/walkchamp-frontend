@@ -27,6 +27,34 @@ export type SponsoredEventDto = {
   }>;
 };
 
+/** Default sponsored goal — matches backend TARGET_STEPS. */
+export const SPONSORED_DEFAULT_TARGET_STEPS = 10_000;
+
+/** Default Amazon gift card per winner — matches backend PRIZE_PER_WINNER_CENTS. */
+export const SPONSORED_PRIZE_PER_WINNER_CENTS = 500;
+
+/**
+ * Sponsored winner slots from active/registered player count:
+ *  1–2 players → 1 winner
+ *  3–10 players → 2 winners
+ */
+export function getSponsoredWinnerCount(playerCount: number): number {
+  const n = Math.max(0, Math.floor(playerCount));
+  if (n <= 0) return 0;
+  if (n <= 2) return 1;
+  return 2;
+}
+
+export function getSponsoredPrizePerWinnerUsd(
+  prizePerWinnerCents?: number | null,
+): number {
+  const cents =
+    typeof prizePerWinnerCents === "number" && prizePerWinnerCents > 0
+      ? prizePerWinnerCents
+      : SPONSORED_PRIZE_PER_WINNER_CENTS;
+  return Math.round(cents) / 100;
+}
+
 const RACE_DURATION_MS = 3 * 60 * 60 * 1000;
 
 export function parseSponsoredEventsResponse(

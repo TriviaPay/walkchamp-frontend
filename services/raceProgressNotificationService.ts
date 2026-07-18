@@ -22,12 +22,18 @@ export type RaceProgressNotificationPayload = {
   lastSyncedAt?: string;
   /** Absolute race end (ISO or epoch ms). Used once to seed native countdown chronometer. */
   challengeEndAt?: string | number;
+  /** Drives "Sponsored Event" vs "Live Race" notification title. */
+  isSponsored?: boolean;
 };
 
 type NativeModule = {
   startRaceProgressNotification: (payload: Record<string, unknown>) => Promise<void>;
   updateRaceProgressNotification: (payload: Record<string, unknown>) => Promise<void>;
   stopRaceProgressNotification: (payload: { raceId: string; reason?: string }) => Promise<void>;
+  upsertParallelRaceProgressNotification?: (
+    payload: Record<string, unknown>,
+  ) => Promise<void>;
+  stopParallelRaceProgressNotification?: (payload: { raceId: string }) => Promise<void>;
   startRaceBackgroundService?: (payload: Record<string, unknown>) => Promise<void>;
   updateRaceBackgroundService?: (payload: Record<string, unknown>) => Promise<void>;
   stopRaceBackgroundService?: (payload: {
@@ -99,6 +105,9 @@ async function toNativePayload(
   if (payload.challengeEndAt != null && payload.challengeEndAt !== "") {
     out.challengeEndAt = payload.challengeEndAt;
   }
+  if (payload.isSponsored === true) {
+    out.isSponsored = true;
+  }
   return out;
 }
 
@@ -117,8 +126,20 @@ function formatRaceNotificationBody(payload: RaceProgressNotificationPayload): s
   return `${steps} steps • #${payload.rank}/${payload.totalParticipants} • Goal ${goal}${openHint}`;
 }
 
+type ParallelRaceCache = {
+  payload: RaceProgressNotificationPayload;
+  raceStartISO: string | null;
+  /** Device todaySteps when parallel notif was started — for incremental race step estimates. */
+  bootTodaySteps: number;
+  bootRaceSteps: number;
+  lastLocalUpdateMs: number;
+  lastSteps: number;
+};
+
 class RaceProgressNotificationService {
   private activeRaceId: string | null = null;
+  private parallelRaceId: string | null = null;
+  private parallelCache: ParallelRaceCache | null = null;
   private lastLocalUpdateMs = 0;
   private lastSteps = -1;
   private lastRank = -1;
@@ -135,6 +156,14 @@ class RaceProgressNotificationService {
 
   isNotificationPermissionDenied(): boolean {
     return notificationPermissionDenied;
+  }
+
+  getActiveRaceId(): string | null {
+    return this.activeRaceId;
+  }
+
+  getParallelRaceId(): string | null {
+    return this.parallelRaceId;
   }
 
   setHealthKitWakeHandler(handler: (() => void) | null): void {
@@ -210,6 +239,10 @@ class RaceProgressNotificationService {
     if (!native) return;
 
     this.clearRegisterTimer();
+    // If this race was shown as the parallel tray entry, drop it first.
+    if (this.parallelRaceId === payload.raceId) {
+      await this.stopParallel(payload.raceId);
+    }
     this.activeRaceId = payload.raceId;
     this.raceStartISO = raceStartISO ?? null;
     this.lastSteps = -1;
@@ -270,10 +303,151 @@ class RaceProgressNotificationService {
     }
   }
 
+  /**
+   * Second concurrent race notification (Android notify-only id 1002).
+   * Keeps sponsored + free/coins both visible alongside the daily walk notif.
+   */
+  async startParallel(
+    payload: RaceProgressNotificationPayload,
+    raceStartISO?: string,
+  ): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    if (!payload.raceId || !payload.userId) return;
+    if (this.activeRaceId === payload.raceId) {
+      if (__DEV__) {
+        console.log(
+          `[RaceNotification] skip parallel — already FGS primary raceId=${payload.raceId}`,
+        );
+      }
+      return;
+    }
+    if (Platform.OS !== "android") return;
+    const native = getNativeModule();
+    if (!native?.upsertParallelRaceProgressNotification) {
+      if (__DEV__) {
+        console.warn(
+          "[RaceProgressNotif] upsertParallelRaceProgressNotification missing — rebuild native app",
+        );
+      }
+      return;
+    }
+
+    const permitted = await checkAndroidNotificationPermission();
+    if (!permitted) {
+      console.warn("[RaceProgressNotif] parallel notif skipped — POST_NOTIFICATIONS denied");
+      return;
+    }
+
+    const todaySteps = store.getState().raceProgress.todaySteps;
+    this.parallelRaceId = payload.raceId;
+    this.parallelCache = {
+      payload: { ...payload },
+      raceStartISO: raceStartISO ?? null,
+      bootTodaySteps: todaySteps,
+      bootRaceSteps: Math.max(0, payload.raceSteps),
+      lastLocalUpdateMs: 0,
+      lastSteps: -1,
+    };
+
+    try {
+      const nativePayload = await toNativePayload(payload, raceStartISO);
+      await native.upsertParallelRaceProgressNotification(nativePayload);
+      this.parallelCache.lastLocalUpdateMs = Date.now();
+      this.parallelCache.lastSteps = payload.raceSteps;
+      if (__DEV__) {
+        console.log(`[RaceNotification] parallel start raceId=${payload.raceId}`);
+      }
+    } catch (err) {
+      if (__DEV__) console.warn("[RaceProgressNotif] parallel start failed", err);
+    }
+  }
+
+  async stopParallel(raceId: string): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    if (Platform.OS !== "android") return;
+    if (this.parallelRaceId && this.parallelRaceId !== raceId) return;
+    const native = getNativeModule();
+    this.parallelRaceId = null;
+    this.parallelCache = null;
+    if (!native?.stopParallelRaceProgressNotification) return;
+    try {
+      await native.stopParallelRaceProgressNotification({ raceId });
+      if (__DEV__) {
+        console.log(`[RaceNotification] parallel stop raceId=${raceId}`);
+      }
+    } catch (err) {
+      if (__DEV__) console.warn("[RaceProgressNotif] parallel stop failed", err);
+    }
+  }
+
+  async updateParallel(
+    payload: RaceProgressNotificationPayload,
+    forceUpdate = false,
+  ): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    if (Platform.OS !== "android") return;
+    if (!this.parallelRaceId || this.parallelRaceId !== payload.raceId) return;
+    if (!this.parallelCache) return;
+    const native = getNativeModule();
+    if (!native?.upsertParallelRaceProgressNotification) return;
+
+    const cfg = RACE_PROGRESS_NOTIFICATION_CONFIG;
+    const now = Date.now();
+    if (
+      !forceUpdate &&
+      now - this.parallelCache.lastLocalUpdateMs < cfg.LOCAL_UPDATE_MS &&
+      Math.abs(payload.raceSteps - this.parallelCache.lastSteps) <
+        cfg.MIN_STEP_DELTA_FOR_UPDATE
+    ) {
+      return;
+    }
+
+    const merged: RaceProgressNotificationPayload = {
+      ...this.parallelCache.payload,
+      ...payload,
+      raceId: this.parallelRaceId,
+    };
+    this.parallelCache.payload = merged;
+
+    try {
+      const nativePayload = await toNativePayload(
+        merged,
+        this.parallelCache.raceStartISO ?? undefined,
+      );
+      await native.upsertParallelRaceProgressNotification(nativePayload);
+      this.parallelCache.lastLocalUpdateMs = now;
+      this.parallelCache.lastSteps = payload.raceSteps;
+    } catch (err) {
+      if (__DEV__) console.warn("[RaceProgressNotif] parallel update failed", err);
+    }
+  }
+
+  /**
+   * Bump parallel race steps from device today total (companion races sync via deviceTotalSteps).
+   */
+  async onCompanionDeviceStepsUpdated(todaySteps: number, force = false): Promise<void> {
+    if (!this.parallelCache || !this.parallelRaceId) return;
+    const delta = Math.max(0, todaySteps - this.parallelCache.bootTodaySteps);
+    const raceSteps = this.parallelCache.bootRaceSteps + delta;
+    await this.updateParallel(
+      {
+        ...this.parallelCache.payload,
+        raceSteps,
+      },
+      force,
+    );
+  }
+
   async stop(raceId: string, raceStatus = "completed", todaySteps?: number): Promise<void> {
     if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
     const native = getNativeModule();
     if (!native) return;
+
+    // Stopping the companion race must not tear down the FGS primary.
+    if (this.parallelRaceId === raceId && this.activeRaceId !== raceId) {
+      await this.stopParallel(raceId);
+      return;
+    }
 
     this.clearRegisterTimer();
     healthKitWakeSubscription?.remove();
@@ -305,6 +479,9 @@ class RaceProgressNotificationService {
 
   /** Stop any active race notification (logout / global cleanup). */
   async stopAll(todaySteps?: number, reason = "cancelled"): Promise<void> {
+    if (this.parallelRaceId) {
+      await this.stopParallel(this.parallelRaceId);
+    }
     if (this.activeRaceId) {
       await this.stop(this.activeRaceId, reason, reason === "logout" ? 0 : todaySteps);
     }

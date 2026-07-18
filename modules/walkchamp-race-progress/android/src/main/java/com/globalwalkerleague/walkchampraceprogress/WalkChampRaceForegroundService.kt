@@ -25,12 +25,19 @@ class WalkChampRaceForegroundService : Service() {
     const val CHANNEL_RACE = "walkchamp_race_live"
     const val CHANNEL_STEPS = "walkchamp_steps_ongoing"
     const val NOTIFICATION_ID_RACE = 1001
+    /** Second concurrent race (e.g. sponsored while free is FGS) — notify-only, not FGS. */
+    const val NOTIFICATION_ID_RACE_PARALLEL = 1002
     const val NOTIFICATION_ID_WALK = 91002
 
     const val ACTION_START = "com.globalwalkerleague.walkchampraceprogress.START"
     const val ACTION_UPDATE = "com.globalwalkerleague.walkchampraceprogress.UPDATE"
     const val ACTION_STOP = "com.globalwalkerleague.walkchampraceprogress.STOP"
     const val ACTION_RESTORE = "com.globalwalkerleague.walkchampraceprogress.RESTORE"
+    /** Upsert a second ongoing race notification without replacing the FGS race. */
+    const val ACTION_UPSERT_PARALLEL_RACE =
+      "com.globalwalkerleague.walkchampraceprogress.UPSERT_PARALLEL_RACE"
+    const val ACTION_STOP_PARALLEL_RACE =
+      "com.globalwalkerleague.walkchampraceprogress.STOP_PARALLEL_RACE"
 
     const val ACTION_START_WALK = "com.globalwalkerleague.walkchampraceprogress.START_WALK"
     const val ACTION_UPDATE_WALK = "com.globalwalkerleague.walkchampraceprogress.UPDATE_WALK"
@@ -140,6 +147,7 @@ class WalkChampRaceForegroundService : Service() {
         anchored.deepLink(),
         anchored.raceStartTimeMs,
         anchored.challengeEndAtMs,
+        anchored.isSponsored,
       )
     }
 
@@ -150,6 +158,7 @@ class WalkChampRaceForegroundService : Service() {
       deepLink: String,
       raceStartTimeMs: Long = 0L,
       challengeEndAtMs: Long = 0L,
+      isSponsored: Boolean = false,
     ): Notification {
       ensureChannels(ctx)
       val uri = Uri.parse(deepLink.ifBlank { "walkchamp://race/$raceId" })
@@ -163,8 +172,9 @@ class WalkChampRaceForegroundService : Service() {
         intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
+      val title = if (isSponsored || challengeEndAtMs > 0L) "Sponsored Event" else "Live Race"
       val builder = NotificationCompat.Builder(ctx, CHANNEL_RACE)
-        .setContentTitle("Live Race")
+        .setContentTitle(title)
         .setContentText(body)
         .setSmallIcon(notificationSmallIcon(ctx))
         .setOngoing(true)
@@ -186,7 +196,7 @@ class WalkChampRaceForegroundService : Service() {
             .setChronometerCountDown(true)
           Log.d(
             TAG,
-            "[OngoingNotification] trackingType=race chronometerEnabled=true mode=countdown endAt=$challengeEndAtMs",
+            "[OngoingNotification] trackingType=race title=$title chronometerEnabled=true mode=countdown endAt=$challengeEndAtMs",
           )
         }
         raceStartTimeMs > 0L -> {
@@ -196,11 +206,11 @@ class WalkChampRaceForegroundService : Service() {
             .setUsesChronometer(true)
           Log.d(
             TAG,
-            "[OngoingNotification] trackingType=race chronometerEnabled=true mode=elapsed startAt=$raceStartTimeMs",
+            "[OngoingNotification] trackingType=race title=$title chronometerEnabled=true mode=elapsed startAt=$raceStartTimeMs",
           )
         }
         else -> {
-          Log.d(TAG, "[OngoingNotification] trackingType=race chronometerEnabled=false")
+          Log.d(TAG, "[OngoingNotification] trackingType=race title=$title chronometerEnabled=false")
         }
       }
       return builder.build()
@@ -259,6 +269,8 @@ class WalkChampRaceForegroundService : Service() {
   }
 
   private var raceState: RaceNotificationState? = null
+  /** Second concurrent race shown as a separate ongoing notification (not FGS). */
+  private var parallelRaceState: RaceNotificationState? = null
   private var workerThread: HandlerThread? = null
   private var workerHandler: Handler? = null
   private var wakeLock: PowerManager.WakeLock? = null
@@ -893,7 +905,8 @@ class WalkChampRaceForegroundService : Service() {
         raceSteps = maxOf(activeRace.raceSteps, state.raceSteps),
         rank = if (state.rank > 0) state.rank else activeRace.rank,
         totalParticipants = if (state.totalParticipants > 0) state.totalParticipants else activeRace.totalParticipants,
-        goalSteps = if (state.goalSteps > 0) state.goalSteps else activeRace.goalSteps,
+        // Keep the race room's targetSteps — never let a stale sensor/daily goal overwrite it.
+        goalSteps = if (activeRace.goalSteps > 0) activeRace.goalSteps else state.goalSteps,
         timeLeftSeconds = if (state.timeLeftSeconds > 0) state.timeLeftSeconds else activeRace.timeLeftSeconds,
         lastUpdatedAt = state.updatedAt,
       ).withComputedTimeLeft()
@@ -1251,11 +1264,21 @@ class WalkChampRaceForegroundService : Service() {
     refreshForegroundAfterRaceStop()
   }
 
+  private fun cancelParallelRaceNotification() {
+    parallelRaceState = null
+    try {
+      notificationManager().cancel(NOTIFICATION_ID_RACE_PARALLEL)
+    } catch (_: Exception) {
+    }
+    Log.d(TAG, "[RaceNotification] parallel stopped id=$NOTIFICATION_ID_RACE_PARALLEL")
+  }
+
   private fun clearSessionForUser(userId: String) {
     if (userId.isBlank()) return
     Log.d(TAG, "[Logout] clearing active step session userId=$userId")
     stopRaceLoops()
     raceState = null
+    cancelParallelRaceNotification()
     RaceNotificationState.clearForUser(this, userId)
     RaceNotificationState.save(this, null)
     notificationManager().cancel(NOTIFICATION_ID_RACE)
@@ -1552,12 +1575,41 @@ class WalkChampRaceForegroundService : Service() {
       }
       ACTION_STOP -> {
         val raceId = intent.getStringExtra(EXTRA_RACE_ID)
+        // Stopping the parallel (secondary) race must not tear down the FGS race.
+        if (raceId != null && parallelRaceState?.raceId == raceId && raceState?.raceId != raceId) {
+          cancelParallelRaceNotification()
+          return START_STICKY
+        }
         if (raceId == null || raceState?.raceId == raceId || raceState == null) {
           val reason = intent.getStringExtra("reason") ?: "race_stopped"
           val todaySteps = intent.getIntExtra("todaySteps", 0)
           stopRaceAndSwitchToDailySteps(reason, todaySteps)
         }
         return START_NOT_STICKY
+      }
+      ACTION_UPSERT_PARALLEL_RACE -> {
+        val incoming = parseStateFromIntent(intent) ?: return START_STICKY
+        // Never duplicate the FGS race as a parallel tray entry.
+        if (raceState?.raceId == incoming.raceId) {
+          Log.d(TAG, "[RaceNotification] skip parallel — same as FGS raceId=${incoming.raceId}")
+          return START_STICKY
+        }
+        parallelRaceState = incoming.withComputedTimeLeft()
+        val notification = buildRaceNotification(this, parallelRaceState!!)
+        ensureChannels(this)
+        notificationManager().notify(NOTIFICATION_ID_RACE_PARALLEL, notification)
+        Log.d(
+          TAG,
+          "[RaceNotification] parallel upsert raceId=${incoming.raceId} id=$NOTIFICATION_ID_RACE_PARALLEL",
+        )
+        return START_STICKY
+      }
+      ACTION_STOP_PARALLEL_RACE -> {
+        val raceId = intent.getStringExtra(EXTRA_RACE_ID)
+        if (raceId == null || parallelRaceState?.raceId == raceId || parallelRaceState == null) {
+          cancelParallelRaceNotification()
+        }
+        return START_STICKY
       }
       ACTION_SWITCH_TO_WALK -> {
         val todaySteps = intent.getIntExtra("todaySteps", 0)
@@ -1569,6 +1621,10 @@ class WalkChampRaceForegroundService : Service() {
         val allowReset = action == ACTION_START
         if (action == ACTION_START) {
           Log.d(TAG, "[RaceService] start raceId=${incoming.raceId}")
+          // Promoting a race that was shown as parallel — drop the duplicate tray entry.
+          if (parallelRaceState?.raceId == incoming.raceId) {
+            cancelParallelRaceNotification()
+          }
           syncBackoffIndex = 0
           lastBackendSyncMs = 0L
           lastSyncedRaceSteps = -1

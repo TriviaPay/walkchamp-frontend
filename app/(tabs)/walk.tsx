@@ -96,9 +96,12 @@ import {
   isTrackLayoutId,
 } from "@/constants/trackLayouts";
 import { fetchCoinBalance, selectCurrentCoinBalance } from "@/store/slices/coinsSlice";
+import { raceProgressActions } from "@/store/slices/raceProgressSlice";
+import { store } from "@/store";
+import { activeChallengeSync } from "@/services/activeChallengeSync";
 import CoinsInfoModal from "@/components/CoinsInfoModal";
 import CoinsStoreModal from "@/components/CoinsStoreModal";
-import ActiveRaceModal, { type ActiveRaceInfo } from "@/components/ActiveRaceModal";
+import ActiveRaceModal, { type ActiveRaceInfo, isSponsoredActiveRaceConflict } from "@/components/ActiveRaceModal";
 import AlreadyHostingModal from "@/components/AlreadyHostingModal";
 import CoinIcon from "@/components/CoinIcon";
 import DraggableShopIcon from "@/components/DraggableShopIcon";
@@ -1404,7 +1407,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
               </Text>
               <Text style={{ fontSize: 12, color: colors.mutedForeground, marginTop: 1 }}>
                 {stepSourceInfo?.permissionStatus === "connected"
-                  ? `${Platform.OS === "ios" ? "Apple Health" : "Health Connect"} is syncing`
+                  ? `${Platform.OS === "ios" ? "Apple Health" : "Health Connect"} is connected`
                   : `Tap to connect ${Platform.OS === "ios" ? "Apple Health" : "Health Connect"}`}
               </Text>
             </View>
@@ -2201,6 +2204,37 @@ function WalkScreenContent() {
         }
         if (!cancelled) {
           setSponsoredStatus(next);
+          // Dual-race: keep sponsored as companion while a free/coins race is active
+          // so device totals sync into both rooms.
+          if (next?.kind === "racing" && next.eventId) {
+            const activeId = store.getState().raceProgress.activeRaceId;
+            if (activeId && activeId !== next.eventId) {
+              store.dispatch(raceProgressActions.setCompanionRaceId(next.eventId));
+              void import("@/services/stepProgressCoordinator").then(({ ensureCompanionRaceNotification }) => {
+                void ensureCompanionRaceNotification({
+                  raceId: next.eventId,
+                  userId: store.getState().auth.user?.id ?? "",
+                  username: store.getState().auth.user?.username ?? undefined,
+                });
+              });
+            } else if (!activeId) {
+              store.dispatch(raceProgressActions.setCompanionRaceId(null));
+            }
+            try {
+              activeChallengeSync.register(next.eventId);
+              if (activeId) activeChallengeSync.register(activeId);
+            } catch { /* ignore */ }
+          } else if (next?.kind !== "racing") {
+            const companion = store.getState().raceProgress.companionRaceId;
+            if (companion && next?.kind !== "join_window") {
+              store.dispatch(raceProgressActions.setCompanionRaceId(null));
+              void import("@/services/raceProgressNotificationService").then(
+                ({ raceProgressNotificationService }) => {
+                  void raceProgressNotificationService.stopParallel(companion);
+                },
+              );
+            }
+          }
         }
       } catch { /* silent */ }
     };
@@ -2368,55 +2402,15 @@ function WalkScreenContent() {
     | { kind: "registered"; eventId: string; scheduledStartAt: string; registeredCount: number; maxSlots: number }
     | { kind: "available"; eventId: string; registeredCount: number; maxSlots: number }
     | { kind: "watch_live"; eventId: string };
-  type SponsoredBlockingInfo =
-    | { blocked: false; target: null; title: ""; message: ""; eventId?: undefined }
-    | { blocked: true; target: "waiting-room" | "race"; title: string; message: string; eventId: string };
   const [sponsoredStatus, setSponsoredStatus] = useState<SponsoredCardStatus | null>(null);
 
   const openSponsoredWaitingRoom = useCallback((eventId: string) => {
     router.push({ pathname: "/sponsored-events/waiting-room", params: { id: eventId, from: "walk" } });
   }, []);
 
-  const getSponsoredBlockingInfo = useCallback((status: SponsoredCardStatus | null): SponsoredBlockingInfo => {
-    if (status?.kind === "join_window") {
-      return {
-        blocked: true,
-        target: "waiting-room",
-        title: "Sponsored Event Starting Soon",
-        message: "Your sponsored event is starting soon. Please stay in the waiting room or leave the event before joining another challenge.",
-        eventId: status.eventId,
-      };
-    }
-    if (status?.kind === "racing") {
-      return {
-        blocked: true,
-        target: "race",
-        title: "Sponsored Race In Progress",
-        message: "You are currently in a sponsored race. Finish or leave the race before joining another challenge.",
-        eventId: status.eventId,
-      };
-    }
-    return { blocked: false, target: null, title: "", message: "" };
-  }, []);
-
-  const showSponsoredBlockAlert = useCallback(() => {
-    const block = getSponsoredBlockingInfo(sponsoredStatus);
-    if (!block.blocked) return false;
-    AppAlert.alert(block.title, block.message, [
-      {
-        text: block.target === "race" ? "Open Race" : "Open Waiting Room",
-        onPress: () => {
-          if (block.target === "race") {
-            router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(block.eventId) });
-          } else {
-            openSponsoredWaitingRoom(block.eventId);
-          }
-        },
-      },
-      { text: "Cancel", style: "cancel" },
-    ]);
-    return true;
-  }, [getSponsoredBlockingInfo, openSponsoredWaitingRoom, sponsoredStatus]);
+  // Sponsored may run alongside one free/coins/cash race — do not block joining
+  // other challenges while registered, in the join window, or racing sponsored.
+  const showSponsoredBlockAlert = useCallback(() => false, []);
 
   const feeToEntryType = (fee: number) =>
     fee === 0 ? "free" : fee === 1 ? "paid_1" : fee === 3 ? "paid_3" : fee === -1 ? "coins_battle" : "paid_5";
@@ -2426,23 +2420,38 @@ function WalkScreenContent() {
 
   const ACTIVE_OR_WAITING = ["user_hosting_active", "user_joined_active", "user_hosting_waiting", "user_joined_waiting"];
 
+  /** Sponsored event id while racing — must not block Host / Create Challenge. */
+  const sponsoredRacingId =
+    sponsoredStatus?.kind === "racing" ? sponsoredStatus.eventId : null;
+
   const findActiveRaceForOtherChallenge = useCallback((targetEntryKey: string) => {
     for (const [ek, cs] of Object.entries(challengeStatuses)) {
-      if (ek !== targetEntryKey && cs && ACTIVE_OR_WAITING.includes(cs.status) && cs.raceId) {
+      if (
+        ek !== targetEntryKey &&
+        cs &&
+        ACTIVE_OR_WAITING.includes(cs.status) &&
+        cs.raceId &&
+        cs.raceId !== sponsoredRacingId
+      ) {
         return { entryKey: ek, cs };
       }
     }
     return null;
-  }, [challengeStatuses]);
+  }, [challengeStatuses, sponsoredRacingId]);
 
   const findAnyActiveRace = useCallback(() => {
     for (const [ek, cs] of Object.entries(challengeStatuses)) {
-      if (cs && ACTIVE_OR_WAITING.includes(cs.status) && cs.raceId) {
+      if (
+        cs &&
+        ACTIVE_OR_WAITING.includes(cs.status) &&
+        cs.raceId &&
+        cs.raceId !== sponsoredRacingId
+      ) {
         return { entryKey: ek, cs };
       }
     }
     return null;
-  }, [challengeStatuses]);
+  }, [challengeStatuses, sponsoredRacingId]);
 
   const buildActiveRaceInfoFromStatus = useCallback((entryKey: string, cs: { status: string; raceId: string | null; isHost: boolean; targetSteps?: number }): ActiveRaceInfo => {
     const isActiveRace = cs.status === "user_hosting_active" || cs.status === "user_joined_active";
@@ -2831,11 +2840,35 @@ function WalkScreenContent() {
 
       if (!res.ok) {
         if (res.status === 409 && data.code === "ACTIVE_RACE_EXISTS" && data.active_race) {
-          const ar = data.active_race;
+          const ar = data.active_race as ActiveRaceInfo & {
+            room_type?: string;
+            is_sponsored?: boolean;
+          };
+          // Sponsored events use entryType "free" — older APIs report them as a
+          // blocking "free" race. Confirm via room type / current sponsored id.
+          let sponsoredBlock = isSponsoredActiveRaceConflict(ar, sponsoredRacingId);
+          if (!sponsoredBlock && ar.room_id) {
+            try {
+              const detailRes = await authFetch(`/api/races/${ar.room_id}`);
+              if (detailRes.ok) {
+                const detail = (await detailRes.json()) as { race?: { type?: string } };
+                if (detail.race?.type === "sponsored") sponsoredBlock = true;
+              }
+            } catch { /* ignore */ }
+          }
+          if (sponsoredBlock) {
+            AppAlert.alert(
+              "Server needs update",
+              "You're only in a sponsored event — hosting a free challenge should be allowed. The API you're connected to is still treating sponsored as a blocking race. Redeploy/restart the backend with the latest fix, then try again.",
+            );
+            return;
+          }
           setActiveRaceModal({
             room_id: ar.room_id,
             room_status: ar.room_status as "open" | "in_progress",
             challenge_type: ar.challenge_type,
+            room_type: ar.room_type,
+            is_sponsored: ar.is_sponsored,
             entry_fee: ar.entry_fee,
             target_steps: ar.target_steps,
             current_user_role: ar.current_user_role as "host" | "participant",

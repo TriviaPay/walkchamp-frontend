@@ -144,7 +144,7 @@ function PrizeBanner() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={pb.title}>How Prizes Work</Text>
-            <Text style={pb.subtitle}>Amazon Gift Cards · 2 winners per race</Text>
+            <Text style={pb.subtitle}>Amazon Gift Cards · 1–2 winners by player count</Text>
           </View>
           <Feather name={open ? "chevron-up" : "chevron-down"} size={16} color="rgba(255,255,255,0.35)" />
         </TouchableOpacity>
@@ -183,7 +183,12 @@ function PrizeBanner() {
             {/* Rules list */}
             <View style={pb.ruleRow}>
               <Text style={pb.ruleDot}>🏆</Text>
-              <Text style={pb.ruleText}>Top <Text style={{ color: "#F59E0B", fontWeight: "800" }}>2 finishers</Text> each receive a $5 Amazon gift card</Text>
+              <Text style={pb.ruleText}>
+                <Text style={{ color: "#F59E0B", fontWeight: "800" }}>1–2 players</Text>
+                {" → 1st to finish wins $5 · "}
+                <Text style={{ color: "#F59E0B", fontWeight: "800" }}>3–10 players</Text>
+                {" → 1st & 2nd each win $5"}
+              </Text>
             </View>
             <View style={pb.ruleRow}>
               <Text style={pb.ruleDot}>⚡</Text>
@@ -191,7 +196,9 @@ function PrizeBanner() {
             </View>
             <View style={pb.ruleRow}>
               <Text style={pb.ruleDot}>🔒</Text>
-              <Text style={pb.ruleText}>Event needs ≥ 2 players to start — otherwise full coin refund</Text>
+              <Text style={pb.ruleText}>
+                Event needs at least <Text style={{ color: "#F59E0B", fontWeight: "800" }}>1 player</Text> to start — otherwise the event will be cancelled
+              </Text>
             </View>
             <View style={pb.ruleRow}>
               <Text style={pb.ruleDot}>⏱️</Text>
@@ -1239,9 +1246,11 @@ export default function SponsoredEventsScreen() {
             <Text style={sc.rulesBody}>
               {"• Register and coins are deducted immediately.\n" +
                 "• Leave before the race starts to get a full refund.\n" +
-                "• Race to 10,000 steps — top 2 finishers each win a $5 Amazon Gift Card.\n" +
+                "• Race to 10,000 steps.\n" +
+                "• 1–2 players: 1st to finish wins a $5 Amazon Gift Card.\n" +
+                "• 3–10 players: 1st & 2nd each win a $5 Amazon Gift Card.\n" +
                 "• Tie? The $10 prize is split equally among ALL tied finishers\n  (e.g. 3-way tie → $3.33 each, 4-way tie → $2.50 each).\n" +
-                "• Event cancelled (< 2 players)? Full coin refund instantly."}
+                "• Event cancelled (no players)? Full coin refund instantly."}
             </Text>
           </View>
         </ScrollView>

@@ -51,6 +51,20 @@ class WalkChampRaceProgressModule : Module() {
       null
     }
 
+    /**
+     * Second concurrent race (notify-only, id 1002). Does not replace the FGS race
+     * notification so daily walk + free race + sponsored can all stay visible.
+     */
+    AsyncFunction("upsertParallelRaceProgressNotification") { payload: Map<String, Any?> ->
+      sendRaceService(WalkChampRaceForegroundService.ACTION_UPSERT_PARALLEL_RACE, payload)
+      null
+    }
+
+    AsyncFunction("stopParallelRaceProgressNotification") { payload: Map<String, Any?> ->
+      stopParallelRaceService(payload)
+      null
+    }
+
     AsyncFunction("startRaceBackgroundService") { payload: Map<String, Any?> ->
       sendRaceService(WalkChampRaceForegroundService.ACTION_START, payload)
       null
@@ -384,6 +398,16 @@ class WalkChampRaceProgressModule : Module() {
     deliverToService(ctx, intent)
   }
 
+  private fun stopParallelRaceService(payload: Map<String, Any?>) {
+    val raceId = payload["raceId"] as? String ?: return
+    val ctx = appContext.reactContext ?: return
+    val intent = Intent(ctx, WalkChampRaceForegroundService::class.java).apply {
+      action = WalkChampRaceForegroundService.ACTION_STOP_PARALLEL_RACE
+      putExtra(WalkChampRaceForegroundService.EXTRA_RACE_ID, raceId)
+    }
+    deliverToService(ctx, intent)
+  }
+
   private fun sendRaceService(action: String, payload: Map<String, Any?>) {
     val ctx = appContext.reactContext ?: return
     val raceId = payload["raceId"] as? String ?: return
@@ -403,7 +427,7 @@ class WalkChampRaceProgressModule : Module() {
       // START must be called from the foreground — use startForegroundService.
       startServiceForeground(ctx, intent)
     } else {
-      // UPDATE delivers to an already-running service — safe from any app state.
+      // UPDATE / parallel upsert deliver to an already-running service.
       deliverToService(ctx, intent)
     }
   }

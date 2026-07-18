@@ -107,17 +107,48 @@ interface ProfileData {
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
+type StepSourceInfo = {
+  platform: string;
+  permissionStatus: string;
+  setupCompleted: boolean;
+};
+
 interface ProfileMeResponse {
   profile: ProfileData | null;
   stats: ServerStats | null;
   activeTitle: ActiveTitle | null;
   challengeHistory: ChallengeHistoryItem[];
   last7Days: { date: string; steps: number }[];
-  stepSource: { platform: string; permissionStatus: string; setupCompleted: boolean } | null;
+  stepSource: StepSourceInfo | null;
 }
 
 const PROFILE_ME_TTL_MS = 90_000;
 const PROFILE_TITLES_EVAL_TTL_MS = 5 * 60_000;
+
+/** Prefer a freshly completed local "connected" state over stale cache/API nulls. */
+function mergeStepSource(
+  incoming: StepSourceInfo | null | undefined,
+  current: StepSourceInfo | null,
+): StepSourceInfo | null {
+  if (incoming === undefined) return current;
+  if (incoming === null) {
+    if (current?.setupCompleted && current.permissionStatus === "connected") return current;
+    return null;
+  }
+  if (
+    current?.permissionStatus === "connected" &&
+    current.setupCompleted &&
+    incoming.permissionStatus !== "connected" &&
+    incoming.permissionStatus !== "denied"
+  ) {
+    return {
+      ...incoming,
+      permissionStatus: "connected",
+      setupCompleted: true,
+    };
+  }
+  return incoming;
+}
 
 function applyProfileMeData(
   data: ProfileMeResponse,
@@ -126,14 +157,16 @@ function applyProfileMeData(
     setActiveTitle: (v: ActiveTitle | null) => void;
     setChallengeHistory: (v: ChallengeHistoryItem[]) => void;
     setLast7Days: (v: { date: string; steps: number }[]) => void;
-    setStepSourceInfo: (v: { platform: string; permissionStatus: string; setupCompleted: boolean } | null) => void;
+    setStepSourceInfo: React.Dispatch<React.SetStateAction<StepSourceInfo | null>>;
   },
 ): void {
   if (data.stats) setters.setServerStats(data.stats);
   setters.setActiveTitle(data.activeTitle);
   if (data.challengeHistory.length > 0) setters.setChallengeHistory(data.challengeHistory);
   if (data.last7Days.length > 0) setters.setLast7Days(data.last7Days);
-  if (data.stepSource !== undefined) setters.setStepSourceInfo(data.stepSource);
+  if (data.stepSource !== undefined) {
+    setters.setStepSourceInfo((prev) => mergeStepSource(data.stepSource, prev));
+  }
 }
 
 async function fetchProfileMeFull(): Promise<ProfileMeResponse | null> {
@@ -207,14 +240,15 @@ function computeLevel(totalSteps: number) {
 function WearableStatusCard({
   stepSource, onSetupPress, colors: c,
 }: {
-  stepSource: { platform: string; permissionStatus: string; setupCompleted: boolean } | null;
+  stepSource: StepSourceInfo | null;
   onSetupPress: () => void;
   colors: ReturnType<typeof useColors>;
 }) {
   const isConnected = stepSource?.permissionStatus === "connected";
   const isDenied    = stepSource?.permissionStatus === "denied";
   const sourceName  =
-    stepSource?.platform === "ios_healthkit"         ? "Apple Health"    :
+    stepSource?.platform === "ios_healthkit"          ? "Apple Health"    :
+    stepSource?.platform === "android_legacy_sensor"  ? "Android Steps"   :
     stepSource?.platform === "android_health_connect" ? "Health Connect"  :
     Platform.OS === "ios"                             ? "Apple Health"    : "Health Connect";
 
@@ -234,7 +268,7 @@ function WearableStatusCard({
         </Text>
         <Text style={[wsCard.sub, { color: c.mutedForeground }]}>
           {isConnected
-            ? `${sourceName} is syncing with Walk Champ.`
+            ? `${sourceName} is connected and counting your steps.`
             : isDenied
             ? "Tap to restore permissions."
             : `Tap to connect ${sourceName}`}
@@ -337,7 +371,7 @@ export default function ProfileScreen() {
   const [activeTitle,       setActiveTitle]       = useState<ActiveTitle | null>(cachedProfile?.activeTitle ?? null);
   const [challengeHistory,  setChallengeHistory]  = useState<ChallengeHistoryItem[]>(cachedProfile?.challengeHistory ?? []);
   const [last7Days,         setLast7Days]         = useState<{ date: string; steps: number }[]>(cachedProfile?.last7Days ?? []);
-  const [stepSourceInfo,    setStepSourceInfo]    = useState<{ platform: string; permissionStatus: string; setupCompleted: boolean } | null>(cachedProfile?.stepSource ?? null);
+  const [stepSourceInfo,    setStepSourceInfo]    = useState<StepSourceInfo | null>(cachedProfile?.stepSource ?? null);
   const [showWearableSetup, setShowWearableSetup] = useState(false);
   const [deleteLoading,     setDeleteLoading]     = useState(false);
 
@@ -600,6 +634,57 @@ export default function ProfileScreen() {
           }
         })();
       }
+
+      // If steps permission is already granted on-device but Profile still shows setup
+      // (stale not_requested / missing row), heal the UI + server status.
+      void (async () => {
+        try {
+          if (Platform.OS === "ios") {
+            const { stepTracker } = await import("@/services/StepTrackingService");
+            const s = await stepTracker.getPermissionStatus();
+            if (s !== "granted") return;
+            const platform = "ios_healthkit";
+            setStepSourceInfo((prev) => {
+              if (prev?.permissionStatus === "connected") return prev;
+              return { platform, permissionStatus: "connected", setupCompleted: true };
+            });
+            void authFetch("/api/me/step-source", {
+              method: "POST",
+              body: JSON.stringify({
+                platform,
+                permission_status: "connected",
+                source_name: "Apple Health",
+                setup_completed: true,
+              }),
+            }).catch(() => {});
+            return;
+          }
+          const { stepProviderManager } = await import("@/services/steps/stepProviderManager");
+          const status = await stepProviderManager.refreshStatus();
+          if (status.permission !== "granted") return;
+          const platform =
+            status.providerId === "android_legacy_sensor"
+              ? "android_legacy_sensor"
+              : "android_health_connect";
+          const sourceName =
+            platform === "android_legacy_sensor" ? "Android Steps" : "Health Connect";
+          setStepSourceInfo((prev) => {
+            if (prev?.permissionStatus === "connected") return prev;
+            return { platform, permissionStatus: "connected", setupCompleted: true };
+          });
+          void authFetch("/api/me/step-source", {
+            method: "POST",
+            body: JSON.stringify({
+              platform,
+              permission_status: "connected",
+              source_name: sourceName,
+              setup_completed: true,
+            }),
+          }).catch(() => {});
+        } catch {
+          /* ignore */
+        }
+      })();
 
       if (apiFetchAllowed("profile_titles_evaluate", PROFILE_TITLES_EVAL_TTL_MS)) {
         markApiFetched("profile_titles_evaluate");
@@ -1161,7 +1246,18 @@ export default function ProfileScreen() {
         onClose={() => setShowWearableSetup(false)}
         last7Days={last7Days}
         onComplete={(platform: string, permissionStatus: string) => {
-          setStepSourceInfo({ platform, permissionStatus, setupCompleted: true });
+          const next: StepSourceInfo = {
+            platform,
+            permissionStatus,
+            setupCompleted: true,
+          };
+          setStepSourceInfo((prev) => mergeStepSource(next, prev) ?? next);
+          void (async () => {
+            const cached = await screenCache.get<ProfileMeResponse>(PROFILE_ME_CACHE_KEY);
+            if (cached) {
+              await screenCache.set(PROFILE_ME_CACHE_KEY, { ...cached, stepSource: next });
+            }
+          })();
           if (permissionStatus === "connected") {
             void requestStepPermission();
           }

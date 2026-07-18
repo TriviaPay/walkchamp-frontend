@@ -24,6 +24,7 @@ import type { UserProfile } from "@/store/types";
 import { prefetchProfileAvatar } from "@/services/mediaApi";
 import { authEvents } from "@/utils/authEvents";
 import { screenCache } from "@/utils/screenCache";
+import { activeChallengeSync } from "@/services/activeChallengeSync";
 import { storageGet, storageSet, storageRemove, STORAGE_KEYS } from "@/utils/storage";
 import { perf } from "@/utils/perfLogger";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
@@ -166,6 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     void clearPendingMatchPermissionAction().catch(() => {});
     void clearActiveSessionMeta().catch(() => {});
+    activeChallengeSync.clear();
     // Optimistic logout: wipe Redux immediately so the TabLayout Redirect fires
     // right away — the user sees the login screen without any intermediate flash.
     // Native step cleanup + Descope API continue in the background.

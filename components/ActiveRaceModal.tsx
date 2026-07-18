@@ -13,11 +13,27 @@ export interface ActiveRaceInfo {
   room_id: string;
   room_status: string;
   challenge_type: string;
+  /** Present on updated backends — "sponsored" means this should not block hosting. */
+  room_type?: string;
+  is_sponsored?: boolean;
   entry_fee: number;
   target_steps: number;
   current_user_role: string;
   can_leave: boolean;
   next_screen: string;
+}
+
+/** True when the "active race" conflict is only a sponsored event (should not block host). */
+export function isSponsoredActiveRaceConflict(info: {
+  room_id?: string;
+  room_type?: string;
+  is_sponsored?: boolean;
+  challenge_type?: string;
+} | null | undefined, sponsoredRacingId?: string | null): boolean {
+  if (!info) return false;
+  if (info.is_sponsored === true || info.room_type === "sponsored") return true;
+  if (sponsoredRacingId && info.room_id === sponsoredRacingId) return true;
+  return false;
 }
 
 interface ActiveRaceModalProps {

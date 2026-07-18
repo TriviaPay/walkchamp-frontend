@@ -51,7 +51,7 @@ export function getRoomCountLabel(count: number): string {
  *
  * @param races       source list (already filtered by chip)
  * @param getDateIso  extractor returning the ISO date to group/sort by
- * @param opts.order        order of date sections ("asc" = Today first)
+ * @param opts.order        order of date sections ("desc" = newest/Today first)
  * @param opts.withinOrder  order of cards inside a date ("asc" = earliest first)
  */
 export function groupRacesByDate<T>(
@@ -59,7 +59,7 @@ export function groupRacesByDate<T>(
   getDateIso: (r: T) => string | null | undefined,
   opts?: { order?: "asc" | "desc"; withinOrder?: "asc" | "desc" },
 ): DateGroup<T>[] {
-  const order = opts?.order ?? "asc";
+  const order = opts?.order ?? "desc";
   const withinOrder = opts?.withinOrder ?? "asc";
 
   const buckets = new Map<string, T[]>();
@@ -80,8 +80,14 @@ export function groupRacesByDate<T>(
     groups.push({ dateKey, dateLabel: formatRaceDateLabel(dateKey), races: arr });
   });
 
-  groups.sort((a, b) =>
-    order === "asc" ? a.dateKey.localeCompare(b.dateKey) : b.dateKey.localeCompare(a.dateKey),
-  );
+  groups.sort((a, b) => {
+    // Always pin local "Today" first when present — newest calendar day at top.
+    const todayKey = getRaceDateKey(undefined);
+    if (a.dateKey === todayKey && b.dateKey !== todayKey) return -1;
+    if (b.dateKey === todayKey && a.dateKey !== todayKey) return 1;
+    return order === "asc"
+      ? a.dateKey.localeCompare(b.dateKey)
+      : b.dateKey.localeCompare(a.dateKey);
+  });
   return groups;
 }

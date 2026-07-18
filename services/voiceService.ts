@@ -83,7 +83,9 @@ function installLiveKitClosingRejectionGuard(): void {
     const msg = reason instanceof Error ? reason.message : String(reason ?? "");
     return (
       msg.includes("Cannot read property 'Closing' of undefined") ||
-      msg.includes("Cannot read properties of undefined (reading 'Closing')")
+      msg.includes("Cannot read properties of undefined (reading 'Closing')") ||
+      msg.includes("The remote description was null") ||
+      msg.includes("remote description was null")
     );
   };
   // RN / Hermes: prevent redbox for known LiveKit UMD teardown noise.

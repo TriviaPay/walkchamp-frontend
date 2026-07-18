@@ -70,6 +70,7 @@ interface RaceData {
   startedAt: string | null;
   completedAt: string | null;
   challengeEndAt: string | null;
+  type?: string;
   creatorId: string;
   prizePool?: number;
   prizeTiers?: number[];
@@ -378,6 +379,7 @@ export default function LiveTrackTab() {
   const { user } = useAuth();
   const {
     setActiveRace,
+    setRaceTargetSteps,
     resumeLiveRace,
     catchUpLiveRaceSteps,
     userRaceSteps,
@@ -467,16 +469,37 @@ export default function LiveTrackTab() {
       if (detail.race?.status === "in_progress" && user?.id) {
         const me = findEligibleLiveRaceParticipant(parts, user);
         if (me) {
+          const prevActiveId = store.getState().raceProgress.activeRaceId;
+          const preserveAsCompanion = !!prevActiveId && prevActiveId !== raceId;
+          const resolvedGoal =
+            typeof detail.race.targetSteps === "number" && detail.race.targetSteps > 0
+              ? detail.race.targetSteps
+              : undefined;
+          if (resolvedGoal != null) {
+            setRaceTargetSteps(resolvedGoal);
+          }
           setActiveRace(raceId, false);
+          const challengeEndAt =
+            detail.race.type === "sponsored"
+              ? detail.race.challengeEndAt ??
+                (detail.race.startedAt
+                  ? new Date(
+                      new Date(detail.race.startedAt).getTime() + 3 * 60 * 60 * 1000,
+                    ).toISOString()
+                  : undefined)
+              : detail.race.challengeEndAt ?? undefined;
           ensureActiveRaceInStore({
             raceId,
             raceStartTime: new Date(detail.race.startedAt ?? Date.now()).toISOString(),
             userId: user.id,
             username: user.username ?? "Runner",
-            goalSteps: typeof detail.race.targetSteps === "number" ? detail.race.targetSteps : DEFAULT_TARGET_STEPS,
+            goalSteps: resolvedGoal ?? store.getState().raceProgress.goalSteps ?? 0,
             totalParticipants: detail.race.currentPlayers ?? parts.length,
             bootSteps: me.currentSteps ?? 0,
             participantConfirmed: true,
+            preserveAsCompanion,
+            isSponsored: detail.race.type === "sponsored",
+            challengeEndAt,
           });
           if (!raceResumedRef.current) {
             raceResumedRef.current = true;
@@ -550,22 +573,43 @@ export default function LiveTrackTab() {
       );
       return;
     }
+    const prevActiveId = store.getState().raceProgress.activeRaceId;
+    const preserveAsCompanion = !!prevActiveId && prevActiveId !== activeRaceId;
+    const resolvedGoal =
+      typeof race?.targetSteps === "number" && race.targetSteps > 0
+        ? race.targetSteps
+        : targetSteps > 0
+          ? targetSteps
+          : undefined;
+    if (resolvedGoal != null) {
+      setRaceTargetSteps(resolvedGoal);
+    }
+    const challengeEndAt =
+      race?.type === "sponsored"
+        ? race.challengeEndAt ??
+          (race.startedAt
+            ? new Date(new Date(race.startedAt).getTime() + 3 * 60 * 60 * 1000).toISOString()
+            : undefined)
+        : race?.challengeEndAt ?? undefined;
     ensureActiveRaceInStore({
       raceId: activeRaceId,
       raceStartTime: new Date(race?.startedAt ?? Date.now()).toISOString(),
       userId: user.id,
       username: user.username ?? "Runner",
-      goalSteps: targetSteps,
+      goalSteps: resolvedGoal ?? store.getState().raceProgress.goalSteps ?? 0,
       totalParticipants: race?.currentPlayers ?? participants.length,
       bootSteps: Math.max(me.currentSteps ?? 0, liveRaceSteps),
       participantConfirmed: true,
+      preserveAsCompanion,
+      isSponsored: race?.type === "sponsored",
+      challengeEndAt,
     });
     stepEngineLog(
       "LiveScreen",
       `live-track focus raceId=${activeRaceId} renderedSteps=${liveRaceSteps} participantNotifications=true`,
     );
     void catchUpLiveRaceSteps(me.currentSteps ?? 0, true);
-  }, [activeRaceId, isActive, user?.id, user?.username, participants, race?.startedAt, race?.currentPlayers, targetSteps, liveRaceSteps, catchUpLiveRaceSteps]));
+  }, [activeRaceId, isActive, user?.id, user?.username, participants, race?.startedAt, race?.currentPlayers, race?.type, race?.challengeEndAt, race?.targetSteps, targetSteps, liveRaceSteps, catchUpLiveRaceSteps, setRaceTargetSteps]));
 
   useEffect(() => {
     if (!activeRaceId || !user?.id) return;

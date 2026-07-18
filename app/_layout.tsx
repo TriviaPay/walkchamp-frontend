@@ -108,8 +108,13 @@ if (Platform.OS === "web" && typeof window !== "undefined") {
   );
 
   window.addEventListener("unhandledrejection", (e) => {
-    const msg = String(e.reason?.message ?? "");
-    if (msg.includes("timeout exceeded") || msg.includes("Unable to activate keep awake")) {
+    const msg = String(e.reason?.message ?? e.reason ?? "");
+    if (
+      msg.includes("timeout exceeded") ||
+      msg.includes("Unable to activate keep awake") ||
+      msg.includes("The remote description was null") ||
+      msg.includes("remote description was null")
+    ) {
       e.preventDefault();
     }
   });
@@ -120,7 +125,11 @@ if (typeof globalThis !== "undefined" && "addEventListener" in globalThis) {
   globalThis.addEventListener("unhandledrejection", (e: Event) => {
     const reason = (e as PromiseRejectionEvent).reason;
     const msg = String(reason?.message ?? reason ?? "");
-    if (msg.includes("Unable to activate keep awake")) {
+    if (
+      msg.includes("Unable to activate keep awake") ||
+      msg.includes("The remote description was null") ||
+      msg.includes("remote description was null")
+    ) {
       e.preventDefault?.();
     }
   });

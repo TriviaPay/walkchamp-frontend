@@ -195,3 +195,32 @@ export function isWithinEventWindow(
   if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
   return timestampMs >= start && timestampMs < end;
 }
+
+/**
+ * Sponsored event titles are stored with a fixed Morning/Evening label.
+ * Rewrite Morning/Evening (and weekday) from the event start instant in the
+ * device local timezone so the header matches what the user sees on the clock.
+ * Also strips trailing date suffixes like "(Jul 18)".
+ */
+export function localizeSponsoredEventTitle(
+  title: string | null | undefined,
+  startIso: string | null | undefined,
+): string {
+  if (!title) return "";
+  let t = title.replace(/^LIVE\s+/i, "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+  if (!startIso) return t;
+  try {
+    const d = new Date(startIso);
+    if (Number.isNaN(d.getTime())) return t;
+    const period = d.getHours() < 12 ? "Morning" : "Evening";
+    t = t.replace(/\b(Morning|Evening)\b/i, period);
+    const weekday = d.toLocaleDateString(undefined, { weekday: "long" });
+    t = t.replace(
+      /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i,
+      weekday,
+    );
+    return t;
+  } catch {
+    return t;
+  }
+}

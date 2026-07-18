@@ -901,12 +901,28 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     // Register race in canonical store and start notification from coordinator.
     if (raceIdRef.current) {
       resetRaceStepBuffer();
+      const existing = store.getState().raceProgress;
+      let goalSteps = raceTargetStepsRef.current;
+      // Avoid clobbering a hydrated race goal (e.g. sponsored 10k) with the
+      // RaceContext default (1000) when resume races before setRaceTargetSteps.
+      if (
+        existing.activeRaceId === raceIdRef.current &&
+        existing.raceStatus === "active" &&
+        typeof existing.goalSteps === "number" &&
+        existing.goalSteps > 0 &&
+        (goalSteps <= 0 ||
+          (goalSteps === RACE_DEFAULTS.RACE_TARGET &&
+            existing.goalSteps !== RACE_DEFAULTS.RACE_TARGET))
+      ) {
+        goalSteps = existing.goalSteps;
+        raceTargetStepsRef.current = goalSteps;
+      }
       setActiveRaceProgress({
         raceId: raceIdRef.current,
         raceStartTime: raceStart?.toISOString() ?? new Date().toISOString(),
         userId: userProfileRef.current.userId,
         username: userProfileRef.current.username,
-        goalSteps: raceTargetStepsRef.current,
+        goalSteps,
         totalParticipants: Math.max(1, allParticipants.length),
         bootSteps,
         freshStart: !options?.isRejoin,

@@ -12,6 +12,8 @@ import {
 import { walkActions } from "@/store/slices/walkSlice";
 import { notifyMidnightRollover } from "@/services/walkMidnightEvents";
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
+import { postRaceProgress } from "@/services/raceProgressApi";
+import { activeChallengeSync } from "@/services/activeChallengeSync";
 import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
 import { stepTrackingNotificationService } from "@/services/stepTrackingNotificationService";
 import { RACE_PROGRESS_NOTIFICATION_CONFIG } from "@/config/raceProgressNotificationConfig";
@@ -38,6 +40,9 @@ import { findEligibleLiveRaceParticipant } from "@/utils/raceNotificationEligibi
 
 let notificationTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingNotification = false;
+/** Throttle companion multi-race POSTs (primary race uses raceStepSyncBuffer). */
+let lastCompanionSyncMs = 0;
+const COMPANION_SYNC_MIN_MS = 10_000;
 let walkNotificationTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingWalkNotification = false;
 let lastWalkNotificationSteps = -1;
@@ -573,6 +578,7 @@ async function pushNotificationFromStore(): Promise<void> {
     timeLeftSeconds: s.timeLeftSeconds ?? 0,
     raceStatus: "in_progress",
     lastSyncedAt: s.lastBackendSyncedAt ?? undefined,
+    isSponsored: s.activeRaceIsSponsored === true,
   };
 
   if (__DEV__) {
@@ -582,6 +588,10 @@ async function pushNotificationFromStore(): Promise<void> {
   }
 
   await raceProgressNotificationService.onLocalRaceStepsUpdated(payload);
+  // Keep companion race tray (id 1002) in sync with device today steps.
+  if (s.companionRaceId) {
+    await raceProgressNotificationService.onCompanionDeviceStepsUpdated(s.todaySteps);
+  }
   store.dispatch(raceProgressActions.markNotificationUpdated());
 }
 
@@ -1162,6 +1172,11 @@ export function ensureActiveRaceInStore(params: {
    * Callers must pass true only after confirming race_participants membership.
    */
   participantConfirmed: boolean;
+  /** Keep previous activeRaceId as companion for sponsored dual-race sync. */
+  preserveAsCompanion?: boolean;
+  isSponsored?: boolean;
+  /** Sponsored / timed races — seeds native countdown chronometer. */
+  challengeEndAt?: string | number | null;
 }): void {
   if (!params.participantConfirmed) {
     stepCoordDebug(
@@ -1178,6 +1193,35 @@ export function ensureActiveRaceInStore(params: {
     s.activeRaceId === params.raceId &&
     s.userId === params.userId
   ) {
+    const nextGoal =
+      typeof params.goalSteps === "number" && params.goalSteps > 0
+        ? params.goalSteps
+        : null;
+    if (nextGoal != null && nextGoal !== s.goalSteps) {
+      store.dispatch(
+        raceProgressActions.updateFromBackend({
+          goalSteps: nextGoal,
+          syncedAt: new Date().toISOString(),
+        }),
+      );
+      void raceProgressNotificationService.onLocalRaceStepsUpdated(
+        {
+          raceId: params.raceId,
+          userId: params.userId,
+          username: params.username,
+          raceSteps: Math.max(boot, s.raceSteps),
+          rank: s.rank ?? 1,
+          totalParticipants: params.totalParticipants ?? s.totalParticipants ?? 1,
+          goalSteps: nextGoal,
+          timeLeftSeconds: s.timeLeftSeconds ?? 0,
+          isSponsored: params.isSponsored === true || s.activeRaceIsSponsored === true,
+          ...(params.challengeEndAt != null && params.challengeEndAt !== ""
+            ? { challengeEndAt: params.challengeEndAt }
+            : {}),
+        },
+        true,
+      );
+    }
     if (boot > s.raceSteps) {
       store.dispatch(
         raceProgressActions.updateFromDeviceSource({
@@ -1189,7 +1233,7 @@ export function ensureActiveRaceInStore(params: {
       scheduleNotificationUpdate(true);
     }
     stepCoordDebug(
-      `[StepCoordinator] ensureActiveRaceInStore ok raceId=${params.raceId} raceSteps=${store.getState().raceProgress.raceSteps}`,
+      `[StepCoordinator] ensureActiveRaceInStore ok raceId=${params.raceId} raceSteps=${store.getState().raceProgress.raceSteps} goal=${store.getState().raceProgress.goalSteps}`,
     );
     return;
   }
@@ -1220,6 +1264,9 @@ export function setActiveRaceProgress(params: {
    * Must be true only for confirmed race_participants.
    */
   participantConfirmed: boolean;
+  preserveAsCompanion?: boolean;
+  isSponsored?: boolean;
+  challengeEndAt?: string | number | null;
 }): void {
   if (!params.participantConfirmed) {
     stepCoordDebug(
@@ -1230,12 +1277,67 @@ export function setActiveRaceProgress(params: {
   }
   const freshStart = params.freshStart !== false;
   const boot = freshStart ? 0 : Math.max(0, params.bootSteps ?? 0);
+  const prev = store.getState().raceProgress;
+  const prevActiveId = prev.activeRaceId;
+  // Prefer an already-known goal for the same race over RaceContext's default 1000
+  // when resume/start races the notification before targetSteps was synced.
+  let resolvedGoal = Math.max(0, params.goalSteps || 0);
+  if (
+    prevActiveId === params.raceId &&
+    prev.raceStatus === "active" &&
+    typeof prev.goalSteps === "number" &&
+    prev.goalSteps > 0
+  ) {
+    if (resolvedGoal <= 0) {
+      resolvedGoal = prev.goalSteps;
+    } else if (resolvedGoal === 1000 && prev.goalSteps !== 1000) {
+      resolvedGoal = prev.goalSteps;
+    }
+  }
+  const prevCompanionSnapshot =
+    params.preserveAsCompanion &&
+    prevActiveId &&
+    prevActiveId !== params.raceId &&
+    prev.raceStatus === "active"
+      ? {
+          raceId: prevActiveId,
+          userId: prev.userId ?? params.userId,
+          username: prev.username ?? params.username,
+          raceSteps: prev.raceSteps,
+          rank: prev.rank ?? 1,
+          totalParticipants: prev.totalParticipants ?? 1,
+          goalSteps: prev.goalSteps && prev.goalSteps > 0 ? prev.goalSteps : resolvedGoal,
+          timeLeftSeconds: prev.timeLeftSeconds ?? 0,
+          raceStartTime: prev.raceStartTime,
+          isSponsored: prev.activeRaceIsSponsored === true,
+          challengeEndAt: undefined as string | number | undefined,
+        }
+      : null;
+
   raceStepSyncService.reset();
   if (!freshStart && boot > 0) {
     raceStepSyncService.seedSyncedSteps(boot);
   }
   store.dispatch(raceProgressActions.resetRaceStepBuffer());
-  store.dispatch(raceProgressActions.setActiveRace({ ...params, bootSteps: boot }));
+  store.dispatch(
+    raceProgressActions.setActiveRace({
+      ...params,
+      goalSteps: resolvedGoal,
+      bootSteps: boot,
+      preserveAsCompanion: params.preserveAsCompanion === true,
+    }),
+  );
+  activeChallengeSync.register(params.raceId);
+  if (params.preserveAsCompanion) {
+    const companionId = store.getState().raceProgress.companionRaceId;
+    if (companionId) activeChallengeSync.register(companionId);
+  }
+
+  const challengeEndAt =
+    params.challengeEndAt != null && params.challengeEndAt !== ""
+      ? params.challengeEndAt
+      : undefined;
+
   void raceProgressNotificationService.start(
     {
       raceId: params.raceId,
@@ -1244,11 +1346,35 @@ export function setActiveRaceProgress(params: {
       raceSteps: boot,
       rank: 1,
       totalParticipants: params.totalParticipants ?? 1,
-      goalSteps: params.goalSteps,
+      goalSteps: resolvedGoal,
       timeLeftSeconds: 0,
+      isSponsored: params.isSponsored === true,
+      ...(challengeEndAt != null ? { challengeEndAt } : {}),
     },
     params.raceStartTime,
   );
+
+  // Demoted previous race keeps an ongoing tray notification (id 1002).
+  if (prevCompanionSnapshot) {
+    void raceProgressNotificationService.startParallel(
+      {
+        raceId: prevCompanionSnapshot.raceId,
+        userId: prevCompanionSnapshot.userId,
+        username: prevCompanionSnapshot.username,
+        raceSteps: prevCompanionSnapshot.raceSteps,
+        rank: prevCompanionSnapshot.rank,
+        totalParticipants: prevCompanionSnapshot.totalParticipants,
+        goalSteps: prevCompanionSnapshot.goalSteps,
+        timeLeftSeconds: prevCompanionSnapshot.timeLeftSeconds,
+        isSponsored: prevCompanionSnapshot.isSponsored,
+        ...(prevCompanionSnapshot.challengeEndAt != null
+          ? { challengeEndAt: prevCompanionSnapshot.challengeEndAt }
+          : {}),
+      },
+      prevCompanionSnapshot.raceStartTime ?? undefined,
+    );
+  }
+
   scheduleNotificationUpdate(true);
 }
 
@@ -1349,6 +1475,7 @@ export function clearActiveRaceProgress(
   const s = store.getState().raceProgress;
   const todaySteps = s.todaySteps;
   const raceIdToStop = options?.raceId ?? s.activeRaceId;
+  const companionId = s.companionRaceId;
 
   store.dispatch(
     raceProgressActions.clearActiveRace({
@@ -1356,8 +1483,13 @@ export function clearActiveRaceProgress(
       preserveWalkDisplay: options?.preserveWalkDisplay,
     }),
   );
+  if (raceIdToStop) activeChallengeSync.unregister(raceIdToStop);
+  if (companionId) activeChallengeSync.unregister(companionId);
 
   void (async () => {
+    if (companionId) {
+      await raceProgressNotificationService.stopParallel(companionId);
+    }
     if (raceIdToStop) {
       await raceProgressNotificationService.stop(raceIdToStop, status, todaySteps);
       stepEngineLog(
@@ -1466,6 +1598,15 @@ export function syncRaceProgressToBackend(options?: {
       source,
       options.deviceTotalSteps,
     );
+    const companionIds = new Set<string>(activeChallengeSync.getRaceIds());
+    if (s.companionRaceId) companionIds.add(s.companionRaceId);
+    companionIds.delete(s.activeRaceId);
+    const deviceTotal = options.deviceTotalSteps ?? s.todaySteps;
+    if (deviceTotal > 0) {
+      for (const raceId of companionIds) {
+        void postRaceProgress(raceId, 0, undefined, deviceTotal, source).catch(() => {});
+      }
+    }
     return;
   }
 
@@ -1478,6 +1619,24 @@ export function syncRaceProgressToBackend(options?: {
       deviceTotalSteps: options?.deviceTotalSteps,
     },
   );
+
+  // Dual / multi-challenge: mirror device totals into every other active
+  // participation (sponsored + free/coins + multi-day). Primary race already
+  // went through raceStepSyncBuffer above. Backend derives each room's
+  // race-relative steps from raceBaselineSteps + deviceTotalSteps.
+  const companionIds = new Set<string>(activeChallengeSync.getRaceIds());
+  if (s.companionRaceId) companionIds.add(s.companionRaceId);
+  companionIds.delete(s.activeRaceId);
+  const deviceTotal = options?.deviceTotalSteps ?? s.todaySteps;
+  const nowMs = Date.now();
+  const companionDue =
+    options?.force === true || nowMs - lastCompanionSyncMs >= COMPANION_SYNC_MIN_MS;
+  if (deviceTotal > 0 && companionIds.size > 0 && companionDue) {
+    lastCompanionSyncMs = nowMs;
+    for (const raceId of companionIds) {
+      void postRaceProgress(raceId, 0, undefined, deviceTotal, source).catch(() => {});
+    }
+  }
 }
 
 export function getRaceProgressState() {
@@ -1559,9 +1718,11 @@ export function deactivateRaceInStore(
   status: RaceProgressStatus,
   preserveWalkDisplay?: number,
 ): void {
+  const prevId = store.getState().raceProgress.activeRaceId;
   store.dispatch(
     raceProgressActions.clearActiveRace({ status, preserveWalkDisplay }),
   );
+  if (prevId) activeChallengeSync.unregister(prevId);
   if (__DEV__) {
     console.log(`[StepStore] deactivateRaceInStore status=${status}`);
   }
@@ -1779,23 +1940,144 @@ export type MyActiveInProgressRace = {
   currentPlayers: number;
   isHost?: boolean;
   title?: string;
+  type?: string;
+  challengeEndAt?: string | null;
 };
 
-/** Fetch the signed-in user's in-progress race (participant only). */
+/** Fetch the signed-in user's newest in-progress race (participant only). */
 export async function fetchMyActiveInProgressRace(
   userId: string,
 ): Promise<MyActiveInProgressRace | null> {
-  if (!userId) return null;
+  const races = await fetchMyActiveInProgressRaces(userId);
+  return races[0] ?? null;
+}
+
+/** All concurrent in-progress races for the signed-in user (sponsored + free/coins). */
+export async function fetchMyActiveInProgressRaces(
+  userId: string,
+): Promise<MyActiveInProgressRace[]> {
+  if (!userId) return [];
   try {
     const { authFetch } = await import("@/utils/authFetch");
     const res = await authFetch("/api/races/my-active");
-    if (!res.ok) return null;
-    const body = (await res.json()) as { race?: MyActiveInProgressRace | null };
-    const race = body.race;
-    if (!race?.id || race.status !== "in_progress") return null;
-    return race;
+    if (!res.ok) return [];
+    const body = (await res.json()) as {
+      race?: MyActiveInProgressRace | null;
+      races?: MyActiveInProgressRace[];
+    };
+    const list =
+      Array.isArray(body.races) && body.races.length > 0
+        ? body.races
+        : body.race
+          ? [body.race]
+          : [];
+    return list.filter((r) => r?.id && r.status === "in_progress");
   } catch {
-    return null;
+    return [];
+  }
+}
+
+/**
+ * When Walk tab discovers a second live race (e.g. sponsored) while another is
+ * already FGS-primary, show the companion as parallel tray notification (1002).
+ */
+export async function ensureCompanionRaceNotification(params: {
+  raceId: string;
+  userId: string;
+  username?: string;
+}): Promise<void> {
+  const { raceId, userId } = params;
+  if (!raceId || !userId) return;
+  const s = store.getState().raceProgress;
+  if (s.activeRaceId === raceId) return;
+  if (raceProgressNotificationService.getParallelRaceId() === raceId) return;
+
+  try {
+    await waitForAppStartupReady();
+    const { authFetch } = await import("@/utils/authFetch");
+    const detailRes = await authFetch(`/api/races/${raceId}`);
+    if (!detailRes.ok) return;
+    const detail = (await detailRes.json()) as {
+      race?: {
+        startedAt?: string | null;
+        targetSteps?: number;
+        currentPlayers?: number;
+        type?: string;
+        challengeEndAt?: string | null;
+      };
+      participants?: Array<{
+        userId: string;
+        username?: string;
+        currentSteps: number;
+        status?: string | null;
+      }>;
+    };
+    const me = findEligibleLiveRaceParticipant(detail.participants ?? [], {
+      id: userId,
+    });
+    if (!me) return;
+
+    const bootSteps = Math.max(0, Math.floor(me.currentSteps ?? 0));
+    const race = detail.race;
+    const goalSteps =
+      typeof race?.targetSteps === "number" && race.targetSteps > 0
+        ? race.targetSteps
+        : null;
+    if (goalSteps == null) {
+      if (__DEV__) {
+        console.warn(
+          `[StepCoordinator] ensureCompanionRaceNotification skip — missing targetSteps raceId=${raceId}`,
+        );
+      }
+      return;
+    }
+    const challengeEndAt =
+      race?.type === "sponsored"
+        ? race.challengeEndAt ??
+          (race.startedAt
+            ? new Date(new Date(race.startedAt).getTime() + 3 * 60 * 60 * 1000).toISOString()
+            : undefined)
+        : race?.challengeEndAt ?? undefined;
+
+    store.dispatch(raceProgressActions.setCompanionRaceId(raceId));
+    store.dispatch(
+      raceProgressActions.setCompanionRaceMeta({
+        raceId,
+        isSponsored: race?.type === "sponsored",
+      }),
+    );
+    activeChallengeSync.register(raceId);
+    if (s.activeRaceId) activeChallengeSync.register(s.activeRaceId);
+
+    await raceProgressNotificationService.startParallel(
+      {
+        raceId,
+        userId,
+        username:
+          params.username ??
+          me.username ??
+          s.username ??
+          store.getState().auth.user?.username ??
+          "Runner",
+        raceSteps: bootSteps,
+        rank: 1,
+        totalParticipants: Math.max(1, race?.currentPlayers ?? 1),
+        goalSteps,
+        timeLeftSeconds: 0,
+        isSponsored: race?.type === "sponsored",
+        ...(challengeEndAt ? { challengeEndAt } : {}),
+      },
+      race?.startedAt
+        ? new Date(race.startedAt).toISOString()
+        : undefined,
+    );
+    if (__DEV__) {
+      console.log(`[StepCoordinator] companion parallel notif raceId=${raceId}`);
+    }
+  } catch (err) {
+    if (__DEV__) {
+      console.warn("[StepCoordinator] ensureCompanionRaceNotification failed", err);
+    }
   }
 }
 
@@ -1811,72 +2093,97 @@ export async function restoreActiveLiveRaceNotificationForUser(
   if (!userId) return null;
   try {
     await waitForAppStartupReady();
-    const race = await fetchMyActiveInProgressRace(userId);
-    if (!race) return null;
+    const races = await fetchMyActiveInProgressRaces(userId);
+    if (races.length === 0) return null;
+
+    // Prefer non-sponsored as FGS primary so free/coins keep the sticky service slot.
+    const primary =
+      races.find((r) => r.type !== "sponsored") ?? races[0]!;
+    const secondaries = races.filter((r) => r.id !== primary.id);
 
     const { authFetch } = await import("@/utils/authFetch");
-    let bootSteps = 0;
-    let detailOk = false;
-    const fetchDetail = async () => {
-      const detailRes = await authFetch(`/api/races/${race.id}`);
-      if (!detailRes.ok) return false;
-      const detail = (await detailRes.json()) as {
-        participants?: Array<{
-          userId: string;
-          username?: string;
-          currentSteps: number;
-          status?: string | null;
-        }>;
+    const hydrateOne = async (race: MyActiveInProgressRace) => {
+      let bootSteps = 0;
+      let challengeEndAt: string | number | null | undefined;
+      let raceType: string | undefined = race.type;
+      const fetchDetail = async () => {
+        const detailRes = await authFetch(`/api/races/${race.id}`);
+        if (!detailRes.ok) return false as const;
+        const detail = (await detailRes.json()) as {
+          race?: {
+            type?: string;
+            challengeEndAt?: string | null;
+            startedAt?: string | null;
+            targetSteps?: number;
+            currentPlayers?: number;
+          };
+          participants?: Array<{
+            userId: string;
+            username?: string;
+            currentSteps: number;
+            status?: string | null;
+          }>;
+        };
+        const me = findEligibleLiveRaceParticipant(detail.participants ?? [], {
+          id: userId,
+        });
+        if (!me) return null;
+        bootSteps = Math.max(0, Math.floor(me.currentSteps ?? 0));
+        raceType = detail.race?.type ?? race.type;
+        challengeEndAt =
+          detail.race?.challengeEndAt ??
+          (raceType === "sponsored" && (detail.race?.startedAt ?? race.startedAt)
+            ? new Date(
+                new Date(detail.race?.startedAt ?? race.startedAt!).getTime() +
+                  3 * 60 * 60 * 1000,
+              ).toISOString()
+            : undefined);
+        if (detail.race?.targetSteps) {
+          race.targetSteps = detail.race.targetSteps;
+        }
+        if (detail.race?.currentPlayers) {
+          race.currentPlayers = detail.race.currentPlayers;
+        }
+        return true as const;
       };
-      const me = findEligibleLiveRaceParticipant(detail.participants ?? [], {
-        id: userId,
-      });
-      if (!me) {
-        if (__DEV__) {
-          console.log(
-            `[AuthSwitch] my-active raceId=${race.id} but not eligible participant — skip race notif`,
+
+      let detailResult = await fetchDetail().catch(() => false as const);
+      if (detailResult === null) return null;
+      if (!detailResult) {
+        await new Promise((r) => setTimeout(r, 600));
+        detailResult = await fetchDetail().catch(() => false as const);
+        if (detailResult === null) return null;
+      }
+      if (detailResult !== true) return null;
+
+      try {
+        const { setRaceStepSeed } = await import(
+          "@/services/steps/raceBaselineStorage"
+        );
+        await setRaceStepSeed(race.id, userId, bootSteps);
+        if (stepProviderManager.usesRaceBaseline()) {
+          await stepProviderManager.ensureRaceBaseline(race.id, userId, bootSteps);
+          await stepProviderManager.alignRaceBaselineToRaceSteps(
+            race.id,
+            userId,
+            bootSteps,
           );
         }
-        return null;
+      } catch {
+        /* non-fatal */
       }
-      bootSteps = Math.max(0, Math.floor(me.currentSteps ?? 0));
-      return true;
+
+      return { bootSteps, challengeEndAt, raceType };
     };
 
-    let detailResult = await fetchDetail().catch(() => false);
-    if (detailResult === null) return null;
-    if (!detailResult) {
-      await new Promise((r) => setTimeout(r, 600));
-      detailResult = await fetchDetail().catch(() => false);
-      if (detailResult === null) return null;
-    }
-    detailOk = detailResult === true;
-    if (!detailOk) {
+    const primaryHydrated = await hydrateOne(primary);
+    if (!primaryHydrated) {
       if (__DEV__) {
         console.warn(
-          `[AuthSwitch] race detail unavailable raceId=${race.id} — skip restore until live-detail hydrate`,
+          `[AuthSwitch] race detail unavailable raceId=${primary.id} — skip restore until live-detail hydrate`,
         );
       }
       return null;
-    }
-
-    // Persist seed + repair baseline BEFORE starting notification so legacy
-    // getRaceSteps never treats today total as race progress after re-login.
-    try {
-      const { setRaceStepSeed } = await import(
-        "@/services/steps/raceBaselineStorage"
-      );
-      await setRaceStepSeed(race.id, userId, bootSteps);
-      if (stepProviderManager.usesRaceBaseline()) {
-        await stepProviderManager.ensureRaceBaseline(race.id, userId, bootSteps);
-        await stepProviderManager.alignRaceBaselineToRaceSteps(
-          race.id,
-          userId,
-          bootSteps,
-        );
-      }
-    } catch {
-      /* non-fatal */
     }
 
     const displayName =
@@ -1885,31 +2192,70 @@ export async function restoreActiveLiveRaceNotificationForUser(
       "Runner";
 
     ensureActiveRaceInStore({
-      raceId: race.id,
-      raceStartTime: new Date(race.startedAt ?? Date.now()).toISOString(),
+      raceId: primary.id,
+      raceStartTime: new Date(primary.startedAt ?? Date.now()).toISOString(),
       userId,
       username: displayName,
       goalSteps:
-        typeof race.targetSteps === "number" && race.targetSteps > 0
-          ? race.targetSteps
-          : 10_000,
-      totalParticipants: Math.max(1, race.currentPlayers ?? 1),
-      bootSteps,
+        typeof primary.targetSteps === "number" && primary.targetSteps > 0
+          ? primary.targetSteps
+          : 0,
+      totalParticipants: Math.max(1, primary.currentPlayers ?? 1),
+      bootSteps: primaryHydrated.bootSteps,
       participantConfirmed: true,
+      isSponsored: primaryHydrated.raceType === "sponsored",
+      challengeEndAt: primaryHydrated.challengeEndAt,
     });
 
+    for (const secondary of secondaries) {
+      const hydrated = await hydrateOne(secondary);
+      if (!hydrated) continue;
+      const secondaryGoal =
+        typeof secondary.targetSteps === "number" && secondary.targetSteps > 0
+          ? secondary.targetSteps
+          : null;
+      if (secondaryGoal == null) continue;
+      store.dispatch(raceProgressActions.setCompanionRaceId(secondary.id));
+      store.dispatch(
+        raceProgressActions.setCompanionRaceMeta({
+          raceId: secondary.id,
+          isSponsored: hydrated.raceType === "sponsored",
+        }),
+      );
+      activeChallengeSync.register(secondary.id);
+      await raceProgressNotificationService.startParallel(
+        {
+          raceId: secondary.id,
+          userId,
+          username: displayName,
+          raceSteps: hydrated.bootSteps,
+          rank: 1,
+          totalParticipants: Math.max(1, secondary.currentPlayers ?? 1),
+          goalSteps: secondaryGoal,
+          timeLeftSeconds: 0,
+          isSponsored: hydrated.raceType === "sponsored",
+          ...(hydrated.challengeEndAt
+            ? { challengeEndAt: hydrated.challengeEndAt }
+            : {}),
+        },
+        secondary.startedAt
+          ? new Date(secondary.startedAt).toISOString()
+          : undefined,
+      );
+    }
+
     await storageSet(STORAGE_KEYS.PENDING_RACE, {
-      raceId: race.id,
-      raceStartTimeUTC: new Date(race.startedAt ?? Date.now()).toISOString(),
+      raceId: primary.id,
+      raceStartTimeUTC: new Date(primary.startedAt ?? Date.now()).toISOString(),
       status: "in_progress",
     });
 
     if (__DEV__) {
       console.log(
-        `[AuthSwitch] restored live race notification raceId=${race.id} bootSteps=${bootSteps}`,
+        `[AuthSwitch] restored live race notification raceId=${primary.id} bootSteps=${primaryHydrated.bootSteps} companions=${secondaries.length}`,
       );
     }
-    return { race, bootSteps };
+    return { race: primary, bootSteps: primaryHydrated.bootSteps };
   } catch (err) {
     if (__DEV__) {
       console.warn("[AuthSwitch] restore live race notification failed", err);
@@ -1925,3 +2271,4 @@ export async function clearStepSessionForLogout(userId: string | undefined): Pro
   }
   await clearUserSessionStepState(userId, "logout");
 }
+

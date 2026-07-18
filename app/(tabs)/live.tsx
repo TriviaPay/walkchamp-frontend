@@ -285,6 +285,45 @@ interface MyActiveRace {
   targetSteps: number;
   isHost: boolean;
   startedAt: string | null;
+  type?: string;
+}
+
+/** True when the signed-in user appears in this race's participant list. */
+export function isUserParticipatingInRace(
+  race: LiveRace,
+  opts: { userId?: string | null; username?: string | null; myActiveRaceIds?: Set<string> | null },
+): boolean {
+  if (opts.myActiveRaceIds?.has(race.id)) return true;
+  const uid = opts.userId;
+  const uname = opts.username?.trim().toLowerCase();
+  if (!uid && !uname) return false;
+  return race.players.some((p) => {
+    if (uid && p.userId === uid) return true;
+    if (uname && p.username?.trim().toLowerCase() === uname) return true;
+    return false;
+  });
+}
+
+async function fetchMyActiveRaces(): Promise<{ primary: MyActiveRace | null; all: MyActiveRace[] }> {
+  try {
+    const res = await authFetch(`/api/races/my-active`);
+    if (!res.ok) return { primary: null, all: [] };
+    const data = await res.json() as { race?: MyActiveRace | null; races?: MyActiveRace[] };
+    const all = Array.isArray(data.races) && data.races.length > 0
+      ? data.races
+      : data.race
+        ? [data.race]
+        : [];
+    return { primary: data.race ?? all[0] ?? null, all };
+  } catch {
+    return { primary: null, all: [] };
+  }
+}
+
+/** @deprecated use fetchMyActiveRaces — kept for any external callers */
+async function fetchMyActiveRace(): Promise<MyActiveRace | null> {
+  const { primary } = await fetchMyActiveRaces();
+  return primary;
 }
 
 interface ScheduledEvt {
@@ -298,17 +337,6 @@ interface ScheduledEvt {
   maxSlots: number;
   isRegistered?: boolean;
   isActive?: boolean;
-}
-
-async function fetchMyActiveRace(): Promise<MyActiveRace | null> {
-  try {
-    const res = await authFetch(`/api/races/my-active`);
-    if (!res.ok) return null;
-    const data = await res.json() as { race?: MyActiveRace };
-    return data.race ?? null;
-  } catch {
-    return null;
-  }
 }
 
 // ── Palette cycling for sponsored event cards ──────────────────────────────────
@@ -580,6 +608,8 @@ function RaceCardBase({
   isMyRace,
   isHost,
   myUsername,
+  myUserId,
+  myActiveRaceIds,
   onAvatarPress,
   style,
 }: {
@@ -588,11 +618,20 @@ function RaceCardBase({
   isMyRace?: boolean;
   isHost?: boolean;
   myUsername?: string;
+  myUserId?: string | null;
+  myActiveRaceIds?: Set<string> | null;
   onAvatarPress?: (p: LiveRacePlayer) => void;
   style?: StyleProp<ViewStyle>;
 }) {
   const { isDark } = useTheme();
   const isFinished = race.status === "completed";
+  const participating =
+    !!isMyRace ||
+    isUserParticipatingInRace(race, {
+      userId: myUserId,
+      username: myUsername,
+      myActiveRaceIds,
+    });
 
   // ── Per-card reaction counts (optimistic local state) ─────────────────────
   const [localReactions, setLocalReactions] = useState<Record<string, number>>(
@@ -1004,7 +1043,7 @@ function RaceCardBase({
             <View style={st.finishedReactBtn} />
           </LinearGradient>
         </TouchableOpacity>
-      ) : isMyRace ? (
+      ) : participating ? (
         <TouchableOpacity
           onPress={openLiveRace}
           activeOpacity={0.85}
@@ -1094,6 +1133,8 @@ const DateGroupRow = React.memo(function DateGroupRow({
   colors,
   myRace,
   myUsername,
+  myUserId,
+  myActiveRaceIds,
   onAvatarPress,
   onViewAll,
   showTrailingLoader,
@@ -1103,6 +1144,8 @@ const DateGroupRow = React.memo(function DateGroupRow({
   colors: ReturnType<typeof useColors>;
   myRace: MyActiveRace | null;
   myUsername?: string;
+  myUserId?: string | null;
+  myActiveRaceIds?: Set<string> | null;
   onAvatarPress: (p: LiveRacePlayer) => void;
   onViewAll: (origin: RaceOrigin, group: DateGroup<LiveRace>) => void;
   showTrailingLoader?: boolean;
@@ -1142,9 +1185,11 @@ const DateGroupRow = React.memo(function DateGroupRow({
             <RaceCard
               race={item}
               colors={colors}
-              isMyRace={item.id === myRace?.id}
-              isHost={myRace?.isHost}
+              isMyRace={item.id === myRace?.id || myActiveRaceIds?.has(item.id)}
+              isHost={item.id === myRace?.id ? myRace?.isHost : undefined}
               myUsername={myUsername}
+              myUserId={myUserId}
+              myActiveRaceIds={myActiveRaceIds}
               onAvatarPress={onAvatarPress}
               style={st.carouselCard}
             />
@@ -1177,6 +1222,7 @@ export default function LiveTab() {
   const [finishedOffset, setFinishedOffset] = useState(FINISHED_PAGE_SIZE);
   const [hasMoreFinished, setHasMoreFinished] = useState(true);
   const [myRace, setMyRace] = useState<MyActiveRace | null>(null);
+  const [myActiveRaceIds, setMyActiveRaceIds] = useState<Set<string>>(() => new Set());
   const [scheduledEvents,  setScheduledEvents]  = useState<ScheduledEvt[]>([]);
   const [scheduledLoading, setScheduledLoading] = useState(false);
   // True after the first successful fetch — subsequent filter switches skip the skeleton.
@@ -1231,9 +1277,9 @@ export default function LiveTab() {
       }
 
       // ── 2. Fetch fresh data in the background ────────────────────────────────
-      const [{ live, finished, ok }, myRaceData] = await Promise.all([
+      const [{ live, finished, ok }, myRaceResult] = await Promise.all([
         fetchLiveChallenges(activeFilter),
-        fetchMyActiveRace(),
+        fetchMyActiveRaces(),
       ]);
       if (ok) {
         setLiveChallenges(live);
@@ -1243,7 +1289,13 @@ export default function LiveTab() {
         // ── 3. Persist fresh data so the next open is instant ─────────────────
         void screenCache.set(cacheKey, { live, finished });
       }
-      setMyRace(myRaceData);
+      setMyRace(myRaceResult.primary);
+      const idSet = new Set(myRaceResult.all.map((r) => r.id));
+      setMyActiveRaceIds(idSet);
+      try {
+        const { activeChallengeSync } = await import("@/services/activeChallengeSync");
+        activeChallengeSync.registerMany([...idSet]);
+      } catch { /* optional */ }
       setLoading(false);
     } catch {
       setLoading(false);
@@ -1441,7 +1493,7 @@ export default function LiveTab() {
     for (const g of groupRacesByDate(
       liveChallenges,
       (r) => r.startedAt ?? r.createdAt,
-      { order: "asc", withinOrder: "asc" },
+      { order: "desc", withinOrder: "desc" },
     )) {
       rows.push({ kind: "group", key: `live-${g.dateKey}`, origin: "live", group: g });
     }
@@ -1501,12 +1553,14 @@ export default function LiveTab() {
         colors={colors}
         myRace={myRace}
         myUsername={user?.username}
+        myUserId={user?.id}
+        myActiveRaceIds={myActiveRaceIds}
         onAvatarPress={handleAvatarPress}
         onViewAll={handleViewAll}
         showTrailingLoader={item.origin === "finished" && item.isLastFinished && loadingMore}
       />
     );
-  }, [colors, myRace, user?.username, handleAvatarPress, handleViewAll, loadingMore]);
+  }, [colors, myRace, myActiveRaceIds, user?.username, user?.id, handleAvatarPress, handleViewAll, loadingMore]);
 
   return (
     <View style={[st.container, { paddingBottom: tabBarHeight, backgroundColor: colors.background }]}>
@@ -1576,7 +1630,7 @@ export default function LiveTab() {
                 <SectionHeader label="Live Now" sub={`${liveChallenges.length} sponsored event${liveChallenges.length !== 1 ? "s" : ""} in progress`} isFinished={false} />
                 {liveChallenges.map((r) => (
                   <View key={r.id} style={{ marginBottom: 16 }}>
-                    <RaceCard race={r} colors={colors} isMyRace={r.id === myRace?.id} isHost={myRace?.isHost} myUsername={user?.username} onAvatarPress={handleAvatarPress} />
+                    <RaceCard race={r} colors={colors} isMyRace={r.id === myRace?.id || myActiveRaceIds.has(r.id)} isHost={r.id === myRace?.id ? myRace?.isHost : undefined} myUsername={user?.username} myUserId={user?.id} myActiveRaceIds={myActiveRaceIds} onAvatarPress={handleAvatarPress} />
                   </View>
                 ))}
               </>
@@ -1586,7 +1640,7 @@ export default function LiveTab() {
                 <SectionHeader label="Recently Finished" sub="Here are the latest sponsored event results" isFinished={true} />
                 {finishedChallenges.map((r) => (
                   <View key={r.id} style={{ marginBottom: 16 }}>
-                    <RaceCard race={r} colors={colors} isMyRace={r.id === myRace?.id} isHost={myRace?.isHost} myUsername={user?.username} onAvatarPress={handleAvatarPress} />
+                    <RaceCard race={r} colors={colors} isMyRace={r.id === myRace?.id || myActiveRaceIds.has(r.id)} isHost={r.id === myRace?.id ? myRace?.isHost : undefined} myUsername={user?.username} myUserId={user?.id} myActiveRaceIds={myActiveRaceIds} onAvatarPress={handleAvatarPress} />
                   </View>
                 ))}
               </>

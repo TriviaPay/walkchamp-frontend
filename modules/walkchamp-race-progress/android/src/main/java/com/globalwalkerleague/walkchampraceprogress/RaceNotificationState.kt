@@ -27,6 +27,8 @@ data class RaceNotificationState(
   val sensorCounterBaseline: Long = 0L,
   /** Race step count when [sensorCounterBaseline] was captured — pairs with sensor delta. */
   val raceStepsAtSensorBaseline: Int = 0,
+  /** Explicit sponsored flag — drives notification title (do not infer from end time alone). */
+  val isSponsored: Boolean = false,
 ) {
   fun toNotificationBody(): String = formatCompactRaceBody(
     raceSteps = raceSteps,
@@ -86,6 +88,7 @@ data class RaceNotificationState(
         incoming.challengeEndAtMs > 0L -> incoming.challengeEndAtMs
         else -> 0L
       },
+      isSponsored = isSponsored || incoming.isSponsored,
       lastUpdatedAt = maxOf(lastUpdatedAt, incoming.lastUpdatedAt),
       apiBaseUrl = incoming.apiBaseUrl.ifBlank { apiBaseUrl },
       authToken = incoming.authToken.ifBlank { authToken },
@@ -144,6 +147,7 @@ data class RaceNotificationState(
     put("stepSource", stepSource)
     put("sensorCounterBaseline", sensorCounterBaseline)
     put("raceStepsAtSensorBaseline", raceStepsAtSensorBaseline)
+    put("isSponsored", isSponsored)
   }
 
   companion object {
@@ -205,6 +209,12 @@ data class RaceNotificationState(
       val source = payload["stepSource"] as? String ?: "health_connect"
       val sensorBaseline = (payload["sensorCounterBaseline"] as? Number)?.toLong() ?: 0L
       val raceStepsAtBaseline = (payload["raceStepsAtSensorBaseline"] as? Number)?.toInt() ?: raceSteps
+      val sponsoredFlag = when (val v = payload["isSponsored"]) {
+        is Boolean -> v
+        is Number -> v.toInt() != 0
+        is String -> v.equals("true", ignoreCase = true) || v == "1"
+        else -> false
+      } || challengeEndMs > 0L
       return RaceNotificationState(
         raceId = raceId,
         userId = userId,
@@ -223,6 +233,7 @@ data class RaceNotificationState(
         stepSource = source,
         sensorCounterBaseline = sensorBaseline,
         raceStepsAtSensorBaseline = raceStepsAtBaseline,
+        isSponsored = sponsoredFlag,
       )
     }
 
@@ -270,6 +281,7 @@ data class RaceNotificationState(
           stepSource = json.optString("stepSource", "health_connect"),
           sensorCounterBaseline = json.optLong("sensorCounterBaseline", 0L),
           raceStepsAtSensorBaseline = json.optInt("raceStepsAtSensorBaseline", 0),
+          isSponsored = json.optBoolean("isSponsored", json.optLong("challengeEndAtMs", 0L) > 0L),
         ).takeIf { it.raceId.isNotBlank() }?.also { state ->
           if (uid == null && state.userId.isNotBlank()) {
             save(ctx, state)

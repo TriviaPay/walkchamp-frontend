@@ -206,28 +206,70 @@ export default function WearableSetupModal({
     finally { setPermLoading(false); }
   };
 
-  const handleDone = async () => {
-    setSaving(true);
+  const resolveLivePermStatus = async (): Promise<"unknown" | "granted" | "denied" | "unavailable"> => {
     try {
-      await authFetch("/api/me/step-source", {
-        method: "POST",
-        body: JSON.stringify({
-          platform,
-          permission_status: permStatus === "granted" ? "connected" : permStatus === "denied" ? "denied" : "not_requested",
-          source_name: healthName,
-          setup_completed: true,
-        }),
-      });
-    } catch { /* ignore */ }
-    finally {
-      setSaving(false);
-      const resolvedStatus = permStatus === "granted" ? "connected" : permStatus === "denied" ? "denied" : "not_requested";
-      onComplete?.(platform, resolvedStatus);
-      onClose();
+      if (isIOS) {
+        const { stepTracker } = await import("@/services/StepTrackingService");
+        const s = await stepTracker.getPermissionStatus();
+        return (s as typeof permStatus) ?? "unknown";
+      }
+      const s = await stepProviderManager.refreshStatus();
+      if (s.permission === "granted") return "granted";
+      if (s.permission === "denied") return "denied";
+      return "unknown";
+    } catch {
+      return permStatus;
     }
   };
 
-  const goNext = () => setStep(s => Math.min(s + 1, (isIOS ? TOTAL_IOS : TOTAL_ANDROID) - 1));
+  const handleDone = async () => {
+    setSaving(true);
+    try {
+      // Re-check the OS permission now — users can reach "You're set!" via Next
+      // without granting, which previously saved not_requested and left Profile
+      // stuck on "Tap to connect Health Connect".
+      const live = await resolveLivePermStatus();
+      setPermStatus(live);
+
+      if (live !== "granted" && live !== "denied") {
+        setSaving(false);
+        setStep(1); // Allow Steps screen
+        return;
+      }
+
+      const resolvedStatus = live === "granted" ? "connected" : "denied";
+      try {
+        await authFetch("/api/me/step-source", {
+          method: "POST",
+          body: JSON.stringify({
+            platform,
+            permission_status: resolvedStatus,
+            source_name: healthName,
+            setup_completed: true,
+          }),
+        });
+      } catch { /* ignore network — still update local UI */ }
+
+      onComplete?.(platform, resolvedStatus);
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const goNext = async () => {
+    // On the Allow Steps step, require a live grant before continuing so Done
+    // cannot mark setup complete while Profile still shows "Tap to connect".
+    const allowStepsIndex = 1;
+    if (step === allowStepsIndex) {
+      const live = await resolveLivePermStatus();
+      setPermStatus(live);
+      if (live !== "granted") {
+        return;
+      }
+    }
+    setStep(s => Math.min(s + 1, (isIOS ? TOTAL_IOS : TOTAL_ANDROID) - 1));
+  };
   const goBack = () => setStep(s => Math.max(s - 1, 0));
   const isLast = step === (isIOS ? TOTAL_IOS : TOTAL_ANDROID) - 1;
 

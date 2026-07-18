@@ -26,6 +26,15 @@ export interface RaceProgressState {
   todayStepsLastUpdatedAt: string | null;
 
   activeRaceId: string | null;
+  /**
+   * Optional second race (sponsored ↔ free/coins). Steps sync to both via
+   * deviceTotalSteps; only activeRaceId owns the primary FGS / UI counter.
+   */
+  companionRaceId: string | null;
+  /** Whether the primary FGS race is a sponsored event (notification title). */
+  activeRaceIsSponsored: boolean;
+  /** Whether the companion tray race is sponsored. */
+  companionRaceIsSponsored: boolean;
   raceStartTime: string | null;
   raceStatus: RaceProgressStatus;
 
@@ -56,6 +65,9 @@ const initialState: RaceProgressState = {
   todaySteps: 0,
   todayStepsLastUpdatedAt: null,
   activeRaceId: null,
+  companionRaceId: null,
+  activeRaceIsSponsored: false,
+  companionRaceIsSponsored: false,
   raceStartTime: null,
   raceStatus: "idle",
   raceSteps: 0,
@@ -103,9 +115,25 @@ const raceProgressSlice = createSlice({
         goalSteps: number;
         totalParticipants?: number;
         bootSteps?: number;
+        /** When opening race B while race A is still active (sponsored dual). */
+        preserveAsCompanion?: boolean;
+        isSponsored?: boolean;
       }>,
     ) {
       const boot = Math.max(0, action.payload.bootSteps ?? 0);
+      const prevActive = state.activeRaceId;
+      const prevSponsored = state.activeRaceIsSponsored;
+      if (
+        action.payload.preserveAsCompanion &&
+        prevActive &&
+        prevActive !== action.payload.raceId
+      ) {
+        state.companionRaceId = prevActive;
+        state.companionRaceIsSponsored = prevSponsored;
+      } else if (state.companionRaceId === action.payload.raceId) {
+        state.companionRaceId = null;
+        state.companionRaceIsSponsored = false;
+      }
       state.activeRaceId = action.payload.raceId;
       state.raceStartTime = action.payload.raceStartTime;
       state.raceStatus = "active";
@@ -117,12 +145,31 @@ const raceProgressSlice = createSlice({
       state.raceStepsLastUpdatedAt = new Date().toISOString();
       state.rank = state.rank ?? 1;
       state.timeLeftSeconds = state.timeLeftSeconds ?? 0;
+      state.activeRaceIsSponsored = action.payload.isSponsored === true;
       state.syncError = null;
       if (__DEV__) {
         console.log(
-          `[StepStore] setActiveRace raceId=${action.payload.raceId} bootSteps=${boot}`,
+          `[StepStore] setActiveRace raceId=${action.payload.raceId} bootSteps=${boot} companion=${state.companionRaceId ?? "none"}`,
         );
       }
+    },
+
+    setCompanionRaceId(state, action: PayloadAction<string | null>) {
+      const id = action.payload;
+      if (!id || id === state.activeRaceId) {
+        state.companionRaceId = null;
+        state.companionRaceIsSponsored = false;
+        return;
+      }
+      state.companionRaceId = id;
+    },
+
+    setCompanionRaceMeta(
+      state,
+      action: PayloadAction<{ raceId: string; isSponsored?: boolean }>,
+    ) {
+      if (state.companionRaceId !== action.payload.raceId) return;
+      state.companionRaceIsSponsored = action.payload.isSponsored === true;
     },
 
     clearActiveRace(
@@ -136,6 +183,9 @@ const raceProgressSlice = createSlice({
         state.walkRaceStepsDisplay = action.payload.preserveWalkDisplay;
       }
       state.activeRaceId = null;
+      state.companionRaceId = null;
+      state.activeRaceIsSponsored = false;
+      state.companionRaceIsSponsored = false;
       state.raceStartTime = null;
       state.raceStatus = action.payload.status;
       state.raceSteps = 0;
@@ -327,6 +377,9 @@ const raceProgressSlice = createSlice({
 
     clearRaceStepStateForAccountSwitch(state) {
       state.activeRaceId = null;
+      state.companionRaceId = null;
+      state.activeRaceIsSponsored = false;
+      state.companionRaceIsSponsored = false;
       state.raceStartTime = null;
       state.raceStatus = "idle";
       state.raceSteps = 0;

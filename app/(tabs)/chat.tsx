@@ -806,7 +806,7 @@ function GlobalChatTab({ colors, insets, user, headerHeight }: {
 
       <View style={[cStyles.onlineBar, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
         <View style={[cStyles.onlineDot, { backgroundColor: colors.primary }]} />
-        <Text style={[cStyles.onlineText, { color: colors.mutedForeground }]}>{formatCount(counts.online)} walkers online worldwide</Text>
+        <Text style={[cStyles.onlineText, { color: colors.mutedForeground }]}>{formatCount(counts.online)} online worldwide</Text>
       </View>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding" keyboardVerticalOffset={0}>

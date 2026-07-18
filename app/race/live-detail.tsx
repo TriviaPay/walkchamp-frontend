@@ -8,6 +8,7 @@ import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 import { Alert,
   AppState,
   Image,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -57,6 +58,12 @@ import {
   subscribeToChannel,
   unsubscribeFromChannel, } from "@/services/realtimeService";
 import { formatDuration } from "@/utils/format";
+import { localizeSponsoredEventTitle } from "@/utils/timezone";
+import {
+  getSponsoredPrizePerWinnerUsd,
+  getSponsoredWinnerCount,
+  SPONSORED_DEFAULT_TARGET_STEPS,
+} from "@/utils/sponsoredEventsApi";
 import { screenCache } from "@/utils/screenCache";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { PublicProfileModal } from "@/components/PublicProfileModal";
@@ -699,9 +706,19 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
   stepDeltas?: Record<string, number>; }) {
   const { getAvatarVersion } = useAvatarVersionContext();
   const isCompleted = race.status === "completed";
+  const isSponsored = race.type === "sponsored";
+  const [showPrizeInfo, setShowPrizeInfo] = useState(false);
   const rankColors  = [colors.gold, colors.silver, colors.bronze];
   const rankMedals  = ["🥇", "🥈", "🥉"];
   const sorted = useMemo(() => [...participants].sort((a, b) => b.currentSteps - a.currentSteps), [participants]);
+  const { height: winH, width: winW } = useWindowDimensions();
+  const prizeModalMaxH = Math.min(winH * 0.78, 560);
+  const prizeModalW = Math.min(winW - 32, 420);
+  const playerCount = Math.max(participants.length, race.currentPlayers ?? 0);
+  const winnerCount = getSponsoredWinnerCount(playerCount);
+  const prizeUsd = getSponsoredPrizePerWinnerUsd(
+    (race as RaceData & { prizePerWinnerCents?: number }).prizePerWinnerCents,
+  );
   return (
     <View style={[lbpStyles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <View style={lbpStyles.header}>
@@ -709,6 +726,17 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
         <Text style={[lbpStyles.title, { color: colors.foreground }]}>
           {isCompleted ? "Final Leaderboard" : "Live Leaderboard"}
         </Text>
+        {isSponsored ? (
+          <TouchableOpacity
+            onPress={() => setShowPrizeInfo(true)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityLabel="Gift card prizes info"
+            activeOpacity={0.7}
+            style={lbpStyles.infoBtn}
+          >
+            <Feather name="info" size={16} color="#FF9900" />
+          </TouchableOpacity>
+        ) : null}
         <Text style={[lbpStyles.count, { color: colors.mutedForeground }]}>{participants.length}/{race.maxPlayers}</Text>
       </View>
       {sorted.length === 0 ? (
@@ -770,6 +798,72 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
             </View>
           </TouchableOpacity>
         ); })}
+
+      {isSponsored ? (
+        <Modal
+          transparent
+          visible={showPrizeInfo}
+          animationType="fade"
+          onRequestClose={() => setShowPrizeInfo(false)}
+          statusBarTranslucent
+        >
+          <View style={lbpStyles.prizeOverlay}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={() => setShowPrizeInfo(false)}
+              accessibilityLabel="Dismiss prizes"
+            />
+            <View
+              style={[
+                lbpStyles.prizeModalCard,
+                {
+                  width: prizeModalW,
+                  maxHeight: prizeModalMaxH,
+                  backgroundColor: colors.card,
+                  borderColor: "#FF990055",
+                },
+              ]}
+            >
+              <View style={lbpStyles.prizeModalHeader}>
+                <Text style={{ fontSize: 18 }}>🎁</Text>
+                <View style={lbpStyles.prizeModalHeaderText}>
+                  <Text style={[lbpStyles.prizeModalTitle, { color: "#FF9900" }]} numberOfLines={1}>
+                    Gift Card Prizes
+                  </Text>
+                  <Text style={[lbpStyles.prizeModalSub, { color: "#FF9900" }]}>
+                    ${prizeUsd} each
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={[lbpStyles.prizeClose, { backgroundColor: colors.border + "99" }]}
+                  onPress={() => setShowPrizeInfo(false)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityLabel="Close"
+                  activeOpacity={0.7}
+                >
+                  <Feather name="x" size={18} color={colors.foreground} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                style={{ maxHeight: prizeModalMaxH - 72 }}
+                contentContainerStyle={lbpStyles.prizeScrollContent}
+                showsVerticalScrollIndicator
+                bounces
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+              >
+                <SponsoredPrizePanel
+                  race={race}
+                  participants={participants}
+                  colors={colors}
+                  embedded
+                />
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
     </View>
   ); }
 
@@ -778,6 +872,7 @@ const lbpStyles = StyleSheet.create({
   header:    { flexDirection: "row", alignItems: "center", gap: 6, paddingBottom: 4 },
   dot:       { width: 7, height: 7, borderRadius: 3.5 },
   title:     { flex: 1, fontSize: 15, fontWeight: "800" },
+  infoBtn:   { padding: 2 },
   count:     { fontSize: 12 },
   empty:     { fontSize: 13, textAlign: "center", paddingVertical: 8 },
   row:       { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8 },
@@ -795,7 +890,57 @@ const lbpStyles = StyleSheet.create({
   right:     { alignItems: "flex-end", gap: 2 },
   steps:     { fontSize: 12, fontWeight: "700" },
   stepDelta: { fontSize: 10, fontWeight: "800", color: "#00E676" },
-  prize:     { fontSize: 12, fontWeight: "800" }, });
+  prize:     { fontSize: 12, fontWeight: "800" },
+  prizeOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 24,
+  },
+  prizeModalCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: "hidden",
+    zIndex: 1,
+  },
+  prizeModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#FF990033",
+  },
+  prizeModalHeaderText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  prizeModalTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  prizeModalSub: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  prizeClose: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  prizeScrollContent: {
+    paddingBottom: 12,
+    flexGrow: 0,
+  },
+});
 
 // ── ReactionBar ───────────────────────────────────────────────────────────────
 
@@ -857,12 +1002,26 @@ const cfStyles = StyleSheet.create({
 
 // ── SponsoredPrizePanel ───────────────────────────────────────────────────────
 
-function SponsoredPrizePanel({ race, participants, colors }: { race: RaceData; participants?: RaceParticipant[]; colors: ReturnType<typeof useColors> }) {
+function SponsoredPrizePanel({ race, participants, colors, embedded = false }: {
+  race: RaceData;
+  participants?: RaceParticipant[];
+  colors: ReturnType<typeof useColors>;
+  /** When true, drop outer chrome (used inside the info modal). */
+  embedded?: boolean;
+}) {
   const isCompleted = race.status === "completed";
-  const targetSteps = race.targetSteps ?? 10000;
-  const winnerCount = race.winnerCount ?? 2;
-  const prizeUsd = Math.round((race.prizePoolCents ?? 1000) / 100 / winnerCount);
-  const totalParts = (participants ?? []).length;
+  const targetSteps =
+    typeof race.targetSteps === "number" && race.targetSteps > 0
+      ? race.targetSteps
+      : SPONSORED_DEFAULT_TARGET_STEPS;
+  const playerCount = Math.max(
+    (participants ?? []).length,
+    race.currentPlayers ?? 0,
+  );
+  const winnerCount = getSponsoredWinnerCount(playerCount);
+  const prizeUsd = getSponsoredPrizePerWinnerUsd(
+    (race as RaceData & { prizePerWinnerCents?: number }).prizePerWinnerCents,
+  );
 
   const finishers = (participants ?? [])
     .filter((p) => p.finishedGoal && p.finishedAt)
@@ -874,25 +1033,40 @@ function SponsoredPrizePanel({ race, participants, colors }: { race: RaceData; p
   const winners = finishers.slice(0, winnerCount);
 
   const rankIcons = ["🥇", "🥈", "🥉"];
+  const ordinal = (i: number) =>
+    i === 0 ? "1st" : i === 1 ? "2nd" : i === 2 ? "3rd" : `${i + 1}th`;
 
   return (
-    <View style={[pzStyles.card, { backgroundColor: colors.card, borderColor: "#FF990044" }]}>
-      <View style={pzStyles.header}>
-        <Text style={{ fontSize: 18 }}>🎁</Text>
-        <Text style={[pzStyles.title, { color: "#FF9900" }]}>Gift Card Prizes</Text>
-        <Text style={[pzStyles.pool, { color: "#FF9900" }]}>${prizeUsd} each</Text>
-      </View>
-      <View style={[pzStyles.divider, { backgroundColor: colors.border }]} />
+    <View style={[
+      pzStyles.card,
+      { backgroundColor: colors.card, borderColor: "#FF990044" },
+      embedded && {
+        marginHorizontal: 0,
+        borderWidth: 0,
+        borderRadius: 0,
+        backgroundColor: "transparent",
+        paddingTop: 12,
+        paddingBottom: 4,
+      },
+    ]}>
+      {!embedded ? (
+        <View style={pzStyles.header}>
+          <Text style={{ fontSize: 18 }}>🎁</Text>
+          <Text style={[pzStyles.title, { color: "#FF9900" }]}>Gift Card Prizes</Text>
+          <Text style={[pzStyles.pool, { color: "#FF9900" }]}>${prizeUsd} each</Text>
+        </View>
+      ) : null}
+      {!embedded ? <View style={[pzStyles.divider, { backgroundColor: colors.border }]} /> : null}
       {isCompleted ? (
         winners.length > 0 ? (
           winners.map((p, i) => (
             <View key={p.userId} style={pzStyles.row}>
               <Text style={{ fontSize: 15 }}>{rankIcons[i] ?? "🏅"}</Text>
-              <View style={{ flex: 1 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={[pzStyles.place, { color: "#FF9900" }]}>
-                  {i === 0 ? "1st Finisher" : "2nd Finisher"}
+                  {ordinal(i)} Finisher
                 </Text>
-                <Text style={{ fontSize: 11, color: colors.mutedForeground }}>{p.username}</Text>
+                <Text style={{ fontSize: 11, color: colors.mutedForeground }} numberOfLines={1}>{p.username}</Text>
               </View>
               <Text style={[pzStyles.amount, { color: "#FF9900" }]}>${prizeUsd} Gift Card</Text>
             </View>
@@ -918,6 +1092,7 @@ function SponsoredPrizePanel({ race, participants, colors }: { race: RaceData; p
           )}
           <Text style={{ fontSize: 11, color: colors.mutedForeground, textAlign: "center", marginTop: 4 }}>
             Complete {targetSteps.toLocaleString()} steps to win · {winnerCount} winner{winnerCount !== 1 ? "s" : ""}
+            {playerCount > 0 ? ` · ${playerCount} racing` : ""}
           </Text>
         </>
       )}
@@ -928,7 +1103,8 @@ function SponsoredPrizePanel({ race, participants, colors }: { race: RaceData; p
 // ── PrizePanel ────────────────────────────────────────────────────────────────
 
 function PrizePanel({ race, participants, colors }: { race: RaceData; participants?: RaceParticipant[]; colors: ReturnType<typeof useColors> }) {
-  if (race.type === "sponsored") return <SponsoredPrizePanel race={race} participants={participants} colors={colors} />;
+  // Sponsored gift-card prizes open from Live Leaderboard info icon modal instead.
+  if (race.type === "sponsored") return null;
   if (race.entryType === "free") return null;
 
   const rankColors  = [colors.gold, colors.silver, colors.bronze];
@@ -1543,12 +1719,15 @@ export default function LiveRaceDetailScreen() {
     };
   }, [closeMicMenu]));
   const raceTitle   = race?.title ?? "Live Race";
+  const isSponsored = race?.type === "sponsored";
+  const headerRaceTitle = isSponsored
+    ? localizeSponsoredEventTitle(raceTitle, race?.startedAt)
+    : raceTitle.replace(/^LIVE\s+/i, "");
 
   const startedAtMs   = race?.startedAt   ? new Date(race.startedAt).getTime()   : null;
   const completedAtMs = race?.completedAt ? new Date(race.completedAt).getTime() : null;
   const elapsed       = startedAtMs ? Math.max(0, Math.floor(((completedAtMs ?? now) - startedAtMs) / 1000)) : 0;
   const statusLabel = isCompleted ? "FINISHED" : isActive ? "LIVE" : race ? "WAITING" : "NO RACE";
-  const isSponsored = race?.type === "sponsored";
   const SPONSORED_DURATION_S = 3 * 60 * 60;
   const sponsoredRemaining = Math.max(0, SPONSORED_DURATION_S - elapsed);
   const infoTimeLabel = isCompleted ? "TIME" : isActive && isSponsored ? "TIME LEFT" : isActive ? "TIME" : "STATUS";
@@ -1793,16 +1972,39 @@ export default function LiveRaceDetailScreen() {
       return;
     }
 
+    const prevActiveId = store.getState().raceProgress.activeRaceId;
+    const preserveAsCompanion = !!prevActiveId && prevActiveId !== raceId;
+    const resolvedGoal =
+      typeof raceData.targetSteps === "number" && raceData.targetSteps > 0
+        ? raceData.targetSteps
+        : undefined;
+    // Keep RaceContext target in sync BEFORE resumeLiveRace — otherwise it
+    // restarts the ongoing notification with the default 1000-step goal.
+    if (resolvedGoal != null) {
+      setRaceTargetSteps(resolvedGoal);
+    }
     setActiveRace(raceId, false);
+    const challengeEndAt =
+      raceData.type === "sponsored"
+        ? raceData.challengeEndAt ??
+          (raceData.startedAt
+            ? new Date(
+                new Date(raceData.startedAt).getTime() + 3 * 60 * 60 * 1000,
+              ).toISOString()
+            : undefined)
+        : raceData.challengeEndAt ?? undefined;
     ensureActiveRaceInStore({
       raceId,
       raceStartTime: new Date(raceData.startedAt ?? Date.now()).toISOString(),
       userId: user.id,
       username: user.username ?? "Runner",
-      goalSteps: typeof raceData.targetSteps === "number" ? raceData.targetSteps : 10_000,
+      goalSteps: resolvedGoal ?? store.getState().raceProgress.goalSteps ?? 0,
       totalParticipants: raceData.currentPlayers ?? parts.length,
       bootSteps: me.currentSteps ?? 0,
       participantConfirmed: true,
+      preserveAsCompanion,
+      isSponsored: raceData.type === "sponsored",
+      challengeEndAt,
     });
     if (!raceResumedRef.current) {
       raceResumedRef.current = true;
@@ -1825,7 +2027,7 @@ export default function LiveRaceDetailScreen() {
       setConfirmedSteps(p.userId, p.currentSteps, { instant: true });
       prevStepsMapRef.current[p.userId] = p.currentSteps;
     }
-  }, [raceId, user?.id, user?.username, setActiveRace, resumeLiveRace, catchUpLiveRaceSteps, setConfirmedSteps, stopRaceStepTracking]);
+  }, [raceId, user?.id, user?.username, setActiveRace, setRaceTargetSteps, resumeLiveRace, catchUpLiveRaceSteps, setConfirmedSteps, stopRaceStepTracking]);
 
   const fetchRaceDetails = useCallback(async (
     force = false,
@@ -1884,15 +2086,34 @@ export default function LiveRaceDetailScreen() {
 
     const me = findEligibleLiveRaceParticipant(participantsOnFocusRef.current, user);
     if (me) {
+      const prevActiveId = store.getState().raceProgress.activeRaceId;
+      const preserveAsCompanion = !!prevActiveId && prevActiveId !== raceId;
+      const resolvedGoal =
+        typeof race?.targetSteps === "number" && race.targetSteps > 0
+          ? race.targetSteps
+          : undefined;
+      if (resolvedGoal != null) {
+        setRaceTargetSteps(resolvedGoal);
+      }
+      const challengeEndAt =
+        race?.type === "sponsored"
+          ? race.challengeEndAt ??
+            (race.startedAt
+              ? new Date(new Date(race.startedAt).getTime() + 3 * 60 * 60 * 1000).toISOString()
+              : undefined)
+          : race?.challengeEndAt ?? undefined;
       ensureActiveRaceInStore({
         raceId,
         raceStartTime: new Date(race?.startedAt ?? Date.now()).toISOString(),
         userId: user.id,
         username: user.username ?? "Runner",
-        goalSteps: typeof race?.targetSteps === "number" ? race.targetSteps : 10_000,
+        goalSteps: resolvedGoal ?? store.getState().raceProgress.goalSteps ?? 0,
         totalParticipants: race?.currentPlayers ?? participantsOnFocusRef.current.length,
         bootSteps: Math.max(me.currentSteps ?? 0, localStepsRef.current),
         participantConfirmed: true,
+        preserveAsCompanion,
+        isSponsored: race?.type === "sponsored",
+        challengeEndAt,
       });
       stepEngineLog(
         "LiveScreen",
@@ -1917,7 +2138,7 @@ export default function LiveRaceDetailScreen() {
         void resumeStepWatching();
       }, 0);
     };
-  }, [raceId, race?.status, race?.startedAt, race?.targetSteps, race?.currentPlayers, user?.id, user?.username, resumeStepWatching, refreshTodaySteps, stopRaceStepTracking]));
+  }, [raceId, race?.status, race?.startedAt, race?.targetSteps, race?.currentPlayers, race?.type, race?.challengeEndAt, user?.id, user?.username, resumeStepWatching, refreshTodaySteps, stopRaceStepTracking, setRaceTargetSteps]));
 
   useEffect(() => {
     if (!raceId || !user?.id) return;
@@ -2646,9 +2867,16 @@ export default function LiveRaceDetailScreen() {
           <Feather name="chevron-left" size={25} color="#fff" />
         </TouchableOpacity>
         <View style={s.hCenter}>
-          {isActive  && <Text style={s.hLive}>LIVE </Text>}
-          {isCompleted && <Text style={[s.hLive, { color: "#FFD700" }]}>FINISHED </Text>}
-          <Text style={s.hTitle} numberOfLines={1}>{raceTitle.replace(/^LIVE\s+/i, "")}</Text>
+          {isActive  && <Text style={[s.hLive, isSponsored && s.hLiveSponsored]}>LIVE </Text>}
+          {isCompleted && <Text style={[s.hLive, isSponsored && s.hLiveSponsored, { color: "#FFD700" }]}>FINISHED </Text>}
+          <Text
+            style={[s.hTitle, isSponsored && s.hTitleSponsored]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.72}
+          >
+            {headerRaceTitle}
+          </Text>
         </View>
         {currentParticipant && isActive && currentParticipant.status !== "forfeited" ? (
           <TouchableOpacity activeOpacity={0.85} onPress={() =>
@@ -3285,11 +3513,13 @@ const cdStyles = StyleSheet.create({
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
-  header:      { paddingHorizontal: 12, paddingBottom: 10, flexDirection: "row", alignItems: "center" },
+  header:      { paddingHorizontal: 12, paddingBottom: 2, flexDirection: "row", alignItems: "center" },
   backBtn:     { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
   hCenter:     { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", minWidth: 0 },
   hLive:       { fontSize: 18, fontWeight: "900", color: "#00E676" },
-  hTitle:      { fontSize: 18, fontWeight: "900", color: "#FFFFFF", maxWidth: "62%" },
+  hLiveSponsored: { fontSize: 14 },
+  hTitle:      { fontSize: 18, fontWeight: "900", color: "#FFFFFF", maxWidth: "62%", flexShrink: 1 },
+  hTitleSponsored: { fontSize: 13, maxWidth: "78%", letterSpacing: -0.2 },
   hShoe:       { fontSize: 18 },
   leaveBtn:    { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 },
   leaveTxt:    { color: "#FFFFFF", fontSize: 13, fontWeight: "800", marginRight: 4 },
@@ -3317,18 +3547,21 @@ const s = StyleSheet.create({
   winnerBadge:  { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: "#FFD700" },
   winnerBadgeTxt: { fontSize: 10, fontWeight: "800", color: "#000" },
   taglineSlot: {
-    minHeight: 40,
-    marginTop: 4,
-    marginBottom: 4,
+    marginTop: 0,
+    marginBottom: 2,
     paddingHorizontal: 16,
+    paddingVertical: 0,
     justifyContent: "center",
     alignItems: "center",
+    alignSelf: "center",
+    width: "100%",
   },
   subtitle: {
     fontSize: 12,
     color: "#64748B",
     fontWeight: "500",
     textAlign: "center",
+    lineHeight: 16,
     width: "100%",
   },
   endsPill: {
