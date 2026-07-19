@@ -9,13 +9,23 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Native (app shells — not Expo local modules under modules/)
+# Native (iOS shell stays local; Android app project is tracked)
 ios/
-android/
-!modules/walkchamp-race-progress/android/
-!modules/walkchamp-race-progress/android/**
 !modules/walkchamp-race-progress/ios/
 !modules/walkchamp-race-progress/ios/**
+
+# Android build / machine-local outputs (source under android/ is committed)
+android/build/
+android/.gradle/
+android/.kotlin/
+android/**/build/
+android/**/.cxx/
+android/local.properties
+android/*.log
+android/.idea/
+modules/**/android/build/
+modules/**/android/.gradle/
+
 *.orig.*
 *.jks
 *.p8
@@ -51,6 +61,4 @@ dist-export-*/
 .verify-export-android/
 package-lock.json
 package_dump.txt
-modules/**/android/build/
-modules/**/android/.gradle/
 frontend/
