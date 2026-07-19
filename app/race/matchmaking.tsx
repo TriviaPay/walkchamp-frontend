@@ -1159,9 +1159,6 @@ export default function MatchmakingScreen() {
           >
             <Feather name="arrow-left" size={18} color="#E2E8F8" />
           </TouchableOpacity>
-          <View style={styles.iconBtn}>
-            <Feather name="more-horizontal" size={18} color="#E2E8F8" />
-          </View>
         </View>
 
         <View style={styles.heroIconWrap}>
@@ -1174,7 +1171,9 @@ export default function MatchmakingScreen() {
 
         <Text style={styles.title}>Waiting Room</Text>
         <Text style={styles.subtitle}>
-          {isHostMode ? "Start when you're ready" : "Waiting for host to start the race"}
+          {isHostMode
+            ? "Start when you're ready"
+            : "Race will start automatically at the Scheduled time"}
         </Text>
 
         <View style={styles.infoBanner}>
