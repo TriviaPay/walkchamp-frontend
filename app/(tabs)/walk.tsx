@@ -2054,6 +2054,9 @@ function WalkScreenContent() {
       }
       return;
     }
+    // Reject legacy +1 pedometer phantoms right after tab focus / screen switch.
+    const { suppressLegacyStepBumps } = require("@/utils/stepAccuracy") as typeof import("@/utils/stepAccuracy");
+    suppressLegacyStepBumps(8_000);
     void refreshTodayRank();
     void refetchDbWalk();
     if (usingRealTracking) {
@@ -2865,15 +2868,19 @@ function WalkScreenContent() {
           }
           setActiveRaceModal({
             room_id: ar.room_id,
-            room_status: ar.room_status as "open" | "in_progress",
+            room_status: ar.room_status,
             challenge_type: ar.challenge_type,
             room_type: ar.room_type,
             is_sponsored: ar.is_sponsored,
             entry_fee: ar.entry_fee,
             target_steps: ar.target_steps,
-            current_user_role: ar.current_user_role as "host" | "participant",
-            can_leave: true,
-            next_screen: "/(tabs)/walk",
+            current_user_role: ar.current_user_role,
+            can_leave: ar.can_leave ?? true,
+            next_screen: ar.next_screen ?? "waiting_room",
+            scheduled_start_at: ar.scheduled_start_at ?? null,
+            started_at: ar.started_at ?? null,
+            max_players: ar.max_players,
+            registered_count: ar.registered_count,
           });
           return;
         }
@@ -3605,8 +3612,8 @@ function WalkScreenContent() {
                       <View style={styles.sponsoredTitleRow}>
                         <Text style={styles.sponsoredTitle}>Sponsored Events</Text>
                         {isRegistered && (
-                          <View style={[styles.newBadge, { backgroundColor: "#A855F725", borderColor: "#A855F755" }]}>
-                            <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: "#A855F7", marginRight: 3 }} />
+                          <View style={[styles.newBadge, { backgroundColor: "#A855F725", borderColor: "#A855F755", borderWidth: 1 }]}>
+                            <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: "#A855F7" }} />
                             <Text style={[styles.newBadgeText, { color: "#A855F7" }]}>JOINED</Text>
                           </View>
                         )}
@@ -3616,8 +3623,8 @@ function WalkScreenContent() {
                           </View>
                         )}
                         {isRacing && (
-                          <View style={[styles.newBadge, { backgroundColor: "#00E67625", borderColor: "#00E67655" }]}>
-                            <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: "#00E676", marginRight: 3 }} />
+                          <View style={[styles.newBadge, { backgroundColor: "#00E67625", borderColor: "#00E67655", borderWidth: 1 }]}>
+                            <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: "#00E676" }} />
                             <Text style={[styles.newBadgeText, { color: "#00E676" }]}>LIVE</Text>
                           </View>
                         )}
@@ -5419,10 +5426,13 @@ const styles = StyleSheet.create({
   sponsoredTitleRow: { flexDirection: "row", alignItems: "center", gap: rs(6), marginBottom: 3 },
   sponsoredTitle: { fontSize: rf(15.5), fontWeight: "800", color: "#FFF" },
   newBadge: {
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: "#6C00FF",
     borderRadius: 6,
     paddingHorizontal: 5,
     paddingVertical: 1,
+    gap: 3,
   },
   newBadgeText: { fontSize: rf(9), fontWeight: "800", color: "#FFF", letterSpacing: 0.5 },
   sponsoredSub: { fontSize: rf(11), color: "rgba(255,255,255,0.55)", lineHeight: 16, marginBottom: rs(8) },

@@ -214,7 +214,7 @@ data class RaceNotificationState(
         is Number -> v.toInt() != 0
         is String -> v.equals("true", ignoreCase = true) || v == "1"
         else -> false
-      } || challengeEndMs > 0L
+      }
       return RaceNotificationState(
         raceId = raceId,
         userId = userId,
@@ -281,7 +281,7 @@ data class RaceNotificationState(
           stepSource = json.optString("stepSource", "health_connect"),
           sensorCounterBaseline = json.optLong("sensorCounterBaseline", 0L),
           raceStepsAtSensorBaseline = json.optInt("raceStepsAtSensorBaseline", 0),
-          isSponsored = json.optBoolean("isSponsored", json.optLong("challengeEndAtMs", 0L) > 0L),
+          isSponsored = json.optBoolean("isSponsored", false),
         ).takeIf { it.raceId.isNotBlank() }?.also { state ->
           if (uid == null && state.userId.isNotBlank()) {
             save(ctx, state)

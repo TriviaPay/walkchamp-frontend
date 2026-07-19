@@ -22,6 +22,7 @@ import {
   handleSessionInvalidation,
   parseSessionErrorFromResponse,
 } from "@/services/sessionInvalidation";
+import { buildSessionRequestHeaders } from "@/services/sessionRequestHeaders";
 import { authEvents } from "@/utils/authEvents";
 
 // ── Timeout constants ─────────────────────────────────────────────────────────
@@ -117,6 +118,11 @@ export async function authFetch(
   }
   if (__DEV__) console.log("[API] attaching token for", path);
 
+  // Single-session gate: X-Session-Id + device metadata (backend requireAuth).
+  const sessionHeaders = await buildSessionRequestHeaders().catch(
+    () => ({} as Record<string, string>),
+  );
+
   const makeRequest = async (token: string): Promise<Response> => {
     // Own controller so we can cancel both timeout and caller signal cleanly.
     const ctrl = new AbortController();
@@ -152,6 +158,7 @@ export async function authFetch(
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          ...sessionHeaders,
           ...(fetchOptions.headers ?? {}),
         },
       });

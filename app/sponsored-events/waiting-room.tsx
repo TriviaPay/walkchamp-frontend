@@ -15,7 +15,7 @@ import { Feather } from "@expo/vector-icons";
 import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { parseSponsoredEventsResponse } from "@/utils/sponsoredEventsApi";
-import { formatSponsoredEventWindow } from "@/utils/timezone";
+import { SponsoredEventWindowLabel } from "@/components/SponsoredEventWindowLabel";
 import { authFetch } from "@/utils/authFetch";
 import { screenCache } from "@/utils/screenCache";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
@@ -358,9 +358,11 @@ export default function SponsoredWaitingRoom() {
                 </Text>
                 <View style={s.windowBox}>
                   <Feather name="clock" size={12} color="rgba(255,255,255,0.55)" />
-                  <Text style={s.windowText}>
-                    {formatSponsoredEventWindow(event.scheduledStartAt, event.endsAt ?? null)}
-                  </Text>
+                  <SponsoredEventWindowLabel
+                    startIso={event.scheduledStartAt}
+                    endIso={event.endsAt ?? null}
+                    style={s.windowText}
+                  />
                 </View>
               </>
             ) : null}

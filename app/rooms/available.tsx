@@ -28,6 +28,7 @@ import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { AppAlert } from "@/components/AppAlert";
 import ActiveRaceModal, { type ActiveRaceInfo } from "@/components/ActiveRaceModal";
+import AlreadyRegisteredModal, { type RegisteredRaceInfo } from "@/components/AlreadyRegisteredModal";
 import { JoinProgressOverlay } from "@/components/RaceJoinBadge";
 import JoinWithCodeModal, { type JoinWithCodeResult } from "@/components/JoinWithCodeModal";
 import { PublicProfileModal, type PublicProfileInitialData } from "@/components/PublicProfileModal";
@@ -1456,6 +1457,8 @@ export default function AvailableRoomsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [activeRaceModal, setActiveRaceModal] = useState<ActiveRaceInfo | null>(null);
   const [leavingActiveRace, setLeavingActiveRace] = useState(false);
+  const [registeredRaceModal, setRegisteredRaceModal] = useState<RegisteredRaceInfo | null>(null);
+  const [withdrawingRegistration, setWithdrawingRegistration] = useState(false);
   const pendingRaceActionRef = useRef<(() => Promise<void>) | null>(null);
 
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
@@ -1556,6 +1559,19 @@ export default function AvailableRoomsScreen() {
   const isRefreshing = refreshing || upcomingRefreshing;
 
   // ── Register for upcoming room ─────────────────────────────────────────────
+  const enrichRegisteredRace = useCallback((raw: ActiveRaceInfo): RegisteredRaceInfo => {
+    const local = upcomingRooms.find((r) => r.room_id === raw.room_id);
+    return {
+      ...raw,
+      scheduled_start_at: raw.scheduled_start_at ?? local?.scheduled_start_at ?? null,
+      max_players: raw.max_players ?? local?.max_players,
+      registered_count: raw.registered_count ?? local?.registered_count,
+      target_steps: raw.target_steps || local?.target_steps || 0,
+      entry_fee: raw.entry_fee ?? local?.entry_fee ?? 0,
+      challenge_type: raw.challenge_type || local?.challenge_type || "free",
+    };
+  }, [upcomingRooms]);
+
   const doRegister = useCallback(async (room: UpcomingRoom) => {
     if (registeringRoomId) return;
     setRegisteringRoomId(room.room_id);
@@ -1566,7 +1582,25 @@ export default function AvailableRoomsScreen() {
       });
       const body = await res.json().catch(() => ({})) as Record<string, unknown>;
       if (!res.ok) {
-        AppAlert.alert("Registration failed", (body.error as string) ?? "Could not register.");
+        const code = body.code as string | undefined;
+        const activeRace = body.active_race as ActiveRaceInfo | undefined;
+        if (
+          res.status === 409 &&
+          (code === "REGULAR_RACE_REGISTRATION_EXISTS" || code === "ACTIVE_RACE_EXISTS") &&
+          activeRace
+        ) {
+          setConsentUpcomingRoom(null);
+          setConsentRoom(null);
+          const status = activeRace.room_status;
+          if (status === "scheduled") {
+            setRegisteredRaceModal(enrichRegisteredRace(activeRace));
+          } else {
+            pendingRaceActionRef.current = null;
+            setActiveRaceModal(activeRace);
+          }
+          return;
+        }
+        AppAlert.alert("Registration failed", (body.error as string) ?? (body.message as string) ?? "Could not register.");
         return;
       }
       setUpcomingRooms((prev) =>
@@ -1581,16 +1615,60 @@ export default function AvailableRoomsScreen() {
     } finally {
       setRegisteringRoomId(null);
     }
-  }, [registeringRoomId]);
+  }, [registeringRoomId, enrichRegisteredRace]);
 
-  const handleRegister = useCallback((room: UpcomingRoom) => {
+  const handleRegister = useCallback(async (room: UpcomingRoom) => {
+    // Scenario 1: already registered for another scheduled user-created room → show modal immediately (skip consent).
+    const existingReg = upcomingRooms.find(
+      (r) => r.current_user_registered && r.room_id !== room.room_id && r.challenge_type !== "sponsored",
+    );
+    if (existingReg) {
+      setConsentUpcomingRoom(null);
+      setConsentRoom(null);
+      setRegisteredRaceModal({
+        room_id: existingReg.room_id,
+        room_status: existingReg.status || "scheduled",
+        challenge_type: existingReg.challenge_type,
+        entry_fee: existingReg.entry_fee,
+        target_steps: existingReg.target_steps,
+        current_user_role: user?.id && existingReg.host_user_id === user.id ? "host" : "participant",
+        can_leave: true,
+        next_screen: "waiting_room",
+        scheduled_start_at: existingReg.scheduled_start_at,
+        max_players: existingReg.max_players,
+        registered_count: existingReg.registered_count,
+      });
+      return;
+    }
+
+    // Scenario 2: already in an active/waiting race → show ActiveRaceModal immediately.
+    try {
+      const res = await authFetch("/api/races/current-active");
+      if (res.ok) {
+        const data = await res.json() as {
+          has_active_race?: boolean;
+          active_race?: ActiveRaceInfo | null;
+        };
+        const ar = data.active_race;
+        if (data.has_active_race && ar && !ar.is_sponsored && ar.room_type !== "sponsored") {
+          setConsentUpcomingRoom(null);
+          setConsentRoom(null);
+          pendingRaceActionRef.current = null;
+          setActiveRaceModal(ar);
+          return;
+        }
+      }
+    } catch {
+      // Fall through to normal register / consent.
+    }
+
     if (room.entry_fee > 0) {
       setConsentChecks([false, false, false, false]);
       setConsentUpcomingRoom(room);
     } else {
       void doRegister(room);
     }
-  }, [doRegister]);
+  }, [doRegister, upcomingRooms, user?.id]);
 
   const handleCancelRegistration = useCallback(async (room: UpcomingRoom) => {
     if (registeringRoomId) return;
@@ -1888,6 +1966,66 @@ export default function AvailableRoomsScreen() {
     pendingRaceActionRef.current = null;
   };
 
+  const handleGoToRegisteredRace = () => {
+    const ar = registeredRaceModal;
+    setRegisteredRaceModal(null);
+    if (!ar) return;
+    if (ar.room_status === "in_progress") {
+      router.push({ pathname: "/race/live-detail", params: { id: ar.room_id } });
+      return;
+    }
+    router.push({
+      pathname: "/race/matchmaking",
+      params: buildMatchmakingParams({
+        raceId: ar.room_id,
+        isHost: ar.current_user_role === "host",
+        user,
+      }),
+    });
+  };
+
+  const handleWithdrawRegisteredRace = async () => {
+    const ar = registeredRaceModal;
+    if (!ar) return;
+    setWithdrawingRegistration(true);
+    try {
+      const useLeave = ar.room_status === "open" || ar.room_status === "full";
+      const res = await authFetch(
+        useLeave
+          ? `/api/races/${ar.room_id}/leave`
+          : `/api/rooms/${ar.room_id}/cancel-registration`,
+        { method: "POST", ...(useLeave ? { body: JSON.stringify({ reason: "cancel_registration" }) } : {}) },
+      );
+      const body = await res.json().catch(() => ({})) as RaceLeaveResponse & Record<string, unknown>;
+      if (!res.ok) {
+        AppAlert.alert("Could not withdraw", (body.error as string) ?? "Please try again.");
+        return;
+      }
+      if (useLeave) {
+        await refreshWallet();
+        const refundMsg = refundMessageFromLeaveBody(body);
+        if (refundMsg) AppAlert.alert("Refund", refundMsg);
+      }
+      setUpcomingRooms((prev) =>
+        prev.map((r) =>
+          r.room_id === ar.room_id
+            ? {
+                ...r,
+                current_user_registered: false,
+                registered_count: Math.max(0, r.registered_count - 1),
+                eligible_to_register: true,
+              }
+            : r
+        )
+      );
+      setRegisteredRaceModal(null);
+    } catch {
+      AppAlert.alert("Error", "Could not withdraw. Please try again.");
+    } finally {
+      setWithdrawingRegistration(false);
+    }
+  };
+
   // ── View host profile ──────────────────────────────────────────────────────
   const handleViewHost = useCallback((room: Room) => {
     setSelectedHostData({
@@ -2038,6 +2176,15 @@ export default function AvailableRoomsScreen() {
         onStay={handleStayInActiveRace}
         onLeaveAndContinue={handleLeaveAndContinue}
         onCancel={handleCancelActiveRaceModal}
+      />
+
+      <AlreadyRegisteredModal
+        visible={!!registeredRaceModal}
+        race={registeredRaceModal}
+        withdrawing={withdrawingRegistration}
+        onGoToRace={handleGoToRegisteredRace}
+        onWithdraw={handleWithdrawRegisteredRace}
+        onCancel={() => setRegisteredRaceModal(null)}
       />
 
       <JoinWithCodeModal

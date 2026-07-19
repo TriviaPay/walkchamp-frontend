@@ -87,14 +87,17 @@ export function getLocalMonthStart(): string {
 
 /**
  * Formats a UTC ISO timestamp as a local time string, e.g. "2:45 PM".
- * Uses the device's locale and timezone automatically via toLocaleTimeString.
+ * Always 12-hour with uppercase AM/PM in the device local timezone.
  */
 export function formatLocalTime(utcIso: string): string {
   try {
-    return new Date(utcIso).toLocaleTimeString([], {
-      hour: "numeric",
-      minute: "2-digit",
-    });
+    const d = new Date(utcIso);
+    if (Number.isNaN(d.getTime())) return "";
+    let hour = d.getHours();
+    const minute = d.getMinutes();
+    const ampm = hour >= 12 ? "PM" : "AM";
+    hour = hour % 12 || 12;
+    return `${hour}:${minute.toString().padStart(2, "0")} ${ampm}`;
   } catch {
     return "";
   }
@@ -117,10 +120,7 @@ export function formatRelativeTime(utcIso: string): string {
     const yesterday = new Date(now);
     yesterday.setDate(now.getDate() - 1);
 
-    const timeStr = d.toLocaleTimeString([], {
-      hour: "numeric",
-      minute: "2-digit",
-    });
+    const timeStr = formatLocalTime(d.toISOString());
 
     if (toKey(d) === toKey(now)) return `Today · ${timeStr}`;
     if (toKey(d) === toKey(yesterday)) return `Yesterday · ${timeStr}`;
@@ -149,6 +149,44 @@ export function formatLocalDate(utcIso: string): string {
   }
 }
 
+export type SponsoredEventWindowParts = {
+  startTime: string;
+  endValue: string | null;
+};
+
+/**
+ * Structured Sponsored Event start→end times for colored labels.
+ * Same-day endValue is just the time; cross-midnight includes the date.
+ */
+export function getSponsoredEventWindowParts(
+  startIso: string | null | undefined,
+  endIso: string | null | undefined,
+): SponsoredEventWindowParts | null {
+  if (!startIso) return null;
+  try {
+    const start = new Date(startIso);
+    if (Number.isNaN(start.getTime())) return null;
+    const startTime = formatLocalTime(startIso);
+    if (!endIso) return { startTime, endValue: null };
+
+    const end = new Date(endIso);
+    if (Number.isNaN(end.getTime())) return { startTime, endValue: null };
+
+    const sameLocalDay =
+      start.getFullYear() === end.getFullYear() &&
+      start.getMonth() === end.getMonth() &&
+      start.getDate() === end.getDate();
+
+    const endTime = formatLocalTime(endIso);
+    const endValue = sameLocalDay
+      ? endTime
+      : `${formatLocalDate(endIso)} · ${endTime}`;
+    return { startTime, endValue };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Compact Sponsored Event start→end times for list/detail cards.
  * Converts absolute backend instants to the device local timezone (display only).
@@ -161,27 +199,10 @@ export function formatSponsoredEventWindow(
   startIso: string | null | undefined,
   endIso: string | null | undefined,
 ): string {
-  if (!startIso) return "";
-  try {
-    const start = new Date(startIso);
-    if (Number.isNaN(start.getTime())) return "";
-    const startTime = formatLocalTime(startIso);
-    if (!endIso) return `Start time ${startTime}`;
-
-    const end = new Date(endIso);
-    if (Number.isNaN(end.getTime())) return `Start time ${startTime}`;
-
-    const sameLocalDay =
-      start.getFullYear() === end.getFullYear() &&
-      start.getMonth() === end.getMonth() &&
-      start.getDate() === end.getDate();
-
-    const endTime = formatLocalTime(endIso);
-    if (sameLocalDay) return `Start time ${startTime} · End time ${endTime}`;
-    return `Start time ${startTime} · End time ${formatLocalDate(endIso)} · ${endTime}`;
-  } catch {
-    return "";
-  }
+  const parts = getSponsoredEventWindowParts(startIso, endIso);
+  if (!parts) return "";
+  if (!parts.endValue) return `Start time ${parts.startTime}`;
+  return `Start time ${parts.startTime} · End time ${parts.endValue}`;
 }
 
 /** Inclusive start / exclusive end against canonical backend instants. */

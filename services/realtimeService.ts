@@ -73,11 +73,18 @@ function getClient(): PusherInstance | null {
             callback(new Error("No auth session for Pusher"), { auth: "" });
             return;
           }
+          const { buildSessionRequestHeaders } = await import(
+            "@/services/sessionRequestHeaders"
+          );
+          const sessionHeaders = await buildSessionRequestHeaders().catch(
+            () => ({} as Record<string, string>),
+          );
           const resp = await fetch(`${API_BASE}/api/realtime/pusher/auth`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${session}`,
+              ...sessionHeaders,
             },
             body: JSON.stringify({
               socket_id: socketId,
@@ -156,6 +163,8 @@ export const CHANNELS = {
   LIVE_LEADERBOARD: "public-leaderboard-global",
   liveRace: (raceId: string) => `public-live-race-${raceId}`,
   privateUser: (userId: string) => `private-user-${userId}`,
+  /** Backend emits session-invalidated here for the superseded session id. */
+  privateSession: (sessionId: string) => `private-session-${sessionId}`,
   privateChat: (convId: string) => `private-chat-${convId}`,
   presenceRace: (raceId: string) => `presence-race-${raceId}`,
 };

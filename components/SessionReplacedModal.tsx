@@ -22,7 +22,7 @@ function copyFor(kind: SessionNoticeKind): { title: string; body: string; icon: 
     return {
       title: "Signed in on another device",
       body:
-        "Your account was just signed in on a different device, so you’ve been signed out here for security. Sign in again on this device if you want to continue.",
+        "Your account was signed in on another device. Please sign in again.",
       icon: "smartphone",
     };
   }

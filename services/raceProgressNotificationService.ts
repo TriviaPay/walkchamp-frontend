@@ -105,6 +105,7 @@ async function toNativePayload(
   if (payload.challengeEndAt != null && payload.challengeEndAt !== "") {
     out.challengeEndAt = payload.challengeEndAt;
   }
+  // Title type is explicit only — having an end window does not mean sponsored.
   if (payload.isSponsored === true) {
     out.isSponsored = true;
   }
@@ -118,8 +119,8 @@ function formatGoalSteps(goalSteps: number): string {
 }
 
 function formatRaceNotificationBody(payload: RaceProgressNotificationPayload): string {
-  // Elapsed / countdown is owned by the Android notification chronometer.
-  // Do not embed a static "m:ss left" — it freezes between JS updates.
+  // Race duration / countdown is not shown as a shade chronometer.
+  // Body stays steps / rank / goal only.
   const steps = payload.raceSteps.toLocaleString();
   const goal = formatGoalSteps(payload.goalSteps);
   const openHint = payload.timeLeftSeconds > 0 ? "" : " • Open";

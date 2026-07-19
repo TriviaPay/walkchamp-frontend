@@ -15,7 +15,9 @@ import { Alert,
   Text,
   TextInput,
   useWindowDimensions,
-  View} from "react-native";
+  View,
+  Animated as RNAnimated,
+} from "react-native";
 import { SkeletonLiveDetail } from "@/components/SkeletonRows";
 import { MicPassModal } from "@/components/race/MicPassModal";
 import { useMicPass } from "@/hooks/useMicPass";
@@ -35,6 +37,7 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { formatRaceSteps, resolveLiveRaceDisplaySteps } from "@/utils/liveRaceDisplay";
 import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
 import { ChallengeEndsPillLabel } from "@/components/ChallengeEndsPillLabel";
+import { SponsoredEventWindowLabel } from "@/components/SponsoredEventWindowLabel";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
@@ -124,6 +127,8 @@ interface RaceData {
   maxPlayers: number;
   startedAt: string | null;
   completedAt: string | null;
+  scheduledStartAt?: string | null;
+  endsAt?: string | null;
   creatorId: string;
   prizePool: number;
   prizeTiers: number[];
@@ -165,6 +170,7 @@ interface RaceParticipant {
   isTied?: boolean;
   tieGroupSize?: number;
   eligibleForPrize?: boolean;
+  isWinner?: boolean;
   finishedGoal?: boolean;
   finishedAt?: string | null; }
 
@@ -1771,16 +1777,145 @@ export default function LiveRaceDetailScreen() {
     ],
   );
 
-  const [showChallengeEndsLabel, setShowChallengeEndsLabel] = useState(true);
+  const sponsoredStartIso = useMemo(() => {
+    if (!isSponsored) return null;
+    return race?.scheduledStartAt ?? race?.startedAt ?? null;
+  }, [isSponsored, race?.scheduledStartAt, race?.startedAt]);
+
+  const sponsoredEndIso = useMemo(() => {
+    if (!isSponsored) return null;
+    if (race?.endsAt) return race.endsAt;
+    const start = race?.startedAt ?? race?.scheduledStartAt;
+    if (!start) return null;
+    return new Date(new Date(start).getTime() + 3 * 60 * 60 * 1000).toISOString();
+  }, [isSponsored, race?.endsAt, race?.startedAt, race?.scheduledStartAt]);
+
+  const hasAltSlot = !!(challengeEndsLabel || (isSponsored && sponsoredStartIso));
+
+  // Single-layer tagline: freeze start/end copy once, hold 5s, fade, swap, fade — no recapture.
+  type TaglineAlt =
+    | { kind: "ends"; label: string }
+    | { kind: "sponsored"; start: string; end: string | null };
+  const [taglineMode, setTaglineMode] = useState<"alt" | "beat">("beat");
+  const [taglineAlt, setTaglineAlt] = useState<TaglineAlt | null>(null);
+  const taglineModeRef = useRef<"alt" | "beat">("beat");
+  const taglineOpacity = useRef(new RNAnimated.Value(1)).current;
+  const taglineLoopGenRef = useRef(0);
+  const challengeEndsLabelRef = useRef(challengeEndsLabel);
+  const sponsoredStartRef = useRef(sponsoredStartIso);
+  const sponsoredEndRef = useRef(sponsoredEndIso);
+  challengeEndsLabelRef.current = challengeEndsLabel;
+  sponsoredStartRef.current = sponsoredStartIso;
+  sponsoredEndRef.current = sponsoredEndIso;
+
   useEffect(() => {
-    if (!challengeEndsLabel || isCompleted) {
-      setShowChallengeEndsLabel(false);
-      return;
+    const gen = ++taglineLoopGenRef.current;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let resolveSleep: (() => void) | null = null;
+
+    const alive = () => gen === taglineLoopGenRef.current;
+
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => {
+        resolveSleep = resolve;
+        timer = setTimeout(() => {
+          timer = null;
+          resolveSleep = null;
+          resolve();
+        }, ms);
+      });
+
+    const cleanupSleep = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (resolveSleep) {
+        const r = resolveSleep;
+        resolveSleep = null;
+        r();
+      }
+    };
+
+    const fade = (to: number) =>
+      new Promise<void>((resolve) => {
+        RNAnimated.timing(taglineOpacity, {
+          toValue: to,
+          duration: 300,
+          useNativeDriver: true,
+        }).start(() => resolve());
+      });
+
+    if (!hasAltSlot || isCompleted) {
+      taglineModeRef.current = "beat";
+      setTaglineMode("beat");
+      setTaglineAlt(null);
+      taglineOpacity.stopAnimation();
+      taglineOpacity.setValue(1);
+      return () => {
+        taglineLoopGenRef.current += 1;
+        cleanupSleep();
+      };
     }
-    setShowChallengeEndsLabel(true);
-    const id = setInterval(() => setShowChallengeEndsLabel((v) => !v), 5000);
-    return () => clearInterval(id);
-  }, [challengeEndsLabel, isCompleted]);
+
+    // Freeze once for this race — never rewrite while rotating (stops blink/change).
+    const ends = challengeEndsLabelRef.current;
+    const frozen: TaglineAlt | null = ends
+      ? { kind: "ends", label: ends }
+      : sponsoredStartRef.current
+        ? {
+            kind: "sponsored",
+            start: sponsoredStartRef.current,
+            end: sponsoredEndRef.current,
+          }
+        : null;
+
+    if (!frozen) {
+      taglineModeRef.current = "beat";
+      setTaglineMode("beat");
+      setTaglineAlt(null);
+      taglineOpacity.setValue(1);
+      return () => {
+        taglineLoopGenRef.current += 1;
+        cleanupSleep();
+      };
+    }
+
+    setTaglineAlt(frozen);
+    taglineModeRef.current = "alt";
+    setTaglineMode("alt");
+    taglineOpacity.stopAnimation();
+    taglineOpacity.setValue(1);
+
+    const HOLD_MS = 5000;
+
+    void (async () => {
+      while (alive()) {
+        // Full 5s visible before any fade starts.
+        await sleep(HOLD_MS);
+        if (!alive()) break;
+
+        await fade(0);
+        if (!alive()) break;
+
+        // Swap only after fully invisible. Keep frozen alt payload untouched.
+        const next: "alt" | "beat" = taglineModeRef.current === "alt" ? "beat" : "alt";
+        taglineModeRef.current = next;
+        setTaglineMode(next);
+
+        await sleep(80);
+        if (!alive()) break;
+
+        await fade(1);
+      }
+    })();
+
+    return () => {
+      taglineLoopGenRef.current += 1;
+      cleanupSleep();
+      taglineOpacity.stopAnimation();
+    };
+  }, [hasAltSlot, isCompleted, race?.id, taglineOpacity]);
 
   // Feed confirmed step values into the animator (local user + Pusher/backend).
   useEffect(() => {
@@ -2739,6 +2874,13 @@ export default function LiveRaceDetailScreen() {
   // ── Race Finished banner (shared) ─────────────────────────────────────────
   const allForfeited    = forfeitReason === "all_forfeited";
   const winnerByForfeit = forfeitReason === "winner_by_forfeit";
+  const sponsoredMeQualified =
+    !!currentParticipant &&
+    (
+      currentParticipant.eligibleForPrize === true ||
+      currentParticipant.isWinner === true ||
+      (currentParticipant.prizeAmount ?? 0) > 0
+    );
   const FinishedBanner = isCompleted && !bannerDismissed ? (
     <View style={[s.finishedBanner]}>
       <View style={s.finishedBannerHeader}>
@@ -2750,6 +2892,16 @@ export default function LiveRaceDetailScreen() {
           <Feather name="x" size={18} color="#888" />
         </TouchableOpacity>
       </View>
+      {isSponsored && currentParticipant ? (
+        <View style={s.sponsoredFinishBody}>
+          <Text style={s.sponsoredFinishMsg}>
+            {sponsoredMeQualified
+              ? "Congratulations! You reached the target steps and qualified for the event reward"
+              : "Oops! Target steps not completed, so you’re not eligible for this event’s reward. Better luck next time—keep walking!"}
+          </Text>
+        </View>
+      ) : (
+        <>
       {allForfeited && (
         <Text style={{ color: "#9CA3AF", fontSize: 13, paddingHorizontal: 4, paddingBottom: 4 }}>
           Match ended — all participants forfeited. No winners were declared.
@@ -2845,6 +2997,8 @@ export default function LiveRaceDetailScreen() {
           </View>
         );
       })}
+        </>
+      )}
     </View>
   ) : null;
 
@@ -2906,19 +3060,30 @@ export default function LiveRaceDetailScreen() {
         )}
       </View>
 
-      {/* ── Centered slot: time-left ↔ beat friends (every 3s) ── */}
+      {/* ── Fixed-height single-text rotator: 5s hold → fade → swap → fade ── */}
       {!isCompleted ? (
         <View style={s.taglineSlot}>
-          {showChallengeEndsLabel && challengeEndsLabel ? (
-            <View style={s.endsPill}>
-              <Feather name="calendar" size={13} color="#FFFFFF" />
-              <ChallengeEndsPillLabel label={challengeEndsLabel} style={s.endsPillText} />
-            </View>
-          ) : (
-            <Text style={s.subtitle} numberOfLines={2}>
-              Beat your friends. Hit your goal!
-            </Text>
-          )}
+          <RNAnimated.View style={[s.taglineInner, { opacity: taglineOpacity }]}>
+            {taglineMode === "alt" && taglineAlt?.kind === "ends" ? (
+              <View style={s.endsPill}>
+                <Feather name="calendar" size={13} color="#FFFFFF" />
+                <ChallengeEndsPillLabel label={taglineAlt.label} style={s.endsPillText} />
+              </View>
+            ) : taglineMode === "alt" && taglineAlt?.kind === "sponsored" ? (
+              <View style={s.endsPill}>
+                <Feather name="clock" size={13} color="#FFFFFF" />
+                <SponsoredEventWindowLabel
+                  startIso={taglineAlt.start}
+                  endIso={taglineAlt.end}
+                  style={s.endsPillText}
+                />
+              </View>
+            ) : (
+              <Text style={s.subtitle} numberOfLines={1}>
+                Beat your friends. Hit your goal!
+              </Text>
+            )}
+          </RNAnimated.View>
         </View>
       ) : null}
 
@@ -3535,6 +3700,18 @@ const s = StyleSheet.create({
   finishedBanner:       { marginHorizontal: 12, marginTop: 8, borderRadius: 16, borderWidth: 1.5, padding: 14, gap: 10, backgroundColor: "#FFD70012", borderColor: "#FFD70044" },
   finishedBannerHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
   finishedBannerTitle:  { fontSize: 17, fontWeight: "800", flex: 1, color: "#FFD700" },
+  sponsoredFinishBody:  {
+    backgroundColor: "rgba(0,0,0,0.28)",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  sponsoredFinishMsg:   {
+    color: "#F5F3FF",
+    fontSize: 13.5,
+    fontWeight: "600",
+    lineHeight: 20,
+  },
   finishedDuration:     { fontSize: 13, fontWeight: "600", color: "#888" },
   winnerRow:    { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 12, borderWidth: 1, padding: 10, backgroundColor: "#FFD70018", borderColor: "#FFD70044" },
   winnerCrown:  { fontSize: 20, color: "#FFD700" },
@@ -3547,14 +3724,20 @@ const s = StyleSheet.create({
   winnerBadge:  { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: "#FFD700" },
   winnerBadgeTxt: { fontSize: 10, fontWeight: "800", color: "#000" },
   taglineSlot: {
-    marginTop: 0,
-    marginBottom: 2,
+    marginTop: 2,
+    marginBottom: 6,
     paddingHorizontal: 16,
-    paddingVertical: 0,
+    height: 40,
     justifyContent: "center",
     alignItems: "center",
     alignSelf: "center",
     width: "100%",
+    overflow: "hidden",
+  },
+  taglineInner: {
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "center",
   },
   subtitle: {
     fontSize: 12,
@@ -3567,8 +3750,8 @@ const s = StyleSheet.create({
   endsPill: {
     alignSelf: "center",
     maxWidth: "100%",
-    paddingHorizontal: 16,
-    paddingVertical: 9,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 999,
     backgroundColor: "#1E1535",
     borderWidth: 1,

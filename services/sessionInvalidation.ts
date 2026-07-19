@@ -44,10 +44,11 @@ export function onSessionInvalidation(cb: InvalidationListener): () => void {
 }
 
 function userMessageFor(reason: SessionInvalidationReason, custom?: string | null): string {
-  if (custom?.trim()) return custom.trim();
+  // Product copy for replaced sessions (ignore shorter backend variants).
   if (REPLACED_REASONS.has(reason) || String(reason).toUpperCase() === "SESSION_REPLACED") {
-    return "Your account was just signed in on a different device, so you’ve been signed out here for security. Sign in again on this device if you want to continue.";
+    return "Your account was signed in on another device. Please sign in again.";
   }
+  if (custom?.trim()) return custom.trim();
   if (String(reason).toUpperCase() === "SESSION_REVOKED") {
     return "Your session was ended for security. Please sign in again to continue.";
   }

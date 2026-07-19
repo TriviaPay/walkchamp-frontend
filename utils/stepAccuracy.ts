@@ -42,8 +42,6 @@ export function shouldIgnoreLegacyPhantomBump(
   options?: { backendSteps?: number; inStartupWindow?: boolean; fromWatch?: boolean },
 ): boolean {
   if (stepProviderManager.usesVerifiedStepSource()) return false;
-  // Live sensor watch callbacks are trusted after startup — poll/open paths are not.
-  if (options?.fromWatch) return false;
 
   const current = Math.max(0, Math.floor(previousSteps));
   const incoming = Math.max(0, Math.floor(incomingSteps));
@@ -52,6 +50,37 @@ export function shouldIgnoreLegacyPhantomBump(
 
   const inStartup =
     options?.inStartupWindow ?? isLegacyStepBumpSuppressed();
+
+  // Screen focus / remount often fires a single legacy watch tick (+1). Reject it
+  // during the suppress window even for fromWatch callbacks.
+  if (
+    options?.fromWatch &&
+    inStartup &&
+    delta > 0 &&
+    delta <= STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP
+  ) {
+    stepEngineLog(
+      "StepEngine",
+      `ignoredPhantomBump=true delta=${delta} reason=focus_watch_phantom current=${current}`,
+    );
+    try {
+      const { stepAudit } = require("@/utils/stepAudit") as typeof import("@/utils/stepAudit");
+      stepAudit.notePhantom({
+        providerId: stepProviderManager.getActiveProviderId(),
+        eventOrigin: "watch",
+        previousDailySteps: current,
+        calculatedDailySteps: incoming,
+        reason: "focus_watch_phantom",
+      });
+    } catch {
+      /* optional */
+    }
+    return true;
+  }
+
+  // Live sensor watch callbacks are trusted after the suppress window.
+  if (options?.fromWatch) return false;
+
   // Open/reload: reject classic +1 pedometer phantoms at any current count.
   // (Previously only 0→1 was blocked, so 122→123 still landed as a "fake" step.)
   if (inStartup && delta > 0 && delta <= STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP) {

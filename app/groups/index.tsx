@@ -426,6 +426,22 @@ export default function GroupsScreen() {
     setCreateColorTheme("custom_purple_blue");
   };
 
+  const openCreateModal = useCallback(() => {
+    const type =
+      selectedFilter === "friends" ||
+      selectedFilter === "family" ||
+      selectedFilter === "office" ||
+      selectedFilter === "custom"
+        ? selectedFilter
+        : "friends";
+    setCreateName("");
+    setCreateGoal("10000");
+    setCreateType(type);
+    setCreateCustomType("");
+    setCreateColorTheme("custom_purple_blue");
+    setCreateModal(true);
+  }, [selectedFilter]);
+
   const fetchOverview = useCallback(async (opts?: { force?: boolean }) => {
     const cacheKey = `${GROUPS_CACHE_KEY}_${getLocalDateStr()}`;
     if (!opts?.force && !apiFetchAllowed(cacheKey, 30_000)) {
@@ -662,12 +678,14 @@ export default function GroupsScreen() {
         {/* ── Section header ────────────────────────────────────────────────── */}
         <View style={s.sectionHeader}>
           <Text style={s.sectionTitle}>All My Groups</Text>
-          <TouchableOpacity onPress={() => setCreateModal(true)} style={s.newGroupBtn}>
-            <LinearGradient colors={[T.cyan, T.purple]} style={s.newGroupGrad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-              <Feather name="plus" size={13} color="#fff" />
-              <Text style={s.newGroupBtnText}>New</Text>
-            </LinearGradient>
-          </TouchableOpacity>
+          {visibleGroups.length > 0 ? (
+            <TouchableOpacity onPress={openCreateModal} style={s.newGroupBtn}>
+              <LinearGradient colors={[T.cyan, T.purple]} style={s.newGroupGrad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+                <Feather name="plus" size={13} color="#fff" />
+                <Text style={s.newGroupBtnText}>New</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         {/* ── Groups list / empty state ─────────────────────────────────────── */}
@@ -698,7 +716,7 @@ export default function GroupsScreen() {
                 </Text>
               </>
             )}
-            <TouchableOpacity onPress={() => setCreateModal(true)} style={s.emptyCreateBtn} activeOpacity={0.82}>
+            <TouchableOpacity onPress={openCreateModal} style={s.emptyCreateBtn} activeOpacity={0.82}>
               <LinearGradient
                 colors={filterCfg ? [filterCfg.start, filterCfg.end] : [T.cyan, T.purple]}
                 style={s.emptyCreateGrad}
@@ -753,8 +771,8 @@ export default function GroupsScreen() {
         )}
 
         {/* ── Create New Group CTA ──────────────────────────────────────────── */}
-        {groups.length > 0 && (
-          <TouchableOpacity onPress={() => setCreateModal(true)} style={s.createCta} activeOpacity={0.82}>
+        {visibleGroups.length > 0 && (
+          <TouchableOpacity onPress={openCreateModal} style={s.createCta} activeOpacity={0.82}>
             <LinearGradient
               colors={[T.cyan, T.purple]}
               style={s.createCtaGrad}

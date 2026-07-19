@@ -506,6 +506,13 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         totalParticipants: Math.max(1, participantsRef.current.length),
         bootSteps: userStepsRef.current,
         participantConfirmed: true,
+        isSponsored:
+          store.getState().raceProgress.activeRaceId === raceId &&
+          store.getState().raceProgress.activeRaceIsSponsored === true,
+        ...(store.getState().raceProgress.activeRaceIsSponsored === true &&
+        raceEndTimeRef.current
+          ? { challengeEndAt: raceEndTimeRef.current.toISOString() }
+          : {}),
       });
       const safeServer = Math.max(0, Math.floor(serverSteps));
       const optimistic = Math.max(safeServer, userStepsRef.current);
@@ -851,7 +858,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
   // ── startRace ─────────────────────────────────────────────────────────────────
 
-  const startRace = useCallback((allParticipants: RaceParticipant[], options?: { isRejoin?: boolean }) => {
+  const startRace = useCallback((allParticipants: RaceParticipant[], options?: { isRejoin?: boolean; isSponsored?: boolean }) => {
     finishedCountRef.current = 0;
     const userFromList = allParticipants.find((p) => p.isUser);
     // Fresh races always begin at 0 — only an explicit rejoin may restore server steps.
@@ -917,6 +924,12 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         goalSteps = existing.goalSteps;
         raceTargetStepsRef.current = goalSteps;
       }
+      const endAt = raceEndTimeRef.current;
+      // Sponsored title only from race type / explicit flag — not from having an end window.
+      const resolvedSponsored =
+        options?.isSponsored === true ||
+        (existing.activeRaceId === raceIdRef.current &&
+          existing.activeRaceIsSponsored === true);
       setActiveRaceProgress({
         raceId: raceIdRef.current,
         raceStartTime: raceStart?.toISOString() ?? new Date().toISOString(),
@@ -927,6 +940,10 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         bootSteps,
         freshStart: !options?.isRejoin,
         participantConfirmed: true,
+        isSponsored: resolvedSponsored,
+        ...(resolvedSponsored && endAt
+          ? { challengeEndAt: endAt.toISOString() }
+          : {}),
       });
     }
 
@@ -1536,6 +1553,10 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         setUserRaceSteps(floor);
       }
 
+      // Prefer Redux (set by live-detail ensure with race.type) — do not infer from endAt.
+      const sponsored =
+        store.getState().raceProgress.activeRaceId === raceIdRef.current &&
+        store.getState().raceProgress.activeRaceIsSponsored === true;
       ensureActiveRaceInStore({
         raceId: raceIdRef.current,
         raceStartTime: startedAt.toISOString(),
@@ -1545,13 +1566,20 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         totalParticipants: realPlayerCount,
         bootSteps: floor,
         participantConfirmed: true,
+        isSponsored: sponsored,
+        ...(sponsored && raceEndAt
+          ? { challengeEndAt: raceEndAt.toISOString() }
+          : {}),
       });
 
       if (
         !raceStepApplyRef.current ||
         !stepPollingService.isRacePolling(raceIdRef.current)
       ) {
-        startRace([userParticipant, ...bots], { isRejoin: true });
+        startRace([userParticipant, ...bots], {
+          isRejoin: true,
+          isSponsored: sponsored,
+        });
         return;
       }
 
@@ -1559,7 +1587,14 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    startRace([userParticipant, ...bots], { isRejoin: true });
+    const sponsoredStart =
+      (store.getState().raceProgress.activeRaceId === raceIdRef.current &&
+        store.getState().raceProgress.activeRaceIsSponsored === true) ||
+      raceEndAt != null;
+    startRace([userParticipant, ...bots], {
+      isRejoin: true,
+      isSponsored: sponsoredStart,
+    });
   }, [startRace, catchUpLiveRaceSteps]);
 
   // ── Join race ─────────────────────────────────────────────────────────────────

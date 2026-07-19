@@ -1,5 +1,5 @@
 /**
- * Subscribes to private-user session-invalidated Pusher events.
+ * Subscribes to private-user + private-session session-invalidated Pusher events.
  * Backend remains the security authority; this is UX immediacy only.
  */
 
@@ -17,16 +17,16 @@ import { handleSessionInvalidation } from "@/services/sessionInvalidation";
 
 export function SessionRealtimeGuard() {
   const { user } = useAuth();
-  const channelRef = useRef<ChannelAdapter | null>(null);
+  const userChannelRef = useRef<ChannelAdapter | null>(null);
+  const sessionChannelRef = useRef<ChannelAdapter | null>(null);
+  const boundNamesRef = useRef<string[]>([]);
   const userId = user?.id;
 
   useEffect(() => {
     if (!userId) return;
 
-    const channelName = CHANNELS.privateUser(userId);
-    const channel = subscribeToChannel(channelName);
-    channelRef.current = channel;
-    if (!channel) return;
+    let cancelled = false;
+    boundNamesRef.current = [];
 
     const handler = async (data: unknown) => {
       const payload = (data ?? {}) as {
@@ -54,18 +54,51 @@ export function SessionRealtimeGuard() {
       });
     };
 
-    channel.bind(EVENTS.SESSION_INVALIDATED, handler);
-    channel.bind("session_invalidated", handler);
+    const bindChannel = (name: string): ChannelAdapter | null => {
+      if (boundNamesRef.current.includes(name)) return null;
+      const channel = subscribeToChannel(name);
+      if (!channel) return null;
+      boundNamesRef.current.push(name);
+      channel.bind(EVENTS.SESSION_INVALIDATED, handler);
+      channel.bind("session_invalidated", handler);
+      return channel;
+    };
+
+    userChannelRef.current = bindChannel(CHANNELS.privateUser(userId));
+
+    // Session channel needs X-Session-Id on pusher auth — wait briefly for register().
+    const tryBindSessionChannel = async () => {
+      for (let i = 0; i < 8 && !cancelled; i++) {
+        const meta = await getActiveSessionMeta().catch(() => null);
+        if (meta?.sessionId) {
+          sessionChannelRef.current = bindChannel(
+            CHANNELS.privateSession(meta.sessionId),
+          );
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    };
+    void tryBindSessionChannel();
 
     return () => {
-      try {
-        channel.unbind(EVENTS.SESSION_INVALIDATED, handler);
-        channel.unbind("session_invalidated", handler);
-      } catch {
-        /* ignore */
+      cancelled = true;
+      const names = [...boundNamesRef.current];
+      boundNamesRef.current = [];
+      for (const name of names) {
+        try {
+          const ch = name.startsWith("private-session-")
+            ? sessionChannelRef.current
+            : userChannelRef.current;
+          ch?.unbind(EVENTS.SESSION_INVALIDATED, handler);
+          ch?.unbind("session_invalidated", handler);
+        } catch {
+          /* ignore */
+        }
+        unsubscribeFromChannel(name);
       }
-      unsubscribeFromChannel(channelName);
-      channelRef.current = null;
+      userChannelRef.current = null;
+      sessionChannelRef.current = null;
     };
   }, [userId]);
 

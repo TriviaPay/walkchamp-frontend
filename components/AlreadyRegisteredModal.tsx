@@ -8,49 +8,25 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import type { ActiveRaceInfo } from "@/components/ActiveRaceModal";
 import { formatLocalDate, formatLocalTime } from "@/utils/timezone";
 
-export interface ActiveRaceInfo {
-  room_id: string;
-  room_status: string;
-  challenge_type: string;
-  /** Present on updated backends — "sponsored" means this should not block hosting. */
-  room_type?: string;
-  is_sponsored?: boolean;
-  entry_fee: number;
-  target_steps: number;
-  current_user_role: string;
-  can_leave: boolean;
-  next_screen: string;
+export type RegisteredRaceInfo = ActiveRaceInfo & {
   scheduled_start_at?: string | null;
-  started_at?: string | null;
   max_players?: number;
   registered_count?: number;
-}
+};
 
-/** True when the "active race" conflict is only a sponsored event (should not block host). */
-export function isSponsoredActiveRaceConflict(info: {
-  room_id?: string;
-  room_type?: string;
-  is_sponsored?: boolean;
-  challenge_type?: string;
-} | null | undefined, sponsoredRacingId?: string | null): boolean {
-  if (!info) return false;
-  if (info.is_sponsored === true || info.room_type === "sponsored") return true;
-  if (sponsoredRacingId && info.room_id === sponsoredRacingId) return true;
-  return false;
-}
-
-interface ActiveRaceModalProps {
+interface AlreadyRegisteredModalProps {
   visible: boolean;
-  activeRace: ActiveRaceInfo | null;
-  leaving: boolean;
-  onStay: () => void;
-  onLeaveAndContinue: () => void;
+  race: RegisteredRaceInfo | null;
+  withdrawing: boolean;
+  onGoToRace: () => void;
+  onWithdraw: () => void;
   onCancel: () => void;
 }
 
-function challengeLabel(info: ActiveRaceInfo): string {
+function challengeLabel(info: RegisteredRaceInfo): string {
   if (info.challenge_type === "coins_battle") return "Coins Battle";
   if (info.entry_fee === 0) return "Free Challenge";
   return `$${info.entry_fee.toFixed(2)} Challenge`;
@@ -65,63 +41,19 @@ function formatStartTime(iso: string | null | undefined): string {
   }
 }
 
-function DetailRow({
-  icon,
-  label,
-  value,
-  valueColor,
-  showDivider,
-}: {
-  icon: React.ComponentProps<typeof Feather>["name"];
-  label: string;
-  value: string;
-  valueColor?: string;
-  showDivider?: boolean;
-}) {
-  return (
-    <>
-      <View style={styles.detailRow}>
-        <View style={styles.detailLeft}>
-          <Feather name={icon} size={14} color="#5A6A8A" />
-          <Text style={styles.detailLabel}>{label}</Text>
-        </View>
-        <Text style={[styles.detailValue, valueColor ? { color: valueColor } : null]}>
-          {value}
-        </Text>
-      </View>
-      {showDivider ? <View style={styles.detailDivider} /> : null}
-    </>
-  );
-}
-
-export default function ActiveRaceModal({
+export default function AlreadyRegisteredModal({
   visible,
-  activeRace,
-  leaving,
-  onStay,
-  onLeaveAndContinue,
+  race,
+  withdrawing,
+  onGoToRace,
+  onWithdraw,
   onCancel,
-}: ActiveRaceModalProps) {
-  const isWaiting =
-    activeRace?.room_status === "open" || activeRace?.room_status === "full";
-
-  const label = activeRace ? challengeLabel(activeRace) : "Challenge";
-
-  const title = isWaiting
-    ? "You're already in a waiting room"
-    : "You're already in a race";
-
-  const message = isWaiting
-    ? "You are waiting in another room. Go back to your room, or leave it to join a different challenge."
-    : `You are currently racing in a ${label}. Quitting removes you from this race only — other players will continue.`;
-
-  const role = activeRace?.current_user_role === "host" ? "Host" : "Participant";
-  const startIso = activeRace?.scheduled_start_at ?? activeRace?.started_at ?? null;
+}: AlreadyRegisteredModalProps) {
+  const label = race ? challengeLabel(race) : "Challenge";
+  const role = race?.current_user_role === "host" ? "Host" : "Participant";
   const participants =
-    activeRace &&
-    typeof activeRace.registered_count === "number" &&
-    typeof activeRace.max_players === "number"
-      ? `${activeRace.registered_count} / ${activeRace.max_players}`
+    race && typeof race.registered_count === "number" && typeof race.max_players === "number"
+      ? `${race.registered_count} / ${race.max_players}`
       : "—";
 
   return (
@@ -137,7 +69,7 @@ export default function ActiveRaceModal({
           <TouchableOpacity
             style={styles.closeBtn}
             onPress={onCancel}
-            disabled={leaving}
+            disabled={withdrawing}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Feather name="x" size={20} color="#5A6A8A" />
@@ -145,68 +77,96 @@ export default function ActiveRaceModal({
 
           <View style={styles.iconRow}>
             <View style={styles.iconBadge}>
-              <Feather name="alert-triangle" size={24} color="#FF6B35" />
+              <Text style={styles.iconEmoji}>🏁</Text>
             </View>
           </View>
 
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.message}>{message}</Text>
+          <Text style={styles.title}>You&apos;re already registered for a race!</Text>
+          <Text style={styles.message}>
+            You are currently signed up for the race below. Only one race can be active at a time.
+          </Text>
 
-          {activeRace ? (
+          {race ? (
             <View style={styles.details}>
-              <DetailRow icon="award" label="Challenge" value={label} valueColor="#00E676" showDivider />
-              <DetailRow
-                icon="target"
-                label="Target"
-                value={`${activeRace.target_steps.toLocaleString()} steps`}
-                showDivider
-              />
-              <DetailRow icon="user" label="Your Role" value={role} showDivider />
-              <DetailRow icon="calendar" label="Start Time" value={formatStartTime(startIso)} showDivider />
-              <DetailRow icon="users" label="Participants" value={participants} />
+              <View style={styles.detailRow}>
+                <View style={styles.detailLeft}>
+                  <Feather name="award" size={14} color="#5A6A8A" />
+                  <Text style={styles.detailLabel}>Challenge</Text>
+                </View>
+                <Text style={[styles.detailValue, { color: "#00E676" }]}>{label}</Text>
+              </View>
+              <View style={styles.detailDivider} />
+              <View style={styles.detailRow}>
+                <View style={styles.detailLeft}>
+                  <Feather name="target" size={14} color="#5A6A8A" />
+                  <Text style={styles.detailLabel}>Target</Text>
+                </View>
+                <Text style={styles.detailValue}>
+                  {race.target_steps.toLocaleString()} steps
+                </Text>
+              </View>
+              <View style={styles.detailDivider} />
+              <View style={styles.detailRow}>
+                <View style={styles.detailLeft}>
+                  <Feather name="user" size={14} color="#5A6A8A" />
+                  <Text style={styles.detailLabel}>Your Role</Text>
+                </View>
+                <Text style={styles.detailValue}>{role}</Text>
+              </View>
+              <View style={styles.detailDivider} />
+              <View style={styles.detailRow}>
+                <View style={styles.detailLeft}>
+                  <Feather name="calendar" size={14} color="#5A6A8A" />
+                  <Text style={styles.detailLabel}>Start Time</Text>
+                </View>
+                <Text style={styles.detailValue}>
+                  {formatStartTime(race.scheduled_start_at)}
+                </Text>
+              </View>
+              <View style={styles.detailDivider} />
+              <View style={styles.detailRow}>
+                <View style={styles.detailLeft}>
+                  <Feather name="users" size={14} color="#5A6A8A" />
+                  <Text style={styles.detailLabel}>Participants</Text>
+                </View>
+                <Text style={styles.detailValue}>{participants}</Text>
+              </View>
             </View>
           ) : null}
 
           <View style={styles.buttonStack}>
             <TouchableOpacity
               style={styles.primaryBtn}
-              onPress={onStay}
-              disabled={leaving}
+              onPress={onGoToRace}
+              disabled={withdrawing}
               activeOpacity={0.8}
             >
-              <Feather
-                name={isWaiting ? "clock" : "play-circle"}
-                size={17}
-                color="#000"
-                style={styles.btnIcon}
-              />
-              <Text style={styles.primaryBtnText}>
-                {isWaiting ? "Go Back to Waiting Room" : "Go Back to Race"}
-              </Text>
+              <Feather name="log-in" size={17} color="#000" style={styles.btnIcon} />
+              <Text style={styles.primaryBtnText}>Go to Race</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.dangerBtn, leaving && styles.disabledBtn]}
-              onPress={onLeaveAndContinue}
-              disabled={leaving}
+              style={[styles.dangerBtn, withdrawing && styles.disabledBtn]}
+              onPress={onWithdraw}
+              disabled={withdrawing}
               activeOpacity={0.8}
             >
-              {leaving ? (
+              {withdrawing ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <>
-                  <Feather
-                    name="log-out"
-                    size={17}
-                    color="#fff"
-                    style={styles.btnIcon}
-                  />
-                  <Text style={styles.dangerBtnText}>
-                    {isWaiting ? "Leave Room" : "Quit Race (Forfeit)"}
-                  </Text>
+                  <Feather name="trash-2" size={17} color="#fff" style={styles.btnIcon} />
+                  <Text style={styles.dangerBtnText}>Withdraw Registration</Text>
                 </>
               )}
             </TouchableOpacity>
+          </View>
+
+          <View style={styles.footer}>
+            <Feather name="shield" size={14} color="#FF6B35" />
+            <Text style={styles.footerText}>
+              Withdrawing will remove you from this race. Your spot will be available to others.
+            </Text>
           </View>
         </View>
       </View>
@@ -260,6 +220,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+  iconEmoji: { fontSize: 26 },
   title: {
     color: "#FFFFFF",
     fontSize: 18,
@@ -344,5 +305,17 @@ const styles = StyleSheet.create({
   },
   btnIcon: {
     marginRight: 8,
+  },
+  footer: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginTop: 16,
+  },
+  footerText: {
+    flex: 1,
+    color: "#8B9BBE",
+    fontSize: 12,
+    lineHeight: 17,
   },
 });

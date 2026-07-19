@@ -166,7 +166,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       /* ignore */
     }
     void clearPendingMatchPermissionAction().catch(() => {});
-    void clearActiveSessionMeta().catch(() => {});
+    // Best-effort backend revoke before clearing local session meta.
+    void (async () => {
+      try {
+        const token = await getStoredSession().then((s) => s.session).catch(() => null);
+        const { revokeCurrentSession } = await import("@/services/authSessionService");
+        await revokeCurrentSession(token);
+      } catch {
+        await clearActiveSessionMeta().catch(() => {});
+      }
+    })();
     activeChallengeSync.clear();
     // Optimistic logout: wipe Redux immediately so the TabLayout Redirect fires
     // right away — the user sees the login screen without any intermediate flash.

@@ -1197,10 +1197,21 @@ export function ensureActiveRaceInStore(params: {
       typeof params.goalSteps === "number" && params.goalSteps > 0
         ? params.goalSteps
         : null;
-    if (nextGoal != null && nextGoal !== s.goalSteps) {
+    const resolvedSponsored =
+      params.isSponsored === true || s.activeRaceIsSponsored === true;
+    const needSponsoredFix =
+      resolvedSponsored && s.activeRaceIsSponsored !== true;
+    const needGoalFix = nextGoal != null && nextGoal !== s.goalSteps;
+    const challengeEndAt =
+      params.challengeEndAt != null && params.challengeEndAt !== ""
+        ? params.challengeEndAt
+        : undefined;
+
+    if (needGoalFix || needSponsoredFix) {
       store.dispatch(
         raceProgressActions.updateFromBackend({
-          goalSteps: nextGoal,
+          ...(needGoalFix && nextGoal != null ? { goalSteps: nextGoal } : {}),
+          ...(needSponsoredFix ? { isSponsored: true } : {}),
           syncedAt: new Date().toISOString(),
         }),
       );
@@ -1212,12 +1223,27 @@ export function ensureActiveRaceInStore(params: {
           raceSteps: Math.max(boot, s.raceSteps),
           rank: s.rank ?? 1,
           totalParticipants: params.totalParticipants ?? s.totalParticipants ?? 1,
-          goalSteps: nextGoal,
+          goalSteps: nextGoal ?? s.goalSteps ?? 0,
           timeLeftSeconds: s.timeLeftSeconds ?? 0,
-          isSponsored: params.isSponsored === true || s.activeRaceIsSponsored === true,
-          ...(params.challengeEndAt != null && params.challengeEndAt !== ""
-            ? { challengeEndAt: params.challengeEndAt }
-            : {}),
+          isSponsored: resolvedSponsored,
+          ...(challengeEndAt != null ? { challengeEndAt } : {}),
+        },
+        true,
+      );
+    } else if (challengeEndAt != null && resolvedSponsored) {
+      // Re-seed native countdown/title anchors even when Redux already knows sponsored.
+      void raceProgressNotificationService.onLocalRaceStepsUpdated(
+        {
+          raceId: params.raceId,
+          userId: params.userId,
+          username: params.username,
+          raceSteps: Math.max(boot, s.raceSteps),
+          rank: s.rank ?? 1,
+          totalParticipants: params.totalParticipants ?? s.totalParticipants ?? 1,
+          goalSteps: s.goalSteps ?? nextGoal ?? 0,
+          timeLeftSeconds: s.timeLeftSeconds ?? 0,
+          isSponsored: true,
+          challengeEndAt,
         },
         true,
       );
@@ -1233,7 +1259,7 @@ export function ensureActiveRaceInStore(params: {
       scheduleNotificationUpdate(true);
     }
     stepCoordDebug(
-      `[StepCoordinator] ensureActiveRaceInStore ok raceId=${params.raceId} raceSteps=${store.getState().raceProgress.raceSteps} goal=${store.getState().raceProgress.goalSteps}`,
+      `[StepCoordinator] ensureActiveRaceInStore ok raceId=${params.raceId} raceSteps=${store.getState().raceProgress.raceSteps} goal=${store.getState().raceProgress.goalSteps} sponsored=${store.getState().raceProgress.activeRaceIsSponsored}`,
     );
     return;
   }
@@ -1282,6 +1308,7 @@ export function setActiveRaceProgress(params: {
   // Prefer an already-known goal for the same race over RaceContext's default 1000
   // when resume/start races the notification before targetSteps was synced.
   let resolvedGoal = Math.max(0, params.goalSteps || 0);
+  let resolvedSponsored = params.isSponsored === true;
   if (
     prevActiveId === params.raceId &&
     prev.raceStatus === "active" &&
@@ -1293,6 +1320,14 @@ export function setActiveRaceProgress(params: {
     } else if (resolvedGoal === 1000 && prev.goalSteps !== 1000) {
       resolvedGoal = prev.goalSteps;
     }
+  }
+  // Never let RaceContext rejoin wipe sponsored → live title.
+  if (
+    prevActiveId === params.raceId &&
+    prev.raceStatus === "active" &&
+    prev.activeRaceIsSponsored
+  ) {
+    resolvedSponsored = true;
   }
   const prevCompanionSnapshot =
     params.preserveAsCompanion &&
@@ -1325,6 +1360,7 @@ export function setActiveRaceProgress(params: {
       goalSteps: resolvedGoal,
       bootSteps: boot,
       preserveAsCompanion: params.preserveAsCompanion === true,
+      isSponsored: resolvedSponsored,
     }),
   );
   activeChallengeSync.register(params.raceId);
@@ -1348,7 +1384,7 @@ export function setActiveRaceProgress(params: {
       totalParticipants: params.totalParticipants ?? 1,
       goalSteps: resolvedGoal,
       timeLeftSeconds: 0,
-      isSponsored: params.isSponsored === true,
+      isSponsored: resolvedSponsored,
       ...(challengeEndAt != null ? { challengeEndAt } : {}),
     },
     params.raceStartTime,

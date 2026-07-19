@@ -172,7 +172,7 @@ class WalkChampRaceForegroundService : Service() {
         intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
-      val title = if (isSponsored || challengeEndAtMs > 0L) "Sponsored Event" else "Live Race"
+      val title = if (isSponsored) "Sponsored Event" else "Live Race"
       val builder = NotificationCompat.Builder(ctx, CHANNEL_RACE)
         .setContentTitle(title)
         .setContentText(body)
@@ -185,34 +185,17 @@ class WalkChampRaceForegroundService : Service() {
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
         .setContentIntent(pending)
+        // No ticking when/chronometer in the shade (OEM skins may keep an old
+        // chronometer until the notification is cancelled + re-posted).
+        .setShowWhen(false)
+        .setUsesChronometer(false)
+        .setChronometerCountDown(false)
+        .setWhen(0L)
 
-      // Native chronometer: Android advances the visible timer without 1s rebuilds.
-      when {
-        challengeEndAtMs > 0L -> {
-          builder
-            .setWhen(challengeEndAtMs)
-            .setShowWhen(true)
-            .setUsesChronometer(true)
-            .setChronometerCountDown(true)
-          Log.d(
-            TAG,
-            "[OngoingNotification] trackingType=race title=$title chronometerEnabled=true mode=countdown endAt=$challengeEndAtMs",
-          )
-        }
-        raceStartTimeMs > 0L -> {
-          builder
-            .setWhen(raceStartTimeMs)
-            .setShowWhen(true)
-            .setUsesChronometer(true)
-          Log.d(
-            TAG,
-            "[OngoingNotification] trackingType=race title=$title chronometerEnabled=true mode=elapsed startAt=$raceStartTimeMs",
-          )
-        }
-        else -> {
-          Log.d(TAG, "[OngoingNotification] trackingType=race title=$title chronometerEnabled=false")
-        }
-      }
+      Log.d(
+        TAG,
+        "[OngoingNotification] trackingType=race title=$title chronometerEnabled=false raceId=$raceId",
+      )
       return builder.build()
     }
 
@@ -248,19 +231,16 @@ class WalkChampRaceForegroundService : Service() {
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
         .setContentIntent(pending)
+        // No chronometer on daily step tray notification.
+        .setShowWhen(false)
+        .setUsesChronometer(false)
+        .setChronometerCountDown(false)
+        .setWhen(0L)
 
-      if (trackingStartedAtMs > 0L) {
-        builder
-          .setWhen(trackingStartedAtMs)
-          .setShowWhen(true)
-          .setUsesChronometer(true)
-        Log.d(
-          TAG,
-          "[OngoingNotification] trackingType=daily chronometerEnabled=true trackingStartedAt=$trackingStartedAtMs elapsedMs=${System.currentTimeMillis() - trackingStartedAtMs}",
-        )
-      } else {
-        Log.d(TAG, "[OngoingNotification] trackingType=daily chronometerEnabled=false")
-      }
+      Log.d(
+        TAG,
+        "[OngoingNotification] trackingType=daily chronometerEnabled=false title=${title.ifBlank { "Walk Champ" }}",
+      )
 
       return builder.build().also {
         Log.d(TAG, "[WalkChampFGS] notification built channelId=$CHANNEL_STEPS")
@@ -1628,14 +1608,38 @@ class WalkChampRaceForegroundService : Service() {
           syncBackoffIndex = 0
           lastBackendSyncMs = 0L
           lastSyncedRaceSteps = -1
-          raceState = incoming.withComputedTimeLeft()
+          val prev = raceState
+          var next = incoming.withComputedTimeLeft()
+          // JS rejoin often omits challengeEndAt — keep end anchors for countdown.
+          // Title type is NOT sticky from an unrelated prior race: prefer explicit next.isSponsored.
+          if (prev != null && prev.raceId == next.raceId) {
+            next = next.copy(
+              isSponsored = next.isSponsored || prev.isSponsored,
+              challengeEndAtMs = when {
+                next.challengeEndAtMs > 0L -> next.challengeEndAtMs
+                next.isSponsored -> prev.challengeEndAtMs
+                else -> 0L
+              },
+              raceStartTimeMs = when {
+                next.raceStartTimeMs > 0L -> next.raceStartTimeMs
+                else -> prev.raceStartTimeMs
+              },
+              goalSteps = if (next.goalSteps > 0) next.goalSteps else prev.goalSteps,
+            )
+          }
+          raceState = next
+          // Cancel+repost clears sticky chronometer UI left by older builds.
+          notificationManager().cancel(NOTIFICATION_ID_RACE)
           val notification = buildRaceNotification(this, raceState!!)
           promoteRaceForegroundNow(notification)
           postOngoingNotification(NOTIFICATION_ID_RACE, notification)
         }
         ensureWorker()
         workerHandler?.post {
-          applyRaceState(incoming, allowReset)
+          // Use merged `next` when START so sponsored/end anchors aren't wiped by raw incoming.
+          val toApply =
+            if (action == ACTION_START) (raceState ?: incoming) else incoming
+          applyRaceState(toApply, allowReset)
           startRaceLoops()
         }
       }
@@ -1668,6 +1672,10 @@ class WalkChampRaceForegroundService : Service() {
         lastWalkNotification = notification
         walkRunning = true
         val nm = notificationManager()
+        if (action == ACTION_START_WALK) {
+          // Clear sticky chronometer left by older APKs before re-posting.
+          nm.cancel(NOTIFICATION_ID_WALK)
+        }
         if (raceState != null && isActiveRace(raceState!!)) {
           nm.notify(NOTIFICATION_ID_WALK, notification)
         } else if (action == ACTION_START_WALK) {

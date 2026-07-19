@@ -281,10 +281,31 @@ export async function verifyEmailOTP(
 
 // ── Session ───────────────────────────────────────────────────────────────────
 export async function refreshSession(refreshToken: string): Promise<string> {
+  // Include installation + active session meta when available so backend can
+  // reject a replaced session during refresh (single-device login).
+  let devicePayload: Record<string, unknown> = {};
+  try {
+    const { getDeviceSessionMetadata } = await import("@/services/deviceIdentity");
+    const { getActiveSessionMeta } = await import("@/services/authSessionMetadata");
+    const device = await getDeviceSessionMetadata();
+    const meta = await getActiveSessionMeta();
+    devicePayload = {
+      deviceId: device.deviceId,
+      platform: device.platform,
+      appVersion: device.appVersion,
+      buildNumber: device.buildNumber,
+      ...(meta?.sessionId ? { sessionId: meta.sessionId } : {}),
+      ...(meta?.sessionGeneration
+        ? { sessionGeneration: meta.sessionGeneration }
+        : {}),
+    };
+  } catch {
+    /* optional metadata — refresh must still work without it */
+  }
   const res = await fetch(`${API_BASE}/api/auth/session/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refreshJwt: refreshToken }),
+    body: JSON.stringify({ refreshJwt: refreshToken, ...devicePayload }),
   });
   const body = (await res.json().catch(() => ({}))) as JwtResponse & {
     message?: string;
@@ -567,6 +588,8 @@ export async function signInWithAppleNative(): Promise<JwtResponse> {
       : null;
 
   // Step 2: send Apple credential to backend — backend verifies JWT + creates session
+  const { getDeviceSessionMetadata } = await import("@/services/deviceIdentity");
+  const device = await getDeviceSessionMetadata().catch(() => null);
   const res = await fetch(`${API_BASE}/api/auth/apple/native`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -574,6 +597,15 @@ export async function signInWithAppleNative(): Promise<JwtResponse> {
       identityToken,
       authorizationCode: authorizationCode ?? undefined,
       user: { name, email: email ?? null },
+      ...(device
+        ? {
+            device,
+            deviceId: device.deviceId,
+            platform: device.platform,
+            appVersion: device.appVersion,
+            buildNumber: device.buildNumber,
+          }
+        : {}),
     }),
   });
   if (!res.ok) {
@@ -674,10 +706,23 @@ export async function signInWithProvider(
   // Step 4: exchange the Descope code for a session JWT via the backend
   // The backend calls client.oauth.exchange(code) and returns { sessionJwt, refreshJwt, user }
   if (__DEV__) console.log(`[social-login] exchanging code with backend`);
+  const { getDeviceSessionMetadata } = await import("@/services/deviceIdentity");
+  const device = await getDeviceSessionMetadata().catch(() => null);
   const exchangeRes = await fetch(`${API_BASE}/api/auth/oauth/exchange`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({
+      code,
+      ...(device
+        ? {
+            device,
+            deviceId: device.deviceId,
+            platform: device.platform,
+            appVersion: device.appVersion,
+            buildNumber: device.buildNumber,
+          }
+        : {}),
+    }),
   });
   if (!exchangeRes.ok) {
     const body = (await exchangeRes.json().catch(() => ({}))) as { message?: string; error?: string };
@@ -779,19 +824,50 @@ export async function createProfile(
   return data.profile as DbProfile;
 }
 
-// GET /api/me — returns profile for the JWT owner, or null if no profile
+// GET /api/me — returns profile for the JWT owner, or null if no profile.
+// When X-Session-Id is present, backend may report session.active=false without 401.
 export async function fetchMe(sessionJwt: string): Promise<DbProfile | null> {
+  const { buildSessionRequestHeaders } = await import(
+    "@/services/sessionRequestHeaders"
+  );
+  const sessionHeaders = await buildSessionRequestHeaders().catch(
+    () => ({} as Record<string, string>),
+  );
   const res = await fetch(`${API_BASE}/api/me`, {
     signal: timeoutSignal(API_TIMEOUT_MS),
-    headers: { Authorization: `Bearer ${sessionJwt}` },
+    headers: {
+      Authorization: `Bearer ${sessionJwt}`,
+      ...sessionHeaders,
+    },
   });
   if (res.status === 404) return null;
   const data = (await res.json()) as {
     error?: string;
+    code?: string;
     profile?: DbProfile;
     profile_completed?: boolean;
+    session?: {
+      active?: boolean;
+      code?: string;
+      sessionId?: string;
+      message?: string;
+    };
   };
   if (!res.ok) throw new ApiError(data.error ?? "Failed to fetch profile", res.status);
+
+  // Superseded session: /me is JWT-only and returns profile + session.active=false.
+  if (data.session && data.session.active === false) {
+    const { handleSessionInvalidation } = await import(
+      "@/services/sessionInvalidation"
+    );
+    await handleSessionInvalidation({
+      reason: data.session.code ?? "SESSION_REPLACED",
+      sessionId: data.session.sessionId,
+      message: data.session.message,
+    });
+    throw new ApiError(data.session.code ?? "SESSION_REPLACED", 401);
+  }
+
   if (data.profile_completed === false && !data.profile) return null;
   return (data.profile as DbProfile) ?? null;
 }

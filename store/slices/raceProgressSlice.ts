@@ -145,7 +145,10 @@ const raceProgressSlice = createSlice({
       state.raceStepsLastUpdatedAt = new Date().toISOString();
       state.rank = state.rank ?? 1;
       state.timeLeftSeconds = state.timeLeftSeconds ?? 0;
-      state.activeRaceIsSponsored = action.payload.isSponsored === true;
+      // Sticky sponsored: once true for this race, don't wipe to Live Race title on rejoin.
+      state.activeRaceIsSponsored =
+        action.payload.isSponsored === true ||
+        (prevActive === action.payload.raceId && prevSponsored);
       state.syncError = null;
       if (__DEV__) {
         console.log(
@@ -252,6 +255,8 @@ const raceProgressSlice = createSlice({
         totalParticipants?: number;
         goalSteps?: number;
         timeLeftSeconds?: number;
+        /** Sticky true once known — never demote Sponsored → Live via an omit/false update. */
+        isSponsored?: boolean;
         syncedAt?: string;
       }>,
     ) {
@@ -271,6 +276,9 @@ const raceProgressSlice = createSlice({
       }
       if (action.payload.timeLeftSeconds !== undefined) {
         state.timeLeftSeconds = action.payload.timeLeftSeconds;
+      }
+      if (action.payload.isSponsored === true) {
+        state.activeRaceIsSponsored = true;
       }
       state.lastBackendSyncedAt = syncedAt;
       state.isSyncing = false;
