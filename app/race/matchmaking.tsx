@@ -1471,6 +1471,25 @@ export default function MatchmakingScreen() {
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", paddingHorizontal: 28 }}>
           <View style={{ backgroundColor: colors.card, borderRadius: 18, borderWidth: 1, borderColor: colors.border, overflow: "hidden" }}>
             <View style={{ paddingHorizontal: 22, paddingTop: 22, paddingBottom: 16, alignItems: "center" }}>
+              {confirmModal === "leave" ? (
+                <View
+                  style={{
+                    width: 52,
+                    height: 52,
+                    borderRadius: 26,
+                    backgroundColor: "rgba(239, 68, 68, 0.15)",
+                    borderWidth: 1,
+                    borderColor: "rgba(239, 68, 68, 0.35)",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    marginBottom: 14,
+                  }}
+                >
+                  <Text style={{ fontSize: rf(26), fontWeight: "800", color: colors.destructive, lineHeight: rf(30) }}>
+                    !
+                  </Text>
+                </View>
+              ) : null}
               <Text style={{ fontSize: rf(17), fontWeight: "700", color: colors.foreground, textAlign: "center" }}>
                 {confirmModal === "host_cancel" ? "Cancel Room?" : "Leave Room?"}
               </Text>
@@ -1479,9 +1498,7 @@ export default function MatchmakingScreen() {
                   ? isCoinsBattleRoom
                     ? "This will cancel the waiting room for all players. No coins have been charged yet."
                     : "This will cancel the waiting room for all players."
-                  : isCoinsBattleRoom
-                    ? "You can rejoin from the Live tab. No coins have been charged yet."
-                    : "You can rejoin from the Live tab if you change your mind."}
+                  : "By clicking Leave, you will be withdrawn from the current room registration."}
               </Text>
             </View>
             <View style={{ height: 1, backgroundColor: colors.border }} />
@@ -1491,7 +1508,7 @@ export default function MatchmakingScreen() {
                 onPress={() => setConfirmModal(null)}
               >
                 <Text style={{ color: colors.mutedForeground, fontWeight: "600" }}>
-                  {confirmModal === "host_cancel" ? "Keep Waiting" : "Stay"}
+                  {confirmModal === "host_cancel" ? "Keep Waiting" : "Cancel"}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity

@@ -2977,7 +2977,7 @@ export default function LiveRaceDetailScreen() {
         )}
       </View>
 
-      {/* ── Tagline: Start time holds 5s static, then fades to Beat your friends ── */}
+      {/* ── Tagline: Start time ↔ Beat your friends, 5s each, crossfade both ways ── */}
       <LiveTaglineRotator
         raceId={raceKeyForTagline}
         alt={taglineAlt}

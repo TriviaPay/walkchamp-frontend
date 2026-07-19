@@ -1,5 +1,13 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Animated, Easing, StyleSheet, Text, View } from "react-native";
+import React, { memo, useEffect, useRef, useState } from "react";
+import { Platform, StyleSheet, Text, View } from "react-native";
+import Animated, {
+  cancelAnimation,
+  Easing,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import { Feather } from "@expo/vector-icons";
 import { ChallengeEndsPillLabel } from "@/components/ChallengeEndsPillLabel";
 import { SponsoredEventWindowLabel } from "@/components/SponsoredEventWindowLabel";
@@ -9,19 +17,19 @@ export type LiveTaglineAlt =
   | { kind: "sponsored"; start: string; end: string | null };
 
 const HOLD_MS = 5000;
-const FADE_MS = 500;
+const FADE_MS = 800;
 
 function AltContent({ alt }: { alt: LiveTaglineAlt }) {
   if (alt.kind === "ends") {
     return (
-      <View style={styles.endsPill}>
+      <View style={styles.endsPill} collapsable={false}>
         <Feather name="calendar" size={13} color="#FFFFFF" />
         <ChallengeEndsPillLabel label={alt.label} style={styles.endsPillText} />
       </View>
     );
   }
   return (
-    <View style={styles.endsPill}>
+    <View style={styles.endsPill} collapsable={false}>
       <Feather name="clock" size={13} color="#FFFFFF" />
       <SponsoredEventWindowLabel
         startIso={alt.start}
@@ -40,12 +48,17 @@ function BeatContent() {
   );
 }
 
+function altStableKey(alt: LiveTaglineAlt | null): string | null {
+  if (!alt) return null;
+  if (alt.kind === "ends") return `ends:${alt.label}`;
+  return `sponsored:${alt.start}:${alt.end ?? ""}`;
+}
+
 /**
- * Start time (5s) ↔ Beat your friends (5s) with a reliable crossfade.
- * Uses one interval; frozen copy is read from a ref so parent re-renders
- * (1s clock ticks) do not cancel / restart the timer.
+ * Start time (5s) ↔ Beat your friends (5s) with a real crossfade both ways.
+ * Reanimated + memo so the live clock's 1s re-renders cannot interrupt opacity.
  */
-export function LiveTaglineRotator({
+function LiveTaglineRotatorInner({
   raceId,
   alt,
   visible,
@@ -56,83 +69,86 @@ export function LiveTaglineRotator({
 }) {
   const [frozen, setFrozen] = useState<LiveTaglineAlt | null>(alt);
   const frozenRef = useRef<LiveTaglineAlt | null>(alt);
-  const raceKey = raceId ?? (alt ? `pending:${alt.kind}` : null);
+  const animateKey = altStableKey(frozen);
 
-  // Capture first non-null alt for this race; ignore later parent re-renders.
   useEffect(() => {
     if (!alt) return;
-    if (frozenRef.current && raceKey) return;
+    if (frozenRef.current && raceId) return;
     frozenRef.current = alt;
     setFrozen(alt);
-  }, [alt, raceKey]);
+  }, [alt, raceId]);
 
-  // Reset when race changes.
   useEffect(() => {
     frozenRef.current = alt;
     setFrozen(alt);
   }, [raceId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const altOpacity = useRef(new Animated.Value(1)).current;
-  const beatOpacity = useRef(new Animated.Value(0)).current;
+  /** 0 = Start time, 1 = Beat your friends */
+  const progress = useSharedValue(0);
   const showAltRef = useRef(true);
-  const fadingRef = useRef(false);
+  const cancelledRef = useRef(false);
+
+  const altStyle = useAnimatedStyle(() => ({
+    opacity: 1 - progress.value,
+  }));
+  const beatStyle = useAnimatedStyle(() => ({
+    opacity: progress.value,
+  }));
 
   useEffect(() => {
-    if (!visible) return;
-
-    if (!frozen) {
-      showAltRef.current = false;
-      altOpacity.setValue(0);
-      beatOpacity.setValue(1);
+    if (!visible || !animateKey) {
+      if (!animateKey && visible) {
+        showAltRef.current = false;
+        progress.value = 1;
+      }
       return;
     }
 
-    // Start on Start time for a full 5s.
+    cancelledRef.current = false;
     showAltRef.current = true;
-    fadingRef.current = false;
-    altOpacity.stopAnimation();
-    beatOpacity.stopAnimation();
-    altOpacity.setValue(1);
-    beatOpacity.setValue(0);
+    cancelAnimation(progress);
+    progress.value = 0;
 
-    const crossfade = () => {
-      if (fadingRef.current) return;
-      fadingRef.current = true;
+    let holdTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const clearHold = () => {
+      if (holdTimeout) {
+        clearTimeout(holdTimeout);
+        holdTimeout = null;
+      }
+    };
+
+    const afterFade = () => {
+      if (cancelledRef.current) return;
+      scheduleHold();
+    };
+
+    const runCrossfade = () => {
+      if (cancelledRef.current) return;
       const nextAlt = !showAltRef.current;
       showAltRef.current = nextAlt;
-
-      Animated.parallel([
-        Animated.timing(altOpacity, {
-          toValue: nextAlt ? 1 : 0,
-          duration: FADE_MS,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(beatOpacity, {
-          toValue: nextAlt ? 0 : 1,
-          duration: FADE_MS,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ]).start(({ finished }) => {
-        fadingRef.current = false;
-        if (!finished) {
-          // Snap to intended end state if interrupted.
-          altOpacity.setValue(nextAlt ? 1 : 0);
-          beatOpacity.setValue(nextAlt ? 0 : 1);
-        }
-      });
+      progress.value = withTiming(
+        nextAlt ? 0 : 1,
+        { duration: FADE_MS, easing: Easing.inOut(Easing.quad) },
+        (finished) => {
+          if (finished) runOnJS(afterFade)();
+        },
+      );
     };
 
-    const intervalId = setInterval(crossfade, HOLD_MS);
+    const scheduleHold = () => {
+      clearHold();
+      holdTimeout = setTimeout(runCrossfade, HOLD_MS);
+    };
+
+    scheduleHold();
 
     return () => {
-      clearInterval(intervalId);
-      fadingRef.current = false;
-      altOpacity.stopAnimation();
-      beatOpacity.stopAnimation();
+      cancelledRef.current = true;
+      clearHold();
+      cancelAnimation(progress);
     };
-  }, [visible, frozen, raceId, altOpacity, beatOpacity]);
+  }, [visible, animateKey, raceId, progress]);
 
   if (!visible) return null;
 
@@ -145,16 +161,20 @@ export function LiveTaglineRotator({
   }
 
   return (
-    <View style={styles.slot}>
+    <View style={styles.slot} collapsable={false}>
       <Animated.View
         pointerEvents="none"
-        style={[styles.layer, { opacity: altOpacity }]}
+        collapsable={false}
+        needsOffscreenAlphaCompositing={Platform.OS === "android"}
+        style={[styles.layer, altStyle]}
       >
         <AltContent alt={frozen} />
       </Animated.View>
       <Animated.View
         pointerEvents="none"
-        style={[styles.layer, { opacity: beatOpacity }]}
+        collapsable={false}
+        needsOffscreenAlphaCompositing={Platform.OS === "android"}
+        style={[styles.layer, beatStyle]}
       >
         <BeatContent />
       </Animated.View>
@@ -162,17 +182,18 @@ export function LiveTaglineRotator({
   );
 }
 
+export const LiveTaglineRotator = memo(LiveTaglineRotatorInner);
+
 const styles = StyleSheet.create({
   slot: {
     marginTop: 2,
     marginBottom: 6,
     paddingHorizontal: 16,
-    height: 40,
+    height: 44,
     justifyContent: "center",
     alignItems: "center",
     alignSelf: "center",
     width: "100%",
-    overflow: "hidden",
   },
   layer: {
     ...StyleSheet.absoluteFillObject,
