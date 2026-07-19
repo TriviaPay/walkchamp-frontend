@@ -80,6 +80,27 @@ import { screenCache } from "@/utils/screenCache";
 
 const SCREEN_W = Dimensions.get("window").width;
 
+/** Image format: "Sat, Jun 21, 2025 • 08:00 PM IST" */
+function formatWaitingRoomSchedule(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const datePart = d.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  const timePart = d
+    .toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+      timeZoneName: "short",
+    })
+    .replace(/\u202f/g, " ");
+  return `${datePart} • ${timePart}`;
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type RoomParticipant = {
@@ -404,6 +425,11 @@ export default function MatchmakingScreen() {
       inviteCode: params.initialInviteCode || null,
     };
   });
+  const [scheduledStartAt, setScheduledStartAt] = useState<string | null>(
+    () => (typeof params.initialScheduledStartAt === "string" && params.initialScheduledStartAt
+      ? params.initialScheduledStartAt
+      : null),
+  );
   const [copiedCode, setCopiedCode] = useState(false);
   const [selectedParticipant, setSelectedParticipant] = useState<RoomParticipant | null>(null);
   const [wasRemoved, setWasRemoved] = useState(false);
@@ -742,6 +768,13 @@ export default function MatchmakingScreen() {
           inviteCode: data.race.inviteCode ?? null,
         };
         setLiveRoom(nextLiveRoom);
+        const nextSchedule =
+          data.race.scheduledStartAt ??
+          data.race.scheduled_start_at ??
+          null;
+        if (typeof nextSchedule === "string" && nextSchedule) {
+          setScheduledStartAt(nextSchedule);
+        }
         if (!roomExpiresAtRef.current && data.race.createdAt) {
           // Expiry intentionally disabled — do not set roomExpiresAtRef.
         }
@@ -1129,7 +1162,6 @@ export default function MatchmakingScreen() {
   const participantIds = new Set(participants.map((p) => p.userId));
 
   // ── Render ────────────────────────────────────────────────────────────────
-  const neededPlayers = Math.max(0, realMaxPlayers - realPlayerCount);
   const targetSteps = liveRoom?.targetSteps ?? RACE_DEFAULTS.RACE_TARGET;
   const coinEntry = liveRoom?.coinEntryAmount ?? 0;
   const coinPool = liveRoom?.coinPrizePool ?? (coinEntry * realPlayerCount);
@@ -1161,29 +1193,43 @@ export default function MatchmakingScreen() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.heroIconWrap}>
-          <LinearGradient colors={["#EC4899", "#6366F1"]} style={styles.heroIconBorder}>
-            <View style={styles.heroIconInner}>
-              <Feather name="users" size={26} color="#F5F3FF" />
-            </View>
+        <Animated.View
+          style={[
+            styles.searchIcon,
+            {
+              backgroundColor: "#12162A",
+              borderColor: "#7C3AED66",
+              transform: [{ scale: pulseAnim }],
+            },
+          ]}
+        >
+          <LinearGradient
+            colors={["#7C3AED40", "#6366F133"]}
+            style={styles.searchIconGrad}
+          >
+            <Feather name="search" size={24} color="#A78BFA" />
           </LinearGradient>
-        </View>
+        </Animated.View>
 
         <Text style={styles.title}>Waiting Room</Text>
         <Text style={styles.subtitle}>
-          {isHostMode
-            ? "Start when you're ready"
-            : "Race will start automatically at the Scheduled time"}
+          Race will start automatically at the Scheduled time
         </Text>
+        {scheduledStartAt ? (
+          <View style={styles.scheduleRow}>
+            <Feather name="calendar" size={14} color="#C4B5FD" />
+            <Text style={styles.scheduleText}>
+              {formatWaitingRoomSchedule(scheduledStartAt)}
+            </Text>
+          </View>
+        ) : null}
 
         <View style={styles.infoBanner}>
           <Feather name="clock" size={16} color="#A78BFA" />
           <View style={{ flex: 1 }}>
             <Text style={styles.infoBannerTitle}>No need to stay here.</Text>
             <Text style={styles.infoBannerSub}>
-              {isHostMode
-                ? "Start the race when at least 2 players have joined."
-                : "The race will start automatically when the host starts it."}
+              We&apos;ll notify you when the race starts.
             </Text>
           </View>
         </View>
@@ -1205,12 +1251,13 @@ export default function MatchmakingScreen() {
 
           <View style={styles.grid}>
             {slots.map((p, i) => (
-              <PlayerSlot
-                key={p?.userId ? `${p.userId}-${i}` : `empty-${i}`}
-                participant={p}
-                onPress={p ? () => setSelectedParticipant(p) : undefined}
-                colors={colors}
-              />
+              <View key={p?.userId ? `${p.userId}-${i}` : `empty-${i}`} style={styles.slotCell}>
+                <PlayerSlot
+                  participant={p}
+                  onPress={p ? () => setSelectedParticipant(p) : undefined}
+                  colors={colors}
+                />
+              </View>
             ))}
           </View>
 
@@ -1226,11 +1273,6 @@ export default function MatchmakingScreen() {
               end={{ x: 1, y: 0 }}
             />
           </View>
-          <Text style={styles.neededText}>
-            {neededPlayers > 0
-              ? `${neededPlayers} more player${neededPlayers === 1 ? "" : "s"} needed to start`
-              : "Room is full — ready to start"}
-          </Text>
         </View>
 
         <View style={styles.statsRow}>
@@ -1330,7 +1372,7 @@ export default function MatchmakingScreen() {
               onPress={handleCancel}
             >
               <Text style={[styles.cancelText, { color: colors.destructive }]}>
-                {isFreeRace ? "Cancel Room" : "Cancel & Refund"}
+                {leaving ? "Cancelling…" : "Cancel Room"}
               </Text>
             </TouchableOpacity>
           </>
@@ -1624,11 +1666,11 @@ export default function MatchmakingScreen() {
   );
 }
 
-// ── Responsive slot grid constants ───────────────────────────────────────────
-const SLOT_GAP = 8;
+// ── Responsive slot grid — always exactly 5 per row, fitted inside the card ─
 const SLOTS_PER_ROW = 5;
-const SLOT_SIZE = Math.floor((SCREEN_W - 2 * rs(24) - (SLOTS_PER_ROW - 1) * SLOT_GAP) / SLOTS_PER_ROW);
-const GRID_WIDTH = SLOT_SIZE * SLOTS_PER_ROW + (SLOTS_PER_ROW - 1) * SLOT_GAP;
+const SLOT_PAD = 3;
+/** Approx size for avatar (20% of screen minus pads); exact layout is % width. */
+const SLOT_SIZE = Math.floor(SCREEN_W * 0.2 - SLOT_PAD * 2 - rs(20));
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
@@ -1671,7 +1713,21 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   title: { fontSize: rf(28), fontWeight: "800", letterSpacing: -0.5, color: "#FFFFFF" },
-  subtitle: { fontSize: rf(14), textAlign: "center", color: "#94A3B8", marginBottom: 4 },
+  subtitle: { fontSize: rf(14), textAlign: "center", color: "#94A3B8", marginBottom: 6 },
+  scheduleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginBottom: 12,
+    paddingHorizontal: 12,
+  },
+  scheduleText: {
+    fontSize: rf(13),
+    fontWeight: "600",
+    color: "#C4B5FD",
+    textAlign: "center",
+  },
   infoBanner: {
     width: "100%",
     flexDirection: "row",
@@ -1693,11 +1749,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#0D101F",
     padding: rs(14),
     gap: 10,
+    overflow: "hidden",
   },
   panelHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   panelLabel: { fontSize: rf(11), fontWeight: "700", letterSpacing: 0.8, color: "#94A3B8" },
   panelCount: { fontSize: rf(14), fontWeight: "800", color: "#60A5FA" },
-  neededText: { fontSize: rf(12), fontWeight: "600", color: "#60A5FA", textAlign: "center" },
   statsRow: {
     width: "100%",
     flexDirection: "row",
@@ -1736,15 +1792,34 @@ const styles = StyleSheet.create({
   countLabel: { fontSize: rf(15) },
   countValue: { fontSize: rf(36), fontWeight: "800" },
   countMax: { fontSize: rf(20), fontWeight: "400" },
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: SLOT_GAP, width: GRID_WIDTH },
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    width: "100%",
+  },
+  /** Exactly 5 columns — percentage width cannot wrap to 4. */
+  slotCell: {
+    width: `${100 / SLOTS_PER_ROW}%` as `${number}%`,
+    padding: SLOT_PAD,
+  },
   playerSlot: {
-    width: SLOT_SIZE, height: SLOT_SIZE, borderRadius: 14, borderWidth: 1.5,
-    alignItems: "center", justifyContent: "center", overflow: "visible",
+    width: "100%",
+    aspectRatio: 1,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
   },
   hostBadgeSlot: {
-    position: "absolute", top: -6, right: -6,
-    width: rs(16), height: rs(16), borderRadius: rs(8),
-    alignItems: "center", justifyContent: "center",
+    position: "absolute",
+    top: 2,
+    right: 2,
+    width: rs(14),
+    height: rs(14),
+    borderRadius: rs(7),
+    alignItems: "center",
+    justifyContent: "center",
   },
   tapHint: { fontSize: rf(12), textAlign: "center", color: "#94A3B8" },
   progressTrack: { width: "100%", height: 6, borderRadius: 3, overflow: "hidden", backgroundColor: "#1E2438" },

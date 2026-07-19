@@ -128,6 +128,7 @@ interface Room {
   team_a_country_code: string | null;
   team_b_country: string | null;
   team_b_country_code: string | null;
+  scheduled_start_at?: string | null;
 }
 
 
@@ -1190,16 +1191,28 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
       </View>
 
       {!isSponsored && isHost ? (
-        <TouchableOpacity
-          style={[cc.cancelRoomBtn, { opacity: registering ? 0.6 : 1 }]}
-          onPress={() => !registering && onCancelRoom(room)}
-          disabled={registering}
-          activeOpacity={0.8}
-        >
-          {registering
-            ? <ActivityIndicator size="small" color="#FF6B6B" />
-            : <Text style={cc.cancelRoomBtnText}>Cancel Room</Text>}
-        </TouchableOpacity>
+        <View style={{ gap: 8 }}>
+          <TouchableOpacity style={cc.waitingRoomBtn} onPress={() => onGoWaiting(room)} activeOpacity={0.85}>
+            <View style={cc.waitingRoomIcon}>
+              <Feather name="flag" size={14} color="#60A5FA" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={cc.waitingRoomTitle}>Waiting Room</Text>
+              <Text style={cc.waitingRoomSub}>See countdown & joined players</Text>
+            </View>
+            <Feather name="chevron-right" size={16} color="#60A5FA" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[cc.cancelRoomBtn, { opacity: registering ? 0.6 : 1 }]}
+            onPress={() => !registering && onCancelRoom(room)}
+            disabled={registering}
+            activeOpacity={0.8}
+          >
+            {registering
+              ? <ActivityIndicator size="small" color="#FF6B6B" />
+              : <Text style={cc.cancelRoomBtnText}>Cancel Room</Text>}
+          </TouchableOpacity>
+        </View>
       ) : room.current_user_registered ? (
         <View style={{ gap: 8 }}>
           <View style={cc.registeredBtn}>
@@ -1922,6 +1935,7 @@ export default function AvailableRoomsScreen() {
           raceId: room.room_id,
           isHost: false,
           user,
+          initialScheduledStartAt: room.scheduled_start_at,
         }),
       });
     } catch {
@@ -1972,6 +1986,7 @@ export default function AvailableRoomsScreen() {
           raceId: ar.room_id,
           isHost: ar.current_user_role === "host",
           user,
+          initialScheduledStartAt: ar.scheduled_start_at,
         }),
       });
     }
@@ -2021,6 +2036,7 @@ export default function AvailableRoomsScreen() {
         raceId: ar.room_id,
         isHost: ar.current_user_role === "host",
         user,
+        initialScheduledStartAt: ar.scheduled_start_at,
       }),
     });
   };
@@ -2039,6 +2055,7 @@ export default function AvailableRoomsScreen() {
         raceId: room.room_id,
         isHost: !!user?.id && user.id === room.host_user_id,
         user,
+        initialScheduledStartAt: room.scheduled_start_at,
       }),
     });
   }, [user]);

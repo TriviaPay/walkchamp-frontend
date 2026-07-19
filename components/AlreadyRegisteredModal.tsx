@@ -4,7 +4,6 @@ import {
   Text,
   Modal,
   StyleSheet,
-  ActivityIndicator,
   TouchableOpacity,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
@@ -20,9 +19,10 @@ export type RegisteredRaceInfo = ActiveRaceInfo & {
 interface AlreadyRegisteredModalProps {
   visible: boolean;
   race: RegisteredRaceInfo | null;
-  withdrawing: boolean;
+  /** Kept for call-site compatibility; withdraw UI removed from this modal. */
+  withdrawing?: boolean;
   onGoToRace: () => void;
-  onWithdraw: () => void;
+  onWithdraw?: () => void;
   onCancel: () => void;
 }
 
@@ -44,9 +44,7 @@ function formatStartTime(iso: string | null | undefined): string {
 export default function AlreadyRegisteredModal({
   visible,
   race,
-  withdrawing,
   onGoToRace,
-  onWithdraw,
   onCancel,
 }: AlreadyRegisteredModalProps) {
   const label = race ? challengeLabel(race) : "Challenge";
@@ -69,7 +67,6 @@ export default function AlreadyRegisteredModal({
           <TouchableOpacity
             style={styles.closeBtn}
             onPress={onCancel}
-            disabled={withdrawing}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Feather name="x" size={20} color="#5A6A8A" />
@@ -134,40 +131,14 @@ export default function AlreadyRegisteredModal({
             </View>
           ) : null}
 
-          <View style={styles.buttonStack}>
-            <TouchableOpacity
-              style={styles.primaryBtn}
-              onPress={onGoToRace}
-              disabled={withdrawing}
-              activeOpacity={0.8}
-            >
-              <Feather name="log-in" size={17} color="#000" style={styles.btnIcon} />
-              <Text style={styles.primaryBtnText}>Go to Race</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.dangerBtn, withdrawing && styles.disabledBtn]}
-              onPress={onWithdraw}
-              disabled={withdrawing}
-              activeOpacity={0.8}
-            >
-              {withdrawing ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <>
-                  <Feather name="trash-2" size={17} color="#fff" style={styles.btnIcon} />
-                  <Text style={styles.dangerBtnText}>Withdraw Registration</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.footer}>
-            <Feather name="shield" size={14} color="#FF6B35" />
-            <Text style={styles.footerText}>
-              Withdrawing will remove you from this race. Your spot will be available to others.
-            </Text>
-          </View>
+          <TouchableOpacity
+            style={styles.primaryBtn}
+            onPress={onGoToRace}
+            activeOpacity={0.8}
+          >
+            <Feather name="log-in" size={17} color="#000" style={styles.btnIcon} />
+            <Text style={styles.primaryBtnText}>Go to Race</Text>
+          </TouchableOpacity>
         </View>
       </View>
     </Modal>
@@ -271,9 +242,6 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     textAlign: "right",
   },
-  buttonStack: {
-    gap: 10,
-  },
   primaryBtn: {
     backgroundColor: "#00E676",
     borderRadius: 14,
@@ -287,35 +255,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
   },
-  dangerBtn: {
-    backgroundColor: "#E53935",
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "center",
-  },
-  disabledBtn: {
-    opacity: 0.55,
-  },
-  dangerBtnText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "700",
-  },
   btnIcon: {
     marginRight: 8,
-  },
-  footer: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 8,
-    marginTop: 16,
-  },
-  footerText: {
-    flex: 1,
-    color: "#8B9BBE",
-    fontSize: 12,
-    lineHeight: 17,
   },
 });

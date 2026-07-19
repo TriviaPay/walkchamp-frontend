@@ -106,6 +106,7 @@ export function buildMatchmakingParams(options: {
   initialMaxPlayers?: number;
   initialIsPrivate?: boolean;
   initialInviteCode?: string;
+  initialScheduledStartAt?: string | null;
 }): Record<string, string> {
   const params: Record<string, string> = {
     raceId: options.raceId,
@@ -138,6 +139,9 @@ export function buildMatchmakingParams(options: {
   }
   if (options.initialInviteCode) {
     params.initialInviteCode = options.initialInviteCode;
+  }
+  if (options.initialScheduledStartAt) {
+    params.initialScheduledStartAt = options.initialScheduledStartAt;
   }
 
   return params;

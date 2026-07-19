@@ -32,6 +32,7 @@ import {
   type RaceCancelResponse,
   type RaceLeaveResponse,
 } from "@/services/refundApi";
+import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 
 const BG = "#080B14";
 const CARD_BG = "#0D1122";
@@ -99,7 +100,7 @@ function fmtDateTime(iso: string | null) {
 }
 
 function DetailCard({
-  room, currentUserId, onRegister, onCancel, onCancelRoom, onViewHost, registering,
+  room, currentUserId, onRegister, onCancel, onCancelRoom, onViewHost, onGoWaiting, registering,
 }: {
   room: UpcomingRoom;
   currentUserId: string | undefined;
@@ -107,6 +108,7 @@ function DetailCard({
   onCancel: (r: UpcomingRoom) => void;
   onCancelRoom: (r: UpcomingRoom) => void;
   onViewHost: (r: UpcomingRoom) => void;
+  onGoWaiting: (r: UpcomingRoom) => void;
   registering: boolean;
 }) {
   const countdown   = useCountdown(room.scheduled_start_at);
@@ -296,27 +298,51 @@ function DetailCard({
 
         {/* CTA */}
         {!isSponsored && isHost ? (
-          <TouchableOpacity
-            style={[dc.cancelRoomBtn, { opacity: registering ? 0.6 : 1 }]}
-            onPress={() => !registering && onCancelRoom(room)}
-            disabled={registering}
-            activeOpacity={0.8}
-          >
-            {registering
-              ? <><ActivityIndicator size="small" color="#FF4444" /><Text style={dc.cancelRoomBtnText}>Cancelling…</Text></>
-              : <><Feather name="x-octagon" size={14} color="#FF4444" /><Text style={dc.cancelRoomBtnText}>Cancel Room</Text></>}
-          </TouchableOpacity>
+          <View style={{ gap: 8 }}>
+            <TouchableOpacity style={dc.waitingRoomBtn} onPress={() => onGoWaiting(room)} activeOpacity={0.85}>
+              <View style={dc.waitingRoomIcon}>
+                <Feather name="flag" size={14} color="#60A5FA" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={dc.waitingRoomTitle}>Waiting Room</Text>
+                <Text style={dc.waitingRoomSub}>See countdown & joined players</Text>
+              </View>
+              <Feather name="chevron-right" size={16} color="#60A5FA" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[dc.cancelRoomBtn, { opacity: registering ? 0.6 : 1 }]}
+              onPress={() => !registering && onCancelRoom(room)}
+              disabled={registering}
+              activeOpacity={0.8}
+            >
+              {registering
+                ? <><ActivityIndicator size="small" color="#FF4444" /><Text style={dc.cancelRoomBtnText}>Cancelling…</Text></>
+                : <><Feather name="x-octagon" size={14} color="#FF4444" /><Text style={dc.cancelRoomBtnText}>Cancel Room</Text></>}
+            </TouchableOpacity>
+          </View>
         ) : room.current_user_registered ? (
-          <TouchableOpacity
-            style={[dc.cancelRegBtn, { opacity: registering ? 0.6 : 1 }]}
-            onPress={() => !registering && onCancel(room)}
-            disabled={registering}
-            activeOpacity={0.8}
-          >
-            {registering
-              ? <><ActivityIndicator size="small" color="#8B9AC0" /><Text style={dc.cancelRegBtnText}>Cancelling…</Text></>
-              : <><Feather name="x-circle" size={14} color="#8B9AC0" /><Text style={dc.cancelRegBtnText}>Cancel Registration</Text></>}
-          </TouchableOpacity>
+          <View style={{ gap: 8 }}>
+            <TouchableOpacity style={dc.waitingRoomBtn} onPress={() => onGoWaiting(room)} activeOpacity={0.85}>
+              <View style={dc.waitingRoomIcon}>
+                <Feather name="flag" size={14} color="#60A5FA" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={dc.waitingRoomTitle}>Waiting Room</Text>
+                <Text style={dc.waitingRoomSub}>See countdown & joined players</Text>
+              </View>
+              <Feather name="chevron-right" size={16} color="#60A5FA" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[dc.cancelRegBtn, { opacity: registering ? 0.6 : 1 }]}
+              onPress={() => !registering && onCancel(room)}
+              disabled={registering}
+              activeOpacity={0.8}
+            >
+              {registering
+                ? <><ActivityIndicator size="small" color="#8B9AC0" /><Text style={dc.cancelRegBtnText}>Cancelling…</Text></>
+                : <><Feather name="x-circle" size={14} color="#8B9AC0" /><Text style={dc.cancelRegBtnText}>Cancel Registration</Text></>}
+            </TouchableOpacity>
+          </View>
         ) : (
           <TouchableOpacity
             style={[dc.registerBtn, { opacity: (isFull || registering) ? 0.55 : 1 }]}
@@ -395,6 +421,27 @@ const dc = StyleSheet.create({
   registerBtnText: { fontSize: rf(15), fontWeight: "900" },
 
   cancelRoomBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingVertical: rs(13), borderRadius: 14, borderWidth: 1, borderColor: "#FF444445", backgroundColor: "#FF444412" },
+  waitingRoomBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: rs(12),
+    paddingHorizontal: rs(12),
+    borderRadius: 14,
+    backgroundColor: "#1E3A5F",
+    borderWidth: 1,
+    borderColor: "#3B82F655",
+  },
+  waitingRoomIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: "#2563EB33",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  waitingRoomTitle: { fontSize: rf(13), fontWeight: "800", color: "#E0F2FE" },
+  waitingRoomSub: { fontSize: rf(10), color: "#93C5FD", marginTop: 1 },
   cancelRoomBtnText: { fontSize: rf(14), fontWeight: "700", color: "#FF4444" },
 
   cancelRegBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingVertical: rs(13), borderRadius: 14, borderWidth: 1, borderColor: "#8B9AC030" },
@@ -508,6 +555,25 @@ export default function UpcomingRoomsByDateScreen() {
     setHostId(room.host_user_id);
   }, []);
 
+  const handleGoWaitingRoom = useCallback((room: UpcomingRoom) => {
+    if (room.challenge_type === "sponsored") {
+      router.push({
+        pathname: "/sponsored-events/waiting-room",
+        params: { id: room.room_id, from: "upcoming-rooms" },
+      });
+      return;
+    }
+    router.push({
+      pathname: "/race/matchmaking",
+      params: buildMatchmakingParams({
+        raceId: room.room_id,
+        isHost: !!user?.id && user.id === room.host_user_id,
+        user,
+        initialScheduledStartAt: room.scheduled_start_at,
+      }),
+    });
+  }, [user]);
+
   const handleCancelRoom = useCallback((room: UpcomingRoom) => {
     AppAlert.alert("Cancel Room", "Cancel this room? All registered participants will be notified.", [
       { text: "Keep", style: "cancel" },
@@ -591,6 +657,7 @@ export default function UpcomingRoomsByDateScreen() {
               onCancel={handleCancel}
               onCancelRoom={handleCancelRoom}
               onViewHost={handleViewHost}
+              onGoWaiting={handleGoWaitingRoom}
               registering={registeringId === item.room_id}
             />
           )}
