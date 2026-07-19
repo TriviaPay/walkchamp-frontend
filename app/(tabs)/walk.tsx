@@ -70,7 +70,6 @@ import MyTitlesModal, { type ActiveTitle, difficultyColor } from "@/components/M
 import { TitleBadge } from "@/components/TitleBadge";
 import WearableSetupModal from "@/components/WearableSetupModal";
 import { usePresence } from "@/context/PresenceContext";
-import { useUnread } from "@/context/UnreadContext";
 import { getStoredSession } from "@/services/authService";
 import { authFetch } from "@/utils/authFetch";
 import { isSponsoredRegistrationOpen, canOpenSponsoredWaitingRoom } from "@/utils/sponsoredEventRegistration";
@@ -1758,7 +1757,6 @@ function WalkScreenContent() {
   const raceStepsOnWalk = racePhase === "in_race" ? userRaceSteps : walkRaceStepsDisplay;
   const showRaceStepsOnWalk = raceStepsOnWalk > 0;
   const { counts, formatCount } = usePresence();
-  const { pendingGroupInvites } = useUnread();
   const dispatch = useDispatch<AppDispatch>();
   const themes = useSelector((s: RootState) => s.trackThemes.themes);
   const themesPurchaseLoading = useSelector((s: RootState) => s.trackThemes.purchaseLoading);
@@ -2105,9 +2103,26 @@ function WalkScreenContent() {
     return () => clearTimeout(t);
   }, []));
 
-  // ── Room counts (badge on Rooms button) ───────────────────────────────────
+  // ── Room counts (badge on Available Rooms card) ───────────────────────────
   const [roomCounts, setRoomCounts] = useState<{ current: number; upcoming: number; total: number }>({ current: 0, upcoming: 0, total: 0 });
   const roomPulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Group count for the compact "Groups" entry — reuse Groups screen cache only (no new API).
+  const GROUPS_CACHE_KEY = "screen_groups_overview";
+  const [groupCount, setGroupCount] = useState(() => {
+    const cached = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(GROUPS_CACHE_KEY);
+    return cached?.summary?.total_groups ?? cached?.groups?.length ?? 0;
+  });
+
+  const syncGroupCountFromCache = useCallback(async () => {
+    const mem = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(GROUPS_CACHE_KEY);
+    if (mem) {
+      setGroupCount(mem.summary?.total_groups ?? mem.groups?.length ?? 0);
+      return;
+    }
+    const disk = await screenCache.get<{ summary?: { total_groups?: number }; groups?: unknown[] }>(GROUPS_CACHE_KEY);
+    if (disk) setGroupCount(disk.summary?.total_groups ?? disk.groups?.length ?? 0);
+  }, []);
 
   const fetchRoomCounts = useCallback(async () => {
     try {
@@ -2120,7 +2135,8 @@ function WalkScreenContent() {
 
   useFocusEffect(useCallback(() => {
     void fetchRoomCounts();
-  }, [fetchRoomCounts]));
+    void syncGroupCountFromCache();
+  }, [fetchRoomCounts, syncGroupCountFromCache]));
 
   useEffect(() => {
     const ch = subscribeToChannel("public-rooms-available");
@@ -3170,15 +3186,14 @@ function WalkScreenContent() {
         <View style={styles.sectionRow}>
           <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: 0 }]}>Join a Challenge</Text>
           <TouchableOpacity
-            onPress={() => router.push("/rooms/available")}
+            onPress={() => router.push("/groups")}
             style={[styles.roomsBtn, { backgroundColor: colors.primary + "18" }]}
             activeOpacity={0.7}
           >
-            <Text style={[styles.roomsBtnText, { color: colors.primary }]}>Rooms</Text>
-            {roomCounts.total > 0 && (
+            <Text style={[styles.roomsBtnText, { color: colors.primary }]}>Groups</Text>
+            {groupCount > 0 && (
               <View style={[styles.roomsBadge, { backgroundColor: colors.primary + "25", borderColor: colors.primary + "55" }]}>
-                <Animated.View style={[styles.roomsBadgeDot, { backgroundColor: colors.primary, opacity: roomPulseAnim }]} />
-                <Text style={[styles.roomsBadgeText, { color: colors.primary }]}>{roomCounts.total}</Text>
+                <Text style={[styles.roomsBadgeText, { color: colors.primary }]}>{groupCount}</Text>
               </View>
             )}
             <Feather name="chevron-right" size={13} color={colors.primary} />
@@ -3397,14 +3412,14 @@ function WalkScreenContent() {
           );
         })}
 
-        {/* ── Groups Card ── */}
+        {/* ── Available Rooms Card ── */}
         <TouchableOpacity
           activeOpacity={0.88}
-          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); router.push("/groups"); }}
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); router.push("/rooms/available"); }}
           style={[styles.groupsCardWrap, { position: "relative" }]}
         >
           <LinearGradient
-            colors={["#4C0519", "#BE123C", "#831843"] as [string, string, string]}
+            colors={["#0C4A6E", "#0284C7", "#075985"] as [string, string, string]}
             style={styles.groupsCard}
             start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
           >
@@ -3415,30 +3430,31 @@ function WalkScreenContent() {
 
             {/* Left: icon + text */}
             <View style={styles.groupsLeft}>
-              <LinearGradient colors={["#F43F5E", "#FB7185"]} style={styles.groupsIconWrap} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
-                <Feather name="users" size={20} color="#FFF" />
+              <LinearGradient colors={["#38BDF8", "#0EA5E9"]} style={styles.groupsIconWrap} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
+                <Feather name="grid" size={20} color="#FFF" />
               </LinearGradient>
               <View style={styles.groupsTextBlock}>
-                <Text style={styles.groupsTitle}>Groups</Text>
-                <Text style={styles.groupsSub}>Compete daily with friends, family, or coworkers.</Text>
+                <Text style={styles.groupsTitle}>Available Rooms</Text>
+                <Text style={styles.groupsSub}>Browse and join upcoming challenges</Text>
                 <View style={styles.groupsTagRow}>
-                  <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Friends</Text></View>
-                  <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Family</Text></View>
-                  <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Office</Text></View>
+                  <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Live</Text></View>
+                  <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Upcoming</Text></View>
+                  <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Join</Text></View>
                 </View>
               </View>
             </View>
 
             {/* Right: CTA */}
             <View style={styles.groupsCta}>
-              <LinearGradient colors={["#F43F5E", "#BE123C"]} style={styles.groupsCtaBtn} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+              <LinearGradient colors={["#38BDF8", "#0284C7"]} style={styles.groupsCtaBtn} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
                 <Text style={styles.groupsCtaText}>View</Text>
               </LinearGradient>
             </View>
           </LinearGradient>
-          {pendingGroupInvites > 0 && (
+          {roomCounts.total > 0 && (
             <View style={styles.groupsInviteBadge}>
-              <Text style={styles.groupsInviteBadgeText}>{pendingGroupInvites}</Text>
+              <Animated.View style={[styles.roomsBadgeDot, { backgroundColor: "#FFF", opacity: roomPulseAnim, marginRight: 4 }]} />
+              <Text style={styles.groupsInviteBadgeText}>{roomCounts.total}</Text>
             </View>
           )}
         </TouchableOpacity>
@@ -5531,6 +5547,7 @@ const styles = StyleSheet.create({
     height: 20,
     borderRadius: 10,
     backgroundColor: "#EF4444",
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 5,
