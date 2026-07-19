@@ -212,88 +212,77 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
   };
 
   return (
-    <View style={[cc.wrap, { borderColor: accent + "50" }]}>
-      <TrackThemeImage
-        media={{
-          code: trackCode,
-          trackLayout: trackCode,
-          imageSet: room.imageSet ?? null,
-          imageUrl: room.imageUrl ?? null,
-          assetVersion: room.assetVersion,
-          width: room.width,
-          height: room.height,
-        }}
-        variant="preview"
-        style={cc.bgImage}
-      />
-      <View style={cc.overlay} />
-      <LinearGradient colors={["transparent", "rgba(0,0,0,0.93)"]} style={cc.bottomGrad} />
-      <LinearGradient colors={[accent + "DD", "transparent"]} style={cc.topGlow} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} />
-
-      <View style={cc.content}>
-        <View style={cc.badgeRow}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-            <View style={[
-              cc.typeBadge,
-              { backgroundColor: accent + "30", borderColor: accent },
-              (isCash || isCoins) && cc.typeBadgeHighlight,
-            ]}>
-              {isCash ? <Feather name="dollar-sign" size={9} color={accent} />
-                : isCoins ? <CoinIcon size={11} />
-                : <Ionicons name="walk-outline" size={10} color={accent} />}
-              <Text style={[cc.typeBadgeText, { color: accent }]}>
-                {isCash ? "CASH" : isCoins ? "COINS ⚔️" : "FREE"}
-              </Text>
-            </View>
-            {isCash && (
-              <View style={[cc.entryFeePill, { borderColor: CASH_BLUE, backgroundColor: CASH_BLUE + "30" }]}>
-                <Feather name="dollar-sign" size={8} color={CASH_BLUE} />
-                <Text style={[cc.entryFeePillText, { color: "#FFFFFF" }]}>
-                  Fee ${room.entry_fee.toFixed(0)}
-                </Text>
-              </View>
-            )}
-            {isCoins && (
-              <View style={[cc.entryFeePill, { borderColor: GOLD + "90", backgroundColor: GOLD + "25" }]}>
-                <CoinIcon size={9} />
-                <Text style={[cc.entryFeePillText, { color: GOLD }]}>
-                  Fee {(room.coin_entry_amount ?? 0).toLocaleString()}
-                </Text>
-              </View>
-            )}
+    <View style={[cc.wrap, { borderColor: accent + "55", backgroundColor: CARD_BG }]}>
+      <View style={cc.badgeRow}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flex: 1, flexWrap: "wrap" }}>
+          <View style={[
+            cc.typeBadge,
+            { backgroundColor: accent + "30", borderColor: accent },
+            (isCash || isCoins) && cc.typeBadgeHighlight,
+          ]}>
+            {isCash ? <Feather name="dollar-sign" size={9} color={accent} />
+              : isCoins ? <CoinIcon size={11} />
+              : <Ionicons name="walk-outline" size={10} color={accent} />}
+            <Text style={[cc.typeBadgeText, { color: accent }]}>
+              {isCash ? "CASH" : isCoins ? "COINS" : "FREE"}
+            </Text>
           </View>
-          <View style={{ flex: 1 }} />
-          {isPrivate ? (
-            <View style={[cc.visBadge, { backgroundColor: PURPLE + "28", borderColor: PURPLE + "65" }]}>
-              <Feather name="lock" size={7} color={PURPLE} />
-              <Text style={[cc.visBadgeText, { color: PURPLE }]}>Private</Text>
-              <Text style={[cc.visBadgeText, { color: "#BCC8E8" }]}>{room.current_players}/{room.max_players}</Text>
+          {isCash && (
+            <View style={[cc.entryFeePill, { borderColor: CASH_BLUE, backgroundColor: CASH_BLUE + "30" }]}>
+              <Text style={[cc.entryFeePillText, { color: "#FFFFFF" }]}>Fee ${room.entry_fee.toFixed(0)}</Text>
             </View>
-          ) : (
-            <View style={[cc.visBadge, { backgroundColor: GREEN + "18", borderColor: GREEN + "45" }]}>
-              <Feather name="globe" size={7} color={GREEN} />
-              <Text style={[cc.visBadgeText, { color: GREEN }]}>Public</Text>
-              <Text style={[cc.visBadgeText, { color: "#BCC8E8" }]}>{room.current_players}/{room.max_players}</Text>
+          )}
+          {isCoins && (
+            <View style={[cc.entryFeePill, { borderColor: GOLD + "90", backgroundColor: GOLD + "25" }]}>
+              <Text style={[cc.entryFeePillText, { color: GOLD }]}>Fee {(room.coin_entry_amount ?? 0).toLocaleString()}</Text>
             </View>
           )}
         </View>
+        {isPrivate ? (
+          <View style={[cc.visBadge, { backgroundColor: PURPLE + "28", borderColor: PURPLE + "65" }]}>
+            <Feather name="lock" size={7} color={PURPLE} />
+            <Text style={[cc.visBadgeText, { color: PURPLE }]}>Private {room.current_players}/{room.max_players}</Text>
+          </View>
+        ) : (
+          <View style={[cc.visBadge, { backgroundColor: GREEN + "18", borderColor: GREEN + "45" }]}>
+            <Feather name="globe" size={7} color={GREEN} />
+            <Text style={[cc.visBadgeText, { color: GREEN }]}>Public {room.current_players}/{room.max_players}</Text>
+          </View>
+        )}
+      </View>
 
-        <TouchableOpacity style={cc.hostRow} onPress={() => onViewHost(room)} activeOpacity={0.7}>
-          {room.host_avatar_url ? (
-            <Image
-              source={{ uri: `${getApiBase()}/api/profile/avatar/${room.host_user_id}` }}
-              style={cc.hostAvatar}
-            />
-          ) : (
-            <View style={[cc.hostAvatar, { backgroundColor: room.host_avatar_color ?? (accent + "88") }]}>
-              <Text style={cc.hostInitial}>{(room.host_username[0] ?? "?").toUpperCase()}</Text>
-            </View>
-          )}
-          <Text style={cc.hostName} numberOfLines={1}>@{room.host_username}</Text>
-          {room.host_country_flag ? <Text style={{ fontSize: rf(12) }}>{room.host_country_flag}</Text> : null}
-        </TouchableOpacity>
+      <View style={cc.mainRow}>
+        <View style={cc.thumbWrap}>
+          <TrackThemeImage
+            media={{
+              code: trackCode,
+              trackLayout: trackCode,
+              imageSet: room.imageSet ?? null,
+              imageUrl: room.imageUrl ?? null,
+              assetVersion: room.assetVersion,
+              width: room.width,
+              height: room.height,
+            }}
+            variant="preview"
+            style={cc.thumbImage}
+          />
+        </View>
+        <View style={cc.mainCol}>
+          <TouchableOpacity style={cc.hostRow} onPress={() => onViewHost(room)} activeOpacity={0.7}>
+            {room.host_avatar_url ? (
+              <Image
+                source={{ uri: `${getApiBase()}/api/profile/avatar/${room.host_user_id}` }}
+                style={cc.hostAvatar}
+              />
+            ) : (
+              <View style={[cc.hostAvatar, { backgroundColor: room.host_avatar_color ?? (accent + "88") }]}>
+                <Text style={cc.hostInitial}>{(room.host_username[0] ?? "?").toUpperCase()}</Text>
+              </View>
+            )}
+            <Text style={cc.hostName} numberOfLines={1}>@{room.host_username}</Text>
+            {room.host_country_flag ? <Text style={{ fontSize: rf(12) }}>{room.host_country_flag}</Text> : null}
+          </TouchableOpacity>
 
-        <View style={cc.countdownBlock}>
           <Text style={[cc.countdownBig, { color: accent }]} numberOfLines={1}>Active now</Text>
           {room.created_ago_label ? (
             <Text style={cc.countdownSmall} numberOfLines={1}>{room.created_ago_label}</Text>
@@ -305,65 +294,67 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
             </Text>
           </View>
         </View>
-
-        <View style={[cc.chipsRow, { flexWrap: "wrap" }]}>
-          <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4 }]}>
-            <Image source={require("@/assets/images/footstep.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
-            <Text style={cc.chipText}>{fmtSteps(room.target_steps)} steps</Text>
-          </View>
-          {!isCash && !isCoins && (
-            <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 3 }]}>
-              <CoinIcon size={9} />
-              <Text style={cc.chipText}>🥇{FREE_REWARDS.first} 🥈{FREE_REWARDS.second} 🥉{FREE_REWARDS.third}</Text>
-            </View>
-          )}
-          {isCash && (
-            <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
-              <Image source={require("@/assets/images/trophy-cash.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
-              <Text style={[cc.chipText, { color: GOLD }]}>
-                {prizePoolDollars > 0 ? `Prize Pool $${prizePoolDollars.toFixed(0)}` : "Prize Pool updates as players join"}
-              </Text>
-            </View>
-          )}
-          {isCoins && prizePoolCoins > 0 && (
-            <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
-              <CoinIcon size={9} />
-              <Text style={[cc.chipText, { color: GOLD }]}>Prize Pool {prizePoolCoins.toLocaleString()}</Text>
-            </View>
-          )}
-        </View>
-
-        <TouchableOpacity
-          style={[cc.registerBtn, { opacity: disabled && !joining ? 0.55 : 1 }]}
-          onPress={handlePress}
-          disabled={disabled}
-          activeOpacity={0.8}
-        >
-          <LinearGradient
-            colors={isFull ? (["#2A2D3A", "#1E2130"] as const) : gradColors}
-            start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-            style={[cc.registerBtnGrad, { flexDirection: "row", gap: 8 }]}
-          >
-            {joining ? (
-              <>
-                <ActivityIndicator size="small" color={isCoins ? "#000" : "#FFF"} />
-                <Text style={[cc.registerBtnText, { color: isCoins ? "#000" : "#FFF" }]}>Joining…</Text>
-              </>
-            ) : (
-              <>
-                {!isFull && (
-                  isPrivate ? <Feather name="lock" size={12} color={isCoins ? "#000" : "#FFF"} />
-                  : isCoins ? <CoinIcon size={14} />
-                  : <Feather name="users" size={12} color="#FFF" />
-                )}
-                <Text style={[cc.registerBtnText, { color: isFull ? "#8B9AC0" : isCoins ? "#000" : "#FFF" }]}>
-                  {isFull ? "Full" : isPrivate ? "Enter with Code" : isCoins ? "Join Battle" : "Join"}
-                </Text>
-              </>
-            )}
-          </LinearGradient>
-        </TouchableOpacity>
       </View>
+
+      <View style={cc.cardDivider} />
+
+      <View style={[cc.chipsRow, { flexWrap: "wrap" }]}>
+        <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4 }]}>
+          <Image source={require("@/assets/images/footstep.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
+          <Text style={cc.chipText}>{fmtSteps(room.target_steps)} steps</Text>
+        </View>
+        {!isCash && !isCoins && (
+          <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 3 }]}>
+            <CoinIcon size={9} />
+            <Text style={cc.chipText}>🥇{FREE_REWARDS.first} 🥈{FREE_REWARDS.second} 🥉{FREE_REWARDS.third}</Text>
+          </View>
+        )}
+        {isCash && (
+          <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
+            <Image source={require("@/assets/images/trophy-cash.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
+            <Text style={[cc.chipText, { color: GOLD }]}>
+              {prizePoolDollars > 0 ? `Prize Pool $${prizePoolDollars.toFixed(0)}` : "Prize Pool updates as players join"}
+            </Text>
+          </View>
+        )}
+        {isCoins && prizePoolCoins > 0 && (
+          <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
+            <CoinIcon size={9} />
+            <Text style={[cc.chipText, { color: GOLD }]}>Prize Pool {prizePoolCoins.toLocaleString()}</Text>
+          </View>
+        )}
+      </View>
+
+      <TouchableOpacity
+        style={[cc.registerBtn, { opacity: disabled && !joining ? 0.55 : 1 }]}
+        onPress={handlePress}
+        disabled={disabled}
+        activeOpacity={0.8}
+      >
+        <LinearGradient
+          colors={isFull ? (["#2A2D3A", "#1E2130"] as const) : gradColors}
+          start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+          style={[cc.registerBtnGrad, { flexDirection: "row", gap: 8 }]}
+        >
+          {joining ? (
+            <>
+              <ActivityIndicator size="small" color={isCoins ? "#000" : "#FFF"} />
+              <Text style={[cc.registerBtnText, { color: isCoins ? "#000" : "#FFF" }]}>Joining…</Text>
+            </>
+          ) : (
+            <>
+              {!isFull && (
+                isPrivate ? <Feather name="lock" size={12} color={isCoins ? "#000" : "#FFF"} />
+                : isCoins ? <CoinIcon size={14} />
+                : <Feather name="users" size={12} color="#FFF" />
+              )}
+              <Text style={[cc.registerBtnText, { color: isFull ? "#8B9AC0" : isCoins ? "#000" : "#FFF" }]}>
+                {isFull ? "Full" : isPrivate ? "Enter with Code" : isCoins ? "Join Battle" : "Join"}
+              </Text>
+            </>
+          )}
+        </LinearGradient>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -1027,11 +1018,12 @@ interface CompactCardProps {
   onCancel: (room: UpcomingRoom) => void;
   onCancelRoom: (room: UpcomingRoom) => void;
   onViewHost: (room: UpcomingRoom) => void;
+  onGoWaiting: (room: UpcomingRoom) => void;
   registering: boolean;
 }
 
 const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
-  room, currentUserId, onRegister, onCancel, onCancelRoom, onViewHost, registering,
+  room, currentUserId, onRegister, onCancel, onCancelRoom, onViewHost, onGoWaiting, registering,
 }: CompactCardProps) {
   const countdown   = useCountdown(room.scheduled_start_at);
   const isFull      = room.registered_count >= room.max_players;
@@ -1043,7 +1035,6 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
 
   const trackCode = room.selected_track_theme_id?.trim() || "bg";
 
-  // Prize pool — full entry fees collected (no platform deduction from pool)
   const prizePoolDollars = isCash ? Math.round(room.entry_fee * room.registered_count) : 0;
   const prizePoolCoins   = isCoins ? room.coin_entry_amount * room.registered_count : 0;
 
@@ -1058,8 +1049,8 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
     return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   };
 
-  return (
-    <View style={[cc.wrap, { borderColor: accent + "50" }]}>
+  const trackThumb = (
+    <View style={cc.thumbWrap}>
       <TrackThemeImage
         media={{
           code: trackCode,
@@ -1071,206 +1062,231 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
           height: room.height,
         }}
         variant="preview"
-        style={cc.bgImage}
+        style={cc.thumbImage}
       />
-      <View style={cc.overlay} />
-      <LinearGradient colors={["transparent", "rgba(0,0,0,0.93)"]} style={cc.bottomGrad} />
-      <LinearGradient colors={[accent + "DD", "transparent"]} style={cc.topGlow} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} />
+    </View>
+  );
 
-      <View style={cc.content}>
-        {/* Badges */}
-        <View style={cc.badgeRow}>
-          {/* Left: type badge + entry fee pill for cash cards */}
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-            <View style={[
-              cc.typeBadge,
-              { backgroundColor: accent + "30", borderColor: accent },
-              (isCash || isCoins) && cc.typeBadgeHighlight,
-            ]}>
-              {isSponsored ? <Text style={{ fontSize: rf(9) }}>🏆</Text>
-                : isCash ? <Feather name="dollar-sign" size={9} color={accent} />
-                : isCoins ? <CoinIcon size={11} />
-                : <Ionicons name="walk-outline" size={10} color={accent} />}
-              <Text style={[cc.typeBadgeText, { color: accent }]}>
-                {isSponsored ? "CHAMP" : isCash ? "CASH" : isCoins ? "COINS ⚔️" : "FREE"}
-              </Text>
-            </View>
-            {isCash && (
-              <View style={[cc.entryFeePill, { borderColor: CASH_BLUE, backgroundColor: CASH_BLUE + "30" }]}>
-                <Feather name="dollar-sign" size={8} color={CASH_BLUE} />
-                <Text style={[cc.entryFeePillText, { color: "#FFFFFF" }]}>
-                  Fee ${room.entry_fee.toFixed(0)}
-                </Text>
-              </View>
-            )}
-            {isCoins && (
-              <View style={[cc.entryFeePill, { borderColor: GOLD + "90", backgroundColor: GOLD + "25" }]}>
-                <CoinIcon size={9} />
-                <Text style={[cc.entryFeePillText, { color: GOLD }]}>
-                  Fee {room.coin_entry_amount.toLocaleString()}
-                </Text>
-              </View>
-            )}
-          </View>
-          <View style={{ flex: 1 }} />
-          {room.requires_code ? (
-            <View style={[cc.visBadge, { backgroundColor: PURPLE + "28", borderColor: PURPLE + "65" }]}>
-              <Feather name="lock" size={7} color={PURPLE} />
-              <Text style={[cc.visBadgeText, { color: PURPLE }]}>Private</Text>
-              <Text style={[cc.visBadgeText, { color: "#BCC8E8" }]}>{room.registered_count}/{room.max_players}</Text>
-            </View>
-          ) : (
-            <View style={[cc.visBadge, { backgroundColor: GREEN + "18", borderColor: GREEN + "45" }]}>
-              <Feather name="globe" size={7} color={GREEN} />
-              <Text style={[cc.visBadgeText, { color: GREEN }]}>Public</Text>
-              <Text style={[cc.visBadgeText, { color: "#BCC8E8" }]}>{room.registered_count}/{room.max_players}</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Host — tappable → profile modal */}
-        <TouchableOpacity
-          style={cc.hostRow}
-          onPress={() => !isSponsored && onViewHost(room)}
-          activeOpacity={isSponsored ? 1 : 0.7}
-          disabled={isSponsored}
-        >
-          {room.host_avatar_url ? (
-            <Image
-              source={{ uri: `${getApiBase()}/api/profile/avatar/${room.host_user_id}` }}
-              style={cc.hostAvatar}
-            />
-          ) : (
-            <View style={[cc.hostAvatar, { backgroundColor: room.host_avatar_color ?? (accent + "88") }]}>
-              <Text style={cc.hostInitial}>{(isSponsored ? "W" : (room.host_username[0] ?? "?")).toUpperCase()}</Text>
-            </View>
-          )}
-          <Text style={cc.hostName} numberOfLines={1}>@{isSponsored ? "WalkChamp" : room.host_username}</Text>
-          {isHost && (
-            <View style={cc.hostBadge}>
-              <Feather name="star" size={7} color="#FFD700" />
-              <Text style={cc.hostBadgeText}>HOST</Text>
-            </View>
-          )}
-          {room.host_country_flag ? <Text style={{ fontSize: rf(12) }}>{room.host_country_flag}</Text> : null}
-        </TouchableOpacity>
-
-        {/* Countdown */}
-        <View style={cc.countdownBlock}>
-          <Text style={[cc.countdownBig, { color: accent }]} numberOfLines={1}>{countdown || "Starting soon"}</Text>
-          {room.scheduled_start_at ? (
-            <Text style={cc.countdownSmall} numberOfLines={1}>
-              {room.challenge_duration_days > 1 && room.challenge_end_at
-                ? `${fmtShort(room.scheduled_start_at)} → ${fmtShort(room.challenge_end_at)}`
-                : fmtShort(room.scheduled_start_at)}
+  return (
+    <View style={[cc.wrap, { borderColor: accent + "55", backgroundColor: CARD_BG }]}>
+      {/* Badges — top row like Image 1 */}
+      <View style={cc.badgeRow}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flex: 1, flexWrap: "wrap" }}>
+          <View style={[
+            cc.typeBadge,
+            { backgroundColor: accent + "30", borderColor: accent },
+            (isCash || isCoins) && cc.typeBadgeHighlight,
+          ]}>
+            {isSponsored ? <Text style={{ fontSize: rf(9) }}>🏆</Text>
+              : isCash ? <Feather name="dollar-sign" size={9} color={accent} />
+              : isCoins ? <CoinIcon size={11} />
+              : <Ionicons name="walk-outline" size={10} color={accent} />}
+            <Text style={[cc.typeBadgeText, { color: accent }]}>
+              {isSponsored ? "CHAMP" : isCash ? "CASH" : isCoins ? "COINS" : "FREE"}
             </Text>
-          ) : null}
-          {/* Duration — separate row clearly below the date */}
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 2 }}>
-            <Feather name="calendar" size={9} color="#8B9AC0" />
-            <Text style={[cc.countdownSmall, { color: "#8B9AC0" }]}>{room.challenge_duration_days > 0 ? `${room.challenge_duration_days}d` : "1d"} challenge</Text>
           </View>
-        </View>
-
-        {/* Info chips */}
-        <View style={[cc.chipsRow, { flexWrap: "wrap" }]}>
-          {/* Steps — always shown */}
-          <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4 }]}>
-            <Image source={require("@/assets/images/footstep.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
-            <Text style={cc.chipText}>{room.target_steps >= 1000 ? `${(room.target_steps / 1000).toFixed(0)}k` : room.target_steps} steps</Text>
-          </View>
-          {/* Reward split chip — free cards only; cash + coins fee moved to badge row */}
-          {!isCash && !isCoins && !isSponsored && (
-            <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 3 }]}>
-              <CoinIcon size={9} />
-              <Text style={cc.chipText}>🥇{FREE_REWARDS.first} 🥈{FREE_REWARDS.second} 🥉{FREE_REWARDS.third}</Text>
+          {isCash && (
+            <View style={[cc.entryFeePill, { borderColor: CASH_BLUE, backgroundColor: CASH_BLUE + "30" }]}>
+              <Text style={[cc.entryFeePillText, { color: "#FFFFFF" }]}>Fee ${room.entry_fee.toFixed(0)}</Text>
             </View>
           )}
-          {/* Prize pool chip — cash: always shown (pending if 0); coins: shown if > 0 */}
-          {isCash && (
-            <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
-              <Image source={require("@/assets/images/trophy-cash.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
-              <Text style={[cc.chipText, { color: GOLD }]}>
-                {prizePoolDollars > 0 ? `Prize Pool $${prizePoolDollars}` : "Prize Pool updates as players join"}
+          {isCoins && (
+            <View style={[cc.entryFeePill, { borderColor: GOLD + "90", backgroundColor: GOLD + "25" }]}>
+              <Text style={[cc.entryFeePillText, { color: GOLD }]}>Fee {room.coin_entry_amount.toLocaleString()}</Text>
+            </View>
+          )}
+        </View>
+        {room.requires_code ? (
+          <View style={[cc.visBadge, { backgroundColor: PURPLE + "28", borderColor: PURPLE + "65" }]}>
+            <Feather name="lock" size={7} color={PURPLE} />
+            <Text style={[cc.visBadgeText, { color: PURPLE }]}>Private {room.registered_count}/{room.max_players}</Text>
+          </View>
+        ) : (
+          <View style={[cc.visBadge, { backgroundColor: GREEN + "18", borderColor: GREEN + "45" }]}>
+            <Feather name="globe" size={7} color={GREEN} />
+            <Text style={[cc.visBadgeText, { color: GREEN }]}>Public {room.registered_count}/{room.max_players}</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Main row: theme thumb (left) + host/countdown (right) — Image 1 alignment */}
+      <View style={cc.mainRow}>
+        {trackThumb}
+        <View style={cc.mainCol}>
+          <TouchableOpacity
+            style={cc.hostRow}
+            onPress={() => !isSponsored && onViewHost(room)}
+            activeOpacity={isSponsored ? 1 : 0.7}
+            disabled={isSponsored}
+          >
+            {room.host_avatar_url ? (
+              <Image
+                source={{ uri: `${getApiBase()}/api/profile/avatar/${room.host_user_id}` }}
+                style={cc.hostAvatar}
+              />
+            ) : (
+              <View style={[cc.hostAvatar, { backgroundColor: room.host_avatar_color ?? (accent + "88") }]}>
+                <Text style={cc.hostInitial}>{(isSponsored ? "W" : (room.host_username[0] ?? "?")).toUpperCase()}</Text>
+              </View>
+            )}
+            <Text style={cc.hostName} numberOfLines={1}>@{isSponsored ? "WalkChamp" : room.host_username}</Text>
+            {isHost && (
+              <View style={cc.hostBadge}>
+                <Feather name="star" size={7} color="#FFD700" />
+                <Text style={cc.hostBadgeText}>HOST</Text>
+              </View>
+            )}
+            {room.host_country_flag ? <Text style={{ fontSize: rf(12) }}>{room.host_country_flag}</Text> : null}
+          </TouchableOpacity>
+
+          <Text style={[cc.countdownBig, { color: isCoins ? GOLD : accent }]} numberOfLines={1}>
+            {countdown || "Starting soon"}
+          </Text>
+          {room.scheduled_start_at ? (
+            <View style={cc.dateRow}>
+              <Feather name="calendar" size={11} color="#8B9AC0" />
+              <Text style={cc.countdownSmall} numberOfLines={2}>
+                {room.challenge_duration_days > 1 && room.challenge_end_at
+                  ? `${fmtShort(room.scheduled_start_at)} → ${fmtShort(room.challenge_end_at)}`
+                  : fmtShort(room.scheduled_start_at)}
               </Text>
             </View>
-          )}
-          {isCoins && prizePoolCoins > 0 && (
-            <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
-              <CoinIcon size={9} />
-              <Text style={[cc.chipText, { color: GOLD }]}>Prize Pool {prizePoolCoins.toLocaleString()}</Text>
-            </View>
-          )}
+          ) : null}
+          <Text style={cc.durationLbl}>
+            {room.challenge_duration_days > 0 ? `${room.challenge_duration_days}d` : "1d"} challenge
+          </Text>
         </View>
+      </View>
 
-        {/* CTA */}
-        {!isSponsored && isHost ? (
+      <View style={cc.cardDivider} />
+
+      <View style={[cc.chipsRow, { flexWrap: "wrap" }]}>
+        <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4 }]}>
+          <Image source={require("@/assets/images/footstep.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
+          <Text style={cc.chipText}>{room.target_steps >= 1000 ? `${(room.target_steps / 1000).toFixed(0)}k` : room.target_steps} steps</Text>
+        </View>
+        {!isCash && !isCoins && !isSponsored && (
+          <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 3 }]}>
+            <CoinIcon size={9} />
+            <Text style={cc.chipText}>🥇{FREE_REWARDS.first} 🥈{FREE_REWARDS.second} 🥉{FREE_REWARDS.third}</Text>
+          </View>
+        )}
+        {isCash && (
+          <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
+            <Image source={require("@/assets/images/trophy-cash.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
+            <Text style={[cc.chipText, { color: GOLD }]}>
+              {prizePoolDollars > 0 ? `Prize Pool $${prizePoolDollars}` : "Prize Pool updates as players join"}
+            </Text>
+          </View>
+        )}
+        {isCoins && (
+          <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
+            <CoinIcon size={9} />
+            <Text style={[cc.chipText, { color: GOLD }]}>
+              Prize Pool {prizePoolCoins > 0 ? prizePoolCoins.toLocaleString() : "—"}
+            </Text>
+          </View>
+        )}
+      </View>
+
+      {!isSponsored && isHost ? (
+        <TouchableOpacity
+          style={[cc.cancelRoomBtn, { opacity: registering ? 0.6 : 1 }]}
+          onPress={() => !registering && onCancelRoom(room)}
+          disabled={registering}
+          activeOpacity={0.8}
+        >
+          {registering
+            ? <ActivityIndicator size="small" color="#FF6B6B" />
+            : <Text style={cc.cancelRoomBtnText}>Cancel Room</Text>}
+        </TouchableOpacity>
+      ) : room.current_user_registered ? (
+        <View style={{ gap: 8 }}>
+          <View style={cc.registeredBtn}>
+            <Feather name="check-circle" size={12} color={GREEN} />
+            <Text style={cc.registeredBtnText}>Registered</Text>
+          </View>
+          <TouchableOpacity style={cc.waitingRoomBtn} onPress={() => onGoWaiting(room)} activeOpacity={0.85}>
+            <View style={cc.waitingRoomIcon}>
+              <Feather name="flag" size={14} color="#60A5FA" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={cc.waitingRoomTitle}>Waiting Room</Text>
+              <Text style={cc.waitingRoomSub}>See countdown & joined players</Text>
+            </View>
+            <Feather name="chevron-right" size={16} color="#60A5FA" />
+          </TouchableOpacity>
+          <View style={cc.infoRow}>
+            <Feather name="info" size={12} color="#8B9AC0" />
+            <Text style={cc.infoText}>You&apos;re all set! The race will start automatically at the scheduled time.</Text>
+          </View>
           <TouchableOpacity
-            style={[cc.cancelRoomBtn, { opacity: registering ? 0.6 : 1 }]}
-            onPress={() => !registering && onCancelRoom(room)}
+            style={[cc.withdrawBtn, { opacity: registering ? 0.6 : 1 }]}
+            onPress={() => !registering && onCancel(room)}
             disabled={registering}
             activeOpacity={0.8}
           >
             {registering
-              ? <ActivityIndicator size="small" color="#FF6B6B" />
-              : <Text style={cc.cancelRoomBtnText}>Cancel Room</Text>}
+              ? <ActivityIndicator size="small" color="#FF8A65" />
+              : <><Feather name="log-out" size={11} color="#FF8A65" /><Text style={cc.withdrawBtnText}>Withdraw Registration</Text></>}
           </TouchableOpacity>
-        ) : room.current_user_registered ? (
-          <View style={{ gap: 6 }}>
-            <View style={cc.registeredBtn}>
-              <Feather name="check-circle" size={12} color={GREEN} />
-              <Text style={cc.registeredBtnText}>Registered</Text>
-            </View>
-            <TouchableOpacity
-              style={[cc.withdrawBtn, { opacity: registering ? 0.6 : 1 }]}
-              onPress={() => !registering && onCancel(room)}
-              disabled={registering}
-              activeOpacity={0.8}
-            >
-              {registering
-                ? <ActivityIndicator size="small" color="#FF8A65" />
-                : <><Feather name="log-out" size={11} color="#FF8A65" /><Text style={cc.withdrawBtnText}>Withdraw Registration</Text></>}
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <TouchableOpacity
-            style={[cc.registerBtn, { opacity: (isFull || registering) ? 0.55 : 1 }]}
-            onPress={() => !isFull && !registering && onRegister(room)}
-            disabled={isFull || registering}
-            activeOpacity={0.8}
+        </View>
+      ) : (
+        <TouchableOpacity
+          style={[cc.registerBtn, { opacity: (isFull || registering) ? 0.55 : 1 }]}
+          onPress={() => !isFull && !registering && onRegister(room)}
+          disabled={isFull || registering}
+          activeOpacity={0.8}
+        >
+          <LinearGradient
+            colors={isFull ? (["#2A2D3A", "#1E2130"] as const) : gradColors}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+            style={cc.registerBtnGrad}
           >
-            <LinearGradient
-              colors={isFull ? (["#2A2D3A", "#1E2130"] as const) : gradColors}
-              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-              style={cc.registerBtnGrad}
-            >
-              {registering
-                ? <ActivityIndicator size="small" color="#FFF" />
-                : <Text style={[cc.registerBtnText, { color: isFull ? "#8B9AC0" : "#FFF" }]}>{isFull ? "Full" : "Register"}</Text>}
-            </LinearGradient>
-          </TouchableOpacity>
-        )}
-      </View>
+            {registering
+              ? <ActivityIndicator size="small" color="#FFF" />
+              : <Text style={[cc.registerBtnText, { color: isFull ? "#8B9AC0" : "#FFF" }]}>{isFull ? "Full" : "Register"}</Text>}
+          </LinearGradient>
+        </TouchableOpacity>
+      )}
     </View>
   );
 });
 
 const cc = StyleSheet.create({
-  wrap: { width: COMPACT_W, borderRadius: 18, overflow: "hidden", borderWidth: 1.5, marginRight: 12 },
-  bgImage: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, width: "100%", height: "100%" },
-  overlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(4,6,18,0.72)" },
-  bottomGrad: { position: "absolute", bottom: 0, left: 0, right: 0, height: 130 },
-  topGlow: { position: "absolute", top: 0, left: 0, right: 0, height: 1.5 },
-  content: { padding: rs(12), gap: 8 },
+  wrap: {
+    width: COMPACT_W,
+    borderRadius: 18,
+    overflow: "hidden",
+    borderWidth: 1.5,
+    marginRight: 12,
+    backgroundColor: CARD_BG,
+    padding: rs(12),
+    gap: 10,
+  },
+  mainRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  thumbWrap: {
+    width: rs(72),
+    height: rs(72),
+    borderRadius: 12,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#2A3550",
+    backgroundColor: "#0A0E1A",
+    flexShrink: 0,
+  },
+  thumbImage: { width: "100%", height: "100%" },
+  mainCol: { flex: 1, minWidth: 0, gap: 3 },
+  dateRow: { flexDirection: "row", alignItems: "flex-start", gap: 5, marginTop: 2 },
+  durationLbl: { fontSize: rf(10), color: "#8B9AC0", marginTop: 1 },
+  cardDivider: { height: StyleSheet.hairlineWidth, backgroundColor: "#1E2740", marginVertical: 2 },
 
   badgeRow: { flexDirection: "row", alignItems: "center", gap: 5, flexWrap: "wrap" },
   typeBadge: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, borderWidth: 1 },
-  typeBadgeHighlight: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 7, borderWidth: 1.5, shadowColor: "#000", shadowOpacity: 0.4, shadowRadius: 4, shadowOffset: { width: 0, height: 1 } },
+  typeBadgeHighlight: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 7, borderWidth: 1.5 },
   typeBadgeText: { fontSize: rf(9), fontWeight: "800", letterSpacing: 0.7 },
   visBadge: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, borderWidth: 1 },
   visBadgeText: { fontSize: rf(9), fontWeight: "700" },
-  countBadge: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4 },
-  countText: { fontSize: rf(10), fontWeight: "600", color: "#BCC8E8" },
   entryFeePill: { flexDirection: "row", alignItems: "center", paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, borderWidth: 1 },
   entryFeePillText: { fontSize: rf(9), fontWeight: "700" },
 
@@ -1284,9 +1300,8 @@ const cc = StyleSheet.create({
   withdrawBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: rs(7), borderRadius: 10, borderWidth: 1, borderColor: "#FF8A6540", backgroundColor: "#FF8A6510" },
   withdrawBtnText: { fontSize: rf(12), fontWeight: "700", color: "#FF8A65" },
 
-  countdownBlock: { gap: 2 },
-  countdownBig: { fontSize: rf(18), fontWeight: "800", letterSpacing: 0.2 },
-  countdownSmall: { fontSize: rf(10), color: "#8B9AC0" },
+  countdownBig: { fontSize: rf(17), fontWeight: "800", letterSpacing: 0.2, marginTop: 2 },
+  countdownSmall: { fontSize: rf(10), color: "#8B9AC0", flex: 1 },
 
   chipsRow: { flexDirection: "row", gap: 5 },
   chip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: "#2A3550", backgroundColor: "rgba(8,11,24,0.7)" },
@@ -1298,6 +1313,30 @@ const cc = StyleSheet.create({
 
   registeredBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: rs(9), borderRadius: 10, borderWidth: 1, borderColor: GREEN + "40", backgroundColor: GREEN + "12" },
   registeredBtnText: { fontSize: rf(13), fontWeight: "700", color: GREEN },
+
+  waitingRoomBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: rs(10),
+    paddingHorizontal: rs(12),
+    borderRadius: 12,
+    backgroundColor: "#1E3A5F",
+    borderWidth: 1,
+    borderColor: "#3B82F655",
+  },
+  waitingRoomIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: "#2563EB33",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  waitingRoomTitle: { fontSize: rf(13), fontWeight: "800", color: "#E0F2FE" },
+  waitingRoomSub: { fontSize: rf(10), color: "#93C5FD", marginTop: 1 },
+  infoRow: { flexDirection: "row", alignItems: "flex-start", gap: 6, paddingHorizontal: 2 },
+  infoText: { flex: 1, fontSize: rf(10), color: "#8B9AC0", lineHeight: rf(14) },
 
   cancelRoomBtn: { alignItems: "center", justifyContent: "center", paddingVertical: rs(9), borderRadius: 10, borderWidth: 1, borderColor: "#FF444440", backgroundColor: "#FF444415" },
   cancelRoomBtnText: { fontSize: rf(13), fontWeight: "700", color: "#FF6B6B" },
@@ -1379,9 +1418,10 @@ interface DateSectionProps {
   onCancel: (room: UpcomingRoom) => void;
   onCancelRoom: (room: UpcomingRoom) => void;
   onViewHost: (room: UpcomingRoom) => void;
+  onGoWaiting: (room: UpcomingRoom) => void;
 }
 
-function DateSection({ group, currentUserId, registeringRoomId, onRegister, onCancel, onCancelRoom, onViewHost }: DateSectionProps) {
+function DateSection({ group, currentUserId, registeringRoomId, onRegister, onCancel, onCancelRoom, onViewHost, onGoWaiting }: DateSectionProps) {
   return (
     <View style={ds.section}>
       <View style={ds.header}>
@@ -1412,6 +1452,7 @@ function DateSection({ group, currentUserId, registeringRoomId, onRegister, onCa
             onCancel={onCancel}
             onCancelRoom={onCancelRoom}
             onViewHost={onViewHost}
+            onGoWaiting={onGoWaiting}
             registering={registeringRoomId === item.room_id}
           />
         )}
@@ -1984,6 +2025,24 @@ export default function AvailableRoomsScreen() {
     });
   };
 
+  const handleGoWaitingRoom = useCallback((room: UpcomingRoom) => {
+    if (room.challenge_type === "sponsored") {
+      router.push({
+        pathname: "/sponsored-events/waiting-room",
+        params: { id: room.room_id, from: "available-rooms" },
+      });
+      return;
+    }
+    router.push({
+      pathname: "/race/matchmaking",
+      params: buildMatchmakingParams({
+        raceId: room.room_id,
+        isHost: !!user?.id && user.id === room.host_user_id,
+        user,
+      }),
+    });
+  }, [user]);
+
   const handleWithdrawRegisteredRace = async () => {
     const ar = registeredRaceModal;
     if (!ar) return;
@@ -2163,6 +2222,7 @@ export default function AvailableRoomsScreen() {
                 onCancel={handleCancelRegistration}
                 onCancelRoom={handleCancelRoom}
                 onViewHost={handleViewUpcomingHost}
+                onGoWaiting={handleGoWaitingRoom}
               />
             ))
           )}

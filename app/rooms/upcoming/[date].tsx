@@ -34,6 +34,7 @@ import {
 } from "@/services/refundApi";
 
 const BG = "#080B14";
+const CARD_BG = "#0D1122";
 const GREEN = "#00E676";
 const CASH_BLUE = "#0EA5E9";
 const PURPLE = "#9333EA";
@@ -132,24 +133,7 @@ function DetailCard({
     : ([GREEN, "#00C853"] as const);
 
   return (
-    <View style={[dc.wrap, { borderColor: accent + "50" }]}>
-      <TrackThemeImage
-        media={{
-          code: trackCode,
-          trackLayout: trackCode,
-          imageSet: room.imageSet ?? null,
-          imageUrl: room.imageUrl ?? null,
-          assetVersion: room.assetVersion,
-          width: room.width,
-          height: room.height,
-        }}
-        variant="preview"
-        style={dc.bgImage}
-      />
-      <View style={dc.overlay} />
-      <LinearGradient colors={["transparent", "rgba(0,0,0,0.94)"]} style={dc.bottomGrad} />
-      <LinearGradient colors={[accent + "DD", "transparent"]} style={dc.topGlow} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} />
-
+    <View style={[dc.wrap, { borderColor: accent + "55", backgroundColor: CARD_BG }]}>
       <View style={dc.content}>
         {/* Header badges */}
         <View style={dc.headerRow}>
@@ -191,6 +175,23 @@ function DetailCard({
           </View>
         </View>
 
+        <View style={{ flexDirection: "row", gap: 12, alignItems: "flex-start" }}>
+          <View style={{ width: 72, height: 72, borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: "#2A3550" }}>
+            <TrackThemeImage
+              media={{
+                code: trackCode,
+                trackLayout: trackCode,
+                imageSet: room.imageSet ?? null,
+                imageUrl: room.imageUrl ?? null,
+                assetVersion: room.assetVersion,
+                width: room.width,
+                height: room.height,
+              }}
+              variant="preview"
+              style={{ width: "100%", height: "100%" }}
+            />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
         {/* Host row — tappable → profile modal */}
         <TouchableOpacity
           style={dc.hostRow}
@@ -240,6 +241,8 @@ function DetailCard({
               <Text style={dc.scheduledDate}>{fmtDateTime(room.scheduled_start_at)}</Text>
             )
           ) : null}
+        </View>
+          </View>
         </View>
 
         {/* Stats panel */}

@@ -36,8 +36,7 @@ import { useParticipantStepAnimator } from "@/hooks/useParticipantStepAnimator";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { formatRaceSteps, resolveLiveRaceDisplaySteps } from "@/utils/liveRaceDisplay";
 import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
-import { ChallengeEndsPillLabel } from "@/components/ChallengeEndsPillLabel";
-import { SponsoredEventWindowLabel } from "@/components/SponsoredEventWindowLabel";
+import { LiveTaglineRotator, type LiveTaglineAlt } from "@/components/LiveTaglineRotator";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
@@ -1790,132 +1789,50 @@ export default function LiveRaceDetailScreen() {
     return new Date(new Date(start).getTime() + 3 * 60 * 60 * 1000).toISOString();
   }, [isSponsored, race?.endsAt, race?.startedAt, race?.scheduledStartAt]);
 
-  const hasAltSlot = !!(challengeEndsLabel || (isSponsored && sponsoredStartIso));
+  // Freeze Start time / ends label once per race for the tagline rotator.
+  const taglineFrozenRaceIdRef = useRef<string | null>(null);
+  const taglineFrozenRef = useRef<LiveTaglineAlt | null>(null);
+  const raceKeyForTagline = race?.id != null ? String(race.id) : null;
 
-  // Single-layer tagline: freeze start/end copy once, hold 5s, fade, swap, fade — no recapture.
-  type TaglineAlt =
-    | { kind: "ends"; label: string }
-    | { kind: "sponsored"; start: string; end: string | null };
-  const [taglineMode, setTaglineMode] = useState<"alt" | "beat">("beat");
-  const [taglineAlt, setTaglineAlt] = useState<TaglineAlt | null>(null);
-  const taglineModeRef = useRef<"alt" | "beat">("beat");
-  const taglineOpacity = useRef(new RNAnimated.Value(1)).current;
-  const taglineLoopGenRef = useRef(0);
-  const challengeEndsLabelRef = useRef(challengeEndsLabel);
-  const sponsoredStartRef = useRef(sponsoredStartIso);
-  const sponsoredEndRef = useRef(sponsoredEndIso);
-  challengeEndsLabelRef.current = challengeEndsLabel;
-  sponsoredStartRef.current = sponsoredStartIso;
-  sponsoredEndRef.current = sponsoredEndIso;
+  if (isCompleted) {
+    taglineFrozenRaceIdRef.current = null;
+    taglineFrozenRef.current = null;
+  } else if (
+    raceKeyForTagline != null &&
+    taglineFrozenRaceIdRef.current != null &&
+    taglineFrozenRaceIdRef.current !== raceKeyForTagline
+  ) {
+    taglineFrozenRaceIdRef.current = null;
+    taglineFrozenRef.current = null;
+  } else if (
+    raceKeyForTagline != null &&
+    taglineFrozenRef.current != null &&
+    taglineFrozenRaceIdRef.current == null
+  ) {
+    // Race id arrived after freeze — attach without dropping Start time.
+    taglineFrozenRaceIdRef.current = raceKeyForTagline;
+  }
 
-  useEffect(() => {
-    const gen = ++taglineLoopGenRef.current;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let resolveSleep: (() => void) | null = null;
-
-    const alive = () => gen === taglineLoopGenRef.current;
-
-    const sleep = (ms: number) =>
-      new Promise<void>((resolve) => {
-        resolveSleep = resolve;
-        timer = setTimeout(() => {
-          timer = null;
-          resolveSleep = null;
-          resolve();
-        }, ms);
-      });
-
-    const cleanupSleep = () => {
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
+  if (!isCompleted && !taglineFrozenRef.current) {
+    let frozen: LiveTaglineAlt | null = null;
+    if (isSponsored) {
+      if (sponsoredStartIso) {
+        frozen = {
+          kind: "sponsored",
+          start: sponsoredStartIso,
+          end: sponsoredEndIso,
+        };
       }
-      if (resolveSleep) {
-        const r = resolveSleep;
-        resolveSleep = null;
-        r();
-      }
-    };
-
-    const fade = (to: number) =>
-      new Promise<void>((resolve) => {
-        RNAnimated.timing(taglineOpacity, {
-          toValue: to,
-          duration: 300,
-          useNativeDriver: true,
-        }).start(() => resolve());
-      });
-
-    if (!hasAltSlot || isCompleted) {
-      taglineModeRef.current = "beat";
-      setTaglineMode("beat");
-      setTaglineAlt(null);
-      taglineOpacity.stopAnimation();
-      taglineOpacity.setValue(1);
-      return () => {
-        taglineLoopGenRef.current += 1;
-        cleanupSleep();
-      };
+    } else if (challengeEndsLabel) {
+      frozen = { kind: "ends", label: challengeEndsLabel };
     }
-
-    // Freeze once for this race — never rewrite while rotating (stops blink/change).
-    const ends = challengeEndsLabelRef.current;
-    const frozen: TaglineAlt | null = ends
-      ? { kind: "ends", label: ends }
-      : sponsoredStartRef.current
-        ? {
-            kind: "sponsored",
-            start: sponsoredStartRef.current,
-            end: sponsoredEndRef.current,
-          }
-        : null;
-
-    if (!frozen) {
-      taglineModeRef.current = "beat";
-      setTaglineMode("beat");
-      setTaglineAlt(null);
-      taglineOpacity.setValue(1);
-      return () => {
-        taglineLoopGenRef.current += 1;
-        cleanupSleep();
-      };
+    if (frozen) {
+      taglineFrozenRaceIdRef.current = raceKeyForTagline;
+      taglineFrozenRef.current = frozen;
     }
+  }
 
-    setTaglineAlt(frozen);
-    taglineModeRef.current = "alt";
-    setTaglineMode("alt");
-    taglineOpacity.stopAnimation();
-    taglineOpacity.setValue(1);
-
-    const HOLD_MS = 5000;
-
-    void (async () => {
-      while (alive()) {
-        // Full 5s visible before any fade starts.
-        await sleep(HOLD_MS);
-        if (!alive()) break;
-
-        await fade(0);
-        if (!alive()) break;
-
-        // Swap only after fully invisible. Keep frozen alt payload untouched.
-        const next: "alt" | "beat" = taglineModeRef.current === "alt" ? "beat" : "alt";
-        taglineModeRef.current = next;
-        setTaglineMode(next);
-
-        await sleep(80);
-        if (!alive()) break;
-
-        await fade(1);
-      }
-    })();
-
-    return () => {
-      taglineLoopGenRef.current += 1;
-      cleanupSleep();
-      taglineOpacity.stopAnimation();
-    };
-  }, [hasAltSlot, isCompleted, race?.id, taglineOpacity]);
+  const taglineAlt = !isCompleted && taglineFrozenRef.current ? taglineFrozenRef.current : null;
 
   // Feed confirmed step values into the animator (local user + Pusher/backend).
   useEffect(() => {
@@ -3060,32 +2977,12 @@ export default function LiveRaceDetailScreen() {
         )}
       </View>
 
-      {/* ── Fixed-height single-text rotator: 5s hold → fade → swap → fade ── */}
-      {!isCompleted ? (
-        <View style={s.taglineSlot}>
-          <RNAnimated.View style={[s.taglineInner, { opacity: taglineOpacity }]}>
-            {taglineMode === "alt" && taglineAlt?.kind === "ends" ? (
-              <View style={s.endsPill}>
-                <Feather name="calendar" size={13} color="#FFFFFF" />
-                <ChallengeEndsPillLabel label={taglineAlt.label} style={s.endsPillText} />
-              </View>
-            ) : taglineMode === "alt" && taglineAlt?.kind === "sponsored" ? (
-              <View style={s.endsPill}>
-                <Feather name="clock" size={13} color="#FFFFFF" />
-                <SponsoredEventWindowLabel
-                  startIso={taglineAlt.start}
-                  endIso={taglineAlt.end}
-                  style={s.endsPillText}
-                />
-              </View>
-            ) : (
-              <Text style={s.subtitle} numberOfLines={1}>
-                Beat your friends. Hit your goal!
-              </Text>
-            )}
-          </RNAnimated.View>
-        </View>
-      ) : null}
+      {/* ── Tagline: Start time holds 5s static, then fades to Beat your friends ── */}
+      <LiveTaglineRotator
+        raceId={raceKeyForTagline}
+        alt={taglineAlt}
+        visible={!isCompleted}
+      />
 
       {/* ── Info bar ── */}
       <View style={s.infoBar}>
@@ -3723,51 +3620,6 @@ const s = StyleSheet.create({
   winnerPrize:  { fontSize: 11, fontWeight: "700", color: "#FFD700", marginTop: 2 },
   winnerBadge:  { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: "#FFD700" },
   winnerBadgeTxt: { fontSize: 10, fontWeight: "800", color: "#000" },
-  taglineSlot: {
-    marginTop: 2,
-    marginBottom: 6,
-    paddingHorizontal: 16,
-    height: 40,
-    justifyContent: "center",
-    alignItems: "center",
-    alignSelf: "center",
-    width: "100%",
-    overflow: "hidden",
-  },
-  taglineInner: {
-    width: "100%",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  subtitle: {
-    fontSize: 12,
-    color: "#64748B",
-    fontWeight: "500",
-    textAlign: "center",
-    lineHeight: 16,
-    width: "100%",
-  },
-  endsPill: {
-    alignSelf: "center",
-    maxWidth: "100%",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: "#1E1535",
-    borderWidth: 1,
-    borderColor: "#3D2A6B",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-  },
-  endsPillText: {
-    color: "#F5F3FF",
-    fontSize: 11.5,
-    fontWeight: "600",
-    textAlign: "center",
-    flexShrink: 1,
-  },
 });
 
 const st = StyleSheet.create({

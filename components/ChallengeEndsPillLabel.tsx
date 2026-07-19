@@ -1,5 +1,5 @@
 import React from "react";
-import { Text, type StyleProp, type TextStyle } from "react-native";
+import { Text, View, type StyleProp, type TextStyle } from "react-native";
 
 const ENDS_ON_SEP = " • Ends on ";
 /** Highlight only the calendar date + time after "Ends on". */
@@ -9,6 +9,8 @@ const DATE_TIME_YELLOW = "#FACC15";
  * Renders challenge end labels like:
  *   "7 days left • Ends on 24 Jul 2026, 10:01 am"
  * with only the date/time in yellow; prefix stays the caller's text color.
+ *
+ * Sibling Text nodes (not nested) avoid Android opacity-fade blink in the live tagline.
  */
 export function ChallengeEndsPillLabel({
   label,
@@ -30,9 +32,13 @@ export function ChallengeEndsPillLabel({
   const dateTime = label.slice(idx + ENDS_ON_SEP.length);
 
   return (
-    <Text style={style} numberOfLines={1}>
-      {prefix}
-      <Text style={{ color: DATE_TIME_YELLOW, fontWeight: "800" }}>{dateTime}</Text>
-    </Text>
+    <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", flexShrink: 1 }}>
+      <Text style={style} numberOfLines={1}>
+        {prefix}
+      </Text>
+      <Text style={[style, { color: DATE_TIME_YELLOW, fontWeight: "800" }]} numberOfLines={1}>
+        {dateTime}
+      </Text>
+    </View>
   );
 }

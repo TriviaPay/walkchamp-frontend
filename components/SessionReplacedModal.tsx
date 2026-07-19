@@ -63,6 +63,16 @@ export default function SessionReplacedModal({
     >
       <View style={styles.backdrop}>
         <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.closeBtn}
+            onPress={onDismiss}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+          >
+            <Feather name="x" size={20} color="#5A6A8A" />
+          </TouchableOpacity>
+
           <View style={styles.iconRow}>
             <View style={styles.iconBadge}>
               <Feather name={copy.icon} size={26} color="#00E5A0" />
@@ -103,6 +113,21 @@ const styles = StyleSheet.create({
     width: "100%",
     borderWidth: 1.5,
     borderColor: "rgba(0,229,160,0.28)",
+    position: "relative",
+  },
+  closeBtn: {
+    position: "absolute",
+    top: 16,
+    right: 16,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#161A26",
+    borderWidth: 1,
+    borderColor: "#1E2230",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 1,
   },
   iconRow: {
     alignItems: "center",

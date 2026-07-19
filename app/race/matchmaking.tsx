@@ -694,9 +694,7 @@ export default function MatchmakingScreen() {
         };
         setLiveRoom(nextLiveRoom);
         if (!roomExpiresAtRef.current && data.race.createdAt) {
-          roomExpiresAtRef.current = new Date(
-            new Date(data.race.createdAt).getTime() + 10 * 60_000,
-          );
+          // Expiry intentionally disabled — do not set roomExpiresAtRef.
         }
         if (data.race.targetSteps) {
           setRaceTargetSteps(data.race.targetSteps);
@@ -883,34 +881,14 @@ export default function MatchmakingScreen() {
     return () => pulse.stop();
   }, [pulseAnim]);
 
-  // ── Room expiry countdown (ticks every second, auto-closes at 0) ──────────
+  // ── Room expiry UI disabled — stay in waiting room until user leaves ───────
+  // Keep interval only to clear local timer display if any; do NOT auto-cancel/leave.
   useEffect(() => {
     if (!backendRaceId) return;
-    const id = setInterval(async () => {
-      if (!roomExpiresAtRef.current) return;
-      const remaining = Math.max(0, Math.round((roomExpiresAtRef.current.getTime() - Date.now()) / 1000));
-      setRoomTimeLeft(remaining);
-        if (remaining === 0) {
-        clearInterval(id);
-        const endpoint = isHostModeRef.current ? "cancel" : "leave";
-        void authFetch(`/api/races/${backendRaceId}/${endpoint}`, { method: "POST" }).catch(() => {});
-        if (!screenFocusedRef.current) {
-          clearWaitingRoomLocalState();
-          return;
-        }
-        navigateToWalkInstant();
-        setTimeout(() => {
-          AppAlert.alert(
-            "Room Expired",
-            isHostModeRef.current
-              ? "The 10-minute waiting window has passed. The room has been closed."
-              : "The host's room has expired. You have been removed from the waiting room.",
-          );
-        }, 300);
-      }
-    }, 1000);
-    return () => clearInterval(id);
-  }, [backendRaceId, clearWaitingRoomLocalState, navigateToWalkInstant]);
+    // Clear any legacy expiry so Room Expired modal never fires.
+    roomExpiresAtRef.current = null;
+    setRoomTimeLeft(null);
+  }, [backendRaceId]);
 
   // ── Host: start race ──────────────────────────────────────────────────────
   const startingRef = useRef(false);
@@ -1102,52 +1080,65 @@ export default function MatchmakingScreen() {
   const participantIds = new Set(participants.map((p) => p.userId));
 
   // ── Render ────────────────────────────────────────────────────────────────
+  const neededPlayers = Math.max(0, realMaxPlayers - realPlayerCount);
+  const targetSteps = liveRoom?.targetSteps ?? RACE_DEFAULTS.RACE_TARGET;
+  const coinEntry = liveRoom?.coinEntryAmount ?? 0;
+  const coinPool = liveRoom?.coinPrizePool ?? (coinEntry * realPlayerCount);
+  const cashEntry = liveRoom?.entryAmountCents != null ? liveRoom.entryAmountCents / 100 : raceEntryFee;
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <View style={[styles.container, { backgroundColor: "#050711" }]}>
       <LinearGradient
-        colors={[`${colors.accent}10`, "transparent"]}
-        style={styles.glow}
+        colors={["#1E1B4B88", "#05071100", "#7C3AED22"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
       />
 
-      <View style={[styles.content, { paddingTop: safeTop + 24, paddingBottom: safeBottom + 24 }]}>
-
-        <Animated.View
-          style={[
-            styles.searchIcon,
-            {
-              backgroundColor: colors.card,
-              borderColor: colors.accent + "40",
-              transform: [{ scale: pulseAnim }],
-            },
-          ]}
-        >
-          <LinearGradient
-            colors={[colors.accent + "30", colors.primary + "20"]}
-            style={styles.searchIconGrad}
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingTop: safeTop + 16, paddingBottom: safeBottom + 28 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.topBar}>
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => {
+              if (router.canGoBack()) router.back();
+              else navigateToWalkInstant();
+            }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Feather name="search" size={24} color={colors.accent} />
-          </LinearGradient>
-        </Animated.View>
+            <Feather name="arrow-left" size={18} color="#E2E8F8" />
+          </TouchableOpacity>
+          <View style={styles.iconBtn}>
+            <Feather name="more-horizontal" size={18} color="#E2E8F8" />
+          </View>
+        </View>
 
-        <Text style={[styles.title, { color: colors.foreground }]}>Waiting Room</Text>
-        <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
+        <View style={styles.heroIconWrap}>
+          <LinearGradient colors={["#EC4899", "#6366F1"]} style={styles.heroIconBorder}>
+            <View style={styles.heroIconInner}>
+              <Feather name="users" size={26} color="#F5F3FF" />
+            </View>
+          </LinearGradient>
+        </View>
+
+        <Text style={styles.title}>Waiting Room</Text>
+        <Text style={styles.subtitle}>
           {isHostMode ? "Start when you're ready" : "Waiting for host to start the race"}
         </Text>
 
-        {roomTimeLeft !== null && roomTimeLeft > 0 && (() => {
-          const mins = Math.floor(roomTimeLeft / 60);
-          const secs = roomTimeLeft % 60;
-          const timeStr = `${mins}:${String(secs).padStart(2, "0")}`;
-          const timerColor = roomTimeLeft > 120 ? "#6B7A99" : roomTimeLeft > 60 ? "#F59E0B" : "#EF4444";
-          return (
-            <View style={[styles.expiryPill, { borderColor: timerColor + "40" }]}>
-              <Feather name="clock" size={10} color={timerColor} />
-              <Text style={[styles.expiryText, { color: timerColor }]}>
-                Room closes in <Text style={{ fontWeight: "700" }}>{timeStr}</Text>
-              </Text>
-            </View>
-          );
-        })()}
+        <View style={styles.infoBanner}>
+          <Feather name="clock" size={16} color="#A78BFA" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.infoBannerTitle}>No need to stay here.</Text>
+            <Text style={styles.infoBannerSub}>
+              {isHostMode
+                ? "Start the race when at least 2 players have joined."
+                : "The race will start automatically when the host starts it."}
+            </Text>
+          </View>
+        </View>
 
         {isHostMode && (
           <View style={[styles.hostBanner, { backgroundColor: colors.gold + "18", borderColor: colors.gold + "40" }]}>
@@ -1156,132 +1147,112 @@ export default function MatchmakingScreen() {
           </View>
         )}
 
-        <View style={[styles.countCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Text style={[styles.countLabel, { color: colors.mutedForeground }]}>Players Joined</Text>
-          <Text style={[styles.countValue, { color: colors.primary }]}>
-            {realPlayerCount}
-            <Text style={[styles.countMax, { color: colors.mutedForeground }]}>/{realMaxPlayers}</Text>
+        <View style={styles.panelCard}>
+          <View style={styles.panelHead}>
+            <Text style={styles.panelLabel}>PLAYERS JOINED</Text>
+            <Text style={styles.panelCount}>
+              {realPlayerCount} / {realMaxPlayers}
+            </Text>
+          </View>
+
+          <View style={styles.grid}>
+            {slots.map((p, i) => (
+              <PlayerSlot
+                key={p?.userId ? `${p.userId}-${i}` : `empty-${i}`}
+                participant={p}
+                onPress={p ? () => setSelectedParticipant(p) : undefined}
+                colors={colors}
+              />
+            ))}
+          </View>
+
+          {sortedParticipants.length > 0 && (
+            <Text style={styles.tapHint}>Tap a player to view their profile</Text>
+          )}
+
+          <View style={styles.progressTrack}>
+            <LinearGradient
+              colors={["#60A5FA", "#A78BFA"]}
+              style={[styles.progressFill, { width: `${Math.min(100, (realPlayerCount / realMaxPlayers) * 100)}%` }]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+            />
+          </View>
+          <Text style={styles.neededText}>
+            {neededPlayers > 0
+              ? `${neededPlayers} more player${neededPlayers === 1 ? "" : "s"} needed to start`
+              : "Room is full — ready to start"}
           </Text>
         </View>
 
-        <View style={styles.grid}>
-          {slots.map((p, i) => (
-            <PlayerSlot
-              key={p?.userId ? `${p.userId}-${i}` : `empty-${i}`}
-              participant={p}
-              onPress={p ? () => setSelectedParticipant(p) : undefined}
-              colors={colors}
-            />
-          ))}
-        </View>
-
-        {sortedParticipants.length > 0 && (
-          <Text style={[styles.tapHint, { color: colors.mutedForeground }]}>
-            Tap a player to view their profile
-          </Text>
-        )}
-
-        <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
-          <LinearGradient
-            colors={[colors.accent, colors.primary]}
-            style={[styles.progressFill, { width: `${(realPlayerCount / realMaxPlayers) * 100}%` }]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-          />
-        </View>
-
-        <Text style={[styles.hint, { color: colors.mutedForeground }]}>
-          {isHostMode
-            ? realPlayerCount >= 2
-              ? "Ready to start! Tap Start Race when you're ready."
-              : "Host can start once at least 2 players join."
-            : "Waiting for host to start the race."}
-        </Text>
-
-        <View style={[styles.reminderCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.reminderRow}>
-            <Feather name="flag" size={14} color={colors.accent} />
-            <Text style={[styles.reminderText, { color: colors.mutedForeground }]}>
-              Target:{" "}
-              <Text style={{ color: colors.foreground, fontWeight: "700" }}>
-                {(liveRoom?.targetSteps ?? RACE_DEFAULTS.RACE_TARGET).toLocaleString()} steps
-              </Text>
-            </Text>
+        <View style={styles.statsRow}>
+          <View style={styles.statCol}>
+            <Feather name="activity" size={16} color="#60A5FA" />
+            <Text style={styles.statValue}>{targetSteps.toLocaleString()}</Text>
+            <Text style={styles.statLabel}>Steps Goal</Text>
           </View>
-          <View style={styles.reminderRow}>
-            <Feather
-              name={liveRoom?.entryType === "coins_battle" ? "award" : "dollar-sign"}
-              size={14}
-              color={isFreeRace ? colors.success : liveRoom?.entryType === "coins_battle" ? "#F59E0B" : colors.gold}
-            />
-            <Text style={[styles.reminderText, { color: colors.mutedForeground }]}>
-              {liveRoom?.entryType === "coins_battle" ? (
-                <>
-                  Entry:{" "}
-                  <Text style={{ color: "#F59E0B", fontWeight: "700" }}>
-                    {(liveRoom.coinEntryAmount ?? 0).toLocaleString()} coins per player
-                  </Text>
-                  {" — coins charged when race starts"}
-                </>
-              ) : isFreeRace ? (
-                <Text style={{ color: colors.success, fontWeight: "700" }}>Free Challenge — No entry fee</Text>
-              ) : (
-                <>
-                  Entry fee:{" "}
-                  <Text style={{ color: colors.gold, fontWeight: "700" }}>
-                    ${(liveRoom?.entryAmountCents != null ? liveRoom.entryAmountCents / 100 : raceEntryFee).toFixed(2)} per player
-                  </Text>
-                </>
-              )}
-            </Text>
+          <View style={styles.statCol}>
+            {liveRoom?.entryType === "coins_battle" ? (
+              <>
+                <Feather name="award" size={16} color="#F59E0B" />
+                <Text style={styles.statValue}>{coinEntry.toLocaleString()}</Text>
+                <Text style={styles.statLabel}>Coins Entry</Text>
+              </>
+            ) : isFreeRace ? (
+              <>
+                <Feather name="smile" size={16} color="#00E676" />
+                <Text style={styles.statValue}>Free</Text>
+                <Text style={styles.statLabel}>Entry</Text>
+              </>
+            ) : (
+              <>
+                <Feather name="dollar-sign" size={16} color="#F59E0B" />
+                <Text style={styles.statValue}>${cashEntry.toFixed(0)}</Text>
+                <Text style={styles.statLabel}>Cash Entry</Text>
+              </>
+            )}
           </View>
-          {liveRoom?.isPrivate && liveRoom.inviteCode ? (
-            <View style={styles.codeRow}>
-              <Feather name="lock" size={13} color="#A78BFA" />
-              <Text style={styles.codeLabel}>Room Code</Text>
-              <Text style={styles.codeValue}>{liveRoom.inviteCode}</Text>
-              <View style={styles.codeActions}>
-                <TouchableOpacity
-                  style={styles.codeBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  onPress={async () => {
-                    await Clipboard.setStringAsync(liveRoom.inviteCode!);
-                    setCopiedCode(true);
-                    setTimeout(() => setCopiedCode(false), 2000);
-                  }}
-                >
-                  <Feather name={copiedCode ? "check" : "copy"} size={14} color={copiedCode ? "#00E676" : "#A78BFA"} />
-                  <Text style={[styles.codeBtnText, copiedCode && { color: "#00E676" }]}>
-                    {copiedCode ? "Copied!" : "Copy"}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.codeBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  onPress={() => Share.share({
-                    message: Platform.OS === "ios"
-                      ? `Join my private WalkChamp race! Use code: ${liveRoom.inviteCode}`
-                      : `Join my private WalkChamp race! Use code: ${liveRoom.inviteCode}`,
-                    title: "Join my WalkChamp Room",
-                  })}
-                >
-                  <Feather name="share-2" size={14} color="#A78BFA" />
-                  <Text style={styles.codeBtnText}>Share</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ) : backendRaceId && !liveRoom?.isPrivate ? (
-            <View style={styles.reminderRow}>
-              <Feather name="link" size={14} color={colors.mutedForeground} />
-              <Text style={[styles.reminderText, { color: colors.mutedForeground }]}>
-                Room ID:{" "}
-                <Text style={{ color: colors.foreground, fontWeight: "600", fontSize: 11 }}>
-                  {backendRaceId.slice(0, 8)}…
-                </Text>
-              </Text>
-            </View>
-          ) : null}
+          <View style={styles.statCol}>
+            <Feather name="trophy" size={16} color="#F59E0B" />
+            <Text style={styles.statValue}>
+              {liveRoom?.entryType === "coins_battle"
+                ? coinPool.toLocaleString()
+                : isFreeRace
+                  ? "—"
+                  : `$${(cashEntry * realPlayerCount).toFixed(0)}`}
+            </Text>
+            <Text style={styles.statLabel}>Prize Pool</Text>
+          </View>
         </View>
+
+        {(liveRoom?.isPrivate && liveRoom.inviteCode) || (backendRaceId && !liveRoom?.isPrivate) ? (
+          <View style={styles.roomIdCard}>
+            <Text style={styles.roomIdLabel}>
+              {liveRoom?.isPrivate && liveRoom.inviteCode ? "Room Code" : "Room ID"}
+            </Text>
+            <View style={styles.roomIdRow}>
+              <Text style={styles.roomIdValue} numberOfLines={1}>
+                {liveRoom?.isPrivate && liveRoom.inviteCode
+                  ? liveRoom.inviteCode
+                  : `${backendRaceId?.slice(0, 8)}…`}
+              </Text>
+              <TouchableOpacity
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                onPress={async () => {
+                  const val = liveRoom?.isPrivate && liveRoom.inviteCode
+                    ? liveRoom.inviteCode
+                    : backendRaceId ?? "";
+                  if (!val) return;
+                  await Clipboard.setStringAsync(val);
+                  setCopiedCode(true);
+                  setTimeout(() => setCopiedCode(false), 2000);
+                }}
+              >
+                <Feather name={copiedCode ? "check" : "copy"} size={16} color={copiedCode ? "#00E676" : "#60A5FA"} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
 
         {isHostMode ? (
           <>
@@ -1326,7 +1297,7 @@ export default function MatchmakingScreen() {
             </Text>
           </TouchableOpacity>
         )}
-      </View>
+      </ScrollView>
 
       {/* ── Floating Invite tab (host only, right edge) ─────────────────── */}
       {isHostMode && !showingOverlay && (
@@ -1599,11 +1570,95 @@ const GRID_WIDTH = SLOT_SIZE * SLOTS_PER_ROW + (SLOTS_PER_ROW - 1) * SLOT_GAP;
 const styles = StyleSheet.create({
   container: { flex: 1 },
   glow: { position: "absolute", top: 0, left: 0, right: 0, height: 300 },
-  content: { flex: 1, paddingHorizontal: rs(24), alignItems: "center", gap: 8 },
+  content: { paddingHorizontal: rs(20), alignItems: "center", gap: 12 },
+  topBar: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 4,
+  },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "#12162A",
+    borderWidth: 1,
+    borderColor: "#2A2F45",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroIconWrap: { marginTop: 4, marginBottom: 2 },
+  heroIconBorder: {
+    width: 68,
+    height: 68,
+    borderRadius: 20,
+    padding: 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroIconInner: {
+    flex: 1,
+    width: "100%",
+    borderRadius: 18,
+    backgroundColor: "#0B0F1F",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  title: { fontSize: rf(28), fontWeight: "800", letterSpacing: -0.5, color: "#FFFFFF" },
+  subtitle: { fontSize: rf(14), textAlign: "center", color: "#94A3B8", marginBottom: 4 },
+  infoBanner: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    padding: rs(12),
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#7C3AED66",
+    backgroundColor: "#15102A",
+  },
+  infoBannerTitle: { fontSize: rf(13), fontWeight: "800", color: "#F5F3FF" },
+  infoBannerSub: { fontSize: rf(11), color: "#A5B4C8", marginTop: 2, lineHeight: rf(15) },
+  panelCard: {
+    width: "100%",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#3D2A6B",
+    backgroundColor: "#0D101F",
+    padding: rs(14),
+    gap: 10,
+  },
+  panelHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  panelLabel: { fontSize: rf(11), fontWeight: "700", letterSpacing: 0.8, color: "#94A3B8" },
+  panelCount: { fontSize: rf(14), fontWeight: "800", color: "#60A5FA" },
+  neededText: { fontSize: rf(12), fontWeight: "600", color: "#60A5FA", textAlign: "center" },
+  statsRow: {
+    width: "100%",
+    flexDirection: "row",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#2A2F45",
+    backgroundColor: "#0D101F",
+    paddingVertical: rs(14),
+  },
+  statCol: { flex: 1, alignItems: "center", gap: 4 },
+  statValue: { fontSize: rf(15), fontWeight: "800", color: "#FFFFFF" },
+  statLabel: { fontSize: rf(10), color: "#94A3B8" },
+  roomIdCard: {
+    width: "100%",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#2A2F45",
+    backgroundColor: "#0D101F",
+    padding: rs(14),
+    gap: 6,
+  },
+  roomIdLabel: { fontSize: rf(11), color: "#94A3B8", fontWeight: "600" },
+  roomIdRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  roomIdValue: { flex: 1, fontSize: rf(15), fontWeight: "700", color: "#FFFFFF" },
   searchIcon: { width: rs(72), height: rs(72), borderRadius: 22, borderWidth: 1, overflow: "hidden" },
   searchIconGrad: { flex: 1, alignItems: "center", justifyContent: "center" },
-  title: { fontSize: rf(26), fontWeight: "800", letterSpacing: -0.5 },
-  subtitle: { fontSize: rf(15), textAlign: "center" },
   hostBanner: {
     flexDirection: "row", alignItems: "center", gap: 6,
     borderRadius: 10, borderWidth: 1, paddingHorizontal: rs(14), paddingVertical: rs(7),
@@ -1626,8 +1681,8 @@ const styles = StyleSheet.create({
     width: rs(16), height: rs(16), borderRadius: rs(8),
     alignItems: "center", justifyContent: "center",
   },
-  tapHint: { fontSize: rf(12), textAlign: "center" },
-  progressTrack: { width: "100%", height: 6, borderRadius: 3, overflow: "hidden" },
+  tapHint: { fontSize: rf(12), textAlign: "center", color: "#94A3B8" },
+  progressTrack: { width: "100%", height: 6, borderRadius: 3, overflow: "hidden", backgroundColor: "#1E2438" },
   progressFill: { height: 6, borderRadius: 3 },
   hint: { fontSize: rf(13), textAlign: "center", lineHeight: 18 },
   reminderCard: { width: "100%", borderRadius: 14, borderWidth: 1, padding: rs(14), gap: 8 },

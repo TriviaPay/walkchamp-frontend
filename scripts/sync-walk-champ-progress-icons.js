@@ -198,18 +198,25 @@ function syncMilestone(projectRoot, mainDir, resDir, milestoneName, isDefault) {
 
 function syncInAppAssets(mainDir, assetsDir) {
   ensureDir(assetsDir);
+  const adaptiveDir = path.join(assetsDir, "adaptive");
+  ensureDir(adaptiveDir);
   for (const milestoneName of MILESTONES) {
-    const src = path.join(
+    const xxxhdpi = path.join(
       mainDir,
       milestoneName,
       "android",
       "res",
       "mipmap-xxxhdpi",
-      "ic_launcher.png",
     );
+    const launcherSrc = path.join(xxxhdpi, "ic_launcher.png");
+    const foregroundSrc = path.join(xxxhdpi, "ic_launcher_foreground.png");
     const dest = path.join(assetsDir, `${milestoneName}.png`);
-    if (copyFile(src, dest)) {
+    const adaptiveDest = path.join(adaptiveDir, `${milestoneName}.png`);
+    if (copyFile(launcherSrc, dest)) {
       console.log(`in-app asset: ${milestoneName}.png`);
+    }
+    if (copyFile(foregroundSrc, adaptiveDest)) {
+      console.log(`adaptive asset: adaptive/${milestoneName}.png`);
     }
   }
 }
