@@ -471,29 +471,78 @@ export default function MatchmakingScreen() {
 
   const runRoomExitApi = useCallback(
     async (endpoint: "leave" | "cancel") => {
-      if (!backendRaceId) return;
+      if (!backendRaceId) return { ok: true as const };
       try {
-        await authFetch(`/api/races/${backendRaceId}/${endpoint}`, {
-          method: "POST",
-          timeoutMs: 4_000,
-        });
+        const status = liveRoom?.status ?? "open";
+        // Waiting-room leave must unregister this race registration (same as Available Rooms withdraw).
+        if (endpoint === "leave") {
+          const useLeave = status === "open" || status === "full";
+          const res = await authFetch(
+            useLeave
+              ? `/api/races/${backendRaceId}/leave`
+              : `/api/rooms/${backendRaceId}/cancel-registration`,
+            {
+              method: "POST",
+              ...(useLeave
+                ? { body: JSON.stringify({ reason: "cancel_registration" }) }
+                : {}),
+              timeoutMs: 12_000,
+            },
+          );
+          if (!res.ok) {
+            const body = (await res.json().catch(() => ({}))) as Record<string, string>;
+            return { ok: false as const, error: body.error ?? "Could not leave this room." };
+          }
+        } else {
+          const res = await authFetch(`/api/races/${backendRaceId}/cancel`, {
+            method: "POST",
+            timeoutMs: 12_000,
+          });
+          if (!res.ok) {
+            const body = (await res.json().catch(() => ({}))) as Record<string, string>;
+            return { ok: false as const, error: body.error ?? "Could not cancel this room." };
+          }
+        }
+        void refreshWallet({ silent: true });
+        return { ok: true as const };
       } catch {
-        /* navigate-first — wallet refresh reconciles */
+        return {
+          ok: false as const,
+          error: endpoint === "leave"
+            ? "Could not leave this room. Check your connection and try again."
+            : "Could not cancel this room. Check your connection and try again.",
+        };
       }
-      void refreshWallet({ silent: true });
     },
-    [backendRaceId, refreshWallet],
+    [backendRaceId, liveRoom?.status, refreshWallet],
   );
 
-  const executeLeave = useCallback(() => {
+  const executeLeave = useCallback(async () => {
+    if (leaving || exitingRef.current) return;
+    setLeaving(true);
+    const result = await runRoomExitApi("leave");
+    if (!result.ok) {
+      setLeaving(false);
+      AppAlert.alert("Could not leave", result.error);
+      return;
+    }
+    setConfirmModal(null);
+    setRefundModalVisible(false);
     navigateToWalkInstant();
-    void runRoomExitApi("leave");
-  }, [navigateToWalkInstant, runRoomExitApi]);
+  }, [leaving, runRoomExitApi, navigateToWalkInstant]);
 
-  const executeHostCancel = useCallback(() => {
+  const executeHostCancel = useCallback(async () => {
+    if (leaving || exitingRef.current) return;
+    setLeaving(true);
+    const result = await runRoomExitApi("cancel");
+    if (!result.ok) {
+      setLeaving(false);
+      AppAlert.alert("Could not cancel", result.error);
+      return;
+    }
+    setConfirmModal(null);
     navigateToWalkInstant();
-    void runRoomExitApi("cancel");
-  }, [navigateToWalkInstant, runRoomExitApi]);
+  }, [leaving, runRoomExitApi, navigateToWalkInstant]);
 
   const handleCancel = useCallback(() => {
     if (isHostMode && backendRaceId) {
