@@ -1,0 +1,1219 @@
+import { LinearGradient } from "expo-linear-gradient";
+import React, { useState, useEffect, useCallback, useMemo, useRef, memo } from "react";
+import {
+  ActivityIndicator,
+  InteractionManager,
+  Modal,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
+import { Feather } from "@expo/vector-icons";
+import * as Haptics from "@/utils/haptics";
+import { getValidSession } from "@/services/authService";
+import { getApiBase } from "@/utils/apiUrl";
+import { getLocalDateStr } from "@/utils/timezone";
+import { AppAlert } from "@/components/AppAlert";
+import CoinIcon from "@/components/CoinIcon";
+import { Image } from "react-native";
+import { ENABLE_MIC_PASS } from "@/config/featureFlags";
+import { useAppDispatch, useAppSelector } from "@/store/hooks";
+import {
+  fetchTrackThemes,
+  purchaseTrackTheme,
+  equipTrackTheme,
+  clearPurchaseError,
+  type TrackTheme,
+} from "@/store/slices/trackThemesSlice";
+import {
+  fetchCoinBalance,
+  fetchPurchaseSummary,
+  setCoinBalance,
+  type PurchaseHistoryItem,
+} from "@/store/slices/coinsSlice";
+import {
+  initializeIAP,
+  cleanupIAP,
+  loadIAPProducts,
+  purchaseProduct,
+  setupPurchaseListeners,
+  restoreMicPass,
+  retryPendingPurchases,
+  getIAPUnavailableMessage,
+  isIAPAvailable,
+  COIN_IAP_PRODUCTS,
+  MIC_PASS_PRODUCT_ID,
+  type CoinProduct,
+} from "@/services/iapService";
+import type { Product } from "react-native-iap";
+import { authFetch } from "@/utils/authFetch";
+import { SkeletonList, SkeletonBalanceValue, SkeletonPriceTag } from "@/components/SkeletonRows";
+import BannerAdView, { BANNER_SLOT_HEIGHT } from "@/components/BannerAdView";
+import {
+  preloadRewardedAd,
+  showRewardedAdForCoins,
+  isRewardedAdReady,
+  isNativeAdsAvailable,
+} from "@/services/ads/adMobService";
+import { useColors } from "@/hooks/useColors";
+import { useTabBarHeight } from "@/hooks/useTabBarHeight";
+import { rf, rs } from "@/utils/responsive";
+import { TrackThemeImageBackground } from "@/components/TrackThemeImage";
+
+const shopImage = require("@/assets/images/shop-icon.png");
+
+// Fallback coin pack labels used only when store products haven't loaded yet
+const COIN_PACK_FALLBACKS = COIN_IAP_PRODUCTS.map((p) => ({
+  productId: p.productId,
+  coins: p.coins,
+  name: p.name,
+}));
+const MAX_DAILY_AD_REWARDS = 5;
+
+type BalanceApiResponse = {
+  currentBalance?: number;
+  adsToday?: number;
+  adsRemaining?: number;
+  maxDailyAdRewards?: number;
+};
+
+function iapLogMissingProducts(missing: string[]): void {
+  if (__DEV__) console.log("[IAP] store missing product IDs:", missing.join(", "));
+}
+
+/** Fixed footer — zero props so parent Redux/state updates never remount the ad. */
+const StoreBannerFooter = memo(function StoreBannerFooter() {
+  return (
+    <View
+      style={{
+        width: "100%",
+        height: BANNER_SLOT_HEIGHT,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: "#1E2640",
+        backgroundColor: "#0B0D1A",
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+      }}
+      collapsable={false}
+    >
+      <BannerAdView />
+    </View>
+  );
+});
+
+/** Stable scroll wrapper — keeps scroll position when parent re-renders. */
+const StoreTabScroll = memo(function StoreTabScroll({
+  children,
+  contentContainerStyle,
+  refreshControl,
+}: {
+  children: React.ReactNode;
+  contentContainerStyle: object;
+  refreshControl?: React.ComponentProps<typeof ScrollView>["refreshControl"];
+}) {
+  return (
+    <ScrollView
+      style={{ flex: 1 }}
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={contentContainerStyle}
+      refreshControl={refreshControl}
+      keyboardShouldPersistTaps="handled"
+    >
+      {children}
+    </ScrollView>
+  );
+});
+
+type ShopTab = "coins" | "themes" | "premium";
+
+interface Props {
+  visible: boolean;
+  onClose: () => void;
+  onCoinsAdded?: () => void;
+  onMicPassGranted?: () => void;
+  /** When true, renders as a full-screen tab (no Modal wrapper, no close button). */
+  standalone?: boolean;
+}
+
+async function safeJson(res: Response): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> {
+  const ct = res.headers.get("content-type") ?? "";
+  if (!ct.includes("application/json")) return { ok: false, error: "Could not connect to service. Please try again." };
+  return { ok: true, data: await res.json() as Record<string, unknown> };
+}
+
+// ── Mic Pass state (non-Redux) ───────────────────────────────────────────────
+function useMicPassEntitlement(visible: boolean) {
+  const [hasMicPass, setHasMicPass] = useState(false);
+  const [loadingMic, setLoadingMic] = useState(false);
+
+  const fetchMicEntitlement = useCallback(async () => {
+    if (!ENABLE_MIC_PASS) return;
+    setLoadingMic(true);
+    try {
+      const session = await getValidSession();
+      if (!session) return;
+      const res = await fetch(`${getApiBase()}/api/users/me/entitlements`, {
+        headers: { Authorization: `Bearer ${session}` },
+      });
+      if (res.ok) {
+        const data = await res.json() as { entitlements?: { mic_pass?: boolean } };
+        setHasMicPass(data?.entitlements?.mic_pass === true);
+      }
+    } catch { } finally { setLoadingMic(false); }
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+    const task = InteractionManager.runAfterInteractions(() => {
+      void fetchMicEntitlement();
+    });
+    return () => task.cancel();
+  }, [visible, fetchMicEntitlement]);
+
+  return { hasMicPass, setHasMicPass, loadingMic, fetchMicEntitlement };
+}
+
+// ── Theme card ───────────────────────────────────────────────────────────────
+function ThemeCard({ theme, onUnlock, onEquip }: {
+  theme: TrackTheme;
+  onUnlock: (code: string) => void;
+  onEquip: (code: string) => void;
+}) {
+  const c = useColors();
+  const purchaseLoading = useAppSelector((s) => s.trackThemes.purchaseLoading);
+  const isLoading = purchaseLoading === theme.code;
+
+  const tc = {
+    card:           { width: "47.8%" as const, backgroundColor: c.card, borderRadius: 12, borderWidth: 1, borderColor: c.border, overflow: "hidden" as const },
+    imgWrap:        {} as object,
+    img:            { width: "100%" as const, height: 88, justifyContent: "flex-end" as const, padding: 5 },
+    imgFallback:    { backgroundColor: c.muted, alignItems: "center" as const, justifyContent: "center" as const },
+    lockOverlay:    { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.42)", alignItems: "flex-end" as const, justifyContent: "flex-start" as const, padding: 5, borderTopLeftRadius: 10, borderTopRightRadius: 10 },
+    lockBox:        { backgroundColor: c.muted, borderRadius: 6, width: 22, height: 22, alignItems: "center" as const, justifyContent: "center" as const },
+    equippedBadge:  { flexDirection: "row" as const, alignItems: "center" as const, gap: 3, backgroundColor: "#7C3AED", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, alignSelf: "flex-end" as const },
+    equippedTxt:    { fontSize: 9, fontWeight: "800" as const, color: "#fff" },
+    ownedBadge:     { backgroundColor: "#14532D", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, alignSelf: "flex-end" as const },
+    ownedTxt:       { fontSize: 9, fontWeight: "800" as const, color: "#4ADE80" },
+    body:           { padding: 8 },
+    name:           { fontSize: 12, fontWeight: "700" as const, color: c.foreground, marginBottom: 6 },
+    footer:         { flexDirection: "row" as const, alignItems: "center" as const, justifyContent: "space-between" as const, gap: 4 },
+    pricePill:      { flexDirection: "row" as const, alignItems: "center" as const, gap: 3 },
+    priceNum:       { fontSize: 11, fontWeight: "700" as const, color: "#FFD700" },
+    actionBtn:      { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, minWidth: 48, alignItems: "center" as const, justifyContent: "center" as const },
+    actionBtnDisabled: { backgroundColor: c.muted },
+    unlockBtn:      { backgroundColor: "#7C3AED" },
+    useBtn:         { backgroundColor: "#22C55E" },
+    actionTxt:      { fontSize: 10, fontWeight: "800" as const, color: "#fff" },
+    actionTxtDim:   { color: c.mutedForeground },
+    useTxt:         { fontSize: 10, fontWeight: "800" as const, color: "#000" },
+    selectedPill:   { flexDirection: "row" as const, alignItems: "center" as const, gap: 3, backgroundColor: "#2D1064", paddingHorizontal: 6, paddingVertical: 3, borderRadius: 7, width: "100%" as const, justifyContent: "center" as const },
+    selectedTxt:    { fontSize: 10, fontWeight: "700" as const, color: "#A855F7" },
+  };
+
+  const inner = (
+    <View style={tc.card}>
+      {/* Image — remote thumb (or local fallback) */}
+      <View style={tc.imgWrap}>
+        <TrackThemeImageBackground
+          media={{
+            code: theme.code,
+            trackLayout: theme.code,
+            imageSet: theme.imageSet ?? null,
+            imageUrl: theme.imageUrl ?? null,
+            assetVersion: theme.assetVersion,
+            width: theme.width,
+            height: theme.height,
+          }}
+          variant="thumb"
+          style={tc.img}
+          imageStyle={{ borderTopLeftRadius: 10, borderTopRightRadius: 10 }}
+        >
+          {theme.isEquipped && (
+            <View style={tc.equippedBadge}>
+              <Feather name="check" size={10} color="#fff" />
+              <Text style={tc.equippedTxt}>Equipped</Text>
+            </View>
+          )}
+          {theme.locked && (
+            <View style={tc.lockOverlay}>
+              <View style={tc.lockBox}><Feather name="lock" size={13} color="#fff" /></View>
+            </View>
+          )}
+          {!theme.locked && !theme.isEquipped && theme.owned && (
+            <View style={tc.ownedBadge}><Text style={tc.ownedTxt}>Owned</Text></View>
+          )}
+        </TrackThemeImageBackground>
+      </View>
+
+      {/* Info + action */}
+      <View style={tc.body}>
+        <Text style={tc.name} numberOfLines={1}>{theme.name}</Text>
+        <View style={tc.footer}>
+          {theme.isEquipped ? (
+            <View style={tc.selectedPill}>
+              <Feather name="check-circle" size={11} color="#A855F7" />
+              <Text style={tc.selectedTxt}>Selected</Text>
+            </View>
+          ) : theme.locked ? (
+            <>
+              <View style={tc.pricePill}>
+                <CoinIcon size="small" />
+                <Text style={tc.priceNum}>{theme.priceCoins.toLocaleString()}</Text>
+              </View>
+              <TouchableOpacity
+                style={[tc.actionBtn, tc.unlockBtn, !theme.canPurchase && tc.actionBtnDisabled]}
+                onPress={() => onUnlock(theme.code)}
+                disabled={isLoading}
+                activeOpacity={0.8}
+              >
+                {isLoading
+                  ? <ActivityIndicator size="small" color="#fff" />
+                  : <Text style={[tc.actionTxt, !theme.canPurchase && tc.actionTxtDim]}>
+                      {theme.canPurchase ? "Unlock" : `Need ${theme.coinsNeeded.toLocaleString()}`}
+                    </Text>}
+              </TouchableOpacity>
+            </>
+          ) : (
+            <TouchableOpacity style={[tc.actionBtn, tc.useBtn]} onPress={() => onEquip(theme.code)} activeOpacity={0.8}>
+              <Text style={tc.useTxt}>Use</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    </View>
+  );
+
+  return inner;
+}
+
+
+// ── Main modal ────────────────────────────────────────────────────────────────
+function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, standalone = false }: Props) {
+  const dispatch = useAppDispatch();
+  const colors = useColors();
+  const tabBarHeight = useTabBarHeight();
+  const s = useMemo(() => makeStoreStyles(colors), [colors]);
+  const tabScrollPaddingBottom = rs(16);
+  const tabScrollContentStyle = useMemo(
+    () => ({
+      paddingHorizontal: rs(20),
+      paddingTop: rs(16),
+      flexGrow: 1 as const,
+      paddingBottom: tabScrollPaddingBottom,
+    }),
+    [tabScrollPaddingBottom],
+  );
+  const { themes, loading: themesLoading, error: themesError, purchaseError } = useAppSelector((st) => st.trackThemes);
+  const { purchaseSummary, summaryLoading, balance: reduxBalance } = useAppSelector((st) => st.coins);
+  // Always prefer global coins slice — never trackThemes.coinBalance (defaults to 0).
+  const coinBalance = reduxBalance?.currentBalance ?? null;
+
+  const [activeTab, setActiveTab] = useState<ShopTab>("coins");
+  const [balance, setBalance]               = useState<number | null>(null);
+  const [loadingBalance, setLoadingBalance] = useState(false);
+  const [refreshingCoins, setRefreshingCoins] = useState(false);
+  const [watchingAd, setWatchingAd] = useState(false);
+  const [adsToday, setAdsToday] = useState(0);
+
+  // ── IAP state ──────────────────────────────────────────────────────────────
+  const [coinProducts, setCoinProducts]       = useState<CoinProduct[]>([]);
+  const [premiumProduct, setPremiumProduct]   = useState<Product | null>(null);
+  const [iapLoading, setIapLoading]           = useState(false);
+  const [iapReady, setIapReady]               = useState(false);
+  const [iapError, setIapError]               = useState<string | null>(null);
+  const [buyingProductId, setBuyingProductId] = useState<string | null>(null);
+  const [restoringMic, setRestoringMic]       = useState(false);
+  const cleanupListenersRef                   = useRef<(() => void) | null>(null);
+  const loadInProgressRef                     = useRef(false);
+  const storeBootstrappedRef                  = useRef(false);
+  const onCoinsAddedRef = useRef(onCoinsAdded);
+  const onMicPassGrantedRef = useRef(onMicPassGranted);
+
+  useEffect(() => {
+    onCoinsAddedRef.current = onCoinsAdded;
+    onMicPassGrantedRef.current = onMicPassGranted;
+  }, [onCoinsAdded, onMicPassGranted]);
+
+  const { hasMicPass, setHasMicPass, loadingMic, fetchMicEntitlement } = useMicPassEntitlement(visible);
+
+  // Fetch balance + daily ad-watch count
+  const fetchBalance = useCallback(async () => {
+    setLoadingBalance(true);
+    try {
+      const session = await getValidSession();
+      if (!session) return;
+      const res = await fetch(`${getApiBase()}/api/coins/balance?localDate=${getLocalDateStr()}`, { headers: { Authorization: `Bearer ${session}` } });
+      if (res.ok) {
+        const data = await res.json() as BalanceApiResponse;
+        if (data.currentBalance != null) setBalance(data.currentBalance);
+        if (typeof data.adsToday === "number") setAdsToday(data.adsToday);
+      }
+    } catch { } finally { setLoadingBalance(false); }
+  }, []);
+
+  const refreshCoinStoreState = useCallback(async () => {
+    await Promise.all([
+      fetchBalance(),
+      dispatch(fetchCoinBalance()),
+      dispatch(fetchPurchaseSummary()),
+    ]);
+  }, [fetchBalance, dispatch]);
+
+  // Build purchase listeners callback object (stable ref — does not itself trigger useEffect)
+  const listenersCallbacks = useCallback(() => ({
+    onCoinPurchase: (productId: string, coins: number, newBalance: number) => {
+      setBuyingProductId(null);
+      setBalance(newBalance);
+      onCoinsAddedRef.current?.();
+      AppAlert.alert(
+        "Purchase Successful 🎉",
+        `${coins.toLocaleString()} coins added to your balance.`,
+      );
+    },
+    onMicPassGrant: () => {
+      setBuyingProductId(null);
+      setHasMicPass(true);
+      onMicPassGrantedRef.current?.();
+      void fetchMicEntitlement();
+      AppAlert.alert(
+        "Mic Pass Activated 🎤",
+        "Voice chat is now enabled in all eligible races.",
+      );
+    },
+    onPending: (msg: string) => {
+      setBuyingProductId(null);
+      AppAlert.alert("Purchase Received", msg);
+    },
+    onError: (msg: string) => {
+      setBuyingProductId(null);
+      AppAlert.alert("Purchase Failed", msg);
+    },
+  }), [setHasMicPass, fetchMicEntitlement]);
+
+  // Load IAP products from App Store / Google Play.
+  // Listeners are attached here — AFTER initConnection() completes — to avoid
+  // the E_IAP_NOT_AVAILABLE race that occurs when purchaseUpdatedListener is
+  // called before the connection is initialized.
+  const loadProducts = useCallback(async () => {
+    if (loadInProgressRef.current) return;
+    loadInProgressRef.current = true;
+    setIapLoading(true);
+    setIapError(null);
+    try {
+      if (!isIAPAvailable()) {
+        setIapError(getIAPUnavailableMessage());
+        setCoinProducts([]);
+        setPremiumProduct(null);
+        return;
+      }
+
+      await initializeIAP();
+
+      if (!cleanupListenersRef.current) {
+        cleanupListenersRef.current = setupPurchaseListeners(listenersCallbacks());
+      }
+
+      const { coinProducts: cp, premiumProduct: pp, missingProductIds } = await loadIAPProducts();
+      setCoinProducts(cp);
+      setPremiumProduct(pp);
+
+      if (cp.length === 0) {
+        setIapError(getIAPUnavailableMessage());
+      } else if (missingProductIds.length > 0) {
+        iapLogMissingProducts(missingProductIds);
+      }
+
+      await retryPendingPurchases({
+        onCoinPurchase: (_productId, _coins, newBalance) => {
+          setBalance(newBalance);
+          onCoinsAddedRef.current?.();
+        },
+        onMicPassGrant: () => {
+          setHasMicPass(true);
+          onMicPassGrantedRef.current?.();
+        },
+      });
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code ?? "";
+      const msg = err instanceof Error ? err.message : "";
+      if (code === "E_IAP_NOT_AVAILABLE") {
+        setIapError(getIAPUnavailableMessage());
+      } else if (msg.includes("TIMEOUT")) {
+        setIapError("Store connection timed out. Check your network and tap Try Again.");
+      } else {
+        setIapError(getIAPUnavailableMessage());
+      }
+      setCoinProducts([]);
+      setPremiumProduct(null);
+    } finally {
+      setIapLoading(false);
+      setIapReady(true);
+      loadInProgressRef.current = false;
+    }
+  }, [setHasMicPass, listenersCallbacks]);
+
+  // Sync Redux balance + ad count into local display (Pusher / other tabs).
+  useEffect(() => {
+    if (!visible) return;
+    if (reduxBalance?.currentBalance != null) {
+      setBalance((prev) => (prev === reduxBalance.currentBalance ? prev : reduxBalance.currentBalance));
+    }
+    if (typeof reduxBalance?.adsToday === "number") {
+      setAdsToday((prev) => (prev === reduxBalance.adsToday ? prev : reduxBalance.adsToday!));
+    }
+  }, [visible, reduxBalance?.currentBalance, reduxBalance?.adsToday]);
+
+  useEffect(() => {
+    if (!visible || coinBalance == null) return;
+    setBalance((prev) => (prev === coinBalance ? prev : coinBalance));
+  }, [visible, coinBalance]);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    if (!storeBootstrappedRef.current) {
+      storeBootstrappedRef.current = true;
+      // Paint skeleton UI first — defer store/IAP work so the tab stays scrollable.
+      const task = InteractionManager.runAfterInteractions(() => {
+        void fetchBalance();
+        void dispatch(fetchTrackThemes());
+        void dispatch(fetchPurchaseSummary());
+        void loadProducts();
+        preloadRewardedAd();
+      });
+      return () => task.cancel();
+    }
+  // Bootstrap exactly once per modal/screen mount — never on ad or balance updates.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+  const handleRefreshCoins = useCallback(async () => {
+    setRefreshingCoins(true);
+    await refreshCoinStoreState();
+    setRefreshingCoins(false);
+  }, [refreshCoinStoreState]);
+
+  // ── Earn Free Coins via rewarded ad ────────────────────────────────────────
+  const handleEarnFreeCoins = useCallback(async () => {
+    if (watchingAd || adsToday >= MAX_DAILY_AD_REWARDS) return;
+
+    if (!isRewardedAdReady()) {
+      if (!isNativeAdsAvailable()) {
+        AppAlert.alert(
+          "Ads Not Available",
+          "Rewarded ads require an installed APK/IPA build with native ads enabled.",
+        );
+      } else {
+        AppAlert.alert(
+          "Ad Not Ready",
+          "The ad is still loading. Please wait a moment and try again.",
+        );
+        preloadRewardedAd();
+      }
+      return;
+    }
+
+    setWatchingAd(true);
+    try {
+      const result = await showRewardedAdForCoins(async () => {
+        const res = await authFetch("/api/coins/ad-reward", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ localDate: getLocalDateStr() }),
+        });
+        const data = await res.json() as {
+          success?: boolean;
+          coins_awarded?: number;
+          new_balance?: number;
+          ads_today?: number;
+          ads_remaining?: number;
+          error?: string;
+          code?: string;
+        };
+
+        if (!res.ok) {
+          if (typeof data.ads_today === "number") setAdsToday(data.ads_today);
+          const msg = data.error ?? "Failed to claim coins.";
+          if (data.code === "AD_REWARD_LIMIT") {
+            AppAlert.alert("Limit Reached", msg);
+          } else {
+            AppAlert.alert("Could Not Claim Coins", msg);
+          }
+          throw new Error(msg);
+        }
+
+        const awarded = data.coins_awarded ?? 0;
+        if (data.new_balance != null) setBalance(data.new_balance);
+        if (typeof data.ads_today === "number") setAdsToday(data.ads_today);
+
+        onCoinsAdded?.();
+        await refreshCoinStoreState();
+
+        if (awarded > 0) {
+          AppAlert.alert(
+            "🎉 Coins Earned!",
+            `+${awarded} coins added to your balance! (${data.ads_remaining ?? 0} ads remaining today)`,
+          );
+        } else {
+          AppAlert.alert(
+            "Already Credited",
+            "This ad reward was already applied to your account.",
+          );
+        }
+      });
+
+      if (result === "skipped") {
+        AppAlert.alert("Ad Skipped", "Watch the full ad to earn coins.");
+      } else if (result === "error") {
+        AppAlert.alert(
+          "Could Not Claim Coins",
+          "You watched the ad but we couldn't credit coins. Pull to refresh and try again.",
+        );
+        await refreshCoinStoreState();
+      }
+    } catch {
+      await refreshCoinStoreState();
+    } finally {
+      setWatchingAd(false);
+      preloadRewardedAd();
+    }
+  }, [watchingAd, adsToday, onCoinsAdded, refreshCoinStoreState]);
+
+  // Full cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cleanupListenersRef.current?.();
+      void cleanupIAP();
+    };
+  }, []);
+
+  // Show theme purchase errors
+  useEffect(() => {
+    if (purchaseError) {
+      AppAlert.alert("Purchase Failed", purchaseError);
+      dispatch(clearPurchaseError());
+    }
+  }, [purchaseError, dispatch]);
+
+  // Debug — log only when themes count changes (not on every balance tick).
+  const themesCountRef = useRef(0);
+  useEffect(() => {
+    if (!__DEV__ || themes.length === 0) return;
+    if (themes.length === themesCountRef.current) return;
+    themesCountRef.current = themes.length;
+    const owned   = themes.filter((t) => t.owned).length;
+    const locked  = themes.filter((t) => t.locked).length;
+    const equipped = themes.find((t) => t.isEquipped);
+    console.log("[ShopThemes] response count:", themes.length, "owned:", owned, "locked:", locked, "selected:", equipped?.code ?? "none");
+  }, [themes]);
+
+  // ── Coin pack purchase ─────────────────────────────────────────────────────
+  const handleBuy = async (productId: string) => {
+    if (buyingProductId) return; // prevent double-tap
+    setBuyingProductId(productId);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      await purchaseProduct(productId);
+      // Result handled in setupPurchaseListeners → onCoinPurchase / onError
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
+      // Silently ignore user cancellations
+      if (!msg.toLowerCase().includes("cancel")) {
+        setBuyingProductId(null);
+        AppAlert.alert("Purchase Failed", "Could not start purchase. Please try again.");
+      } else {
+        setBuyingProductId(null);
+      }
+    }
+  };
+
+  // ── Mic Pass purchase ──────────────────────────────────────────────────────
+  const handleBuyMicPass = async () => {
+    if (hasMicPass || buyingProductId) return;
+    setBuyingProductId(MIC_PASS_PRODUCT_ID);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      await purchaseProduct(MIC_PASS_PRODUCT_ID);
+      // Result handled in setupPurchaseListeners → onMicPassGrant / onError
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
+      if (!msg.toLowerCase().includes("cancel")) {
+        setBuyingProductId(null);
+        AppAlert.alert("Purchase Failed", "Could not start purchase. Please try again.");
+      } else {
+        setBuyingProductId(null);
+      }
+    }
+  };
+
+  // ── Restore Mic Pass ───────────────────────────────────────────────────────
+  const handleRestorePurchases = async () => {
+    if (restoringMic) return;
+    setRestoringMic(true);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await restoreMicPass({
+      onSuccess: () => {
+        setHasMicPass(true);
+        onMicPassGranted?.();
+        void fetchMicEntitlement();
+        AppAlert.alert("Restored", "Mic Pass has been restored to your account.");
+      },
+      onNothingToRestore: () => {
+        AppAlert.alert("Nothing to Restore", "No Mic Pass purchase was found for this account.");
+      },
+      onError: (msg) => {
+        AppAlert.alert("Restore Failed", msg);
+      },
+    });
+    setRestoringMic(false);
+  };
+
+  const handleUnlock = async (code: string) => {
+    if (__DEV__) console.log("[ShopThemes] unlock clicked:", code);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const result = await dispatch(purchaseTrackTheme(code));
+    if (purchaseTrackTheme.fulfilled.match(result)) {
+      if (__DEV__) console.log("[ShopThemes] unlock success:", code, "balance:", result.payload.coinBalance);
+      const next = result.payload.coinBalance;
+      if (typeof next === "number") {
+        setBalance(next);
+        dispatch(setCoinBalance(next));
+      }
+    } else {
+      if (__DEV__) console.log("[ShopThemes] unlock failed:", result.payload);
+    }
+  };
+
+  const handleEquip = async (code: string) => {
+    if (__DEV__) console.log("[ShopThemes] select clicked:", code);
+    const result = await dispatch(equipTrackTheme(code));
+    if (equipTrackTheme.fulfilled.match(result)) {
+      if (__DEV__) console.log("[ShopThemes] select success:", code);
+    } else {
+      if (__DEV__) console.log("[ShopThemes] select failed:", code);
+      AppAlert.alert("Error", "Could not select theme. Please try again.");
+    }
+  };
+
+  const handleRefreshThemes = () => {
+    if (__DEV__) console.log("[ShopThemes] fetching themes");
+    void dispatch(fetchTrackThemes());
+  };
+
+  // Sort: equipped → owned → locked; locked themes sorted by priceCoins ascending (cheapest first)
+  const sortedThemes = useMemo<TrackTheme[]>(() => [...themes].sort((a, b) => {
+    const rank = (t: TrackTheme) => t.isEquipped ? 0 : t.owned ? 1 : 2;
+    const r = rank(a) - rank(b);
+    if (r !== 0) return r;
+    if (a.locked && b.locked) return a.priceCoins - b.priceCoins;
+    return a.sortOrder - b.sortOrder;
+  }), [themes]);
+
+  // Shop only shows themes the user does NOT yet own
+  const lockedThemes = useMemo(() => sortedThemes.filter((t) => t.locked), [sortedThemes]);
+
+  // Mic Pass localized price from store, fallback to display placeholder
+  const micPassPrice = premiumProduct?.localizedPrice ?? null;
+  const buyingMic = buyingProductId === MIC_PASS_PRODUCT_ID;
+
+  const displayBalance = balance ?? coinBalance;
+  const showBalanceSkeleton = displayBalance == null && (loadingBalance || !iapReady);
+  const showPackSkeleton = !iapReady && coinProducts.length === 0 && !iapError;
+  const coinPacksToRender =
+    coinProducts.length > 0
+      ? coinProducts
+      : showPackSkeleton
+        ? []
+        : iapError
+          ? []
+          : COIN_PACK_FALLBACKS;
+
+  const renderStorePrice = (price: string | null, isBuying: boolean) => {
+    if (isBuying) return <ActivityIndicator size="small" color="#000" />;
+    if (price) return <Text style={s.priceBtnText}>{price}</Text>;
+    if (!iapReady) return <SkeletonPriceTag />;
+    return <Text style={[s.priceBtnText, { fontSize: rf(11), color: "#9CA3AF" }]}>—</Text>;
+  };
+
+  const storeBody = (
+    <View style={[s.root, { flex: 1 }]}>
+
+      {/* ── Header ── */}
+      <View style={s.header}>
+        <Image source={shopImage} style={s.headerIcon} resizeMode="contain" />
+        <View style={s.headerTextWrap}>
+          <Text style={s.headerTitle}>Coins Store</Text>
+          <Text style={s.headerSub}>Buy coins to unlock race tracks and premium themes</Text>
+        </View>
+        {!standalone && (
+          <TouchableOpacity onPress={onClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.closeBtn}>
+            <Feather name="x" size={18} color="#9CA3AF" />
+          </TouchableOpacity>
+        )}
+      </View>
+
+        {/* ── Tab bar ── */}
+        <View style={s.tabBar}>
+          {(["coins", "themes", "premium"] as ShopTab[]).map((tab) => {
+            const isActive = activeTab === tab;
+            const accent =
+              tab === "coins"   ? "#FFD700" :
+              tab === "themes"  ? "#A855F7" : "#F59E0B";
+            const label =
+              tab === "themes"  ? "🎨 Themes" : "⭐ Premium";
+            return (
+              <TouchableOpacity
+                key={tab}
+                style={[
+                  s.tabBtn,
+                  isActive && { backgroundColor: accent + "22", borderColor: accent + "55", borderWidth: 1 },
+                ]}
+                onPress={() => {
+                  setActiveTab(tab);
+                  if (tab === "themes") handleRefreshThemes();
+                }}
+                activeOpacity={0.8}
+              >
+                {tab === "coins" ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                    <CoinIcon size={14} />
+                    <Text style={[s.tabTxt, isActive && { color: accent, fontWeight: "800" }]}>Coins</Text>
+                  </View>
+                ) : (
+                  <Text style={[s.tabTxt, isActive && { color: accent, fontWeight: "800" }]}>
+                    {label}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <View style={{ flex: 1 }}>
+        {/* ══ COINS TAB ══════════════════════════════════════════════════════ */}
+        {activeTab === "coins" && (
+          <StoreTabScroll
+            contentContainerStyle={tabScrollContentStyle}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshingCoins}
+                onRefresh={handleRefreshCoins}
+                tintColor="#FFD700"
+              />
+            }
+          >
+            {/* ── Balance banner ── */}
+            <View style={[s.balanceRow, { marginHorizontal: 0, marginTop: 0 }]}>
+              <CoinIcon size="medium" />
+              <Text style={s.balanceLabel}>Your Balance</Text>
+              {showBalanceSkeleton ? (
+                <SkeletonBalanceValue />
+              ) : (
+                <Text style={s.balanceValue}>{displayBalance?.toLocaleString() ?? "—"}</Text>
+              )}
+            </View>
+
+            <Text style={s.sectionLabel}>COIN PACKS</Text>
+
+            {showPackSkeleton && (
+              <SkeletonList count={3} variant="pack" />
+            )}
+
+            {/* IAP error with retry */}
+            {iapReady && iapError && (
+              <View style={s.iapErrorCard}>
+                <Feather name="alert-circle" size={20} color="#F87171" />
+                <Text style={s.iapErrorTxt}>{iapError}</Text>
+                <TouchableOpacity style={s.retryBtn} onPress={loadProducts} activeOpacity={0.8}>
+                  <Text style={s.retryTxt}>Try Again</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Coin pack rows — live store prices when available */}
+            {coinPacksToRender.map((pack) => {
+              const liveProduct = coinProducts.find((p) => p.productId === pack.productId);
+              const priceLabel = liveProduct?.localizedPrice ?? null;
+              const isBuying = buyingProductId === pack.productId;
+              const isDisabled = !!buyingProductId || !iapReady || !priceLabel;
+
+              return (
+                <View key={pack.productId} style={s.packCard}>
+                  <CoinIcon size="large" />
+                  <View style={s.packTextCol}>
+                    <Text style={s.packCoins}>{pack.coins.toLocaleString()} Coins</Text>
+                    <Text style={s.packSub}>One-time purchase</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[s.priceBtn, isDisabled && s.priceBtnDim]}
+                    onPress={() => { if (priceLabel) void handleBuy(pack.productId); }}
+                    disabled={isDisabled}
+                    activeOpacity={0.82}
+                  >
+                    {renderStorePrice(priceLabel, isBuying)}
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+
+            {(() => {
+              const adsLimitReached = adsToday >= MAX_DAILY_AD_REWARDS;
+              const adsLeft = Math.max(0, MAX_DAILY_AD_REWARDS - adsToday);
+              return (
+            <TouchableOpacity
+              style={[s.freeCard, (watchingAd || adsLimitReached) && { opacity: 0.6 }]}
+              activeOpacity={0.85}
+              onPress={() => { void handleEarnFreeCoins(); }}
+              disabled={watchingAd || adsLimitReached}
+            >
+              <View style={[s.freeIconCircle, { backgroundColor: "#22C55E20" }]}>
+                {watchingAd
+                  ? <ActivityIndicator size="small" color="#22C55E" />
+                  : <Feather name="play-circle" size={22} color={adsLimitReached ? "#6B7280" : "#22C55E"} />
+                }
+              </View>
+              <View style={s.freeTextCol}>
+                <Text style={s.freeTitle}>Earn Free Coins</Text>
+                <Text style={s.freeSub}>
+                  {adsLimitReached
+                    ? "Daily limit reached — come back tomorrow!"
+                    : `Watch a short ad to earn +30 coins (${adsLeft} left today)`}
+                </Text>
+              </View>
+              {!watchingAd && !adsLimitReached && <Feather name="chevron-right" size={18} color="#6B7280" />}
+            </TouchableOpacity>
+              );
+            })()}
+
+            {/* ── Purchase stats banner ── */}
+            {purchaseSummary && purchaseSummary.iap.totalPurchases > 0 && (
+              <View style={s.statsBanner}>
+                <View style={s.statsBannerItem}>
+                  <Text style={s.statsBannerNum}>{purchaseSummary.iap.totalPurchases}</Text>
+                  <Text style={s.statsBannerLabel}>Purchases</Text>
+                </View>
+                <View style={s.statsBannerDivider} />
+                <View style={s.statsBannerItem}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                    <CoinIcon size="small" />
+                    <Text style={s.statsBannerNum}>{purchaseSummary.iap.totalCoinsPurchased.toLocaleString()}</Text>
+                  </View>
+                  <Text style={s.statsBannerLabel}>Coins Bought</Text>
+                </View>
+                {purchaseSummary.iap.hasMicPass && (
+                  <>
+                    <View style={s.statsBannerDivider} />
+                    <View style={s.statsBannerItem}>
+                      <Feather name="mic" size={16} color="#A855F7" />
+                      <Text style={[s.statsBannerLabel, { color: "#A855F7" }]}>Mic Pass</Text>
+                    </View>
+                  </>
+                )}
+              </View>
+            )}
+
+            {/* ── Purchase history ── */}
+            {summaryLoading && !purchaseSummary && (
+              <SkeletonList count={2} variant="pack" />
+            )}
+            {purchaseSummary && purchaseSummary.purchaseHistory.length > 0 && (
+              <>
+                <Text style={[s.sectionLabel, { marginTop: 16 }]}>RECENT PURCHASES</Text>
+                {purchaseSummary.purchaseHistory.map((item: PurchaseHistoryItem) => (
+                  <View key={item.id} style={s.historyRow}>
+                    <View style={[s.historyIcon, item.isMicPass ? s.historyIconMic : s.historyIconCoin]}>
+                      {item.isMicPass
+                        ? <Feather name="mic" size={15} color="#A855F7" />
+                        : <CoinIcon size={15} />
+                      }
+                    </View>
+                    <View style={s.historyText}>
+                      <Text style={s.historyName}>{item.displayName}</Text>
+                      <Text style={s.historyDate}>
+                        {item.platform === "ios" ? "App Store" : item.platform === "android" ? "Google Play" : item.platform}
+                        {" · "}
+                        {new Date(item.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                      </Text>
+                    </View>
+                    {item.coinAmount != null
+                      ? <View style={s.historyCoinsRow}><CoinIcon size="small" /><Text style={s.historyCoinsText}>+{item.coinAmount.toLocaleString()}</Text></View>
+                      : <View style={s.historyMicBadge}><Text style={s.historyMicBadgeTxt}>LIFETIME</Text></View>
+                    }
+                  </View>
+                ))}
+              </>
+            )}
+            {purchaseSummary && purchaseSummary.purchaseHistory.length === 0 && (
+              <View style={s.historyEmpty}>
+                <Feather name="shopping-bag" size={20} color="#2A2A3A" />
+                <Text style={s.historyEmptyTxt}>No purchases yet</Text>
+              </View>
+            )}
+
+          </StoreTabScroll>
+        )}
+
+        {/* ══ THEMES TAB ═════════════════════════════════════════════════════ */}
+        {activeTab === "themes" && (
+          <StoreTabScroll
+            contentContainerStyle={tabScrollContentStyle}
+            refreshControl={
+              <RefreshControl refreshing={themesLoading} onRefresh={handleRefreshThemes} tintColor="#22C55E" />
+            }
+          >
+            {themesLoading && sortedThemes.length === 0 ? (
+              <View style={s.themesGrid}>
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <View key={i} style={{ width: "47.8%", backgroundColor: colors.card, borderRadius: 12, borderWidth: 1, borderColor: colors.border, overflow: "hidden" }}>
+                    <View style={{ width: "100%", height: 88, backgroundColor: colors.muted }} />
+                    <View style={{ padding: 8 }}>
+                      <View style={{ height: 11, backgroundColor: colors.border, borderRadius: 6, width: "60%", marginBottom: 10 }} />
+                      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                        <View style={{ height: 18, backgroundColor: colors.border, borderRadius: 6, width: "35%" }} />
+                        <View style={{ height: 24, backgroundColor: colors.border, borderRadius: 8, width: "42%" }} />
+                      </View>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : themesError && sortedThemes.length === 0 ? (
+              <View style={s.center}>
+                <Feather name="alert-circle" size={36} color="#EF4444" />
+                <Text style={s.errorTxt}>Could not load track themes.</Text>
+                <Text style={s.errorHint}>Pull to refresh.</Text>
+              </View>
+            ) : lockedThemes.length === 0 && sortedThemes.length > 0 ? (
+              <View style={s.center}>
+                <Feather name="check-circle" size={40} color="#22C55E" />
+                <Text style={s.allOwnedTxt}>You've unlocked all track themes!</Text>
+              </View>
+            ) : (
+              <>
+                <View style={s.themesHeaderRow}>
+                  <Text style={s.sectionLabel}>AVAILABLE TO UNLOCK</Text>
+                  <Text style={s.themesCount}>{lockedThemes.length} themes</Text>
+                </View>
+                <View style={s.themesGrid}>
+                  {lockedThemes.map((theme) => (
+                    <ThemeCard
+                      key={theme.code}
+                      theme={theme}
+                      onUnlock={handleUnlock}
+                      onEquip={handleEquip}
+                    />
+                  ))}
+                </View>
+              </>
+            )}
+          </StoreTabScroll>
+        )}
+
+        {/* ══ PREMIUM TAB ════════════════════════════════════════════════════ */}
+        {activeTab === "premium" && (
+          <StoreTabScroll contentContainerStyle={tabScrollContentStyle}>
+            {ENABLE_MIC_PASS && (
+              <View style={s.micCard}>
+                {!hasMicPass && (
+                  <View style={s.micDiscBadge}><Text style={s.micDiscText}>LIFETIME</Text></View>
+                )}
+                <LinearGradient colors={["#2D1064", "#4C1D95"]} style={s.micGrad}>
+                  <View style={s.micIconCircle}><Feather name="mic" size={22} color="#fff" /></View>
+                  <View style={s.micInfo}>
+                    <Text style={s.micTitle}>Mic Pass</Text>
+                    <Text style={s.micSub}>{hasMicPass ? "Active forever · All races" : "Talk during live races"}</Text>
+                    {!hasMicPass && <Text style={s.micPromo}>One-time purchase · Never expires</Text>}
+                  </View>
+                  <View style={s.micRight}>
+                    {loadingMic ? (
+                      <SkeletonPriceTag width={64} height={32} />
+                    ) : hasMicPass ? (
+                      <View style={s.ownedBadge}>
+                        <Feather name="check-circle" size={14} color="#22C55E" />
+                        <Text style={s.ownedText}>Owned</Text>
+                      </View>
+                    ) : (
+                      <View style={s.micPriceCol}>
+                        <TouchableOpacity
+                          style={[s.micBuyBtn, (buyingMic || (!micPassPrice && iapReady)) && s.micBuyBtnDim]}
+                          onPress={handleBuyMicPass}
+                          disabled={buyingMic || (!micPassPrice && iapReady) || !!buyingProductId}
+                          activeOpacity={0.8}
+                        >
+                          {buyingMic ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : micPassPrice ? (
+                            <Text style={s.micBuyText}>{micPassPrice}</Text>
+                          ) : !iapReady ? (
+                            <SkeletonPriceTag width={64} height={32} />
+                          ) : (
+                            <Text style={[s.micBuyText, { fontSize: rf(11) }]}>—</Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                </LinearGradient>
+                {hasMicPass && (
+                  <View style={s.micActiveBar}>
+                    <Feather name="check-circle" size={13} color="#22C55E" />
+                    <Text style={s.micActiveText}>Mic Pass Active — Voice chat enabled in all races</Text>
+                  </View>
+                )}
+
+                {/* Restore Purchases — only shown when Mic Pass not yet owned */}
+                {!hasMicPass && (
+                  <TouchableOpacity
+                    style={s.restoreBtn}
+                    onPress={handleRestorePurchases}
+                    disabled={restoringMic}
+                    activeOpacity={0.7}
+                  >
+                    {restoringMic ? (
+                      <ActivityIndicator size="small" color="#A855F7" />
+                    ) : (
+                      <Text style={s.restoreTxt}>Restore Purchases</Text>
+                    )}
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+            {!ENABLE_MIC_PASS && (
+              <View style={s.center}>
+                <Feather name="star" size={36} color="#6B7280" />
+                <Text style={s.loadingTxt}>More premium items coming soon!</Text>
+              </View>
+            )}
+          </StoreTabScroll>
+        )}
+        </View>
+      </View>
+  );
+
+  if (standalone) {
+    return (
+      <SafeAreaView
+        edges={["top", "left", "right"]}
+        style={{ flex: 1, backgroundColor: colors.background }}
+      >
+        {storeBody}
+        <View style={{ marginBottom: tabBarHeight }} collapsable={false}>
+          <StoreBannerFooter />
+        </View>
+      </SafeAreaView>
+    );
+  }
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <SafeAreaView
+        edges={["top", "left", "right"]}
+        style={{ flex: 1, backgroundColor: colors.background }}
+      >
+        {storeBody}
+        <SafeAreaView edges={["bottom"]} style={{ backgroundColor: "#0B0D1A" }}>
+          <StoreBannerFooter />
+        </SafeAreaView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+export default memo(CoinsStoreModal);
+
+function makeStoreStyles(c: ReturnType<typeof useColors>) {
+  return {
+    root:           { flex: 1, backgroundColor: c.background },
+    header:         { flexDirection: "row" as const, alignItems: "center" as const, paddingHorizontal: rs(20), paddingTop: rs(12), paddingBottom: rs(14), gap: rs(12), borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
+    headerIcon:     { width: rs(44), height: rs(44) },
+    headerTextWrap: { flex: 1, minWidth: 0 },
+    headerTitle:    { fontSize: rf(22), fontWeight: "800" as const, color: c.foreground },
+    headerSub:      { fontSize: rf(12), color: c.mutedForeground, marginTop: 3, lineHeight: rf(17) },
+    closeBtn:       { width: rs(32), height: rs(32), borderRadius: rs(16), backgroundColor: c.muted, alignItems: "center" as const, justifyContent: "center" as const },
+    tabBar:         { flexDirection: "row" as const, marginHorizontal: rs(20), marginTop: rs(12), marginBottom: rs(4), backgroundColor: c.muted, borderRadius: rs(12), padding: 3 },
+    tabBtn:         { flex: 1, paddingVertical: 9, alignItems: "center" as const, borderRadius: 10 },
+    tabBtnActive:   { backgroundColor: c.secondary },
+    tabTxt:         { fontSize: 13, fontWeight: "600" as const, color: c.mutedForeground },
+    tabTxtActive:   { color: c.foreground, fontWeight: "800" as const },
+    balanceRow:     { flexDirection: "row" as const, alignItems: "center" as const, gap: 10, marginHorizontal: 20, marginTop: 10, marginBottom: 4, backgroundColor: c.muted, borderRadius: 14, borderWidth: 1, borderColor: c.border, paddingHorizontal: 16, paddingVertical: 12 },
+    balanceLabel:   { flex: 1, fontSize: 13, color: c.mutedForeground },
+    balanceValue:   { fontSize: 20, fontWeight: "900" as const, color: "#FFD700" },
+    scroll:         { paddingHorizontal: rs(20), paddingTop: rs(16), flexGrow: 1 },
+    fixedBanner:    { width: "100%", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border, backgroundColor: c.background, paddingTop: rs(4) },
+    sectionLabel:   { fontSize: 11, fontWeight: "700" as const, letterSpacing: 1.1, color: c.mutedForeground, marginBottom: 12 },
+    iapLoadingRow:  { flexDirection: "row" as const, alignItems: "center" as const, gap: 10, paddingVertical: 12 },
+    iapLoadingTxt:  { fontSize: 13, color: c.mutedForeground },
+    iapErrorCard:   { alignItems: "center" as const, gap: 10, backgroundColor: c.card, borderRadius: 14, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: "#F8717130" },
+    iapErrorTxt:    { fontSize: 13, color: "#F87171", textAlign: "center" as const },
+    retryBtn:       { backgroundColor: "#7C3AED", paddingHorizontal: 20, paddingVertical: 9, borderRadius: 10 },
+    retryTxt:       { fontSize: 13, fontWeight: "700" as const, color: "#fff" },
+    packCard:       { flexDirection: "row" as const, alignItems: "center" as const, backgroundColor: c.card, borderRadius: 16, borderWidth: 1, borderColor: c.border, paddingHorizontal: 14, paddingVertical: 14, marginBottom: 10, gap: 12 },
+    packTextCol:    { flex: 1, gap: 2 },
+    packCoins:      { fontSize: 17, fontWeight: "800" as const, color: "#FFD700" },
+    packSub:        { fontSize: 11, color: c.mutedForeground },
+    packBadge:      { paddingHorizontal: 9, paddingVertical: 3, borderRadius: 8, marginRight: 4 },
+    packBadgeGreen: { backgroundColor: "#14532D" },
+    packBadgeGold:  { backgroundColor: "#78350F" },
+    packBadgeText:  { fontSize: 10, fontWeight: "800" as const, letterSpacing: 0.3 },
+    priceBtn:       { backgroundColor: "#22C55E", paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, minWidth: 68, alignItems: "center" as const, justifyContent: "center" as const },
+    priceBtnDim:    { backgroundColor: c.muted },
+    priceBtnText:   { fontSize: 14, fontWeight: "900" as const, color: "#000" },
+    freeCard:       { flexDirection: "row" as const, alignItems: "center" as const, backgroundColor: c.card, borderRadius: 16, borderWidth: 1, borderColor: "#22C55E30", padding: 16, gap: 14, marginTop: 6, marginBottom: 8 },
+    freeIconCircle: { width: 44, height: 44, borderRadius: 22, backgroundColor: "#0B2A1A", alignItems: "center" as const, justifyContent: "center" as const, flexShrink: 0 },
+    freeTextCol:    { flex: 1, gap: 3 },
+    freeTitle:      { fontSize: 15, fontWeight: "700" as const, color: "#22C55E" },
+    freeSub:        { fontSize: 12, color: c.mutedForeground, lineHeight: 17 },
+    themesHeaderRow:{ flexDirection: "row" as const, alignItems: "center" as const, justifyContent: "space-between" as const, marginBottom: 12 },
+    themesCount:    { fontSize: 12, color: c.mutedForeground },
+    themesGrid:     { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 10 },
+    center:         { alignItems: "center" as const, justifyContent: "center" as const, paddingVertical: 60, gap: 12 },
+    loadingTxt:     { fontSize: 14, color: c.mutedForeground, marginTop: 4 },
+    errorTxt:       { fontSize: 15, fontWeight: "600" as const, color: "#EF4444" },
+    errorHint:      { fontSize: 13, color: c.mutedForeground },
+    allOwnedTxt:    { fontSize: 15, fontWeight: "700" as const, color: "#22C55E", textAlign: "center" as const },
+    micCard:        { borderRadius: 18, overflow: "hidden" as const, marginBottom: 20, borderWidth: 1, borderColor: "#7C3AED40" },
+    micDiscBadge:   { position: "absolute" as const, top: 0, right: 14, backgroundColor: "#7C3AED", paddingHorizontal: 10, paddingVertical: 4, borderBottomLeftRadius: 10, borderBottomRightRadius: 10, zIndex: 2 },
+    micDiscText:    { color: "#fff", fontSize: 11, fontWeight: "900" as const, letterSpacing: 0.5 },
+    micGrad:        { flexDirection: "row" as const, alignItems: "center" as const, padding: 18, paddingTop: 22, gap: 14 },
+    micIconCircle:  { width: 52, height: 52, borderRadius: 16, backgroundColor: "#7C3AED", alignItems: "center" as const, justifyContent: "center" as const, flexShrink: 0 },
+    micInfo:        { flex: 1, gap: 3 },
+    micTitle:       { fontSize: 18, fontWeight: "800" as const, color: c.foreground },
+    micSub:         { fontSize: 13, color: "#C4B5FD" },
+    micPromo:       { fontSize: 11, color: "#A78BFA", fontWeight: "700" as const },
+    micRight:       { alignItems: "flex-end" as const, gap: 4 },
+    micPriceCol:    { alignItems: "flex-end" as const, gap: 6 },
+    micOldPrice:    { fontSize: 13, color: c.mutedForeground, textDecorationLine: "line-through" as const },
+    micBuyBtn:      { backgroundColor: "#7C3AED", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, minWidth: 72, alignItems: "center" as const },
+    micBuyBtnDim:   { backgroundColor: "#3D1A6E" },
+    micBuyText:     { color: "#fff", fontSize: 15, fontWeight: "900" as const },
+    ownedBadge:     { flexDirection: "row" as const, alignItems: "center" as const, gap: 5, backgroundColor: "#0B2A1A", borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: "#22C55E30" },
+    ownedText:      { color: "#22C55E", fontSize: 13, fontWeight: "800" as const },
+    micActiveBar:   { flexDirection: "row" as const, alignItems: "center" as const, gap: 8, backgroundColor: "#0B2A1A", paddingHorizontal: 16, paddingVertical: 10 },
+    micActiveText:  { fontSize: 12, color: "#4ADE80", flex: 1 },
+    restoreBtn:     { alignItems: "center" as const, paddingVertical: 14, backgroundColor: c.muted },
+    restoreTxt:     { fontSize: 13, color: "#A855F7", fontWeight: "600" as const },
+    statsBanner:        { flexDirection: "row" as const, alignItems: "center" as const, justifyContent: "space-around" as const, backgroundColor: c.card, borderRadius: 14, borderWidth: 1, borderColor: c.border, paddingVertical: 14, paddingHorizontal: 10, marginTop: 8 },
+    statsBannerItem:    { alignItems: "center" as const, gap: 4, flex: 1 },
+    statsBannerNum:     { fontSize: 18, fontWeight: "900" as const, color: "#FFD700" },
+    statsBannerLabel:   { fontSize: 11, color: c.mutedForeground },
+    statsBannerDivider: { width: 1, height: 30, backgroundColor: c.border },
+    historyLoading:    { flexDirection: "row" as const, alignItems: "center" as const, gap: 8, paddingVertical: 14, justifyContent: "center" as const },
+    historyLoadingTxt: { fontSize: 12, color: c.mutedForeground },
+    historyRow:        { flexDirection: "row" as const, alignItems: "center" as const, gap: 10, backgroundColor: c.card, borderRadius: 14, borderWidth: 1, borderColor: c.border, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 8 },
+    historyIcon:       { width: 36, height: 36, borderRadius: 10, alignItems: "center" as const, justifyContent: "center" as const },
+    historyIconCoin:   { backgroundColor: c.muted },
+    historyIconMic:    { backgroundColor: "#2D1064" },
+    historyText:       { flex: 1, gap: 2 },
+    historyName:       { fontSize: 13, fontWeight: "700" as const, color: c.foreground },
+    historyDate:       { fontSize: 11, color: c.mutedForeground },
+    historyCoinsRow:   { flexDirection: "row" as const, alignItems: "center" as const, gap: 4 },
+    historyCoinsText:  { fontSize: 13, fontWeight: "800" as const, color: "#FFD700" },
+    historyMicBadge:   { backgroundColor: "#2D1064", paddingHorizontal: 7, paddingVertical: 3, borderRadius: 7 },
+    historyMicBadgeTxt:{ fontSize: 10, fontWeight: "800" as const, color: "#A855F7" },
+    historyEmpty:      { alignItems: "center" as const, gap: 6, paddingVertical: 20 },
+    historyEmptyTxt:   { fontSize: 12, color: c.mutedForeground },
+  };
+}

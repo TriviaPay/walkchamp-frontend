@@ -1,0 +1,189 @@
+{
+  "expo": {
+    "name": "Walk Champ",
+    "slug": "walkchamp",
+    "version": "1.0.1",
+    "orientation": "portrait",
+    "icon": "./assets/icons/WalkChampProgress0.png",
+    "scheme": ["globalwalkerleague", "walkchamp"],
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/icons/WalkChampProgress0.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0A0B14"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.globalwalkerleague.app",
+      "entitlements": {
+        "com.apple.developer.applesignin": [
+          "Default"
+        ]
+      },
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSMotionUsageDescription": "We count your steps only to rank you in walking challenges and leaderboards.",
+        "NSHealthShareUsageDescription": "We count your steps only to rank you in walking challenges and leaderboards.",
+        "NSLocationWhenInUseUsageDescription": "Location is used for GPS-verified walking mode and city leaderboards.",
+        "NSCameraUsageDescription": "Walk Champ needs camera access to take a profile photo.",
+        "NSPhotoLibraryUsageDescription": "Walk Champ needs access to your photos to upload a profile picture.",
+        "NSPhotoLibraryAddUsageDescription": "Walk Champ saves photos to your library.",
+        "NSMicrophoneUsageDescription": "Microphone permission is required to use Mic Pass voice chat during live races.",
+        "NSAppleIDUsageDescription": "Walk Champ uses Apple Sign-In to create and access your account securely."
+      }
+    },
+    "android": {
+      "softwareKeyboardLayoutMode": "pan",
+      "permissions": [
+        "com.android.vending.BILLING",
+        "android.permission.ACTIVITY_RECOGNITION",
+        "android.permission.BODY_SENSORS",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.health.READ_STEPS",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_HEALTH",
+        "android.permission.WAKE_LOCK"
+      ],
+      "package": "com.globalwalkerleague.app",
+      "versionCode": 7,
+      "navigationBar": {
+        "backgroundColor": "#0A0B14",
+        "barStyle": "light-content"
+      },
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icons/adaptive/WalkChampProgress0.png",
+        "backgroundColor": "#0A0B14"
+      }
+    },
+    "web": {
+      "favicon": "./assets/icons/WalkChampProgress0.png"
+    },
+    "plugins": [
+      "expo-dev-client",
+      [
+        "onesignal-expo-plugin",
+        {
+          "mode": "production"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26,
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "extraProguardRules": "-keep class com.globalwalkerleague.walkchampraceprogress.** { *; }\n-keep class expo.modules.** { *; }\n-keep class expo.modules.ExpoModulesPackageList { *; }\n-keep class com.facebook.react.** { *; }\n-keep @expo.modules.core.interfaces.DoNotStrip class *"
+          }
+        }
+      ],
+      "./plugins/withHealthConnectManifest.js",
+      "./plugins/withHealthConnectPermissionDelegate.js",
+      "./plugins/withAndroidPackageVisibility.js",
+      [
+        "react-native-health-connect",
+        {
+          "showHealthConnectPermissionRationale": true
+        }
+      ],
+      "./plugins/withIapStoreFlavor.js",
+      "./plugins/withCodegenCMakeFix.js",
+      "./plugins/withReactNativeIapKotlinFix.js",
+      [
+        "expo-router",
+        {
+          "origin": false
+        }
+      ],
+      "expo-font",
+      "expo-web-browser",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Walk Champ needs access to your photos to upload a profile picture.",
+          "cameraPermission": "Walk Champ needs camera access to take a profile photo."
+        }
+      ],
+      [
+        "expo-sensors",
+        {
+          "motionPermission": "Walk Champ needs your physical activity permission to count steps and compete in challenges."
+        }
+      ],
+      "@livekit/react-native-expo-plugin",
+      [
+        "expo-alternate-app-icons",
+        [
+          {
+            "name": "WalkChampProgress0",
+            "ios": "./assets/icons/WalkChampProgress0.png",
+            "android": {
+              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress0.png",
+              "backgroundColor": "#0A0B14"
+            }
+          },
+          {
+            "name": "WalkChampProgress25",
+            "ios": "./assets/icons/WalkChampProgress25.png",
+            "android": {
+              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress25.png",
+              "backgroundColor": "#0A0B14"
+            }
+          },
+          {
+            "name": "WalkChampProgress50",
+            "ios": "./assets/icons/WalkChampProgress50.png",
+            "android": {
+              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress50.png",
+              "backgroundColor": "#0A0B14"
+            }
+          },
+          {
+            "name": "WalkChampProgress75",
+            "ios": "./assets/icons/WalkChampProgress75.png",
+            "android": {
+              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress75.png",
+              "backgroundColor": "#0A0B14"
+            }
+          },
+          {
+            "name": "WalkChampProgress100",
+            "ios": "./assets/icons/WalkChampProgress100.png",
+            "android": {
+              "foregroundImage": "./assets/icons/adaptive/WalkChampProgress100.png",
+              "backgroundColor": "#0A0B14"
+            }
+          }
+        ]
+      ],
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-3940256099942544~3347511713",
+          "iosAppId": "ca-app-pub-3940256099942544~1458002511"
+        }
+      ],
+      "react-native-iap",
+      "./plugins/withSplitSchemeIntentFilters.js",
+      "./plugins/withWalkChampProgressIcons.js",
+      "./plugins/withWalkChampRaceProgress.js",
+      "./plugins/withWalkChampForegroundService.js",
+      "./plugins/withPaymentAppLinks.js"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "90d7e556-85e1-44db-8cd5-2f2e6bc0ed7b"
+      }
+    },
+    "owner": "miragamings-organization"
+  }
+}

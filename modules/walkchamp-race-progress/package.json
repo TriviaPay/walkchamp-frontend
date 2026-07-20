@@ -1,0 +1,13 @@
+{
+  "name": "walkchamp-race-progress",
+  "version": "1.0.0",
+  "main": "index.js",
+  "private": true,
+  "peerDependencies": {
+    "expo": "*",
+    "expo-modules-core": "*"
+  },
+  "dependencies": {
+    "expo-modules-core": "~3.0.30"
+  }
+}

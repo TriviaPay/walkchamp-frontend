@@ -1,0 +1,16 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.globalwalkerleague.walkchampraceprogress'
+version = '1.0.0'
+
+android {
+  namespace "com.globalwalkerleague.walkchampraceprogress"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+    missingDimensionStrategy 'store', 'play'
+  }
+}

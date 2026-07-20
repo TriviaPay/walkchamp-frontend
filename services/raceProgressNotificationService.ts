@@ -1,0 +1,574 @@
+import { Platform } from "react-native";
+import { FEATURE_FLAGS } from "@/config/featureFlags";
+import { RACE_PROGRESS_NOTIFICATION_CONFIG } from "@/config/raceProgressNotificationConfig";
+import { registerLiveActivityToken } from "@/services/raceProgressApi";
+import { getValidSession } from "@/services/authService";
+import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import { store } from "@/store";
+import { getNotificationPermissionStatus } from "@/services/permissions/notificationPermissionService";
+
+const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
+
+export type RaceProgressNotificationPayload = {
+  raceId: string;
+  userId: string;
+  username: string;
+  raceSteps: number;
+  rank: number;
+  totalParticipants: number;
+  goalSteps: number;
+  timeLeftSeconds: number;
+  raceStatus?: string;
+  lastSyncedAt?: string;
+  /** Absolute race end (ISO or epoch ms). Used once to seed native countdown chronometer. */
+  challengeEndAt?: string | number;
+  /** Drives "Sponsored Event" vs "Live Race" notification title. */
+  isSponsored?: boolean;
+};
+
+type NativeModule = {
+  startRaceProgressNotification: (payload: Record<string, unknown>) => Promise<void>;
+  updateRaceProgressNotification: (payload: Record<string, unknown>) => Promise<void>;
+  stopRaceProgressNotification: (payload: { raceId: string; reason?: string }) => Promise<void>;
+  upsertParallelRaceProgressNotification?: (
+    payload: Record<string, unknown>,
+  ) => Promise<void>;
+  stopParallelRaceProgressNotification?: (payload: { raceId: string }) => Promise<void>;
+  startRaceBackgroundService?: (payload: Record<string, unknown>) => Promise<void>;
+  updateRaceBackgroundService?: (payload: Record<string, unknown>) => Promise<void>;
+  stopRaceBackgroundService?: (payload: {
+    raceId: string;
+    reason?: string;
+    todaySteps?: number;
+  }) => Promise<void>;
+  getRaceBackgroundState?: () => Promise<string | null>;
+  startRaceLiveActivity: (
+    payload: Record<string, unknown>,
+  ) => Promise<{ activityId?: string; pushToken?: string }>;
+  updateRaceLiveActivity: (payload: Record<string, unknown>) => Promise<void>;
+  endRaceLiveActivity: (payload: { raceId: string; raceStatus?: string }) => Promise<void>;
+  enableRaceHealthKitBackground?: (raceStartISO: string) => Promise<void>;
+  disableRaceHealthKitBackground?: () => Promise<void>;
+  addListener?: (event: string, handler: () => void) => { remove: () => void };
+};
+
+let nativeModule: NativeModule | null | undefined;
+let notificationPermissionDenied = false;
+let healthKitWakeSubscription: { remove: () => void } | null = null;
+
+function getNativeModule(): NativeModule | null {
+  if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return null;
+  if (nativeModule !== undefined) return nativeModule;
+  try {
+    const { isAppStartupReady } = require("@/services/appStartup") as typeof import("@/services/appStartup");
+    // Do not cache null before startup — bridge may not be ready yet.
+    if (!isAppStartupReady()) return null;
+    const { requireOptionalExpoNativeModule } = require("@/utils/expoNativeModule") as typeof import("@/utils/expoNativeModule");
+    nativeModule = requireOptionalExpoNativeModule<NativeModule>("WalkChampRaceProgress");
+  } catch (err) {
+    if (__DEV__) console.warn("[RaceProgressNotif] native module unavailable", err);
+    nativeModule = null;
+  }
+  return nativeModule ?? null;
+}
+
+async function checkAndroidNotificationPermission(): Promise<boolean> {
+  if (Platform.OS !== "android") return true;
+  const status = await getNotificationPermissionStatus();
+  const ok = status === "granted";
+  notificationPermissionDenied = !ok;
+  return ok;
+}
+
+async function toNativePayload(
+  payload: RaceProgressNotificationPayload,
+  raceStartISO?: string,
+): Promise<Record<string, unknown>> {
+  const session = await getValidSession();
+  const out: Record<string, unknown> = {
+    raceId: payload.raceId,
+    userId: payload.userId,
+    username: payload.username,
+    raceSteps: payload.raceSteps,
+    rank: payload.rank,
+    totalParticipants: payload.totalParticipants,
+    goalSteps: payload.goalSteps,
+    timeLeftSeconds: payload.timeLeftSeconds,
+    raceStatus: payload.raceStatus ?? "in_progress",
+    raceStartTime: raceStartISO,
+    stepSource: stepProviderManager.toRaceProgressSource(),
+    apiBaseUrl: API_BASE,
+    authToken: session ?? "",
+    deepLink: `walkchamp://race/${payload.raceId}`,
+    body: formatRaceNotificationBody(payload),
+  };
+  if (payload.challengeEndAt != null && payload.challengeEndAt !== "") {
+    out.challengeEndAt = payload.challengeEndAt;
+  }
+  // Title type is explicit only — having an end window does not mean sponsored.
+  if (payload.isSponsored === true) {
+    out.isSponsored = true;
+  }
+  return out;
+}
+
+function formatGoalSteps(goalSteps: number): string {
+  const goal = Math.max(0, goalSteps);
+  if (goal >= 1000 && goal % 1000 === 0) return `${goal / 1000}K`;
+  return goal.toLocaleString();
+}
+
+function formatRaceNotificationBody(payload: RaceProgressNotificationPayload): string {
+  // Race duration / countdown is not shown as a shade chronometer.
+  // Body stays steps / rank / goal only.
+  const steps = payload.raceSteps.toLocaleString();
+  const goal = formatGoalSteps(payload.goalSteps);
+  const openHint = payload.timeLeftSeconds > 0 ? "" : " • Open";
+  return `${steps} steps • #${payload.rank}/${payload.totalParticipants} • Goal ${goal}${openHint}`;
+}
+
+type ParallelRaceCache = {
+  payload: RaceProgressNotificationPayload;
+  raceStartISO: string | null;
+  /** Device todaySteps when parallel notif was started — for incremental race step estimates. */
+  bootTodaySteps: number;
+  bootRaceSteps: number;
+  lastLocalUpdateMs: number;
+  lastSteps: number;
+};
+
+class RaceProgressNotificationService {
+  private activeRaceId: string | null = null;
+  private parallelRaceId: string | null = null;
+  private parallelCache: ParallelRaceCache | null = null;
+  private lastLocalUpdateMs = 0;
+  private lastSteps = -1;
+  private lastRank = -1;
+  private lastTimeLeft = -1;
+  private registerTimer: ReturnType<typeof setTimeout> | null = null;
+  private onHealthKitWake: (() => void) | null = null;
+
+  private clearRegisterTimer(): void {
+    if (this.registerTimer) {
+      clearTimeout(this.registerTimer);
+      this.registerTimer = null;
+    }
+  }
+
+  isNotificationPermissionDenied(): boolean {
+    return notificationPermissionDenied;
+  }
+
+  getActiveRaceId(): string | null {
+    return this.activeRaceId;
+  }
+
+  getParallelRaceId(): string | null {
+    return this.parallelRaceId;
+  }
+
+  setHealthKitWakeHandler(handler: (() => void) | null): void {
+    this.onHealthKitWake = handler;
+  }
+
+  private shouldThrottle(
+    steps: number,
+    rank: number,
+    timeLeftSeconds: number,
+    force = false,
+  ): boolean {
+    if (force) return false;
+    const now = Date.now();
+    const cfg = RACE_PROGRESS_NOTIFICATION_CONFIG;
+    if (now - this.lastLocalUpdateMs < cfg.LOCAL_UPDATE_MS) return true;
+    if (
+      Math.abs(steps - this.lastSteps) < cfg.MIN_STEP_DELTA_FOR_UPDATE &&
+      rank === this.lastRank &&
+      timeLeftSeconds === this.lastTimeLeft
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  private markUpdated(steps: number, rank: number, timeLeftSeconds: number): void {
+    this.lastLocalUpdateMs = Date.now();
+    this.lastSteps = steps;
+    this.lastRank = rank;
+    this.lastTimeLeft = timeLeftSeconds;
+  }
+
+  private async registerLiveActivityTokenWithRetry(
+    raceId: string,
+    activityId: string,
+    initialToken: string,
+  ): Promise<void> {
+    const tryRegister = async (token: string) => {
+      if (!token) return false;
+      try {
+        await registerLiveActivityToken(raceId, activityId, token, "ios");
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (await tryRegister(initialToken)) return;
+
+    for (const delayMs of [1500, 3000, 5000]) {
+      await new Promise((r) => setTimeout(r, delayMs));
+      const native = getNativeModule();
+      if (!native?.startRaceLiveActivity) return;
+      // Token may arrive after start — re-read from a no-op update path is unnecessary;
+      // backend registration retries on next progress sync if needed.
+      if (initialToken && (await tryRegister(initialToken))) return;
+    }
+  }
+
+  private raceStartISO: string | null = null;
+
+  async start(payload: RaceProgressNotificationPayload, raceStartISO?: string): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    // Defensive: never start participant-only live race notification without identity.
+    if (!payload.raceId || !payload.userId) {
+      if (__DEV__) {
+        console.warn("[RaceProgressNotif] start blocked — missing raceId/userId");
+      }
+      return;
+    }
+    const native = getNativeModule();
+    if (!native) return;
+
+    this.clearRegisterTimer();
+    // If this race was shown as the parallel tray entry, drop it first.
+    if (this.parallelRaceId === payload.raceId) {
+      await this.stopParallel(payload.raceId);
+    }
+    this.activeRaceId = payload.raceId;
+    this.raceStartISO = raceStartISO ?? null;
+    this.lastSteps = -1;
+    this.lastRank = -1;
+    this.lastTimeLeft = -1;
+    const nativePayload = await toNativePayload(payload, raceStartISO);
+
+    try {
+      if (Platform.OS === "android") {
+        const permitted = await checkAndroidNotificationPermission();
+        if (!permitted) {
+          console.warn(
+            "[RaceProgressNotif] POST_NOTIFICATIONS denied — FGS still starting",
+          );
+        }
+        const { ensureActivityRecognitionPermission } = await import(
+          "@/services/permissions/activityRecognitionPermissionService"
+        );
+        const arGranted = await ensureActivityRecognitionPermission();
+        if (!arGranted) {
+          console.warn(
+            "[RaceProgressNotif] ACTIVITY_RECOGNITION denied — health FGS not started",
+          );
+          return;
+        }
+        const startFn =
+          native.startRaceBackgroundService ?? native.startRaceProgressNotification;
+        if (startFn) {
+          await startFn(nativePayload);
+        }
+        if (__DEV__) {
+          console.log(`[RaceNotification] startForeground raceId=${payload.raceId}`);
+        }
+      }
+
+      if (Platform.OS === "ios") {
+        if (raceStartISO && native.enableRaceHealthKitBackground) {
+          await native.enableRaceHealthKitBackground(raceStartISO);
+          healthKitWakeSubscription?.remove();
+          if (native.addListener) {
+            healthKitWakeSubscription = native.addListener("onHealthKitRaceStepsWake", () => {
+              this.onHealthKitWake?.();
+            });
+          }
+        }
+        if (native.startRaceLiveActivity) {
+          const result = await native.startRaceLiveActivity(nativePayload);
+          const activityId = result?.activityId;
+          const pushToken = result?.pushToken ?? "";
+          if (activityId) {
+            void this.registerLiveActivityTokenWithRetry(payload.raceId, activityId, pushToken);
+          }
+        }
+      }
+      this.markUpdated(payload.raceSteps, payload.rank, payload.timeLeftSeconds);
+    } catch (err) {
+      if (__DEV__) console.warn("[RaceProgressNotif] start failed", err);
+    }
+  }
+
+  /**
+   * Second concurrent race notification (Android notify-only id 1002).
+   * Keeps sponsored + free/coins both visible alongside the daily walk notif.
+   */
+  async startParallel(
+    payload: RaceProgressNotificationPayload,
+    raceStartISO?: string,
+  ): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    if (!payload.raceId || !payload.userId) return;
+    if (this.activeRaceId === payload.raceId) {
+      if (__DEV__) {
+        console.log(
+          `[RaceNotification] skip parallel — already FGS primary raceId=${payload.raceId}`,
+        );
+      }
+      return;
+    }
+    if (Platform.OS !== "android") return;
+    const native = getNativeModule();
+    if (!native?.upsertParallelRaceProgressNotification) {
+      if (__DEV__) {
+        console.warn(
+          "[RaceProgressNotif] upsertParallelRaceProgressNotification missing — rebuild native app",
+        );
+      }
+      return;
+    }
+
+    const permitted = await checkAndroidNotificationPermission();
+    if (!permitted) {
+      console.warn("[RaceProgressNotif] parallel notif skipped — POST_NOTIFICATIONS denied");
+      return;
+    }
+
+    const todaySteps = store.getState().raceProgress.todaySteps;
+    this.parallelRaceId = payload.raceId;
+    this.parallelCache = {
+      payload: { ...payload },
+      raceStartISO: raceStartISO ?? null,
+      bootTodaySteps: todaySteps,
+      bootRaceSteps: Math.max(0, payload.raceSteps),
+      lastLocalUpdateMs: 0,
+      lastSteps: -1,
+    };
+
+    try {
+      const nativePayload = await toNativePayload(payload, raceStartISO);
+      await native.upsertParallelRaceProgressNotification(nativePayload);
+      this.parallelCache.lastLocalUpdateMs = Date.now();
+      this.parallelCache.lastSteps = payload.raceSteps;
+      if (__DEV__) {
+        console.log(`[RaceNotification] parallel start raceId=${payload.raceId}`);
+      }
+    } catch (err) {
+      if (__DEV__) console.warn("[RaceProgressNotif] parallel start failed", err);
+    }
+  }
+
+  async stopParallel(raceId: string): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    if (Platform.OS !== "android") return;
+    if (this.parallelRaceId && this.parallelRaceId !== raceId) return;
+    const native = getNativeModule();
+    this.parallelRaceId = null;
+    this.parallelCache = null;
+    if (!native?.stopParallelRaceProgressNotification) return;
+    try {
+      await native.stopParallelRaceProgressNotification({ raceId });
+      if (__DEV__) {
+        console.log(`[RaceNotification] parallel stop raceId=${raceId}`);
+      }
+    } catch (err) {
+      if (__DEV__) console.warn("[RaceProgressNotif] parallel stop failed", err);
+    }
+  }
+
+  async updateParallel(
+    payload: RaceProgressNotificationPayload,
+    forceUpdate = false,
+  ): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    if (Platform.OS !== "android") return;
+    if (!this.parallelRaceId || this.parallelRaceId !== payload.raceId) return;
+    if (!this.parallelCache) return;
+    const native = getNativeModule();
+    if (!native?.upsertParallelRaceProgressNotification) return;
+
+    const cfg = RACE_PROGRESS_NOTIFICATION_CONFIG;
+    const now = Date.now();
+    if (
+      !forceUpdate &&
+      now - this.parallelCache.lastLocalUpdateMs < cfg.LOCAL_UPDATE_MS &&
+      Math.abs(payload.raceSteps - this.parallelCache.lastSteps) <
+        cfg.MIN_STEP_DELTA_FOR_UPDATE
+    ) {
+      return;
+    }
+
+    const merged: RaceProgressNotificationPayload = {
+      ...this.parallelCache.payload,
+      ...payload,
+      raceId: this.parallelRaceId,
+    };
+    this.parallelCache.payload = merged;
+
+    try {
+      const nativePayload = await toNativePayload(
+        merged,
+        this.parallelCache.raceStartISO ?? undefined,
+      );
+      await native.upsertParallelRaceProgressNotification(nativePayload);
+      this.parallelCache.lastLocalUpdateMs = now;
+      this.parallelCache.lastSteps = payload.raceSteps;
+    } catch (err) {
+      if (__DEV__) console.warn("[RaceProgressNotif] parallel update failed", err);
+    }
+  }
+
+  /**
+   * Bump parallel race steps from device today total (companion races sync via deviceTotalSteps).
+   */
+  async onCompanionDeviceStepsUpdated(todaySteps: number, force = false): Promise<void> {
+    if (!this.parallelCache || !this.parallelRaceId) return;
+    const delta = Math.max(0, todaySteps - this.parallelCache.bootTodaySteps);
+    const raceSteps = this.parallelCache.bootRaceSteps + delta;
+    await this.updateParallel(
+      {
+        ...this.parallelCache.payload,
+        raceSteps,
+      },
+      force,
+    );
+  }
+
+  async stop(raceId: string, raceStatus = "completed", todaySteps?: number): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    const native = getNativeModule();
+    if (!native) return;
+
+    // Stopping the companion race must not tear down the FGS primary.
+    if (this.parallelRaceId === raceId && this.activeRaceId !== raceId) {
+      await this.stopParallel(raceId);
+      return;
+    }
+
+    this.clearRegisterTimer();
+    healthKitWakeSubscription?.remove();
+    healthKitWakeSubscription = null;
+    if (this.activeRaceId === raceId) {
+      this.activeRaceId = null;
+      this.raceStartISO = null;
+    }
+    try {
+      if (Platform.OS === "android") {
+        const stopFn =
+          native.stopRaceBackgroundService ?? native.stopRaceProgressNotification;
+        if (stopFn) {
+          await stopFn({ raceId, reason: raceStatus, todaySteps: todaySteps ?? 0 });
+        }
+      }
+      if (Platform.OS === "ios") {
+        if (native.disableRaceHealthKitBackground) {
+          await native.disableRaceHealthKitBackground();
+        }
+        if (native.endRaceLiveActivity) {
+          await native.endRaceLiveActivity({ raceId, raceStatus });
+        }
+      }
+    } catch (err) {
+      if (__DEV__) console.warn("[RaceProgressNotif] stop failed", err);
+    }
+  }
+
+  /** Stop any active race notification (logout / global cleanup). */
+  async stopAll(todaySteps?: number, reason = "cancelled"): Promise<void> {
+    if (this.parallelRaceId) {
+      await this.stopParallel(this.parallelRaceId);
+    }
+    if (this.activeRaceId) {
+      await this.stop(this.activeRaceId, reason, reason === "logout" ? 0 : todaySteps);
+    }
+    notificationPermissionDenied = false;
+  }
+
+  async onLocalRaceStepsUpdated(
+    payload: RaceProgressNotificationPayload,
+    forceUpdate = false,
+  ): Promise<void> {
+    await this.onBackendProgressSynced(payload, forceUpdate);
+  }
+
+  async onBackendProgressSynced(
+    payload: RaceProgressNotificationPayload,
+    forceUpdate = false,
+  ): Promise<void> {
+    if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
+    const native = getNativeModule();
+    if (!native) return;
+
+    if (!payload.raceId || this.activeRaceId !== payload.raceId) return;
+    if (payload.raceStatus === "completed" || payload.raceStatus === "cancelled") {
+      const todaySteps = store.getState().raceProgress.todaySteps;
+      await this.stop(payload.raceId, payload.raceStatus, todaySteps);
+      return;
+    }
+    const forceByGoal = payload.goalSteps > 0 && payload.raceSteps >= payload.goalSteps;
+    if (
+      this.shouldThrottle(
+        payload.raceSteps,
+        payload.rank,
+        payload.timeLeftSeconds,
+        forceUpdate || forceByGoal,
+      )
+    ) {
+      return;
+    }
+
+    const nativePayload = await toNativePayload(payload, this.raceStartISO ?? undefined);
+    try {
+      if (Platform.OS === "android") {
+        const updateFn =
+          native.updateRaceBackgroundService ?? native.updateRaceProgressNotification;
+        if (updateFn) {
+          await updateFn(nativePayload);
+        }
+      }
+      if (Platform.OS === "ios" && native.updateRaceLiveActivity) {
+        await native.updateRaceLiveActivity(nativePayload);
+      }
+      this.markUpdated(payload.raceSteps, payload.rank, payload.timeLeftSeconds);
+    } catch (err) {
+      if (__DEV__) console.warn("[RaceProgressNotif] update failed", err);
+    }
+  }
+
+  /** Read last native FGS race state (Android) for hydrate on resume. */
+  async getNativeRaceState(): Promise<string | null> {
+    if (Platform.OS !== "android") return null;
+    const native = getNativeModule();
+    if (!native?.getRaceBackgroundState) return null;
+    try {
+      return await native.getRaceBackgroundState();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Return the race step count last persisted by the native foreground service
+   * (Android only). Parsed from the same JSON blob used for hydration on resume.
+   * Returns null on iOS or when the native service has no state.
+   * Used by stepDisplayMerge to reconcile native FGS state on app resume.
+   */
+  async getNativeRaceSteps(): Promise<number | null> {
+    const raw = await this.getNativeRaceState();
+    if (!raw) return null;
+    try {
+      const json = JSON.parse(raw) as Record<string, unknown>;
+      const steps = typeof json.raceSteps === "number" ? json.raceSteps : undefined;
+      return steps ?? null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+export const raceProgressNotificationService = new RaceProgressNotificationService();
