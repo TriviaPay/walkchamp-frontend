@@ -4,9 +4,35 @@ import {
 } from "@/utils/sponsoredEventRegistration";
 
 export type SponsoredCardStatus =
-  | { kind: "racing"; eventId: string }
-  | { kind: "join_window"; eventId: string; registeredCount: number; maxSlots: number }
-  | { kind: "registered"; eventId: string; scheduledStartAt: string; registeredCount: number; maxSlots: number }
+  | {
+      kind: "racing";
+      eventId: string;
+      registeredCount?: number;
+      maxSlots?: number;
+      targetSteps?: number;
+      prizePoolCents?: number;
+      prizePerWinnerCents?: number;
+    }
+  | {
+      kind: "join_window";
+      eventId: string;
+      scheduledStartAt?: string | null;
+      registeredCount: number;
+      maxSlots: number;
+      targetSteps?: number;
+      prizePoolCents?: number;
+      prizePerWinnerCents?: number;
+    }
+  | {
+      kind: "registered";
+      eventId: string;
+      scheduledStartAt: string;
+      registeredCount: number;
+      maxSlots: number;
+      targetSteps?: number;
+      prizePoolCents?: number;
+      prizePerWinnerCents?: number;
+    }
   | { kind: "available"; eventId: string; registeredCount: number; maxSlots: number }
   | { kind: "watch_live"; eventId: string };
 
@@ -20,6 +46,9 @@ type SponsoredEventLike = {
   scheduledStartAt: string | null;
   registeredCount: number;
   maxSlots: number;
+  targetSteps?: number;
+  prizePoolCents?: number;
+  prizePerWinnerCents?: number;
 };
 
 /** Same priority rules previously inlined on the Walk tab. */
@@ -29,7 +58,15 @@ export function mapSponsoredEventsToCardStatus(
   const evs = events ?? [];
   for (const ev of evs) {
     if (ev.status === "in_progress" && ev.isActive) {
-      return { kind: "racing", eventId: ev.id };
+      return {
+        kind: "racing",
+        eventId: ev.id,
+        registeredCount: ev.registeredCount,
+        maxSlots: ev.maxSlots,
+        targetSteps: ev.targetSteps,
+        prizePoolCents: ev.prizePoolCents,
+        prizePerWinnerCents: ev.prizePerWinnerCents,
+      };
     }
   }
   for (const ev of evs) {
@@ -37,8 +74,12 @@ export function mapSponsoredEventsToCardStatus(
       return {
         kind: "join_window",
         eventId: ev.id,
+        scheduledStartAt: ev.scheduledStartAt,
         registeredCount: ev.registeredCount,
         maxSlots: ev.maxSlots,
+        targetSteps: ev.targetSteps,
+        prizePoolCents: ev.prizePoolCents,
+        prizePerWinnerCents: ev.prizePerWinnerCents,
       };
     }
   }
@@ -50,6 +91,9 @@ export function mapSponsoredEventsToCardStatus(
         scheduledStartAt: ev.scheduledStartAt!,
         registeredCount: ev.registeredCount,
         maxSlots: ev.maxSlots,
+        targetSteps: ev.targetSteps,
+        prizePoolCents: ev.prizePoolCents,
+        prizePerWinnerCents: ev.prizePerWinnerCents,
       };
     }
   }

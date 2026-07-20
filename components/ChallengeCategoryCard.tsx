@@ -16,6 +16,11 @@ export interface ChallengeStatus {
   joinedCount: number;
   maxPlayers: number;
   targetSteps?: number;
+  /** Present for scheduled challenges when the available API includes it. */
+  scheduledStartAt?: string | null;
+  entryAmountCents?: number;
+  coinEntryAmount?: number;
+  prizePoolCents?: number;
   canHost: boolean;
   canJoin: boolean;
   isActive: boolean;
@@ -37,6 +42,7 @@ interface Props {
   entryKey: string;
   cs: ChallengeStatus | undefined;
   isJoining: boolean;
+  hideChevron?: boolean;
   onPress: () => void;
   onHostNew: () => void;
   onWatchLive: () => void;
@@ -44,7 +50,7 @@ interface Props {
 
 export function ChallengeCategoryCard({
   label, subtitle, icon, iconImage, gradientColors, lightAccent, cs,
-  isJoining, onPress, onHostNew, onWatchLive,
+  isJoining, hideChevron, onPress, onHostNew, onWatchLive,
 }: Props) {
   const { isDark } = useTheme();
 
@@ -85,7 +91,9 @@ export function ChallengeCategoryCard({
               maxPlayers={cs?.maxPlayers ?? 10}
               label={statusLabel}
             />
-            <Feather name="chevron-right" size={18} color="rgba(255,255,255,0.8)" />
+            {!hideChevron && (
+              <Feather name="chevron-right" size={18} color="rgba(255,255,255,0.8)" />
+            )}
           </>
         )}
       </View>

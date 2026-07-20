@@ -19,6 +19,11 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { BlueShoe } from "@/components/BlueShoe";
 import { RaceJoinBadge, JoinProgressOverlay } from "@/components/RaceJoinBadge";
+import {
+  RaceStartingSoonCard,
+  type RaceStartingSoonChallengeType,
+  type RaceStartingSoonPhase,
+} from "@/components/RaceStartingSoonCard";
 import { ensureMatchStepPermissionsReady } from "@/services/permissions/matchPermissionGate";
 import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -191,8 +196,8 @@ const RACE_OPTIONS = [
     fee: 3,
     label: "$3 Challenge",
     subtitle: "Larger reward pool · Skill-based walking challenge",
-    gradientColors: ["#00B4FF", "#4C6EF5"] as [string, string],
-    lightAccent: "#6366F1",
+    gradientColors: ["#4C0519", "#BE123C"] as [string, string],
+    lightAccent: "#FB7185",
     icon: "trending-up",
     iconImage: undefined as (ReturnType<typeof require> | undefined), },
   {
@@ -2107,6 +2112,21 @@ function WalkScreenContent() {
   const [roomCounts, setRoomCounts] = useState<{ current: number; upcoming: number; total: number }>({ current: 0, upcoming: 0, total: 0 });
   const roomPulseAnim = useRef(new Animated.Value(1)).current;
 
+  /** Registered upcoming rooms for Next Race (same source as Available Rooms). */
+  type WalkUpcomingRoom = {
+    room_id: string;
+    challenge_type: string;
+    entry_fee: number;
+    coin_entry_amount: number;
+    target_steps: number;
+    max_players: number;
+    registered_count: number;
+    scheduled_start_at: string | null;
+    current_user_registered: boolean;
+    host_user_id: string;
+  };
+  const [registeredUpcomingRooms, setRegisteredUpcomingRooms] = useState<WalkUpcomingRoom[]>([]);
+
   // Group count for the compact "Groups" entry — reuse Groups screen cache only (no new API).
   const GROUPS_CACHE_KEY = "screen_groups_overview";
   const [groupCount, setGroupCount] = useState(() => {
@@ -2133,22 +2153,45 @@ function WalkScreenContent() {
     } catch {}
   }, []);
 
+  const fetchRegisteredUpcomingRooms = useCallback(async () => {
+    try {
+      const res = await authFetch("/api/rooms/available?tab=upcoming");
+      if (!res.ok) return;
+      const data = await res.json() as { rooms?: WalkUpcomingRoom[] };
+      const now = Date.now();
+      setRegisteredUpcomingRooms(
+        (data.rooms ?? []).filter(
+          (r) =>
+            r.current_user_registered &&
+            !!r.scheduled_start_at &&
+            new Date(r.scheduled_start_at).getTime() > now,
+        ),
+      );
+    } catch {
+      /* keep previous Next Race list */
+    }
+  }, []);
+
   useFocusEffect(useCallback(() => {
     void fetchRoomCounts();
+    void fetchRegisteredUpcomingRooms();
     void syncGroupCountFromCache();
-  }, [fetchRoomCounts, syncGroupCountFromCache]));
+  }, [fetchRoomCounts, fetchRegisteredUpcomingRooms, syncGroupCountFromCache]));
 
   useEffect(() => {
     const ch = subscribeToChannel("public-rooms-available");
     if (!ch) return;
-    const refetch = () => { void fetchRoomCounts(); };
+    const refetch = () => {
+      void fetchRoomCounts();
+      void fetchRegisteredUpcomingRooms();
+    };
     ch.bind("room:created",   refetch);
     ch.bind("room:scheduled", refetch);
     ch.bind("room:started",   refetch);
     ch.bind("room:cancelled", refetch);
     ch.bind("room:finished",  refetch);
     return () => { unsubscribeFromChannel("public-rooms-available"); };
-  }, [fetchRoomCounts]);
+  }, [fetchRoomCounts, fetchRegisteredUpcomingRooms]);
 
   useEffect(() => {
     if (roomCounts.total <= 0) { roomPulseAnim.stopAnimation(); roomPulseAnim.setValue(1); return; }
@@ -2176,6 +2219,10 @@ function WalkScreenContent() {
             canRegister: boolean;
             scheduledStartAt: string | null;
             registeredCount: number; maxSlots: number;
+            targetSteps?: number;
+            prizePoolCents?: number;
+            prizePerWinnerCents?: number;
+            entryCoinFee?: number;
           }>;
         };
         const evs = data.events ?? [];
@@ -2183,14 +2230,31 @@ function WalkScreenContent() {
         let next: SponsoredCardStatus | null = null;
         for (const ev of evs) {
           if (ev.status === "in_progress" && ev.isActive) {
-            next = { kind: "racing", eventId: ev.id };
+            next = {
+              kind: "racing",
+              eventId: ev.id,
+              registeredCount: ev.registeredCount,
+              maxSlots: ev.maxSlots,
+              targetSteps: ev.targetSteps,
+              prizePoolCents: ev.prizePoolCents,
+              prizePerWinnerCents: ev.prizePerWinnerCents,
+            };
             break;
           }
         }
         if (!next) {
           for (const ev of evs) {
             if (canOpenSponsoredWaitingRoom(ev) && ev.joinWindowOpen) {
-              next = { kind: "join_window", eventId: ev.id, registeredCount: ev.registeredCount, maxSlots: ev.maxSlots };
+              next = {
+                kind: "join_window",
+                eventId: ev.id,
+                scheduledStartAt: ev.scheduledStartAt,
+                registeredCount: ev.registeredCount,
+                maxSlots: ev.maxSlots,
+                targetSteps: ev.targetSteps,
+                prizePoolCents: ev.prizePoolCents,
+                prizePerWinnerCents: ev.prizePerWinnerCents,
+              };
               break;
             }
           }
@@ -2198,7 +2262,16 @@ function WalkScreenContent() {
         if (!next) {
           for (const ev of evs) {
             if (canOpenSponsoredWaitingRoom(ev)) {
-              next = { kind: "registered", eventId: ev.id, scheduledStartAt: ev.scheduledStartAt!, registeredCount: ev.registeredCount, maxSlots: ev.maxSlots };
+              next = {
+                kind: "registered",
+                eventId: ev.id,
+                scheduledStartAt: ev.scheduledStartAt!,
+                registeredCount: ev.registeredCount,
+                maxSlots: ev.maxSlots,
+                targetSteps: ev.targetSteps,
+                prizePoolCents: ev.prizePoolCents,
+                prizePerWinnerCents: ev.prizePerWinnerCents,
+              };
               break;
             }
           }
@@ -2409,6 +2482,10 @@ function WalkScreenContent() {
     entryType: string;
     entryAmountCents: number;
     coinEntryAmount: number;
+    raceId?: string;
+    isHost?: boolean;
+    maxPlayers?: number;
+    joinedCount?: number;
   } | null>(null);
   const [leavingActiveRace, setLeavingActiveRace] = useState(false);
   const pendingRaceActionRef = useRef<(() => Promise<void>) | null>(null);
@@ -2416,9 +2493,35 @@ function WalkScreenContent() {
 
   // Sponsored events card status
   type SponsoredCardStatus =
-    | { kind: "racing"; eventId: string }
-    | { kind: "join_window"; eventId: string; registeredCount: number; maxSlots: number }
-    | { kind: "registered"; eventId: string; scheduledStartAt: string; registeredCount: number; maxSlots: number }
+    | {
+        kind: "racing";
+        eventId: string;
+        registeredCount?: number;
+        maxSlots?: number;
+        targetSteps?: number;
+        prizePoolCents?: number;
+        prizePerWinnerCents?: number;
+      }
+    | {
+        kind: "join_window";
+        eventId: string;
+        scheduledStartAt: string | null;
+        registeredCount: number;
+        maxSlots: number;
+        targetSteps?: number;
+        prizePoolCents?: number;
+        prizePerWinnerCents?: number;
+      }
+    | {
+        kind: "registered";
+        eventId: string;
+        scheduledStartAt: string;
+        registeredCount: number;
+        maxSlots: number;
+        targetSteps?: number;
+        prizePoolCents?: number;
+        prizePerWinnerCents?: number;
+      }
     | { kind: "available"; eventId: string; registeredCount: number; maxSlots: number }
     | { kind: "watch_live"; eventId: string };
   const [sponsoredStatus, setSponsoredStatus] = useState<SponsoredCardStatus | null>(null);
@@ -2471,6 +2574,259 @@ function WalkScreenContent() {
     }
     return null;
   }, [challengeStatuses, sponsoredRacingId]);
+
+  const entryKeyToReminderType = useCallback((entryKey: string): RaceStartingSoonChallengeType => {
+    if (entryKey === "free") return "free";
+    if (entryKey === "coins_battle") return "coins";
+    return "cash";
+  }, []);
+
+  const openChallengeWaitingRoom = useCallback(
+    (entryKey: string, cs: ChallengeStatus) => {
+      if (!cs.raceId) return;
+      const fee = entryKeyToFee(entryKey);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      setActiveRace(cs.raceId, cs.isHost);
+      joinRace(fee, cs.maxPlayers, cs.isHost);
+      navToMatchmaking({ raceId: cs.raceId, isHost: !!cs.isHost });
+    },
+    [joinRace, navToMatchmaking, setActiveRace],
+  );
+
+  type NextRaceCard = {
+    key: string;
+    challengeType: RaceStartingSoonChallengeType;
+    phase: RaceStartingSoonPhase;
+    scheduledStartAt: string;
+    registeredCount: number;
+    maxSlots: number;
+    targetSteps?: number;
+    prizePoolCents?: number;
+    prizePerWinnerCents?: number;
+    coinEntryAmount?: number;
+    entryAmountCents?: number;
+    onPressCta: () => void;
+    sortMs: number;
+  };
+
+  /** Tick so Next Race drops cards the instant scheduledStartAt is no longer in the future. */
+  const [nextRaceNowMs, setNextRaceNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const hasUpcomingCandidate = (() => {
+      if (
+        (sponsoredStatus?.kind === "registered" || sponsoredStatus?.kind === "join_window") &&
+        sponsoredStatus.scheduledStartAt &&
+        new Date(sponsoredStatus.scheduledStartAt).getTime() > Date.now()
+      ) {
+        return true;
+      }
+      for (const cs of Object.values(challengeStatuses)) {
+        if (!cs?.raceId || cs.isFinished) continue;
+        const s = cs.status;
+        if (s !== "user_hosting_waiting" && s !== "user_joined_waiting") continue;
+        if (cs.scheduledStartAt && new Date(cs.scheduledStartAt).getTime() > Date.now()) return true;
+      }
+      if (
+        scheduledRoomResult?.scheduledStartAt &&
+        new Date(scheduledRoomResult.scheduledStartAt).getTime() > Date.now()
+      ) {
+        return true;
+      }
+      if (registeredUpcomingRooms.some((r) => {
+        if (!r.scheduled_start_at) return false;
+        return new Date(r.scheduled_start_at).getTime() > Date.now();
+      })) {
+        return true;
+      }
+      return false;
+    })();
+    if (!hasUpcomingCandidate) return;
+    setNextRaceNowMs(Date.now());
+    const id = setInterval(() => setNextRaceNowMs(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, [challengeStatuses, registeredUpcomingRooms, scheduledRoomResult, sponsoredStatus]);
+
+  const nextRaceCards = useMemo((): NextRaceCard[] => {
+    const cards: NextRaceCard[] = [];
+    const coveredRaceIds = new Set<string>();
+    const now = nextRaceNowMs;
+
+    // Sponsored — future scheduled registration only (never live/racing)
+    if (
+      (sponsoredStatus?.kind === "registered" || sponsoredStatus?.kind === "join_window") &&
+      sponsoredStatus.scheduledStartAt
+    ) {
+      const startMs = new Date(sponsoredStatus.scheduledStartAt).getTime();
+      if (startMs > now) {
+        const msLeft = startMs - now;
+        const phase: RaceStartingSoonPhase =
+          msLeft < 10 * 60_000 ? "join_window" : "registered";
+        cards.push({
+          key: `sponsored:${sponsoredStatus.eventId}`,
+          challengeType: "sponsored",
+          phase,
+          scheduledStartAt: sponsoredStatus.scheduledStartAt,
+          registeredCount: sponsoredStatus.registeredCount ?? 0,
+          maxSlots: sponsoredStatus.maxSlots ?? 10,
+          targetSteps: sponsoredStatus.targetSteps,
+          prizePoolCents: sponsoredStatus.prizePoolCents,
+          prizePerWinnerCents: sponsoredStatus.prizePerWinnerCents,
+          onPressCta: () => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+            openSponsoredWaitingRoom(sponsoredStatus.eventId);
+          },
+          sortMs: startMs,
+        });
+        coveredRaceIds.add(sponsoredStatus.eventId);
+      }
+    }
+
+    for (const [entryKey, cs] of Object.entries(challengeStatuses)) {
+      if (!cs || cs.isFinished || !cs.raceId) continue;
+      if (coveredRaceIds.has(cs.raceId)) continue;
+      const s = cs.status;
+      const isWaiting = s === "user_hosting_waiting" || s === "user_joined_waiting";
+      if (!isWaiting) continue;
+      const startIso = cs.scheduledStartAt ?? null;
+      if (!startIso) continue;
+      const startMs = new Date(startIso).getTime();
+      if (!(startMs > now)) continue;
+      const msLeft = startMs - now;
+      const phase: RaceStartingSoonPhase =
+        msLeft < 10 * 60_000 ? "join_window" : "registered";
+      cards.push({
+        key: `challenge:${entryKey}:${cs.raceId}`,
+        challengeType: entryKeyToReminderType(entryKey),
+        phase,
+        scheduledStartAt: startIso,
+        registeredCount: cs.joinedCount ?? 1,
+        maxSlots: cs.maxPlayers || 10,
+        targetSteps: cs.targetSteps,
+        prizePoolCents: cs.prizePoolCents,
+        coinEntryAmount: cs.coinEntryAmount,
+        entryAmountCents: cs.entryAmountCents,
+        onPressCta: () => openChallengeWaitingRoom(entryKey, cs),
+        sortMs: startMs,
+      });
+      coveredRaceIds.add(cs.raceId);
+    }
+
+    const srr = scheduledRoomResult;
+    if (
+      srr?.raceId &&
+      srr.scheduledStartAt &&
+      new Date(srr.scheduledStartAt).getTime() > now &&
+      !coveredRaceIds.has(srr.raceId)
+    ) {
+      const entryKey = srr.entryType;
+      const startMs = new Date(srr.scheduledStartAt).getTime();
+      const msLeft = startMs - now;
+      const phase: RaceStartingSoonPhase =
+        msLeft < 10 * 60_000 ? "join_window" : "registered";
+      const maxPlayers = srr.maxPlayers ?? 10;
+      cards.push({
+        key: `scheduled:${srr.raceId}`,
+        challengeType: entryKeyToReminderType(entryKey),
+        phase,
+        scheduledStartAt: srr.scheduledStartAt,
+        registeredCount: srr.joinedCount ?? 1,
+        maxSlots: maxPlayers,
+        targetSteps: srr.targetSteps,
+        coinEntryAmount: srr.coinEntryAmount,
+        entryAmountCents: srr.entryAmountCents,
+        onPressCta: () => {
+          openChallengeWaitingRoom(entryKey, {
+            status: "user_hosting_waiting",
+            raceId: srr.raceId!,
+            isHost: srr.isHost ?? true,
+            isParticipant: true,
+            joinedCount: srr.joinedCount ?? 1,
+            maxPlayers,
+            targetSteps: srr.targetSteps,
+            scheduledStartAt: srr.scheduledStartAt,
+            entryAmountCents: srr.entryAmountCents,
+            coinEntryAmount: srr.coinEntryAmount,
+            canHost: false,
+            canJoin: false,
+            isActive: false,
+            isFinished: false,
+            label: "Waiting",
+          });
+        },
+        sortMs: startMs,
+      });
+      coveredRaceIds.add(srr.raceId);
+    }
+
+    // Available Rooms — registered upcoming (has scheduledStartAt; fills gaps when challenges/available omits it)
+    for (const room of registeredUpcomingRooms) {
+      if (!room.scheduled_start_at || coveredRaceIds.has(room.room_id)) continue;
+      const startMs = new Date(room.scheduled_start_at).getTime();
+      if (!(startMs > now)) continue;
+      const msLeft = startMs - now;
+      const phase: RaceStartingSoonPhase =
+        msLeft < 10 * 60_000 ? "join_window" : "registered";
+      const challengeType: RaceStartingSoonChallengeType =
+        room.challenge_type === "sponsored"
+          ? "sponsored"
+          : room.challenge_type === "coins_battle" || room.coin_entry_amount > 0
+            ? "coins"
+            : room.entry_fee > 0
+              ? "cash"
+              : "free";
+      const isHost = !!user?.id && user.id === room.host_user_id;
+      const joinFee =
+        room.entry_fee > 0 ? room.entry_fee : room.coin_entry_amount > 0 ? -1 : 0;
+      cards.push({
+        key: `upcoming:${room.room_id}`,
+        challengeType,
+        phase,
+        scheduledStartAt: room.scheduled_start_at,
+        registeredCount: room.registered_count ?? 1,
+        maxSlots: room.max_players || 10,
+        targetSteps: room.target_steps,
+        prizePoolCents:
+          room.entry_fee > 0
+            ? Math.round(room.entry_fee * 100 * Math.max(1, room.registered_count))
+            : undefined,
+        coinEntryAmount: room.coin_entry_amount,
+        entryAmountCents: room.entry_fee > 0 ? Math.round(room.entry_fee * 100) : undefined,
+        onPressCta: () => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+          if (challengeType === "sponsored") {
+            openSponsoredWaitingRoom(room.room_id);
+            return;
+          }
+          setActiveRace(room.room_id, isHost);
+          joinRace(joinFee, room.max_players, isHost);
+          navToMatchmaking({
+            raceId: room.room_id,
+            isHost,
+            initialScheduledStartAt: room.scheduled_start_at,
+          });
+        },
+        sortMs: startMs,
+      });
+      coveredRaceIds.add(room.room_id);
+    }
+
+    cards.sort((a, b) => a.sortMs - b.sortMs);
+    return cards;
+  }, [
+    challengeStatuses,
+    entryKeyToReminderType,
+    joinRace,
+    navToMatchmaking,
+    nextRaceNowMs,
+    openChallengeWaitingRoom,
+    openSponsoredWaitingRoom,
+    registeredUpcomingRooms,
+    scheduledRoomResult,
+    setActiveRace,
+    sponsoredStatus,
+    user?.id,
+  ]);
 
   const buildActiveRaceInfoFromStatus = useCallback((entryKey: string, cs: { status: string; raceId: string | null; isHost: boolean; targetSteps?: number }): ActiveRaceInfo => {
     const isActiveRace = cs.status === "user_hosting_active" || cs.status === "user_joined_active";
@@ -2921,12 +3277,17 @@ function WalkScreenContent() {
           entryType: data.race?.entryType ?? entryType,
           entryAmountCents: data.race?.entryAmountCents ?? 0,
           coinEntryAmount: data.race?.coinEntryAmount ?? 0,
+          raceId: data.raceId,
+          isHost: true,
+          maxPlayers: data.race?.maxPlayers ?? challengeMaxPlayers,
+          joinedCount: 1,
         });
         setChallengeModal(false);
         setChallengeStartDate(toLocalCalendarDate(new Date()));
         setChallengeEndDate(null);
         setChallengeStartTimeIdx(0);
         setChallengeCreating(false);
+        void loadChallengeStatuses();
         return;
       }
 
@@ -3182,6 +3543,31 @@ function WalkScreenContent() {
         </View>
 
 
+        {/* Next Race — user's active/upcoming registrations (UI only) */}
+        {nextRaceCards.length > 0 && (
+          <View style={{ marginBottom: rs(8) }}>
+            <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: rs(10) }]}>
+              🏁 Next Race 🏃‍♂️
+            </Text>
+            {nextRaceCards.map((card) => (
+              <RaceStartingSoonCard
+                key={card.key}
+                challengeType={card.challengeType}
+                phase={card.phase}
+                scheduledStartAt={card.scheduledStartAt}
+                registeredCount={card.registeredCount}
+                maxSlots={card.maxSlots}
+                targetSteps={card.targetSteps}
+                prizePoolCents={card.prizePoolCents}
+                prizePerWinnerCents={card.prizePerWinnerCents}
+                coinEntryAmount={card.coinEntryAmount}
+                entryAmountCents={card.entryAmountCents}
+                onPressCta={card.onPressCta}
+              />
+            ))}
+          </View>
+        )}
+
         {/* Race section */}
         <View style={styles.sectionRow}>
           <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: 0 }]}>Join a Challenge</Text>
@@ -3199,28 +3585,6 @@ function WalkScreenContent() {
             <Feather name="chevron-right" size={13} color={colors.primary} />
           </TouchableOpacity>
         </View>
-
-        {/* Sponsored waiting room lockout banner */}
-        {sponsoredStatus?.kind === "join_window" && (
-          <TouchableOpacity
-            onPress={() => openSponsoredWaitingRoom(sponsoredStatus.eventId)}
-            activeOpacity={0.85}
-            style={{ marginBottom: 10, borderRadius: 12, overflow: "hidden" }}
-          >
-            <LinearGradient
-              colors={["#2D0072", "#5B21B6"]}
-              style={{ flexDirection: "row", alignItems: "center", padding: 12, gap: 10 }}
-              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-            >
-              <Feather name="lock" size={16} color="#C4B5FD" />
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: "#E9D5FF", fontWeight: "700", fontSize: 13 }}>Sponsored Event Starting Soon</Text>
-                <Text style={{ color: "#A78BFA", fontSize: 11, marginTop: 1 }}>Stay in the waiting room or leave the event to host or join other races.</Text>
-              </View>
-              <Feather name="chevron-right" size={15} color="#A78BFA" />
-            </LinearGradient>
-          </TouchableOpacity>
-        )}
 
         {!walkCacheReady && <SkeletonList count={4} variant="walk" />}
         {RACE_OPTIONS.filter((opt) => showRaceOptionInJoinSection(opt.fee)).map((opt) => {
@@ -3270,6 +3634,7 @@ function WalkScreenContent() {
                 entryKey={entryKey}
                 cs={cs}
                 isJoining={joiningEntryKey === entryKey}
+                hideChevron={opt.fee === -1}
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                   if (showSponsoredBlockAlert()) return;
@@ -3522,11 +3887,11 @@ function WalkScreenContent() {
                   </View>
                   <View style={[styles.raceCardText, { flex: 1 }]}>
                     <Text style={styles.raceCardLabel}>Cash Prize Challenge</Text>
-                    <Text style={styles.raceCardSub}>Skill-based walking challenge · Prize rewards</Text>
-                    <View style={{ flexDirection: "row", gap: 5, marginTop: 5, flexWrap: "wrap" }}>
-                      {["$3 entry", "Step goal"].map((chip) => (
-                        <View key={chip} style={{ backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2 }}>
-                          <Text style={{ color: "#FFF", fontSize: 10, fontWeight: "700" }}>{chip}</Text>
+                    <Text style={styles.raceCardSub}>Skill-based walking challenge</Text>
+                    <View style={{ flexDirection: "row", gap: 4, marginTop: 5, alignItems: "center", flexShrink: 1 }}>
+                      {["$3 Entry", "Step Goal", "Prize rewards"].map((chip) => (
+                        <View key={chip} style={{ backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, flexShrink: 1 }}>
+                          <Text numberOfLines={1} style={{ color: "#FFF", fontSize: 9, fontWeight: "700" }}>{chip}</Text>
                         </View>
                       ))}
                     </View>
@@ -3538,7 +3903,6 @@ function WalkScreenContent() {
                       maxPlayers={premCs?.maxPlayers ?? 10}
                       label={premStatusLabel}
                     />
-                    <Feather name="chevron-right" size={18} color="rgba(255,255,255,0.8)" />
                   </View>
                 </LinearGradient>
                 <JoinProgressOverlay isJoining={joiningEntryKey === premKey} />
@@ -3546,7 +3910,7 @@ function WalkScreenContent() {
             );
           })()}
 
-          {/* Sponsored Events */}
+          {/* Sponsored Events — always available for browsing */}
           {(() => {
             const ss = sponsoredStatus;
             const isRacing     = ss?.kind === "racing";
