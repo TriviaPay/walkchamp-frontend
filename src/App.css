@@ -1,0 +1,116 @@
+.app-wrapper {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+}
+
+.app-wrapper::before,
+.app-wrapper::after {
+  content: '';
+  position: absolute;
+  width: 34rem;
+  height: 34rem;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+  filter: blur(6px);
+  opacity: 0.35;
+}
+
+.app-wrapper::before {
+  top: 16%;
+  left: -12rem;
+  background: radial-gradient(circle, rgba(37, 99, 235, 0.1), transparent 68%);
+  animation: float-left 16s ease-in-out infinite;
+}
+
+.app-wrapper::after {
+  top: 54%;
+  right: -11rem;
+  background: radial-gradient(circle, rgba(249, 115, 22, 0.08), transparent 70%);
+  animation: float-right 18s ease-in-out infinite;
+}
+
+main {
+  flex: 1;
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+section {
+  scroll-margin-top: 110px;
+}
+
+@media (max-width: 1024px) {
+  section {
+    scroll-margin-top: 96px;
+  }
+}
+
+@media (max-width: 768px) {
+  section {
+    scroll-margin-top: 84px;
+  }
+}
+
+/* Custom scrollbar for better aesthetics */
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #eef4ff;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(#f97316, #fb923c);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(#2563eb, #f97316);
+}
+
+@keyframes float-left {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(2rem, -1.75rem, 0) scale(1.06);
+  }
+}
+
+@keyframes float-right {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(-1.5rem, 1.8rem, 0) scale(1.08);
+  }
+}
+
+@media (max-width: 1024px) {
+  .app-wrapper::before,
+  .app-wrapper::after {
+    width: 24rem;
+    height: 24rem;
+    opacity: 0.28;
+  }
+}
+
+@media (max-width: 768px) {
+  .app-wrapper::before,
+  .app-wrapper::after {
+    width: 18rem;
+    height: 18rem;
+    opacity: 0.2;
+  }
+}
