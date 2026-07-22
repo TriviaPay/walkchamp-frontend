@@ -71,6 +71,8 @@ export interface StepProvider {
   stopWatchingSteps?(): void;
   resetForNewLocalDay?(): Promise<void>;
   reconcileTodaySteps?(steps: number): Promise<void>;
+  /** Drop a reload/subscribe phantom bump already persisted for today. */
+  discardPhantomTodayBump?(confirmedSteps: number): Promise<void>;
 }
 
 export function getLocalDateKey(d = new Date()): string {

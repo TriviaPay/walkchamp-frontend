@@ -20,11 +20,13 @@ import {
 } from "./raceBaselineStorage";
 import type {
   StepPermissionResult,
+  StepPermissionState,
   StepProvider,
   StepProviderId,
   StepReadResult,
   StepTrackingStatus,
 } from "./stepProviderTypes";
+import type { StepProgressSource } from "@/store/slices/raceProgressSlice";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { stepAudit } from "@/utils/stepAudit";
 
@@ -618,7 +620,7 @@ export const stepProviderManager = {
   },
 
   /** Map provider to existing race progress source field. */
-  toRaceProgressSource(): string {
+  toRaceProgressSource(): StepProgressSource {
     switch (_activeProvider?.providerId) {
       case "ios_healthkit":
         return "healthkit";

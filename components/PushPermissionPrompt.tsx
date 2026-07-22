@@ -10,6 +10,7 @@ import { Feather } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
+import { useAppSelector } from "@/store/hooks";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf } from "@/utils/responsive";
 import {
@@ -21,9 +22,11 @@ import {
 /**
  * One-time post-login prompt to enable push notifications via OneSignal.
  * Does not block the app if the user declines.
+ * Never runs on the sign-in screen (requires authenticated session).
  */
 export function PushPermissionPrompt() {
-  const { user, loading } = useAuth();
+  const { user, loading, sessionToken } = useAuth();
+  const isAuthenticated = useAppSelector((s) => s.auth.isAuthenticated);
   const colors = useColors();
   const { safeBottom } = useSafeLayout();
   const [visible, setVisible] = useState(false);
@@ -31,7 +34,9 @@ export function PushPermissionPrompt() {
   const handledUserRef = React.useRef<string | null>(null);
 
   useEffect(() => {
-    if (loading || !user?.id) return;
+    if (loading || !isAuthenticated || !sessionToken || !user?.id) return;
+    if (user.profileComplete === false) return;
+    if (!user.emailVerified) return;
     if (handledUserRef.current === user.id) return;
     handledUserRef.current = user.id;
 
@@ -43,7 +48,14 @@ export function PushPermissionPrompt() {
         // Never crash on notification setup
       }
     })();
-  }, [user?.id, loading]);
+  }, [
+    user?.id,
+    user?.profileComplete,
+    user?.emailVerified,
+    loading,
+    isAuthenticated,
+    sessionToken,
+  ]);
 
   const handleEnable = useCallback(async () => {
     if (requesting) return;

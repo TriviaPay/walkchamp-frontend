@@ -390,23 +390,15 @@ export async function runPostLoginPushSetup(userId: string): Promise<{
   pushLog(`permissionStatus=${granted ? "granted" : "denied"}`);
   const pushPromptDismissed = await storageGet<boolean>(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED);
 
-  // Android 13+: always request POST_NOTIFICATIONS when not granted (independent of step-tracking flags).
+  // Check only — never show the system dialog here. The in-app prompt
+  // (completePushPermissionPrompt) requests after the user taps Enable.
   if (Platform.OS === "android" && sdk >= 33) {
     try {
       const postGranted = await PermissionsAndroid.check(
         PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
       );
       pushLog(`POST_NOTIFICATIONS granted=${postGranted}`);
-      if (!postGranted) {
-        pushLog("shouldRequestPermission=true (Android 13+ POST_NOTIFICATIONS)");
-        granted = await requestAndroidPushNotificationPermission();
-        pushLog(`requestPermission result=${granted}`);
-        if (granted) {
-          await storageSet(STORAGE_KEYS.PUSH_PERMISSION_PROMPTED, true);
-        }
-      } else {
-        granted = true;
-      }
+      granted = postGranted;
     } catch (error) {
       pushLog("POST_NOTIFICATIONS check failed", error);
     }
@@ -643,10 +635,13 @@ export async function setupNotificationClickHandler(
     const type = String(data.type ?? "unknown");
     const eventType = String(data.eventType ?? data.event_type ?? "");
     if (type === "race_starting_soon") {
-      notificationLog(`opened payload=${JSON.stringify(data)}`);
+      // Sanitize: never JSON.stringify full push payloads (may include PII).
+      notificationLog(
+        `opened type=${type} eventType=${eventType || "unknown"} keys=${Object.keys(data).join(",")}`,
+      );
       notificationLog(`eventType=${eventType || "unknown"}`);
       const deepLink = String(data.deepLink ?? data.deep_link ?? launchUrl ?? "");
-      if (deepLink) notificationLog(`deepLink=${deepLink}`);
+      if (deepLink) notificationLog(`deepLinkPresent=${deepLink.length > 0}`);
       if (eventType === "sponsored_event") {
         notificationLog(`navigatingToSponsoredEvent eventId=${String(data.eventId ?? data.event_id ?? "")}`);
       } else {
@@ -659,7 +654,7 @@ export async function setupNotificationClickHandler(
       navigate(route);
       return;
     }
-    pushLog("notification click — no route resolved", data);
+    pushLog(`notification click — no route resolved type=${String(data.type ?? "unknown")}`);
   };
 
   OneSignal.Notifications.addEventListener("click", handleClick);
@@ -686,8 +681,7 @@ export async function setupForegroundHandler(): Promise<() => void> {
         : rawData
     ) as Record<string, unknown>;
     const type = String(data.type ?? "unknown");
-    const title = fgEvent.notification.title ?? "";
-    pushLog(`foreground received type=${type} title=${title}`);
+    pushLog(`foreground received type=${type}`);
     if (type === "race_starting_soon") {
       const eventType = String(data.eventType ?? data.event_type ?? "unknown");
       notificationLog(`received type=race_starting_soon`);

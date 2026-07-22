@@ -67,6 +67,7 @@ export default function HealthConnectOnboardingScreen() {
 
       <WearableSetupModal
         visible={showSetup}
+        accent="onboarding"
         onClose={() => setShowSetup(false)}
         onComplete={(_platform, permissionStatus) => {
           if (completedRef.current) return;

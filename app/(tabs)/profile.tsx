@@ -16,6 +16,7 @@ import {
   TextInput,
   View} from "react-native";
 import { AppAlert } from "@/components/AppAlert";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { dynamicIconService } from "@/services/dynamicIconService";
 import CoinIcon from "@/components/CoinIcon";
 import { AvatarPickerSheet } from "@/components/AvatarPickerSheet";
@@ -346,6 +347,14 @@ function AchievementCard({ icon, label, value, color }: { icon: string; label: s
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function ProfileScreen() {
+  return (
+    <ErrorBoundary>
+      <ProfileScreenContent />
+    </ErrorBoundary>
+  );
+}
+
+function ProfileScreenContent() {
   useScreenMountPerf("Profile");
   const colors = useColors();
   const { insets, safeTop, safeBottom } = useSafeLayout();

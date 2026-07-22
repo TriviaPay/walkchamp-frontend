@@ -5,7 +5,6 @@ import {
   OnboardingLayout,
   OnboardingMascot,
   OnboardingPrimaryButton,
-  OnboardingSecondaryButton,
 } from "@/components/onboarding/OnboardingUI";
 import { ONBOARDING_ASSETS, ONBOARDING_COLORS, ONBOARDING_ROUTES } from "@/constants/onboarding";
 import { markOnboardingInProgress } from "@/utils/onboardingStorage";
@@ -22,16 +21,10 @@ export default function OnboardingWelcomeScreen() {
     <OnboardingLayout
       step={1}
       footer={
-        <>
-          <OnboardingPrimaryButton
-            label="Start My Journey"
-            onPress={() => router.push(ONBOARDING_ROUTES.howItWorks)}
-          />
-          <OnboardingSecondaryButton
-            label="Already have an account? Sign In"
-            onPress={() => router.replace(ONBOARDING_ROUTES.signIn)}
-          />
-        </>
+        <OnboardingPrimaryButton
+          label="Start My Journey"
+          onPress={() => router.push(ONBOARDING_ROUTES.howItWorks)}
+        />
       }
     >
       <Text style={styles.brand}>WALK CHAMP</Text>

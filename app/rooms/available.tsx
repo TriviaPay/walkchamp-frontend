@@ -29,6 +29,7 @@ import { useAuth } from "@/context/AuthContext";
 import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { AppAlert } from "@/components/AppAlert";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import ActiveRaceModal, { type ActiveRaceInfo } from "@/components/ActiveRaceModal";
 import AlreadyRegisteredModal, { type RegisteredRaceInfo } from "@/components/AlreadyRegisteredModal";
 import { JoinProgressOverlay } from "@/components/RaceJoinBadge";
@@ -1620,6 +1621,14 @@ const ds = StyleSheet.create({
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function AvailableRoomsScreen() {
+  return (
+    <ErrorBoundary>
+      <AvailableRoomsScreenContent />
+    </ErrorBoundary>
+  );
+}
+
+function AvailableRoomsScreenContent() {
   const { safeBottom } = useSafeLayout();
   const { setActiveRace, joinRace } = useRace();
   const { user } = useAuth();
@@ -1641,6 +1650,9 @@ export default function AvailableRoomsScreen() {
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [selectedHostData, setSelectedHostData] = useState<PublicProfileInitialData | null>(null);
   const [joinWithCodeVisible, setJoinWithCodeVisible] = useState(false);
+  /** When set, JoinWithCodeModal verifies code for this scheduled private room before register. */
+  const [pendingPrivateRegisterRoom, setPendingPrivateRegisterRoom] = useState<UpcomingRoom | null>(null);
+  const [pendingPrivateRegisterCode, setPendingPrivateRegisterCode] = useState<string | null>(null);
   const [currentViewAllOpen, setCurrentViewAllOpen] = useState(false);
   const [consentRoom, setConsentRoom] = useState<Room | null>(null);
   const [consentUpcomingRoom, setConsentUpcomingRoom] = useState<UpcomingRoom | null>(null);
@@ -1749,18 +1761,24 @@ export default function AvailableRoomsScreen() {
     };
   }, [upcomingRooms]);
 
-  const doRegister = useCallback(async (room: UpcomingRoom) => {
+  const doRegister = useCallback(async (room: UpcomingRoom, roomCode?: string | null) => {
     if (registeringRoomId) return;
     setRegisteringRoomId(room.room_id);
     try {
+      const body: Record<string, unknown> = {
+        acceptedCashChallengeConsent: room.entry_fee > 0,
+      };
+      if (room.requires_code && roomCode) {
+        body.code = roomCode;
+      }
       const res = await authFetch(`/api/rooms/${room.room_id}/register`, {
         method: "POST",
-        body: JSON.stringify({ acceptedCashChallengeConsent: room.entry_fee > 0 }),
+        body: JSON.stringify(body),
       });
-      const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+      const bodyRes = await res.json().catch(() => ({})) as Record<string, unknown>;
       if (!res.ok) {
-        const code = body.code as string | undefined;
-        const activeRace = body.active_race as ActiveRaceInfo | undefined;
+        const code = bodyRes.code as string | undefined;
+        const activeRace = bodyRes.active_race as ActiveRaceInfo | undefined;
         if (
           res.status === 409 &&
           (code === "REGULAR_RACE_REGISTRATION_EXISTS" || code === "ACTIVE_RACE_EXISTS") &&
@@ -1777,13 +1795,13 @@ export default function AvailableRoomsScreen() {
           }
           return;
         }
-        AppAlert.alert("Registration failed", (body.error as string) ?? (body.message as string) ?? "Could not register.");
+        AppAlert.alert("Registration failed", (bodyRes.error as string) ?? (bodyRes.message as string) ?? "Could not register.");
         return;
       }
       setUpcomingRooms((prev) =>
         prev.map((r) =>
           r.room_id === room.room_id
-            ? { ...r, current_user_registered: true, registered_count: (body.registered_count as number) ?? r.registered_count + 1, eligible_to_register: false }
+            ? { ...r, current_user_registered: true, registered_count: (bodyRes.registered_count as number) ?? r.registered_count + 1, eligible_to_register: false }
             : r
         )
       );
@@ -1791,10 +1809,11 @@ export default function AvailableRoomsScreen() {
       AppAlert.alert("Error", "Network error. Please try again.");
     } finally {
       setRegisteringRoomId(null);
+      setPendingPrivateRegisterCode(null);
     }
   }, [registeringRoomId, enrichRegisteredRace]);
 
-  const handleRegister = useCallback(async (room: UpcomingRoom) => {
+  const continueRegisterAfterChecks = useCallback(async (room: UpcomingRoom, roomCode?: string | null) => {
     // Scenario 1: already registered for another scheduled user-created room → show modal immediately (skip consent).
     const existingReg = upcomingRooms.find(
       (r) => r.current_user_registered && r.room_id !== room.room_id && r.challenge_type !== "sponsored",
@@ -1843,9 +1862,28 @@ export default function AvailableRoomsScreen() {
       setConsentChecks([false, false, false, false]);
       setConsentUpcomingRoom(room);
     } else {
-      void doRegister(room);
+      void doRegister(room, roomCode);
     }
   }, [doRegister, upcomingRooms, user?.id]);
+
+  const handleRegister = useCallback(async (room: UpcomingRoom) => {
+    // Private rooms require the correct room code before registration.
+    if (room.requires_code) {
+      setPendingPrivateRegisterRoom(room);
+      setPendingPrivateRegisterCode(null);
+      setJoinWithCodeVisible(true);
+      return;
+    }
+    await continueRegisterAfterChecks(room);
+  }, [continueRegisterAfterChecks]);
+
+  const handlePrivateCodeVerified = useCallback((code: string) => {
+    const room = pendingPrivateRegisterRoom;
+    setJoinWithCodeVisible(false);
+    setPendingPrivateRegisterRoom(null);
+    setPendingPrivateRegisterCode(code);
+    if (room) void continueRegisterAfterChecks(room, code);
+  }, [pendingPrivateRegisterRoom, continueRegisterAfterChecks]);
 
   const handleCancelRegistration = useCallback(async (room: UpcomingRoom) => {
     if (registeringRoomId) return;
@@ -2402,8 +2440,13 @@ export default function AvailableRoomsScreen() {
 
       <JoinWithCodeModal
         visible={joinWithCodeVisible}
-        onClose={() => setJoinWithCodeVisible(false)}
+        onClose={() => {
+          setJoinWithCodeVisible(false);
+          setPendingPrivateRegisterRoom(null);
+        }}
         onJoined={handleJoinWithCodeSuccess}
+        expectedRoomId={pendingPrivateRegisterRoom?.room_id}
+        onCodeVerified={pendingPrivateRegisterRoom ? handlePrivateCodeVerified : undefined}
       />
 
       <Modal
@@ -2419,21 +2462,21 @@ export default function AvailableRoomsScreen() {
               <Feather name="x" size={22} color="#EAEFF8" />
             </TouchableOpacity>
           </View>
-          <ScrollView
+          <FlatList
+            data={rooms}
+            keyExtractor={(item) => item.room_id}
             contentContainerStyle={[s.viewAllModalList, { paddingBottom: safeBottom + 20 }]}
             showsVerticalScrollIndicator={false}
-          >
-            {rooms.map((item) => (
+            renderItem={({ item }) => (
               <RoomCard
-                key={item.room_id}
                 room={item}
                 onJoin={handleJoin}
                 onJoinWithCode={() => setJoinWithCodeVisible(true)}
                 onViewHost={handleViewHost}
                 joining={joiningRoomId === item.room_id}
               />
-            ))}
-          </ScrollView>
+            )}
+          />
         </SafeAreaView>
       </Modal>
 
@@ -2534,7 +2577,7 @@ export default function AvailableRoomsScreen() {
                     }
                     dismissConsent();
                     if (room) void doJoin(room);
-                    else if (uroom) void doRegister(uroom);
+                    else if (uroom) void doRegister(uroom, pendingPrivateRegisterCode);
                   }}
                   activeOpacity={0.85}
                 >

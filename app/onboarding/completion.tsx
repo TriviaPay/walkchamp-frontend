@@ -14,9 +14,9 @@ import { rf } from "@/utils/responsive";
 const C = ONBOARDING_COLORS;
 
 export default function CompletionOnboardingScreen() {
-  const goSignIn = async () => {
+  const enterApp = async () => {
     await markOnboardingCompleted();
-    router.replace(ONBOARDING_ROUTES.signIn);
+    router.replace(ONBOARDING_ROUTES.home);
   };
 
   return (
@@ -25,7 +25,7 @@ export default function CompletionOnboardingScreen() {
       showBack
       footer={
         <>
-          <OnboardingPrimaryButton label="Continue to Sign In" onPress={() => void goSignIn()} />
+          <OnboardingPrimaryButton label="Enter Walk Champ" onPress={() => void enterApp()} />
           <OnboardingSecondaryButton
             label="Review Terms and Privacy"
             onPress={() => router.push("/legal")}
@@ -35,7 +35,7 @@ export default function CompletionOnboardingScreen() {
     >
       <OnboardingMascot source={ONBOARDING_ASSETS.completion} />
       <Text style={styles.title}>You’re Ready to Walk Champ</Text>
-      <Text style={styles.subtitle}>Sign in and join your first challenge.</Text>
+      <Text style={styles.subtitle}>Join your first challenge and start walking.</Text>
       <View style={styles.cards}>
         {[
           "Free, Coins, and Cash Challenges",

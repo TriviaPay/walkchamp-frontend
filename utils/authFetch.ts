@@ -24,6 +24,7 @@ import {
 } from "@/services/sessionInvalidation";
 import { buildSessionRequestHeaders } from "@/services/sessionRequestHeaders";
 import { authEvents } from "@/utils/authEvents";
+import { logger } from "@/utils/logger";
 
 // ── Timeout constants ─────────────────────────────────────────────────────────
 // Centralised here so every caller uses the same defaults.
@@ -95,6 +96,12 @@ export interface AuthFetchOptions extends Omit<RequestInit, "signal"> {
    * to a component's useEffect cleanup). Combined with the timeout signal.
    */
   signal?: AbortSignal;
+  /**
+   * When false, a 401 does not re-POST the original body after refresh.
+   * Use for non-idempotent writes (race progress, payments) — caller/outbox retries later.
+   * Default: true (existing behavior).
+   */
+  retryOnUnauthorized?: boolean;
 }
 
 // ── Main API client ───────────────────────────────────────────────────────────
@@ -103,9 +110,14 @@ export async function authFetch(
   path: string,
   options: AuthFetchOptions = {},
 ): Promise<Response> {
-  const { timeoutMs = API_TIMEOUT_MS, signal: callerSignal, ...fetchOptions } = options;
+  const {
+    timeoutMs = API_TIMEOUT_MS,
+    signal: callerSignal,
+    retryOnUnauthorized = true,
+    ...fetchOptions
+  } = options;
 
-  if (__DEV__) console.log("[API] request started:", path);
+  logger.debug("API", `request started: ${path}`);
 
   // getValidSession() returns null on both transient (network) and definitive
   // (Descope rejects token) failures. Definitive failures emit SESSION_EXPIRED
@@ -113,10 +125,10 @@ export async function authFetch(
   // Transient failures: user stays logged in; next request retries the refresh.
   const session = await getValidSession().catch(() => null);
   if (!session) {
-    if (__DEV__) console.log("[Auth] no session available for", path);
+    logger.debug("Auth", `no session available for ${path}`);
     throw new Error("No session");
   }
-  if (__DEV__) console.log("[API] attaching token for", path);
+  logger.debug("API", `attaching auth for ${path}`);
 
   // Single-session gate: X-Session-Id + device metadata (backend requireAuth).
   const sessionHeaders = await buildSessionRequestHeaders().catch(
@@ -172,28 +184,26 @@ export async function authFetch(
   try {
     res = await makeRequest(session);
   } catch (err) {
-    if (__DEV__) {
+    {
       const name = err instanceof Error ? err.name : "UnknownError";
       if (name === "TimeoutError") {
-        console.log("[API] request timeout:", path);
+        logger.debug("API", `request timeout: ${path}`);
       } else if (name === "AbortError") {
-        console.log("[API] request cancelled:", path);
+        logger.debug("API", `request cancelled: ${path}`);
       } else {
-        console.log("[API] request failed:", path, err);
+        logger.debug("API", `request failed: ${path} err=${name}`);
       }
     }
     throw err;
   }
 
-  if (__DEV__) console.log("[API] request completed:", path, res.status);
+  logger.debug("API", `request completed: ${path} status=${res.status}`);
 
   // Machine-readable single-session / revocation errors (401 or 403).
   if (res.status === 401 || res.status === 403) {
     const sessionErr = await parseSessionErrorFromResponse(res);
     if (sessionErr) {
-      if (__DEV__) {
-        console.log("[Auth] session error code=", sessionErr.reason, "path=", path);
-      }
+      logger.debug("Auth", `session error code=${sessionErr.reason} path=${path}`);
       // Do not refresh or retry a replaced/revoked session.
       await handleSessionInvalidation(sessionErr);
       authEvents.emitSessionInvalidated(sessionErr);
@@ -204,30 +214,33 @@ export async function authFetch(
   if (res.status !== 401) return res;
 
   // ── 401 recovery ──────────────────────────────────────────────────────────
-  if (__DEV__) console.log("[API] received 401 for", path);
+  logger.debug("API", `received 401 for ${path}`);
+
+  // Non-idempotent writers (race progress, payments): refresh is handled by
+  // getValidSession on the *next* scheduled sync — do not re-POST this body.
+  if (!retryOnUnauthorized) {
+    logger.debug("API", `skip 401 retry (non-idempotent): ${path}`);
+    return res;
+  }
 
   // refreshSessionSafely() uses the single unified refresh queue — no
   // duplicate in-flight requests. On definitive failure it already cleared
   // the session and emitted SESSION_EXPIRED; just return the 401 response.
   const outcome = await refreshSessionSafely();
   if (!outcome.ok) {
-    if (__DEV__) {
-      if (outcome.definitive) console.log("[Auth] definitive session expiry for", path);
-      else console.log("[Auth] transient refresh failure for", path);
-    }
+    if (outcome.definitive) logger.debug("Auth", `definitive session expiry for ${path}`);
+    else logger.debug("Auth", `transient refresh failure for ${path}`);
     return res;
   }
 
-  if (__DEV__) console.log("[API] retrying after refresh:", path);
+  logger.debug("API", `retrying after refresh: ${path}`);
   try {
     const retryRes = await makeRequest(outcome.token);
-    if (__DEV__) {
-      if (retryRes.ok) console.log("[API] retry success:", path, retryRes.status);
-      else             console.log("[API] retry failed:", path, retryRes.status);
-    }
+    if (retryRes.ok) logger.debug("API", `retry success: ${path} status=${retryRes.status}`);
+    else logger.debug("API", `retry failed: ${path} status=${retryRes.status}`);
     return retryRes;
   } catch (err) {
-    if (__DEV__) console.log("[API] retry failed (network):", path, err);
+    logger.debug("API", `retry failed (network): ${path}`);
     throw err;
   }
 }

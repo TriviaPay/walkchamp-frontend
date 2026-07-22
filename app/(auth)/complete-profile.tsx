@@ -17,6 +17,7 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { createProfile, checkUsernameAvailable, fetchMe, getStoredSession, getValidSession } from "@/services/authService";
 import { dbProfileToUserProfile } from "@/utils/profileMapper";
+import { beginPostSignupOnboarding, getPostSignupHomeHref } from "@/utils/onboardingStorage";
 import { COUNTRIES } from "@/constants/countries";
 import { DateOfBirthInput } from "@/components/DateOfBirthInput";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
@@ -25,7 +26,7 @@ import { rf, rs, MAX_CONTENT_WIDTH } from "@/utils/responsive";
 const USERNAME_RE = /^[a-zA-Z][a-zA-Z0-9_]{5,13}$/;
 const BLOCKED = ["admin","support","official","system","moderator","walkchamp","walk_champ","staff"];
 function usernameBlocked(u: string) { return BLOCKED.some((b) => u.toLowerCase().replace(/_/g,"").includes(b)); }
-const AVATAR_COLORS = ["#00E676","#00B4FF","#FFD700","#FF6B35","#A855F7","#F472B6"];
+const AVATAR_COLORS = ["#006B3F","#00B4FF","#FFD700","#FF6B35","#A855F7","#F472B6"];
 
 function calcAge(dob: string): number {
   const birth = new Date(dob);
@@ -139,7 +140,8 @@ export default function CompleteProfileScreen() {
         // Route based on actual email-verified status, not a fixed destination.
         // Email-login users are already verified; OTP users still need to verify.
         if (userProfile.emailVerified) {
-          router.replace("/(tabs)/walk");
+          await beginPostSignupOnboarding();
+          router.replace(getPostSignupHomeHref());
         } else {
           router.replace({
             pathname: "/(auth)/verify-email",

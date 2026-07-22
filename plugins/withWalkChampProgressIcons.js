@@ -5,7 +5,8 @@ const {
 
 /**
  * After expo-alternate-app-icons generates placeholder mipmaps from app.json,
- * overwrite them with the full icon sets under android/app/src/main/WalkChampProgress folders.
+ * overwrite them with the full icon sets under android/app/src/main/WalkChampProgress
+ * folders (fallback: assets/icons). Does not overwrite committed assets/icons/*.png.
  */
 function withWalkChampProgressIcons(config) {
   return withFinalizedMod(config, [

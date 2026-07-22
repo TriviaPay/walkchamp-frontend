@@ -30,6 +30,7 @@ import {
 } from "@/store/slices/coinsSlice";
 import type { AppDispatch, RootState } from "@/store";
 import { isTrackLayoutId } from "@/constants/trackLayouts";
+import { resolveTrackThemeImageSource } from "@/utils/trackThemeMedia";
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
@@ -444,7 +445,11 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
                   ]}
                   activeOpacity={0.85}
                 >
-                  <Image source={layout.source} style={styles.trackImg} contentFit="cover" />
+                  <Image
+                    source={resolveTrackThemeImageSource(layout.media, "thumb")}
+                    style={styles.trackImg}
+                    contentFit="cover"
+                  />
                   {sel && (
                     <View style={styles.trackCheckOverlay}>
                       <View style={[styles.trackCheckCircle, { backgroundColor: colors.primary }]}>

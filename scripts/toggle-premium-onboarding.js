@@ -24,7 +24,7 @@ src = src.replace(re, `$1${want};`);
 fs.writeFileSync(flagFile, src);
 console.log(
   want
-    ? "ENABLE_PREMIUM_ONBOARDING = true (premium onboarding ON)"
-    : "ENABLE_PREMIUM_ONBOARDING = false (legacy Sign In-first restored)",
+    ? "ENABLE_PREMIUM_ONBOARDING = true (premium onboarding ON — after Sign In / Sign Up)"
+    : "ENABLE_PREMIUM_ONBOARDING = false (premium onboarding skipped; auth goes to app)",
 );
 console.log("Restart Expo with a clean cache: npx expo start -c");

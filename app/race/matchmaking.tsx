@@ -24,6 +24,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   Alert,
   ActivityIndicator,
@@ -695,6 +696,14 @@ function PremiumWaitingRoomValue({
 }
 
 export default function MatchmakingScreen() {
+  return (
+    <ErrorBoundary>
+      <MatchmakingScreenContent />
+    </ErrorBoundary>
+  );
+}
+
+function MatchmakingScreenContent() {
   const colors = useColors();
   const { safeTop, safeBottom } = useSafeLayout();
   const params = useLocalSearchParams<{
@@ -1830,7 +1839,7 @@ export default function MatchmakingScreen() {
             )}
           </View>
           <View style={styles.statCol}>
-            <Feather name="trophy" size={18} color="#F59E0B" />
+            <Feather name="award" size={18} color="#F59E0B" />
             {liveRoom?.entryType === "coins_battle" || !isFreeRace ? (
               <PremiumWaitingRoomValue primary>
                 {liveRoom?.entryType === "coins_battle"

@@ -1840,6 +1840,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             goal,
             user?.id,
           );
+          dynamicIconService.flushAndroidIconIfBackground();
         }
         return;
       }

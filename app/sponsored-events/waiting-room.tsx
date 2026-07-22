@@ -15,6 +15,7 @@ import { Feather } from "@expo/vector-icons";
 import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { parseSponsoredEventsResponse } from "@/utils/sponsoredEventsApi";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SponsoredEventWindowLabel } from "@/components/SponsoredEventWindowLabel";
 import { authFetch } from "@/utils/authFetch";
 import { screenCache } from "@/utils/screenCache";
@@ -122,6 +123,14 @@ function PulseRing() {
 }
 
 export default function SponsoredWaitingRoom() {
+  return (
+    <ErrorBoundary>
+      <SponsoredWaitingRoomContent />
+    </ErrorBoundary>
+  );
+}
+
+function SponsoredWaitingRoomContent() {
   const { id, from } = useLocalSearchParams<{ id: string; from?: string }>();
   const dispatch = useAppDispatch();
   const { markContentReady } = useScreenMountPerf("SponsoredWaitingRoom");

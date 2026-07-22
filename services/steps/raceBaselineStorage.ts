@@ -67,7 +67,7 @@ export async function setRaceBaseline(
   });
   // Drop legacy key so account-switch cleanup cannot resurrect a stale value.
   await storageRemove(legacyBaselineKey(raceId, userId, providerId));
-  if (__DEV__) {
+  if (typeof __DEV__ !== "undefined" && __DEV__) {
     console.log(
       `[RaceSteps] race baseline created raceId=${raceId} provider=${providerId} baseline=${baselineSteps}`,
     );
@@ -144,7 +144,7 @@ export async function clearRaceBaseline(
     }
   }
   await clearRaceStepSeed(raceId, userId);
-  if (__DEV__) {
+  if (typeof __DEV__ !== "undefined" && __DEV__) {
     console.log(`[RaceSteps] race baseline cleared raceId=${raceId}`);
   }
 }

@@ -24,6 +24,9 @@
     ".verify-export-android",
     "dist-export-*",
     "**/*.spec.ts",
-    "**/*.test.ts"
+    "**/*.test.ts",
+    "src",
+    "vite.config.ts",
+    "index.html"
   ]
 }

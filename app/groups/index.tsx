@@ -28,6 +28,7 @@ import { getLocalDateStr } from "@/utils/timezone";
 import { getApiBase } from "@/utils/apiUrl";
 import { profileAvatarImageUri } from "@/services/mediaApi";
 import { useAuth } from "@/context/AuthContext";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SkeletonGroupsScreen } from "@/components/SkeletonRows";
 import { useWalk } from "@/context/WalkContext";
 import { subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
@@ -383,6 +384,14 @@ const GROUPS_CACHE_KEY = "screen_groups_overview";
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 export default function GroupsScreen() {
+  return (
+    <ErrorBoundary>
+      <GroupsScreenContent />
+    </ErrorBoundary>
+  );
+}
+
+function GroupsScreenContent() {
   useScreenMountPerf("Groups");
   const router = useRouter();
   const { user } = useAuth();

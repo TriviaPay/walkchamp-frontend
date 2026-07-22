@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, InteractionManager, Platform, type AppStateStatus } from "react-native";
+import { AppState, InteractionManager, type AppStateStatus } from "react-native";
 import { type LeaderboardUser, type WalletTransaction } from "@/utils/mockData";
 import { formatWalletTransactionDate, mapLedgerTypeToUi } from "@/utils/walletLedger";
 import {
@@ -71,24 +71,20 @@ async function apiFetch<T>(path: string): Promise<T | null> {
 async function apiPost<T>(path: string, body: unknown): Promise<T | null> {
   const session = await getValidSession();
   if (!session) return null;
-  try {
-    const res = await fetch(`${API_BASE}${path}`, {
-      method: "POST",
-      signal: timeoutSignal(API_TIMEOUT_MS),
-      headers: {
-        Authorization: `Bearer ${session}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const err = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(err.error ?? `Request failed: ${res.status}`);
-    }
-    return (await res.json()) as T;
-  } catch (e) {
-    throw e;
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    signal: timeoutSignal(API_TIMEOUT_MS),
+    headers: {
+      Authorization: `Bearer ${session}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Request failed: ${res.status}`);
   }
+  return (await res.json()) as T;
 }
 
 function mapApiTransaction(tx: Record<string, unknown>): WalletTransaction {
@@ -340,7 +336,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const onChange = (state: AppStateStatus) => {
-      if (state === "active" && Platform.OS !== "android") {
+      if (state === "active") {
         void waitForAppStartupReady().then(() => {
           setTimeout(() => {
             dynamicIconService.checkAndUpdate({ allowApiFetch: true }).catch(() => {});

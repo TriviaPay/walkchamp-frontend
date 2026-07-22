@@ -57,6 +57,13 @@ interface Props {
   visible: boolean;
   onClose: () => void;
   onJoined: (result: JoinWithCodeResult) => void;
+  /**
+   * When set with onCodeVerified, resolves the code and requires it to match this
+   * room id. On match, calls onCodeVerified instead of joining via join-with-code.
+   * Used to gate private scheduled-room registration behind a correct room code.
+   */
+  expectedRoomId?: string | null;
+  onCodeVerified?: (code: string) => void;
 }
 
 const JOIN_ERROR: Record<string, string> = {
@@ -71,7 +78,13 @@ const JOIN_ERROR: Record<string, string> = {
 
 type Step = "enter" | "consent";
 
-export default function JoinWithCodeModal({ visible, onClose, onJoined }: Props) {
+export default function JoinWithCodeModal({
+  visible,
+  onClose,
+  onJoined,
+  expectedRoomId,
+  onCodeVerified,
+}: Props) {
   const colors = useColors();
   const [step, setStep] = useState<Step>("enter");
   const [code, setCode] = useState("");
@@ -80,6 +93,7 @@ export default function JoinWithCodeModal({ visible, onClose, onJoined }: Props)
   const [roomPreview, setRoomPreview] = useState<RoomPreview | null>(null);
   const [checks, setChecks] = useState([false, false, false]);
   const allChecked = checks.every(Boolean);
+  const verifyOnly = Boolean(expectedRoomId && onCodeVerified);
 
   const reset = () => {
     setStep("enter");
@@ -120,7 +134,21 @@ export default function JoinWithCodeModal({ visible, onClose, onJoined }: Props)
         return;
       }
 
-      const room = data.room as RoomPreview;
+      const room = data.room as RoomPreview & { room_id?: string };
+      const resolvedRoomId = room.id || room.room_id;
+
+      if (expectedRoomId && resolvedRoomId !== expectedRoomId) {
+        setError("Incorrect room code. This code does not match the selected room.");
+        return;
+      }
+
+      // Verify-only mode: gate private registration without joining via join-with-code.
+      if (verifyOnly && onCodeVerified) {
+        reset();
+        onCodeVerified(trimmed);
+        return;
+      }
+
       // If it's a cash challenge, show consent step
       if (room.entryAmountCents > 0) {
         setRoomPreview(room);
@@ -197,9 +225,13 @@ export default function JoinWithCodeModal({ visible, onClose, onJoined }: Props)
             <View style={[styles.iconCircle, { backgroundColor: "#A855F720" }]}>
               <Feather name="lock" size={26} color="#A855F7" />
             </View>
-            <Text style={[styles.title, { color: colors.foreground }]}>Join Private Room</Text>
+            <Text style={[styles.title, { color: colors.foreground }]}>
+              {verifyOnly ? "Enter Room Code" : "Join Private Room"}
+            </Text>
             <Text style={[styles.sub, { color: colors.mutedForeground }]}>
-              Enter the room code shared by the host.
+              {verifyOnly
+                ? "Enter the room code shared by the host to register for this private room."
+                : "Enter the room code shared by the host."}
             </Text>
             <View
               style={[
@@ -245,7 +277,7 @@ export default function JoinWithCodeModal({ visible, onClose, onJoined }: Props)
                 {loading ? (
                   <ActivityIndicator size="small" color="#FFF" />
                 ) : (
-                  <Text style={styles.btnJoinText}>Join Room</Text>
+                  <Text style={styles.btnJoinText}>{verifyOnly ? "Continue" : "Join Room"}</Text>
                 )}
               </TouchableOpacity>
             </View>

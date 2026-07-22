@@ -19,7 +19,7 @@ import { useAuth } from "@/context/AuthContext";
 import { signInWithEmail, signInWithProvider, signInWithAppleNative, fetchMe, getUserIdFromJwt, DescopeError, ApiError } from "@/services/authService";
 import { dbProfileToUserProfile } from "@/utils/profileMapper";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
-import { rf, rs, MAX_CONTENT_WIDTH } from "@/utils/responsive";
+import { rf, rs, rv, MAX_CONTENT_WIDTH } from "@/utils/responsive";
 import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
 
 const EMAIL_DOMAINS = ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com"];
@@ -254,19 +254,22 @@ export default function LoginScreen() {
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.flex}>
         <ScrollView
-          contentContainerStyle={[styles.scroll, { paddingTop: safeTop + 60, paddingBottom: safeBottom + 30 }]}
+          contentContainerStyle={[
+            styles.scroll,
+            { paddingTop: safeTop + rv(20), paddingBottom: safeBottom + rv(16) },
+          ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
+          bounces={false}
         >
           <View style={styles.header}>
-            <View style={[styles.logoContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Image source={APP_LOGO} style={styles.logoImage} resizeMode="contain" />
-            </View>
+            <Image source={APP_LOGO} style={styles.logoImage} resizeMode="contain" />
             <Text style={[styles.appName, { color: colors.foreground }]}>Walk Champ</Text>
             <Text style={[styles.tagline, { color: colors.mutedForeground }]}>Global Walking Competition</Text>
           </View>
 
           <View style={styles.form}>
+            <View style={styles.formMain}>
             <Text style={[styles.title, { color: colors.foreground }]}>Welcome back</Text>
             <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>Sign in to continue your journey</Text>
 
@@ -335,6 +338,10 @@ export default function LoginScreen() {
               </TouchableOpacity>
             </View>
 
+            <TouchableOpacity style={styles.forgotRow} onPress={() => router.push("/(auth)/forgot-password")}>
+              <Text style={[styles.forgot, { color: colors.accent }]}>Forgot password?</Text>
+            </TouchableOpacity>
+
             <View style={styles.legalRow}>
               <TouchableOpacity
                 onPress={() => {
@@ -376,10 +383,6 @@ export default function LoginScreen() {
                 .
               </Text>
             </View>
-
-            <TouchableOpacity style={styles.forgotRow} onPress={() => router.push("/(auth)/forgot-password")}>
-              <Text style={[styles.forgot, { color: colors.accent }]}>Forgot password?</Text>
-            </TouchableOpacity>
 
             <TouchableOpacity
               style={[styles.loginBtn, { opacity: loading || !canSubmit ? 0.55 : 1 }]}
@@ -440,6 +443,7 @@ export default function LoginScreen() {
                 </TouchableOpacity>
               )}
             </View>
+            </View>
 
             <View style={styles.signupRow}>
               <Text style={[styles.signupText, { color: colors.mutedForeground }]}>New here? </Text>
@@ -461,20 +465,26 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   flex: { flex: 1 },
-  topGlow: { position: "absolute", top: 0, left: 0, right: 0, height: 300 },
-  scroll: { paddingHorizontal: rs(24), maxWidth: MAX_CONTENT_WIDTH, alignSelf: "center", width: "100%" },
-  header: { alignItems: "center", marginBottom: rs(40) },
-  logoContainer: { width: rs(70), height: rs(70), borderRadius: rs(20), borderWidth: 1, alignItems: "center", justifyContent: "center", marginBottom: rs(12) },
-  logoImage: { width: rs(48), height: rs(48) },
+  topGlow: { position: "absolute", top: 0, left: 0, right: 0, height: 280 },
+  scroll: {
+    paddingHorizontal: rs(24),
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: "center",
+    width: "100%",
+    flexGrow: 1,
+  },
+  header: { alignItems: "center", marginBottom: rv(28) },
+  logoImage: { width: rs(64), height: rs(64), marginBottom: rv(10) },
   appName: { fontSize: rf(28), fontWeight: "800", letterSpacing: -0.5 },
   tagline: { fontSize: rf(14), marginTop: 4 },
-  form: { gap: rs(14) },
+  form: { flexGrow: 1, justifyContent: "space-between", gap: rv(16) },
+  formMain: { gap: rv(12) },
   title: { fontSize: rf(26), fontWeight: "800", letterSpacing: -0.5 },
-  subtitle: { fontSize: rf(15), marginTop: -6 },
+  subtitle: { fontSize: rf(15), marginTop: -4 },
   errorBox: { flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 10, borderWidth: 1, paddingHorizontal: rs(12), paddingVertical: rs(10) },
   errorText: { color: "#FF4444", fontSize: rf(13), flex: 1 },
   emailWrapper: { gap: 0 },
-  inputContainer: { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 14, borderWidth: 1, paddingHorizontal: rs(16), paddingVertical: rs(14) },
+  inputContainer: { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 14, borderWidth: 1, paddingHorizontal: rs(16), paddingVertical: rv(14) },
   input: { flex: 1, fontSize: rf(16) },
   legalRow: { flexDirection: "row", alignItems: "flex-start", gap: 12, paddingVertical: 4 },
   checkboxHit: {
@@ -510,15 +520,15 @@ const styles = StyleSheet.create({
   forgotRow: { alignSelf: "flex-end" },
   forgot: { fontSize: rf(14), fontWeight: "500" },
   loginBtn: { borderRadius: 14, overflow: "hidden" },
-  loginGradient: { paddingVertical: rs(16), alignItems: "center" },
+  loginGradient: { paddingVertical: rv(15), alignItems: "center" },
   loginBtnText: { fontSize: rf(17), fontWeight: "700" },
   dividerRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   divider: { flex: 1, height: 1 },
   dividerText: { fontSize: rf(13) },
   socialRow: { flexDirection: "row", gap: 12 },
-  socialBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, borderWidth: 1, paddingVertical: rs(14) },
+  socialBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, borderWidth: 1, paddingVertical: rv(14) },
   socialText: { fontSize: rf(15), fontWeight: "600" },
-  signupRow: { flexDirection: "row", justifyContent: "center", marginTop: 8 },
+  signupRow: { flexDirection: "row", justifyContent: "center", paddingTop: rv(4) },
   signupText: { fontSize: rf(15) },
   signupLink: { fontSize: rf(15), fontWeight: "700" },
 });

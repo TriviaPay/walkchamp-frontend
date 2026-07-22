@@ -18,6 +18,7 @@ import {
 } from "react-native";
 import * as WebBrowser from "expo-web-browser";
 import { AppAlert } from "@/components/AppAlert";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "@/utils/haptics";
@@ -44,10 +45,12 @@ import {
   resolveDepositUiFromTransaction,
   resolvePendingDepositOnResume,
   savePendingDeposit,
+  type DepositPollStatus,
   type PaymentResultStatus,
 } from "@/services/depositSession";
 import { ledgerTypeLabel } from "@/utils/walletLedger";
 import { readPaymentApiError } from "@/utils/paymentApiErrors";
+import { logger } from "@/utils/logger";
 
 const PAYOUT_METHODS = ["PayPal", "Bank Transfer", "UPI (India)", "Gift Card"];
 const MIN_WITHDRAWAL = 5;
@@ -198,6 +201,14 @@ function TransactionRow({
 }
 
 export default function WalletScreen() {
+  return (
+    <ErrorBoundary>
+      <WalletScreenContent />
+    </ErrorBoundary>
+  );
+}
+
+function WalletScreenContent() {
   useScreenMountPerf("Wallet");
   const router = useRouter();
   const params = useLocalSearchParams<{ openDeposit?: string }>();
@@ -232,7 +243,10 @@ export default function WalletScreen() {
   // correct symbol even before their first deposit (DB default is "USD").
   const displayCurrency = hasCountry ? (isIndia ? "INR" : "USD") : walletCurrency;
 
-  if (__DEV__) console.log("[WalletCurrency] user country:", userCountryCode, "| selected provider:", depositProvider, "| wallet currency:", displayCurrency);
+  logger.debug(
+    "WalletCurrency",
+    `provider=${depositProvider} currency=${displayCurrency} countrySet=${!!userCountryCode}`,
+  );
 
   const [showWithdraw, setShowWithdraw] = useState(false);
   const [selectedMethod, setSelectedMethod] = useState(PAYOUT_METHODS[0]);
@@ -468,7 +482,7 @@ export default function WalletScreen() {
       let transactionId = "";
 
       if (depositProvider === "stripe") {
-        if (__DEV__) console.log("[WalletDeposit] create payment started: stripe", checkoutCents, "cents");
+        logger.debug("WalletDeposit", "create payment started: stripe");
         const res = await authFetch("/api/wallet/deposit/stripe/create-payment-intent", {
           method: "POST",
           body: JSON.stringify({ amountCents: checkoutCents }),
@@ -479,9 +493,9 @@ export default function WalletScreen() {
         const data = (await res.json()) as { checkoutUrl: string; transactionId: string };
         checkoutUrl = data.checkoutUrl;
         transactionId = data.transactionId;
-        if (__DEV__) console.log("[WalletDeposit] create payment success: stripe txId:", transactionId);
+        logger.debug("WalletDeposit", "create payment success: stripe");
       } else {
-        if (__DEV__) console.log("[WalletDeposit] create payment started: razorpay", checkoutPaise, "paise");
+        logger.debug("WalletDeposit", "create payment started: razorpay");
         const res = await authFetch("/api/wallet/deposit/razorpay/create-order", {
           method: "POST",
           body: JSON.stringify({ amountPaise: checkoutPaise }),
@@ -492,11 +506,11 @@ export default function WalletScreen() {
         const data = (await res.json()) as { checkoutUrl: string; transactionId: string };
         checkoutUrl = data.checkoutUrl;
         transactionId = data.transactionId;
-        if (__DEV__) console.log("[WalletDeposit] create payment success: razorpay txId:", transactionId);
+        logger.debug("WalletDeposit", "create payment success: razorpay");
       }
 
       setDepositStatus("open");
-      if (__DEV__) console.log("[WalletDeposit] provider checkout opened:", depositProvider);
+      logger.debug("WalletDeposit", `provider checkout opened: ${depositProvider}`);
 
       await savePendingDeposit({
         transactionId,
@@ -507,7 +521,7 @@ export default function WalletScreen() {
       // ── Background poll ────────────────────────────────────────────────────
       // Poll while checkout is open. As soon as backend reports a terminal status,
       // show the wallet result immediately — do not wait for the browser session to end.
-      let polledStatus: string | null = null;
+      let polledStatus: DepositPollStatus | null = null;
       let pollStopped = false;
       let pollInterval: ReturnType<typeof setInterval> | null = null;
       let flowHandled = false;
@@ -518,7 +532,7 @@ export default function WalletScreen() {
         const resolved = await resolveDepositUiFromTransaction(transactionId);
         const ui = resolved ?? fallbackUi ?? null;
         if (!ui) {
-          if (__DEV__) console.log("[WalletDeposit] still settling:", source);
+          logger.debug("WalletDeposit", `still settling: ${source}`);
           return;
         }
         if (ui === "verification_failed" && !resolved) return;
@@ -532,7 +546,7 @@ export default function WalletScreen() {
         void clearPendingDeposit();
         applyPaymentResult(ui, transactionId);
         void WebBrowser.dismissBrowser().catch(() => { /* already closed */ });
-        if (__DEV__) console.log("[WalletDeposit] complete:", ui, `(${source})`);
+        logger.debug("WalletDeposit", `complete: ${ui} (${source})`);
       };
 
       const runPoll = async () => {
@@ -575,7 +589,7 @@ export default function WalletScreen() {
           const s = await fetchDepositStatus(transactionId);
           if (isPollCompleteDepositStatus(s)) {
             polledStatus = s;
-            if (__DEV__) console.log("[WalletDeposit] final status check:", s);
+            logger.debug("WalletDeposit", `final status check: ${s}`);
           }
         } catch {
           // fall through — will use result.type below
@@ -590,11 +604,11 @@ export default function WalletScreen() {
       if (!flowHandled && polledStatus) {
         await completeDepositUi("post-browser", depositStatusToUiResult(polledStatus));
       } else if (!flowHandled && result.type === "success" && "url" in result && result.url) {
-        if (__DEV__) console.log("[WalletDeposit] modal state: from deep link URL:", result.url);
+        logger.debug("WalletDeposit", "modal state: from deep link");
         await completeDepositUi("deep-link");
       } else if (!flowHandled && (result.type === "cancel" || result.type === "dismiss")) {
         // Browser closed before payment completed (user manually dismissed)
-        if (__DEV__) console.log("[WalletDeposit] modal state: cancelled (browser dismissed)");
+        logger.debug("WalletDeposit", "modal state: cancelled (browser dismissed)");
         await completeDepositUi("browser-dismiss", "cancelled");
       }
     } catch (err) {
@@ -884,7 +898,8 @@ export default function WalletScreen() {
           </Text>
         </View>
 
-        {/* Transactions */}
+        {/* Transactions — nested ScrollView (fixed maxHeight) keeps the constrained
+            tx card scroll UX without nesting a VirtualizedList in the page ScrollView. */}
         <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
           Transaction History
         </Text>

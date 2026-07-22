@@ -27,6 +27,7 @@ import { TrackThemeImage } from "@/components/TrackThemeImage";
 import type { TrackThemeImageSet } from "@/utils/trackThemeMedia";
 import { PublicProfileModal, type PublicProfileInitialData } from "@/components/PublicProfileModal";
 import CoinIcon from "@/components/CoinIcon";
+import JoinWithCodeModal from "@/components/JoinWithCodeModal";
 import { useApp } from "@/context/AppContext";
 import {
   refundMessageFromCancelBody,
@@ -550,6 +551,9 @@ export default function UpcomingRoomsByDateScreen() {
   const [checks, setChecks]               = useState([false, false, false, false]);
   const [selectedHostData, setHostData]   = useState<PublicProfileInitialData | null>(null);
   const [selectedHostId, setHostId]       = useState<string | null>(null);
+  const [joinWithCodeVisible, setJoinWithCodeVisible] = useState(false);
+  const [pendingPrivateRegisterRoom, setPendingPrivateRegisterRoom] = useState<UpcomingRoom | null>(null);
+  const [pendingPrivateRegisterCode, setPendingPrivateRegisterCode] = useState<string | null>(null);
 
   const fetchRooms = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -576,29 +580,54 @@ export default function UpcomingRoomsByDateScreen() {
 
   useEffect(() => { void fetchRooms(); }, [fetchRooms]);
 
-  const doRegister = useCallback(async (room: UpcomingRoom) => {
+  const doRegister = useCallback(async (room: UpcomingRoom, roomCode?: string | null) => {
     if (registeringId) return;
     setRegId(room.room_id);
     try {
+      const body: Record<string, unknown> = {
+        acceptedCashChallengeConsent: room.entry_fee > 0,
+      };
+      if (room.requires_code && roomCode) {
+        body.code = roomCode;
+      }
       const res = await authFetch(`/api/rooms/${room.room_id}/register`, {
         method: "POST",
-        body: JSON.stringify({ acceptedCashChallengeConsent: room.entry_fee > 0 }),
+        body: JSON.stringify(body),
       });
-      const body = await res.json().catch(() => ({})) as Record<string, unknown>;
-      if (!res.ok) { AppAlert.alert("Failed", (body.error as string) ?? "Could not register."); return; }
+      const resBody = await res.json().catch(() => ({})) as Record<string, unknown>;
+      if (!res.ok) { AppAlert.alert("Failed", (resBody.error as string) ?? "Could not register."); return; }
       setRooms((prev) => prev.map((r) =>
         r.room_id === room.room_id
-          ? { ...r, current_user_registered: true, registered_count: (body.registered_count as number) ?? r.registered_count + 1 }
+          ? { ...r, current_user_registered: true, registered_count: (resBody.registered_count as number) ?? r.registered_count + 1 }
           : r
       ));
     } catch { AppAlert.alert("Error", "Network error. Please try again."); }
-    finally { setRegId(null); }
+    finally {
+      setRegId(null);
+      setPendingPrivateRegisterCode(null);
+    }
   }, [registeringId]);
 
   const handleRegister = useCallback((room: UpcomingRoom) => {
+    if (room.requires_code) {
+      setPendingPrivateRegisterRoom(room);
+      setPendingPrivateRegisterCode(null);
+      setJoinWithCodeVisible(true);
+      return;
+    }
     if (room.entry_fee > 0) { setChecks([false, false, false, false]); setConsentRoom(room); }
     else void doRegister(room);
   }, [doRegister]);
+
+  const handlePrivateCodeVerified = useCallback((code: string) => {
+    const room = pendingPrivateRegisterRoom;
+    setJoinWithCodeVisible(false);
+    setPendingPrivateRegisterRoom(null);
+    setPendingPrivateRegisterCode(code);
+    if (!room) return;
+    if (room.entry_fee > 0) { setChecks([false, false, false, false]); setConsentRoom(room); }
+    else void doRegister(room, code);
+  }, [pendingPrivateRegisterRoom, doRegister]);
 
   const handleCancel = useCallback(async (room: UpcomingRoom) => {
     if (registeringId) return;
@@ -792,7 +821,7 @@ export default function UpcomingRoomsByDateScreen() {
             <TouchableOpacity
               style={{ opacity: checks.every(Boolean) ? 1 : 0.4, borderRadius: 14, overflow: "hidden", marginTop: 8 }}
               disabled={!checks.every(Boolean)}
-              onPress={() => { const r = consentRoom; setConsentRoom(null); if (r) void doRegister(r); }}
+              onPress={() => { const r = consentRoom; setConsentRoom(null); if (r) void doRegister(r, pendingPrivateRegisterCode); }}
               activeOpacity={0.85}
             >
               <LinearGradient colors={["#7C3AED", "#9333EA"]} style={s.confirmBtn} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
@@ -807,6 +836,20 @@ export default function UpcomingRoomsByDateScreen() {
           </ScrollView>
         </View>
       </Modal>
+
+      <JoinWithCodeModal
+        visible={joinWithCodeVisible}
+        onClose={() => {
+          setJoinWithCodeVisible(false);
+          setPendingPrivateRegisterRoom(null);
+        }}
+        onJoined={() => {
+          setJoinWithCodeVisible(false);
+          setPendingPrivateRegisterRoom(null);
+        }}
+        expectedRoomId={pendingPrivateRegisterRoom?.room_id}
+        onCodeVerified={pendingPrivateRegisterRoom ? handlePrivateCodeVerified : undefined}
+      />
     </View>
   );
 }

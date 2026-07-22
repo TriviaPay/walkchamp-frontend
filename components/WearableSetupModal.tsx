@@ -16,7 +16,9 @@ import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { SkeletonWearableCheck } from "@/components/SkeletonRows";
 import { authFetch } from "@/utils/authFetch";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
-import { rf } from "@/utils/responsive";
+import { LinearGradient } from "expo-linear-gradient";
+import { MODAL_MAX_WIDTH, rf, rs } from "@/utils/responsive";
+import { ONBOARDING_COLORS } from "@/constants/onboarding";
 import {
   androidHCService,
   isExpoGo,
@@ -29,6 +31,7 @@ import { useWalkContext } from "@/context/WalkContext";
 const isIOS = Platform.OS === "ios";
 const TOTAL_IOS = 5;
 const TOTAL_ANDROID = 4;
+const ONBOARDING_BTN = [ONBOARDING_COLORS.cyan, ONBOARDING_COLORS.primary] as const;
 
 type AndroidPhase =
   | "checking"
@@ -44,10 +47,12 @@ interface Props {
   last7Days?: { date: string; steps: number }[];
   onRefreshSteps?: () => Promise<void>;
   onComplete?: (platform: string, permissionStatus: string) => void;
+  /** Match premium onboarding primary button (cyan → blue). */
+  accent?: "default" | "onboarding";
 }
 
 export default function WearableSetupModal({
-  visible, onClose, onComplete,
+  visible, onClose, onComplete, accent = "default",
 }: Props) {
   const colors = useColors();
   const { safeTop, safeBottom } = useSafeLayout();
@@ -586,10 +591,14 @@ export default function WearableSetupModal({
   const footerAction = isAndroidPreCheck ? onClose : isLast ? handleDone : goNext;
   const showFooter = androidPhase !== "checking";
   const showBackBtn = !isAndroidPreCheck && step > 0;
+  const useOnboardingAccent = accent === "onboarding";
+  const activeDot = useOnboardingAccent ? ONBOARDING_COLORS.lime : "#00E676";
+  const doneDot = useOnboardingAccent ? ONBOARDING_COLORS.cyan + "80" : "#00E67650";
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <View style={[ws.container, { backgroundColor: colors.background }]}>
+        <View style={[ws.sheet, { maxWidth: MODAL_MAX_WIDTH }]}>
         <View style={[ws.header, { paddingTop: safeTop + 16, borderBottomColor: colors.border }]}>
           <TouchableOpacity
             onPress={showBackBtn ? goBack : onClose}
@@ -607,7 +616,7 @@ export default function WearableSetupModal({
               <View
                 key={i}
                 style={[ws.dot, {
-                  backgroundColor: i === step ? "#00E676" : i < step ? "#00E67650" : colors.border,
+                  backgroundColor: i === step ? activeDot : i < step ? doneDot : colors.border,
                   width: i === step ? 20 : 8,
                 }]}
               />
@@ -624,35 +633,53 @@ export default function WearableSetupModal({
         {showFooter && (
           <View style={[ws.footer, { paddingBottom: safeBottom + 16, borderTopColor: colors.border }]}>
             <TouchableOpacity
-              style={[ws.nextBtn, { opacity: saving ? 0.6 : 1 }]}
+              style={[
+                ws.nextBtn,
+                !useOnboardingAccent && { backgroundColor: "#00E676", paddingVertical: 16 },
+                { opacity: saving ? 0.6 : 1 },
+              ]}
               onPress={footerAction}
               disabled={saving}
+              activeOpacity={0.88}
             >
-              {saving
+              {useOnboardingAccent ? (
+                <LinearGradient
+                  colors={[...ONBOARDING_BTN]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={ws.nextBtnGrad}
+                >
+                  {saving
+                    ? <ActivityIndicator color="#FFF" />
+                    : <Text style={[ws.nextBtnText, { color: "#FFF" }]}>{footerLabel}</Text>}
+                </LinearGradient>
+              ) : saving
                 ? <ActivityIndicator color="#000" />
                 : <Text style={ws.nextBtnText}>{footerLabel}</Text>}
             </TouchableOpacity>
           </View>
         )}
+        </View>
       </View>
     </Modal>
   );
 }
 
 const ws = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, alignItems: "center" },
+  sheet: { flex: 1, width: "100%", alignSelf: "center" },
   header: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    paddingHorizontal: 20, paddingBottom: 16, borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: rs(20), paddingBottom: rs(16), borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  headerTitle: { fontSize: 17, fontWeight: "700" },
-  dots: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, paddingVertical: 16 },
+  headerTitle: { fontSize: rf(17), fontWeight: "700" },
+  dots: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, paddingVertical: rs(16) },
   dot: { height: 8, borderRadius: 4 },
-  content: { paddingHorizontal: 24, paddingTop: 16, gap: 20 },
-  iconCircle: { width: 80, height: 80, borderRadius: 40, alignItems: "center", justifyContent: "center", alignSelf: "center" },
-  doneCircle: { width: 110, height: 110, borderRadius: 55, alignItems: "center", justifyContent: "center" },
+  content: { paddingHorizontal: rs(24), paddingTop: rs(16), gap: rs(20) },
+  iconCircle: { width: rs(80), height: rs(80), borderRadius: rs(40), alignItems: "center", justifyContent: "center", alignSelf: "center" },
+  doneCircle: { width: rs(110), height: rs(110), borderRadius: rs(55), alignItems: "center", justifyContent: "center" },
   title: { fontSize: rf(24), fontWeight: "800", textAlign: "center" },
-  desc: { fontSize: rf(15), lineHeight: 22, textAlign: "center" },
+  desc: { fontSize: rf(15), lineHeight: rf(22), textAlign: "center" },
   badge: {
     flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "center",
     paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
@@ -660,12 +687,20 @@ const ws = StyleSheet.create({
   badgeText: { fontSize: rf(13), fontWeight: "600" },
   actionBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center",
-    gap: 8, paddingVertical: 14, borderRadius: 14, backgroundColor: "#00E676",
+    gap: 8, paddingVertical: rs(14), borderRadius: rs(14), backgroundColor: "#00E676",
   },
   actionBtnText: { fontSize: rf(16), fontWeight: "700", color: "#000" },
-  infoCard: { borderRadius: 14, borderWidth: 1, padding: 16, gap: 6 },
-  infoText: { fontSize: rf(14), lineHeight: 22 },
-  footer: { paddingHorizontal: 24, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
-  nextBtn: { paddingVertical: 16, borderRadius: 16, alignItems: "center", backgroundColor: "#00E676" },
+  infoCard: { borderRadius: rs(14), borderWidth: 1, padding: rs(16), gap: 6 },
+  infoText: { fontSize: rf(14), lineHeight: rf(22) },
+  footer: { paddingHorizontal: rs(24), paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  nextBtn: { borderRadius: 16, alignItems: "center", overflow: "hidden", minHeight: 54 },
+  nextBtnGrad: {
+    minHeight: 54,
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+  },
   nextBtnText: { fontSize: rf(17), fontWeight: "800", color: "#000" },
 });

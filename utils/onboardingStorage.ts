@@ -1,3 +1,5 @@
+import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
+import { ONBOARDING_ROUTES } from "@/constants/onboarding";
 import { storageGet, storageSet } from "@/utils/storage";
 
 export const ONBOARDING_VERSION = "walkchamp-onboarding-v1";
@@ -28,6 +30,22 @@ export async function getOnboardingStatus(): Promise<OnboardingStatus> {
   if (completed) return "completed";
   const status = await storageGet<OnboardingStatus>(ONBOARDING_KEYS.status);
   return status ?? "not_started";
+}
+
+/**
+ * Start premium onboarding after Sign Up (not Sign In).
+ * Clears any prior completed flag so a new account always sees the flow.
+ */
+export async function beginPostSignupOnboarding(): Promise<void> {
+  if (!ENABLE_PREMIUM_ONBOARDING) return;
+  await storageSet(ONBOARDING_KEYS.version, ONBOARDING_VERSION);
+  await storageSet(ONBOARDING_KEYS.completed, false);
+  await storageSet(ONBOARDING_KEYS.status, "in_progress" satisfies OnboardingStatus);
+}
+
+/** Destination after Sign Up when premium onboarding is enabled. */
+export function getPostSignupHomeHref(): typeof ONBOARDING_ROUTES.welcome | "/(tabs)/walk" {
+  return ENABLE_PREMIUM_ONBOARDING ? ONBOARDING_ROUTES.welcome : "/(tabs)/walk";
 }
 
 export async function markOnboardingInProgress(): Promise<void> {

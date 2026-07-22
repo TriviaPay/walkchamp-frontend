@@ -1,11 +1,20 @@
-import { Stack } from "expo-router";
+import { Redirect, Stack } from "expo-router";
 import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
-import { Redirect } from "expo-router";
+import { useAppSelector } from "@/store/hooks";
 
 export default function OnboardingLayout() {
+  const isAuthenticated = useAppSelector((s) => s.auth.isAuthenticated);
+  const isRestoring = useAppSelector((s) => s.auth.isRestoringSession);
+
   if (!ENABLE_PREMIUM_ONBOARDING) {
     return <Redirect href="/(auth)" />;
   }
+
+  // Onboarding runs after Sign In / Sign Up — bounce signed-out users to auth.
+  if (!isRestoring && !isAuthenticated) {
+    return <Redirect href="/(auth)" />;
+  }
+
   return (
     <Stack screenOptions={{ headerShown: false, animation: "fade" }}>
       <Stack.Screen name="welcome" />

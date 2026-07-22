@@ -24,6 +24,7 @@ import {
   type RaceStartingSoonChallengeType,
   type RaceStartingSoonPhase,
 } from "@/components/RaceStartingSoonCard";
+import { LiveClockText } from "@/components/perf/LiveClockText";
 import { ensureMatchStepPermissionsReady } from "@/services/permissions/matchPermissionGate";
 import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -31,6 +32,7 @@ import DateTimePicker, { type DateTimePickerEvent } from "@react-native-communit
 import {
   ActivityIndicator,
   Animated,
+  AppState,
   Easing,
   FlatList,
   Image,
@@ -616,7 +618,7 @@ function PresenceBar({ colors }: { colors: ReturnType<typeof useColors> }) {
     >
       <Animated.View style={[styles.presenceLiveDot, { backgroundColor: "#FF4444", opacity: pulseAnim }]} />
       <Text style={[styles.presenceText, { color: colors.foreground }]} numberOfLines={1}>
-        <Text style={{ color: "#00E676", fontWeight: "800" }}>{formatCount(counts.online)}</Text>
+        <Text style={{ color: colors.primary, fontWeight: "800" }}>{formatCount(counts.online)}</Text>
         <Text style={{ color: colors.mutedForeground }}> online  </Text>
         <Text style={{ color: "#00B4FF", fontWeight: "700" }}>{formatCount(counts.walking)}</Text>
         <Text style={{ color: colors.mutedForeground }}> walking  </Text>
@@ -854,7 +856,7 @@ const spStyles = StyleSheet.create({
 });
 
 const AVATAR_COLORS = [
-  "#00E676", "#00B4FF", "#FFD700",
+  "#006B3F", "#00B4FF", "#FFD700",
   "#FF6B35", "#A855F7", "#F472B6",
 ];
 
@@ -1803,7 +1805,14 @@ function WalkScreenContent() {
     dispatch(fetchTrackThemes());
   }, [dispatch]);
 
-  const statusConf = STATUS_CONFIG[trackingStatus];
+  const statusConf = (() => {
+    const base = STATUS_CONFIG[trackingStatus];
+    // Use theme primary green so Light Mode gets a stronger #00C853; Dark stays #00E676.
+    if (trackingStatus === "walking") {
+      return { ...base, color: colors.primary };
+    }
+    return base;
+  })();
   const dotAnim = useRef(new Animated.Value(1)).current;
   const bannerAnim = useRef(new Animated.Value(0)).current;
   const bannerVisible = useRef(false);
@@ -1847,7 +1856,6 @@ function WalkScreenContent() {
   const [challengeEndDate, setChallengeEndDate] = useState<Date | null>(null);
   const [challengeStartTimeIdx, setChallengeStartTimeIdx] = useState(0);
   const [challengeNowSetAt, setChallengeNowSetAt] = useState<number | null>(() => Date.now());
-  const [challengeLiveTick, setChallengeLiveTick] = useState(() => Date.now());
   const [showStartDatePicker, setShowStartDatePicker] = useState(false);
   const [showStartTimePicker, setShowStartTimePicker] = useState(false);
   const [showEndDatePicker, setShowEndDatePicker] = useState(false);
@@ -1888,38 +1896,58 @@ function WalkScreenContent() {
     isSameDay(challengeStartDate, new Date()) &&
     (TIME_PRESETS_WITH_NOW[challengeStartTimeIdx]?.isNow === true);
 
-  useEffect(() => {
-    if (!challengeIsNowStart) return;
-    setChallengeLiveTick(Date.now());
-    const id = setInterval(() => setChallengeLiveTick(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [challengeIsNowStart]);
-
-  // Always keep end date locked to start + duration (1/7/30 days), preserving the selected start time
+  // Keep end date locked to start + duration. For "Now", recompute from Date.now()
+  // on a silent 1s interval — only setState when the minute (endMs) actually changes
+  // so Walk does not re-render every second for clock labels (those use LiveClockText).
   useEffect(() => {
     const days = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
-    const now = new Date();
-    const isToday = isSameDay(challengeStartDate, now);
-    const preset = isToday
-      ? (TIME_PRESETS_WITH_NOW[challengeStartTimeIdx] ?? TIME_PRESETS_WITH_NOW[0]!)
-      : (TIME_PRESETS_FUTURE[Math.max(0, challengeStartTimeIdx - 1)] ?? TIME_PRESETS_FUTURE[0]!);
-    const startWithTime = new Date(challengeStartDate);
-    if (preset.isNow && isToday) {
-      const anchor = new Date(challengeLiveTick);
-      startWithTime.setHours(anchor.getHours(), anchor.getMinutes(), 0, 0);
-    } else {
-      startWithTime.setHours(preset.isNow ? now.getHours() : preset.hour, preset.isNow ? now.getMinutes() : preset.minute, 0, 0);
-    }
-    const endDate = new Date(startWithTime);
-    endDate.setDate(endDate.getDate() + days);
-    setChallengeEndDate(endDate);
-    if (__DEV__) {
-      console.log("[CreateChallengeTime] duration selected:", days, "days");
-      console.log("[CreateChallengeTime] calculated end date:", endDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }));
-      console.log("[CreateChallengeTime] calculated end time:", fmtShortTime12(endDate));
-      console.log("[CreateChallengeTime] timezone:", getUserTimezone());
-    }
-  }, [challengeStartDate, challengeGoalType, challengeStartTimeIdx, challengeLiveTick]);
+    let cancelled = false;
+
+    const recompute = () => {
+      if (cancelled) return;
+      const now = new Date();
+      const isToday = isSameDay(challengeStartDate, now);
+      const preset = isToday
+        ? (TIME_PRESETS_WITH_NOW[challengeStartTimeIdx] ?? TIME_PRESETS_WITH_NOW[0]!)
+        : (TIME_PRESETS_FUTURE[Math.max(0, challengeStartTimeIdx - 1)] ?? TIME_PRESETS_FUTURE[0]!);
+      const startWithTime = new Date(challengeStartDate);
+      if (preset.isNow && isToday) {
+        startWithTime.setHours(now.getHours(), now.getMinutes(), 0, 0);
+      } else {
+        startWithTime.setHours(
+          preset.isNow ? now.getHours() : preset.hour,
+          preset.isNow ? now.getMinutes() : preset.minute,
+          0,
+          0,
+        );
+      }
+      const endDate = new Date(startWithTime);
+      endDate.setDate(endDate.getDate() + days);
+      setChallengeEndDate((prev) => {
+        if (prev && prev.getTime() === endDate.getTime()) return prev;
+        if (__DEV__) {
+          console.log("[CreateChallengeTime] duration selected:", days, "days");
+          console.log("[CreateChallengeTime] calculated end date:", endDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }));
+          console.log("[CreateChallengeTime] calculated end time:", fmtShortTime12(endDate));
+          console.log("[CreateChallengeTime] timezone:", getUserTimezone());
+        }
+        return endDate;
+      });
+    };
+
+    recompute();
+    if (!challengeIsNowStart) return () => { cancelled = true; };
+
+    const id = setInterval(recompute, 1000);
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") recompute();
+    });
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      sub.remove();
+    };
+  }, [challengeStartDate, challengeGoalType, challengeStartTimeIdx, challengeIsNowStart]);
 
   useEffect(() => {
     setChallengeTargetSteps(getDefaultTargetSteps(challengeGoalType));
@@ -2633,41 +2661,58 @@ function WalkScreenContent() {
     sortMs: number;
   };
 
-  /** Tick so Next Race drops cards the instant scheduledStartAt is no longer in the future. */
+  /** Tick so Next Race drops cards / flips phase when scheduledStartAt crosses thresholds.
+   *  Countdown digits live in RaceStartingSoonCard — only bump Walk state when membership or phase changes. */
   const [nextRaceNowMs, setNextRaceNowMs] = useState(() => Date.now());
 
   useEffect(() => {
-    const hasUpcomingCandidate = (() => {
+    const collectSig = (now: number): string => {
+      const parts: string[] = [];
+      const pushIfUpcoming = (key: string, startIso: string | null | undefined) => {
+        if (!startIso) return;
+        const startMs = new Date(startIso).getTime();
+        if (!(startMs > now)) return;
+        const phase: RaceStartingSoonPhase =
+          startMs - now < 10 * 60_000 ? "join_window" : "registered";
+        parts.push(`${key}:${phase}`);
+      };
+
       if (
         (sponsoredStatus?.kind === "registered" || sponsoredStatus?.kind === "join_window") &&
-        sponsoredStatus.scheduledStartAt &&
-        new Date(sponsoredStatus.scheduledStartAt).getTime() > Date.now()
+        sponsoredStatus.scheduledStartAt
       ) {
-        return true;
+        pushIfUpcoming(`sponsored:${sponsoredStatus.eventId}`, sponsoredStatus.scheduledStartAt);
       }
-      for (const cs of Object.values(challengeStatuses)) {
+      for (const [entryKey, cs] of Object.entries(challengeStatuses)) {
         if (!cs?.raceId || cs.isFinished) continue;
         const s = cs.status;
         if (s !== "user_hosting_waiting" && s !== "user_joined_waiting") continue;
-        if (cs.scheduledStartAt && new Date(cs.scheduledStartAt).getTime() > Date.now()) return true;
+        pushIfUpcoming(`challenge:${entryKey}:${cs.raceId}`, cs.scheduledStartAt);
       }
-      if (
-        scheduledRoomResult?.scheduledStartAt &&
-        new Date(scheduledRoomResult.scheduledStartAt).getTime() > Date.now()
-      ) {
-        return true;
+      if (scheduledRoomResult?.scheduledStartAt && scheduledRoomResult.raceId) {
+        pushIfUpcoming(`scheduled:${scheduledRoomResult.raceId}`, scheduledRoomResult.scheduledStartAt);
       }
-      if (registeredUpcomingRooms.some((r) => {
-        if (!r.scheduled_start_at) return false;
-        return new Date(r.scheduled_start_at).getTime() > Date.now();
-      })) {
-        return true;
+      for (const r of registeredUpcomingRooms) {
+        if (!r.scheduled_start_at) continue;
+        pushIfUpcoming(`upcoming:${r.room_id}`, r.scheduled_start_at);
       }
-      return false;
-    })();
-    if (!hasUpcomingCandidate) return;
-    setNextRaceNowMs(Date.now());
-    const id = setInterval(() => setNextRaceNowMs(Date.now()), 1_000);
+      return parts.sort().join("|");
+    };
+
+    const initialNow = Date.now();
+    const initialSig = collectSig(initialNow);
+    if (!initialSig) return;
+
+    setNextRaceNowMs(initialNow);
+    let lastSig = initialSig;
+    const id = setInterval(() => {
+      const now = Date.now();
+      const sig = collectSig(now);
+      if (sig !== lastSig) {
+        lastSig = sig;
+        setNextRaceNowMs(now);
+      }
+    }, 1_000);
     return () => clearInterval(id);
   }, [challengeStatuses, registeredUpcomingRooms, scheduledRoomResult, sponsoredStatus]);
 
@@ -4973,9 +5018,9 @@ function WalkScreenContent() {
                     isToday && !rawPreset.isNow && rawPreset.hour * 60 + rawPreset.minute <= nowMinutes
                       ? (TIME_PRESETS_WITH_NOW[getNextPresetIndexForNow(TIME_PRESETS_WITH_NOW)] ?? rawPreset)
                       : rawPreset;
-                  const liveNow = new Date(challengeLiveTick);
-                  const timeLabel = displayPreset.isNow && isToday
-                    ? fmtShortTime12(liveNow)
+                  const liveNowClock = displayPreset.isNow && isToday;
+                  const timeLabel = liveNowClock
+                    ? "" // LiveClockText owns the live label
                     : displayPreset.label;
                   const startDateLabel = isToday
                     ? "Today"
@@ -4983,18 +5028,9 @@ function WalkScreenContent() {
                   const endDateLabel = challengeEndDate
                     ? challengeEndDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
                     : "—";
-                  const endTimeLabel = (() => {
-                    if (!challengeEndDate) return "—";
-                    if (displayPreset.isNow && isToday) {
-                      const days = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
-                      const start = new Date(challengeStartDate);
-                      start.setHours(liveNow.getHours(), liveNow.getMinutes(), 0, 0);
-                      const end = new Date(start);
-                      end.setDate(end.getDate() + days);
-                      return fmtShortTime12(end);
-                    }
-                    return fmtShortTime12(challengeEndDate);
-                  })();
+                  const endTimeLabel = challengeEndDate ? fmtShortTime12(challengeEndDate) : "—";
+                  const clockTextStyle = { fontSize: rf(12), fontWeight: "700" as const, color: accent, marginTop: 1 };
+                  const endClockTextStyle = { fontSize: rf(12), fontWeight: "700" as const, color: colors.foreground, marginTop: 1 };
                   const iconBg = { width: rs(34), height: rs(34), borderRadius: 10, backgroundColor: accent + "20", alignItems: "center" as const, justifyContent: "center" as const };
                   const entryModeIcon = challengeEntryMode === "coins" ? "zap" : challengeEntryMode === "usd" ? "dollar-sign" : "gift";
                   const entryModeLabel = challengeEntryMode === "free" ? "Free" : challengeEntryMode === "coins" ? "Coins" : "USD Entry";
@@ -5116,7 +5152,14 @@ function WalkScreenContent() {
                             activeOpacity={0.78}
                           >
                             <Text style={{ fontSize: rf(9), color: colors.mutedForeground }}>Time</Text>
-                            <Text style={{ fontSize: rf(12), fontWeight: "700", color: accent, marginTop: 1 }}>{timeLabel}</Text>
+                            {liveNowClock ? (
+                              <LiveClockText
+                                style={clockTextStyle}
+                                format={(nowMs) => fmtShortTime12(new Date(nowMs))}
+                              />
+                            ) : (
+                              <Text style={clockTextStyle}>{timeLabel}</Text>
+                            )}
                           </TouchableOpacity>
                         </View>
                       </View>
@@ -5138,7 +5181,22 @@ function WalkScreenContent() {
                           </View>
                           <View style={{ alignItems: "center", backgroundColor: colors.border + "40", borderRadius: 10, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 10, paddingVertical: 6 }}>
                             <Text style={{ fontSize: rf(9), color: colors.mutedForeground }}>End Time</Text>
-                            <Text style={{ fontSize: rf(12), fontWeight: "700", color: colors.foreground, marginTop: 1 }}>{endTimeLabel}</Text>
+                            {liveNowClock ? (
+                              <LiveClockText
+                                style={endClockTextStyle}
+                                format={(nowMs) => {
+                                  const liveNow = new Date(nowMs);
+                                  const days = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
+                                  const start = new Date(challengeStartDate);
+                                  start.setHours(liveNow.getHours(), liveNow.getMinutes(), 0, 0);
+                                  const end = new Date(start);
+                                  end.setDate(end.getDate() + days);
+                                  return fmtShortTime12(end);
+                                }}
+                              />
+                            ) : (
+                              <Text style={endClockTextStyle}>{endTimeLabel}</Text>
+                            )}
                           </View>
                         </View>
                       </View>
@@ -5846,9 +5904,9 @@ const styles = StyleSheet.create({
   pauseBtn: { width: rs(36), height: rs(36), borderRadius: 10, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   stepsHero: { flexDirection: "row", alignItems: "center", gap: 14 },
   stepsHeroIcon: { flexShrink: 0 },
-  stepsHeroText: { flex: 1, alignItems: "flex-start" },
-  stepsHeroValue: { fontSize: rf(44), fontWeight: "800", letterSpacing: -2, fontVariant: ["tabular-nums"] },
-  stepsHeroLabel: { fontSize: rf(13), marginTop: -2 },
+  stepsHeroText: { flex: 1, alignItems: "flex-start", justifyContent: "center", minHeight: rs(64), overflow: "visible", paddingVertical: 2 },
+  stepsHeroValue: { fontSize: rf(44), fontWeight: "800", letterSpacing: -2, fontVariant: ["tabular-nums"], lineHeight: rf(56) },
+  stepsHeroLabel: { fontSize: rf(13), lineHeight: rf(18), marginTop: 2 },
   raceStepsRow: {
     flexDirection: "row",
     alignItems: "center",

@@ -27,6 +27,7 @@ import type { Permission } from "react-native-health-connect";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { storageGet, storageSet } from "@/utils/storage";
 import { stepAudit } from "@/utils/stepAudit";
+import { logger } from "@/utils/logger";
 
 const HC_MANIFEST_BLOCKED_KEY = "hc_manifest_read_steps_blocked" as never;
 
@@ -252,23 +253,23 @@ function hasStepsRead(perms: HCPerm[]): boolean {
 }
 
 function hcLog(message: string, detail?: unknown): void {
-  if (!__DEV__ || !STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) return;
-  if (detail !== undefined) {
-    console.log(`[AndroidHC] ${message}`, detail);
-  } else {
-    console.log(`[AndroidHC] ${message}`);
-  }
+  if (!STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) return;
+  // Never log raw Health Connect records — counts / status only.
+  logger.debug("AndroidHC", message, detail);
 }
 
 function hcWarnOnce(message: string, detail?: unknown): void {
   const now = Date.now();
   if (now - _lastHcErrorLogAt < HC_ERROR_LOG_COOLDOWN_MS) return;
   _lastHcErrorLogAt = now;
-  if (detail !== undefined) {
-    console.warn(`[AndroidHC] ${message}`, detail);
-  } else {
-    console.warn(`[AndroidHC] ${message}`);
-  }
+  // Sanitize: log error name/message only — never raw health records.
+  const safeDetail =
+    detail instanceof Error
+      ? { name: detail.name, message: detail.message }
+      : detail !== undefined
+        ? String(detail).slice(0, 200)
+        : undefined;
+  logger.warn("AndroidHC", message, safeDetail);
 }
 
 function isHcRateLimitedError(detail: unknown): boolean {

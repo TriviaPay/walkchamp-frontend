@@ -53,9 +53,9 @@ export const ENABLE_LEGACY_CASH_RACE_CARDS =
   process.env.EXPO_PUBLIC_ENABLE_LEGACY_CASH_RACE_CARDS === "true";
 
 /**
- * Premium signed-out onboarding (Welcome → … → Sign In).
+ * Premium post-auth onboarding (Welcome → … → Enter Walk Champ).
  *
- * One-command disable (reverts to legacy Sign In-first for signed-out users):
+ * One-command disable (skip premium onboarding; auth goes straight to tabs):
  *   npm run onboarding:disable
  *
  * Or set ENABLE_PREMIUM_ONBOARDING = false below / EXPO_PUBLIC_ENABLE_PREMIUM_ONBOARDING=false

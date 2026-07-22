@@ -1,7 +1,5 @@
-import { getValidSession } from "@/services/authService";
-import { timeoutSignal, STEP_SYNC_TIMEOUT, API_TIMEOUT_MS } from "@/utils/authFetch";
-
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
+import { authFetch, STEP_SYNC_TIMEOUT, API_TIMEOUT_MS } from "@/utils/authFetch";
+import { logger } from "@/utils/logger";
 
 export type RaceProgressSource =
   | "healthkit"
@@ -24,6 +22,45 @@ export interface RaceProgressResult {
   raceId?: string;
 }
 
+function parseRaceProgressResult(
+  json: Record<string, unknown>,
+  fallbackSteps: number,
+): Omit<RaceProgressResult, "ok"> {
+  const acceptedSteps =
+    typeof json.steps === "number"
+      ? json.steps
+      : typeof json.raceSteps === "number"
+        ? json.raceSteps
+        : fallbackSteps;
+  const skipped = json.skipped === true || typeof json.skipped === "string";
+  return {
+    acceptedSteps,
+    skipped,
+    rank: typeof json.rank === "number" ? json.rank : undefined,
+    totalParticipants:
+      typeof json.totalParticipants === "number" ? json.totalParticipants : undefined,
+    goalSteps: typeof json.goalSteps === "number" ? json.goalSteps : undefined,
+    timeLeftSeconds:
+      typeof json.timeLeftSeconds === "number" ? json.timeLeftSeconds : undefined,
+    username: typeof json.username === "string" ? json.username : undefined,
+    raceStatus:
+      typeof json.raceStatus === "string"
+        ? json.raceStatus
+        : typeof json.race_status === "string"
+          ? json.race_status
+          : undefined,
+    userId: typeof json.userId === "string" ? json.userId : undefined,
+    raceId: typeof json.raceId === "string" ? json.raceId : undefined,
+  };
+}
+
+/**
+ * POST /api/races/:id/progress
+ *
+ * Uses authFetch for session headers + token attach, but disables 401 body retry
+ * so a refreshed token cannot duplicate a non-idempotent progress write.
+ * The race sync buffer retries on the next tick with a fresh session.
+ */
 export async function postRaceProgress(
   raceId: string,
   steps: number,
@@ -32,8 +69,6 @@ export async function postRaceProgress(
   stepSource?: RaceProgressSource,
 ): Promise<RaceProgressResult> {
   try {
-    const session = await getValidSession();
-    if (!session) return { ok: false, acceptedSteps: 0, skipped: false };
     const body: Record<string, unknown> = {
       steps,
       deviceTime: new Date().toISOString(),
@@ -41,47 +76,31 @@ export async function postRaceProgress(
     if (sequenceId !== undefined) body.sequenceId = sequenceId;
     if (deviceTotalSteps !== undefined) body.deviceTotalSteps = deviceTotalSteps;
     if (stepSource !== undefined) body.stepSource = stepSource;
-    if (__DEV__) {
-      console.log(
-        `[RaceSteps] sending sync: raceId=${raceId} steps=${steps} source=${stepSource ?? "unknown"} seq=${sequenceId ?? "n/a"} deviceTotal=${deviceTotalSteps ?? "n/a"}`,
-      );
-    }
-    const res = await fetch(`${API_BASE}/api/races/${raceId}/progress`, {
+
+    logger.debug(
+      "RaceSteps",
+      `sending sync raceId=${raceId} steps=${steps} source=${stepSource ?? "unknown"} seq=${sequenceId ?? "n/a"}`,
+    );
+
+    const res = await authFetch(`/api/races/${raceId}/progress`, {
       method: "POST",
-      signal: timeoutSignal(STEP_SYNC_TIMEOUT),
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${session}`,
-      },
+      timeoutMs: STEP_SYNC_TIMEOUT,
+      retryOnUnauthorized: false,
       body: JSON.stringify(body),
     });
+
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    const acceptedSteps =
-      typeof json.steps === "number" ? json.steps : typeof json.raceSteps === "number" ? json.raceSteps : steps;
-    const skipped = json.skipped === true || typeof json.skipped === "string";
-    if (__DEV__) {
-      console.log(
-        `[RaceSteps] sync response HTTP ${res.status} progress:${acceptedSteps} skipped=${skipped}`,
-      );
-    }
+    const parsed = parseRaceProgressResult(json, steps);
+    logger.debug(
+      "RaceSteps",
+      `sync response HTTP ${res.status} progress:${parsed.acceptedSteps} skipped=${parsed.skipped}`,
+    );
     if (!res.ok) {
       return { ok: false, acceptedSteps: 0, skipped: false };
     }
-    return {
-      ok: true,
-      acceptedSteps,
-      skipped,
-      rank: typeof json.rank === "number" ? json.rank : undefined,
-      totalParticipants: typeof json.totalParticipants === "number" ? json.totalParticipants : undefined,
-      goalSteps: typeof json.goalSteps === "number" ? json.goalSteps : undefined,
-      timeLeftSeconds: typeof json.timeLeftSeconds === "number" ? json.timeLeftSeconds : undefined,
-      username: typeof json.username === "string" ? json.username : undefined,
-      raceStatus: typeof json.raceStatus === "string" ? json.raceStatus : typeof json.race_status === "string" ? json.race_status : undefined,
-      userId: typeof json.userId === "string" ? json.userId : undefined,
-      raceId: typeof json.raceId === "string" ? json.raceId : undefined,
-    };
+    return { ok: true, ...parsed };
   } catch (err) {
-    if (__DEV__) console.log(`[RaceSteps] sync failed: ${String(err)}`);
+    logger.debug("RaceSteps", `sync failed: ${String(err)}`);
     return { ok: false, acceptedSteps: 0, skipped: false };
   }
 }
@@ -92,15 +111,10 @@ export async function postRaceReconcile(
   source: string,
 ): Promise<void> {
   try {
-    const session = await getValidSession();
-    if (!session) return;
-    await fetch(`${API_BASE}/api/races/${raceId}/reconcile-steps`, {
+    await authFetch(`/api/races/${raceId}/reconcile-steps`, {
       method: "POST",
-      signal: timeoutSignal(API_TIMEOUT_MS),
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${session}`,
-      },
+      timeoutMs: API_TIMEOUT_MS,
+      retryOnUnauthorized: false,
       body: JSON.stringify({ steps, source }),
     });
   } catch {
@@ -115,15 +129,10 @@ export async function registerLiveActivityToken(
   platform: "ios" | "android" = "ios",
 ): Promise<boolean> {
   try {
-    const session = await getValidSession();
-    if (!session) return false;
-    const res = await fetch(`${API_BASE}/api/races/${raceId}/live-activity/register`, {
+    const res = await authFetch(`/api/races/${raceId}/live-activity/register`, {
       method: "POST",
-      signal: timeoutSignal(API_TIMEOUT_MS),
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${session}`,
-      },
+      timeoutMs: API_TIMEOUT_MS,
+      retryOnUnauthorized: false,
       body: JSON.stringify({ activityId, pushToken, platform }),
     });
     return res.ok;

@@ -3,11 +3,25 @@
  *
  * Verified sources (Health Connect / HealthKit) are always authoritative for display.
  * Backend and local caches are used only for metadata sync and legacy-sensor catch-up.
+ *
+ * Pure math lives in stepAccuracyCore.ts; this module adds provider defaults + logging.
  */
 
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { getTodayKey } from "@/utils/format";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import {
+  capWalkStepsForSyncCore,
+  mergeLegacyStepUpdate as mergeLegacyStepUpdateCore,
+  resolveRaceDisplayStepsCore,
+  resolveTodayDisplayStepsCore,
+  sanitizeLegacyProviderSteps as sanitizeLegacyProviderStepsPureFn,
+  shouldIgnoreStepSpike as shouldIgnoreStepSpikePureFn,
+} from "@/utils/stepAccuracyCore";
+
+/** Pure aliases for tests / callers that want core math without provider defaults. */
+export const sanitizeLegacyProviderStepsPure = sanitizeLegacyProviderStepsPureFn;
+export const shouldIgnoreStepSpikePure = shouldIgnoreStepSpikePureFn;
 
 let legacyBumpIgnoreUntilMs = Date.now() + 5_000;
 /** After local midnight, ignore local-cache revive for a short window so UI stays at 0. */
@@ -82,7 +96,6 @@ export function shouldIgnoreLegacyPhantomBump(
   if (options?.fromWatch) return false;
 
   // Open/reload: reject classic +1 pedometer phantoms at any current count.
-  // (Previously only 0→1 was blocked, so 122→123 still landed as a "fake" step.)
   if (inStartup && delta > 0 && delta <= STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP) {
     stepEngineLog(
       "StepEngine",
@@ -121,7 +134,7 @@ export function filterLegacyStepIncrease(
 
 /** Verbose step pipeline logging — __DEV__ only; routine polls need STEP_DEBUG_VERBOSE. */
 export function stepEngineLog(tag: string, message: string): void {
-  if (!__DEV__) return;
+  if (typeof __DEV__ === "undefined" || !__DEV__) return;
   const important =
     tag === "AuthSwitch" ||
     /rejected|failed|skippedCompletedRace/i.test(message);
@@ -131,7 +144,9 @@ export function stepEngineLog(tag: string, message: string): void {
 
 /** Opt-in verbose diagnostics ([AndroidHC], [StepSource], poll ticks). */
 export function stepDebugVerboseLog(tag: string, message: string, detail?: unknown): void {
-  if (!__DEV__ || !STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) return;
+  if (typeof __DEV__ === "undefined" || !__DEV__ || !STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) {
+    return;
+  }
   if (detail !== undefined) {
     console.log(`[${tag}] ${message}`, detail);
   } else {
@@ -170,40 +185,29 @@ export function sanitizeLegacyProviderSteps(
   backendSteps: number,
   previousProviderSteps?: number,
 ): number {
-  const provider = Math.max(0, Math.floor(providerSteps));
-  const backend = Math.max(0, Math.floor(backendSteps));
   const previous =
     previousProviderSteps != null
       ? Math.max(0, Math.floor(previousProviderSteps))
-      : backend;
-
-  // No established baseline yet — accept the first real sensor read (backend not synced).
-  if (previous === 0 && backend === 0 && provider > 0) {
-    return provider;
-  }
-
-  // Monotonic forward progress — trust background/native FGS catch-up between polls.
-  if (provider >= previous && previous > 0) {
-    return provider;
-  }
-
-  const tickJump = provider - previous;
-  const aheadOfBackend = provider - backend;
-
+      : Math.max(0, Math.floor(backendSteps));
+  const provider = Math.max(0, Math.floor(providerSteps));
+  const backend = Math.max(0, Math.floor(backendSteps));
+  const capped = sanitizeLegacyProviderStepsPureFn(
+    providerSteps,
+    backendSteps,
+    previousProviderSteps,
+  );
   if (
-    provider < previous ||
-    (tickJump > STEP_SYNC_CONFIG.LEGACY_MAX_TICK_JUMP &&
-      aheadOfBackend > STEP_SYNC_CONFIG.LEGACY_MAX_UNCONFIRMED_AHEAD)
+    capped !== provider &&
+    (provider < previous ||
+      (provider - previous > STEP_SYNC_CONFIG.LEGACY_MAX_TICK_JUMP &&
+        provider - backend > STEP_SYNC_CONFIG.LEGACY_MAX_UNCONFIRMED_AHEAD))
   ) {
-    const capped = Math.max(backend, previous);
     stepDebugVerboseLog(
       "StepEngine",
       `sanitizedLegacyProvider provider=${provider} backend=${backend} previous=${previous} capped=${capped}`,
     );
-    return capped;
   }
-
-  return provider;
+  return capped;
 }
 
 /** Today's walk steps for UI — never inflate verified counts from stale backend. */
@@ -214,26 +218,15 @@ export function resolveTodayDisplaySteps(params: {
   verifiedSource?: boolean;
   previousProviderSteps?: number;
 }): number {
-  const backend = Math.max(0, Math.floor(params.backendSteps));
   const verified =
     params.verifiedSource ?? stepProviderManager.usesVerifiedStepSource();
-
-  let provider = Math.max(0, Math.floor(params.providerSteps));
-  if (!verified) {
-    provider = sanitizeLegacyProviderSteps(
-      provider,
-      backend,
-      params.previousProviderSteps,
-    );
-  }
-
-  if (verified) {
-    return provider;
-  }
-
-  const display =
-    params.allowBackendCatchUp && backend > provider ? backend : provider;
-  return display;
+  return resolveTodayDisplayStepsCore({
+    providerSteps: params.providerSteps,
+    backendSteps: params.backendSteps,
+    allowBackendCatchUp: params.allowBackendCatchUp,
+    previousProviderSteps: params.previousProviderSteps,
+    verifiedSource: verified,
+  });
 }
 
 /**
@@ -264,7 +257,6 @@ export function hydrateStepDisplayFromSources(params: {
   const verified =
     params.verifiedSource ?? stepProviderManager.usesVerifiedStepSource();
 
-  // Right after midnight: backend/provider 0 is correct — do not revive yesterday via cache.
   if (isFreshLocalDay() && provider === 0 && backend === 0) {
     stepEngineLog(
       "StepEngine",
@@ -273,7 +265,6 @@ export function hydrateStepDisplayFromSources(params: {
     return 0;
   }
 
-  // Verified HC/HealthKit may return 0 while still initializing — keep backend/local until provider confirms.
   if (verified && provider === 0) {
     if (isFreshLocalDay() && backend === 0) return 0;
     const fallback = Math.max(backend, local);
@@ -310,16 +301,15 @@ export function shouldIgnoreStepSpike(
   incomingSteps: number,
   maxJump = STEP_SYNC_CONFIG.WALK_MAX_STEP_SPIKE ?? 500,
 ): boolean {
-  const delta = incomingSteps - previousSteps;
-  if (delta <= 0) return false;
-  if (delta > maxJump) {
+  const ignored = shouldIgnoreStepSpikePureFn(previousSteps, incomingSteps, maxJump);
+  if (ignored) {
+    const delta = incomingSteps - previousSteps;
     stepEngineLog(
       "StepEngine",
       `ignoredSpike=true previousTodaySteps=${previousSteps} incoming=${incomingSteps} delta=${delta}`,
     );
-    return true;
   }
-  return false;
+  return ignored;
 }
 
 /** Monotonic merge for legacy sensor paths only. */
@@ -327,17 +317,14 @@ export function mergeLegacyStepUpdate(
   currentSteps: number,
   incomingSteps: number,
 ): number {
-  const current = Math.max(0, Math.floor(currentSteps));
-  const incoming = Math.max(0, Math.floor(incomingSteps));
-  if (incoming <= current) {
+  const result = mergeLegacyStepUpdateCore(currentSteps, incomingSteps);
+  if (result.ignoredDuplicate || result.ignoredSpike) {
     stepEngineLog(
       "StepEngine",
-      `ignoredDuplicate=${incoming === current} previousTodaySteps=${current} incoming=${incoming}`,
+      `ignoredDuplicate=${result.ignoredDuplicate} previousTodaySteps=${Math.max(0, Math.floor(currentSteps))} incoming=${Math.max(0, Math.floor(incomingSteps))}`,
     );
-    return current;
   }
-  if (shouldIgnoreStepSpike(current, incoming)) return current;
-  return incoming;
+  return result.next;
 }
 
 /** Race steps since raceStartTime — range query is authoritative when verified. */
@@ -347,17 +334,14 @@ export function resolveRaceDisplaySteps(params: {
   currentUiSteps?: number;
   verifiedSource?: boolean;
 }): number {
-  const provider = Math.max(0, Math.floor(params.providerRaceSteps));
-  const server = Math.max(0, Math.floor(params.serverSteps ?? 0));
-  const current = Math.max(0, Math.floor(params.currentUiSteps ?? 0));
   const verified =
     params.verifiedSource ?? stepProviderManager.usesVerifiedStepSource();
-
-  if (verified) {
-    return provider > 0 ? provider : Math.max(current, server);
-  }
-
-  return Math.max(provider, server, current);
+  return resolveRaceDisplayStepsCore({
+    providerRaceSteps: params.providerRaceSteps,
+    serverSteps: params.serverSteps,
+    currentUiSteps: params.currentUiSteps,
+    verifiedSource: verified,
+  });
 }
 
 /** Cap a walk total before backend sync so inflated UI never persists to server. */
@@ -367,26 +351,13 @@ export function capWalkStepsForSync(
   verifiedSource?: boolean,
   backendSteps?: number,
 ): number {
-  const ui = Math.max(0, Math.floor(uiSteps));
   const verified =
     verifiedSource ?? stepProviderManager.usesVerifiedStepSource();
-  if (verified && providerSteps != null) {
-    const provider = Math.max(0, Math.floor(providerSteps));
-    return Math.min(ui, provider);
-  }
-  if (!verified && backendSteps != null) {
-    const backend = Math.max(0, Math.floor(backendSteps));
-    const provider =
-      providerSteps != null ? Math.max(0, Math.floor(providerSteps)) : 0;
-    // Stale backend must not cap steps the provider already confirmed.
-    const ceiling = Math.max(backend, provider);
-    const sanitized = sanitizeLegacyProviderSteps(ui, ceiling, ceiling);
-    return Math.min(ui, sanitized);
-  }
-  return ui;
+  return capWalkStepsForSyncCore(uiSteps, providerSteps, verified, backendSteps);
 }
 
 export function logStepAccuracyAudit(ctx: StepAccuracyAuditContext): void {
+  if (typeof __DEV__ === "undefined" || !__DEV__) return;
   let tz = "UTC";
   try {
     tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -398,13 +369,7 @@ export function logStepAccuracyAudit(ctx: StepAccuracyAuditContext): void {
   const verified = stepProviderManager.usesVerifiedStepSource();
   stepDebugVerboseLog(
     "StepAudit",
-    `surface=${ctx.surface} localDate=${getTodayKey()} tz=${tz} provider=${providerId} verified=${verified} providerSteps=${ctx.providerSteps ?? "n/a"} backendSteps=${ctx.backendSteps ?? "n/a"} displaySteps=${ctx.displaySteps ?? "n/a"} delta=${ctx.delta ?? "n/a"}`,
-    {
-      lastSynced: ctx.lastSynced,
-      previousPoll: ctx.previousPoll,
-      raceStartAt: ctx.raceStartAt,
-      raceSteps: ctx.raceSteps,
-      ...ctx.extra,
-    },
+    `${ctx.surface} date=${getTodayKey()} tz=${tz} provider=${providerId} verified=${verified}`,
+    ctx.extra,
   );
 }

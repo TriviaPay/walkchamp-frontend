@@ -1,16 +1,19 @@
 import { Redirect } from "expo-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
 import { perf } from "@/utils/perfLogger";
 import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
 import { ONBOARDING_ROUTES } from "@/constants/onboarding";
+import { getOnboardingStatus } from "@/utils/onboardingStorage";
 
 export default function RootIndex() {
   const { user, loading, isAuthenticating } = useAuth();
   const colors = useColors();
   const routeReadyLogged = useRef(false);
+  const [onboardingChecked, setOnboardingChecked] = useState(!ENABLE_PREMIUM_ONBOARDING);
+  const [onboardingInProgress, setOnboardingInProgress] = useState(false);
 
   useEffect(() => {
     if (!loading && !isAuthenticating && !routeReadyLogged.current) {
@@ -19,10 +22,33 @@ export default function RootIndex() {
     }
   }, [loading, isAuthenticating]);
 
+  useEffect(() => {
+    if (!ENABLE_PREMIUM_ONBOARDING || !user) {
+      setOnboardingChecked(true);
+      setOnboardingInProgress(false);
+      return;
+    }
+
+    let cancelled = false;
+    setOnboardingChecked(false);
+    void (async () => {
+      const status = await getOnboardingStatus();
+      if (!cancelled) {
+        // Resume only if signup started onboarding and it wasn't finished yet.
+        setOnboardingInProgress(status === "in_progress");
+        setOnboardingChecked(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
   // Block only when there is no cached user to route with.
   // Logged-in users with a hydrated profile proceed immediately while
   // restoreSession validates the token in the background.
-  if ((loading && !user) || isAuthenticating) {
+  if ((loading && !user) || isAuthenticating || (user && !onboardingChecked)) {
     return (
       <View style={[styles.loading, { backgroundColor: colors.background }]}>
         <ActivityIndicator color={colors.primary} size="large" />
@@ -31,11 +57,7 @@ export default function RootIndex() {
   }
 
   if (!user) {
-    return (
-      <Redirect
-        href={ENABLE_PREMIUM_ONBOARDING ? ONBOARDING_ROUTES.welcome : "/(auth)"}
-      />
-    );
+    return <Redirect href="/(auth)" />;
   }
 
   // Restricted account
@@ -51,6 +73,11 @@ export default function RootIndex() {
   // Profile incomplete (social login first time)
   if (!user.profileComplete) {
     return <Redirect href={{ pathname: "/(auth)/complete-profile", params: { userId: user.id, email: user.email } }} />;
+  }
+
+  // Resume post-signup onboarding if the user left mid-flow
+  if (ENABLE_PREMIUM_ONBOARDING && onboardingInProgress) {
+    return <Redirect href={ONBOARDING_ROUTES.welcome} />;
   }
 
   return <Redirect href="/(tabs)/walk" />;

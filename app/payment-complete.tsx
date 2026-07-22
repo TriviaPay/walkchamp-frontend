@@ -1,5 +1,6 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect } from "react";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   clearPendingDeposit,
   resolveDepositUiFromTransaction,
@@ -11,6 +12,14 @@ import {
  * UI result comes from backend deposit status (not URL query params).
  */
 export default function PaymentCompleteScreen() {
+  return (
+    <ErrorBoundary>
+      <PaymentCompleteScreenContent />
+    </ErrorBoundary>
+  );
+}
+
+function PaymentCompleteScreenContent() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     status?: string;

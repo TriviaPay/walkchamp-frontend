@@ -1,15 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState } from "react-native";
+import { AppState, Platform } from "react-native";
 import { getValidSession } from "@/services/authService";
 import { getApiBase } from "@/utils/apiUrl";
 import { ENABLE_MIC_PASS, ENABLE_RACE_VOICE_CHAT, ENABLE_VOICE_SDK } from "@/config/featureFlags";
 import { voiceService } from "@/services/voiceService";
+import { AppAlert } from "@/components/AppAlert";
+import {
+  type LiveRaceAudioRoute,
+  isBluetoothOutputAvailable,
+  isEarpieceOutputAvailable,
+  routeAfterBluetoothDisconnect,
+} from "@/utils/liveRaceAudioRoute";
 
 export type MicState =
   | "idle"                 // voice not yet joined
   | "connecting"           // joining voice channel (or reconnecting)
   | "active"               // mic on AND local audio track published — audio flowing
-  | "muted"                // joined and published but muted self
+  | "muted"                // joined and published but muted self (local MICROPHONE mute)
   | "listening"            // connected as listener only (can hear, cannot speak)
   | "permission_denied"    // microphone permission denied
   | "restricted"           // backend says user is voice-banned
@@ -17,7 +24,8 @@ export type MicState =
   | "error"                // connection or publish failed
   | "coming_soon";         // legacy — kept so existing callers compile
 
-export type AudioRoute = "phone" | "speaker" | "bluetooth";
+/** Output route preference (Speaker / Phone / Bluetooth). Mute remains mic mute. */
+export type AudioRoute = LiveRaceAudioRoute;
 
 export interface UseMicPassReturn {
   hasMicPass: boolean;
@@ -67,9 +75,11 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
   const micStateRef             = useRef<MicState>("idle");
   const hasMicPassRef           = useRef(hasMicPass);
   const autoConnectAttemptedRef = useRef(false);
+  const audioRouteRef           = useRef<AudioRoute>("speaker");
 
   useEffect(() => { micStateRef.current  = micState;   }, [micState]);
   useEffect(() => { hasMicPassRef.current = hasMicPass; }, [hasMicPass]);
+  useEffect(() => { audioRouteRef.current = audioRoute; }, [audioRoute]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -117,7 +127,7 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
     };
   }, []);
 
-  // Mute mic when app goes to background.
+  // Mute mic when app goes to background; reapply output route on resume.
   useEffect(() => {
     const sub = AppState.addEventListener("change", (nextState) => {
       if (nextState === "background" || nextState === "inactive") {
@@ -128,6 +138,14 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
           setActiveSpeakerIds([]);
           if (__DEV__) console.log("[Voice] backgrounded — mic muted");
         }
+      } else if (nextState === "active") {
+        const connected =
+          micStateRef.current === "active" ||
+          micStateRef.current === "muted" ||
+          micStateRef.current === "listening";
+        if (connected) {
+          voiceService.setAudioRoute(audioRouteRef.current).catch(() => {});
+        }
       }
     });
     return () => sub.remove();
@@ -136,7 +154,7 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
 
   // Poll for Bluetooth availability while the voice session is active.
   useEffect(() => {
-    if (micState !== "active" && micState !== "muted") {
+    if (micState !== "active" && micState !== "muted" && micState !== "listening") {
       setBluetoothAvailable(false);
       return;
     }
@@ -145,14 +163,27 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
       if (cancelled) return;
       const outputs = await voiceService.getAudioOutputs();
       if (!cancelled && mountedRef.current) {
-        const hasBt = outputs.some((o) => o.toLowerCase().includes("bluetooth"));
+        // iOS getAudioOutputs only returns default/force_speaker — show BT control
+        // so users can request OS default routing (AirPods when connected).
+        const hasBt =
+          Platform.OS === "ios"
+            ? true
+            : isBluetoothOutputAvailable(outputs);
+        const wasAvailable = bluetoothAvailable;
         setBluetoothAvailable(hasBt);
         if (hasBt) {
           const btName = outputs.find((o) => o.toLowerCase().includes("bluetooth"));
           setBtDeviceName(btName ?? "Bluetooth");
-          if (__DEV__) console.log("[VoiceRoute] bluetooth connected:", btName ?? "Bluetooth");
-        } else {
-          if (__DEV__ && bluetoothAvailable) console.log("[VoiceRoute] bluetooth disconnected");
+        } else if (wasAvailable && Platform.OS === "android") {
+          const next = routeAfterBluetoothDisconnect(audioRouteRef.current, false);
+          if (next !== audioRouteRef.current) {
+            setAudioRoute(next);
+            voiceService.setAudioRoute(next).catch(() => {});
+            AppAlert.alert(
+              "Bluetooth disconnected",
+              "Audio switched to Speaker.",
+            );
+          }
         }
       }
     };
@@ -388,28 +419,55 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasMicPass, raceId]);
 
-  // ── Route selectors — intentionally keep the menu open on selection ─────────
-  // Removing setShowMicMenu(false) here means the user sees the active-route
-  // highlight update instantly. The backdrop Pressable closes the menu when
-  // they tap outside, or selectMute closes it on mute toggle.
+  // ── Route selectors — apply natively first; update UI only on success ───────
+  const applyRoute = useCallback(async (requested: AudioRoute) => {
+    if (__DEV__) console.log("[VoiceMenu] option selected:", requested);
+
+    if (requested === "bluetooth" && Platform.OS === "android" && !bluetoothAvailable) {
+      AppAlert.alert("Bluetooth", "No Bluetooth audio device is connected.");
+      return;
+    }
+
+    if (requested === "phone") {
+      const outputs = await voiceService.getAudioOutputs();
+      if (
+        Platform.OS === "android" &&
+        !isEarpieceOutputAvailable(outputs, Platform.OS)
+      ) {
+        AppAlert.alert("Phone audio", "Phone audio is not available on this device.");
+        return;
+      }
+    }
+
+    const result = await voiceService.setAudioRoute(requested);
+    if (!mountedRef.current) return;
+    if (result.ok) {
+      setAudioRoute(result.route);
+    } else {
+      AppAlert.alert(
+        "Audio",
+        result.message ?? "We couldn’t switch the audio output. Please try again.",
+      );
+    }
+  }, [bluetoothAvailable]);
+
   const selectSpeaker = useCallback(() => {
-    if (__DEV__) console.log("[VoiceMenu] option selected: speaker");
-    setAudioRoute("speaker");
-    voiceService.setAudioRoute("speaker").catch(() => {});
-  }, []);
+    void applyRoute("speaker");
+  }, [applyRoute]);
 
   const selectPhone = useCallback(() => {
-    if (__DEV__) console.log("[VoiceMenu] option selected: phone");
-    setAudioRoute("phone");
-    voiceService.setAudioRoute("phone").catch(() => {});
-  }, []);
+    void applyRoute("phone");
+  }, [applyRoute]);
 
   const selectBluetooth = useCallback(() => {
-    if (__DEV__) console.log("[VoiceMenu] option selected: bluetooth");
-    setAudioRoute("bluetooth");
-    voiceService.setAudioRoute("bluetooth").catch(() => {});
-  }, []);
+    void applyRoute("bluetooth");
+  }, [applyRoute]);
 
+  /**
+   * Mute in this menu toggles the LOCAL MICROPHONE (existing product behavior).
+   * Icons are mic / mic-off. It does not silence remote race audio output and
+   * does not leave the LiveKit room.
+   */
   const selectMute = useCallback(() => {
     const current = micStateRef.current;
     if (__DEV__) console.log("[VoiceMenu] option selected: mute, current state:", current);

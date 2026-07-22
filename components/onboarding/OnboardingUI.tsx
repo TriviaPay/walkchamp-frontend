@@ -12,11 +12,12 @@ import {
   View,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import { StatusBar } from "expo-status-bar";
 import { Feather } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
-import { rf, rs } from "@/utils/responsive";
+import { isTablet, MAX_CONTENT_WIDTH, rf, rs } from "@/utils/responsive";
 import { ONBOARDING_COLORS } from "@/constants/onboarding";
 
 const C = ONBOARDING_COLORS;
@@ -38,10 +39,11 @@ export function OnboardingLayout({
   showBack = false,
 }: LayoutProps) {
   const { safeTop, safeBottom } = useSafeLayout();
-  const { height } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const fontScale = PixelRatio.getFontScale();
-  // Emergency scroll only for very large accessibility font sizes.
-  const allowScroll = fontScale >= 1.35 || height < 620;
+  const allowScroll = fontScale >= 1.35 || height < 700;
+  const contentMax = isTablet ? Math.min(MAX_CONTENT_WIDTH, 560) : width;
+  const sidePad = Math.max(rs(24), (width - contentMax) / 2);
 
   const content = (
     <View style={styles.contentColumn}>
@@ -58,6 +60,7 @@ export function OnboardingLayout({
 
   return (
     <View style={[styles.root, { backgroundColor: C.bg }]}>
+      <StatusBar style="light" />
       <LinearGradient
         colors={["#224DB628", "#7C4DFF18", "transparent"]}
         style={styles.topGlow}
@@ -68,22 +71,27 @@ export function OnboardingLayout({
         style={[
           styles.main,
           {
-            paddingTop: safeTop + 8,
-            paddingBottom: Math.max(safeBottom, 10),
+            // Clear status bar / notch with extra breathing room
+            paddingTop: safeTop + 20,
+            // Clear home indicator / Android nav with extra breathing room
+            paddingBottom: safeBottom + 24,
+            paddingHorizontal: sidePad,
           },
         ]}
       >
         {allowScroll ? (
-          <ScrollView
-            style={styles.flex}
-            contentContainerStyle={styles.scrollContent}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            bounces={false}
-          >
-            {content}
-            {footer ? <View style={styles.footerInScroll}>{footer}</View> : null}
-          </ScrollView>
+          <>
+            <ScrollView
+              style={styles.flex}
+              contentContainerStyle={styles.scrollContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              bounces={false}
+            >
+              {content}
+            </ScrollView>
+            {footer ? <View style={styles.footer}>{footer}</View> : null}
+          </>
         ) : (
           <>
             <View style={styles.flexShrink}>{content}</View>
@@ -331,7 +339,9 @@ const styles = StyleSheet.create({
   flexShrink: { flex: 1, minHeight: 0 },
   main: {
     flex: 1,
-    paddingHorizontal: rs(20),
+    width: "100%",
+    alignSelf: "center",
+    maxWidth: isTablet ? 560 : undefined,
   },
   topGlow: {
     position: "absolute",
@@ -350,7 +360,8 @@ const styles = StyleSheet.create({
   topRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    marginBottom: 4,
+    marginBottom: 8,
+    marginTop: 4,
   },
   progressFlex: { flex: 1 },
   backPlaceholder: { width: 44 },
@@ -368,12 +379,9 @@ const styles = StyleSheet.create({
     justifyContent: "flex-start",
   },
   footer: {
-    paddingTop: 8,
-    gap: 2,
-  },
-  footerInScroll: {
     paddingTop: 12,
-    gap: 2,
+    paddingBottom: 4,
+    gap: 4,
   },
   progressWrap: { gap: 5 },
   progressTrack: { flexDirection: "row", gap: 5 },
@@ -383,6 +391,7 @@ const styles = StyleSheet.create({
     fontSize: rf(11),
     fontWeight: "700",
     textAlign: "center",
+    marginBottom: 4,
   },
   mascotWrap: {
     alignItems: "center",

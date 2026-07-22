@@ -1,19 +1,16 @@
 /** Single tag for push / OneSignal testing — filter terminal with: adb logcat | findstr Push */
+import { logger } from "@/utils/logger";
+
 export function pushLog(message: string, extra?: unknown): void {
-  if (!__DEV__) return;
-  if (extra !== undefined) {
-    console.log(`[Push] ${message}`, extra);
-  } else {
-    console.log(`[Push] ${message}`);
-  }
+  // Never pass full push payloads / PII as extra.
+  logger.debug("Push", message, typeof extra === "string" || typeof extra === "number" ? extra : undefined);
 }
 
 /** Notification routing / tap testing — filter with: adb logcat | findstr Notification */
 export function notificationLog(message: string, extra?: unknown): void {
-  if (!__DEV__) return;
-  if (extra !== undefined) {
-    console.log(`[Notification] ${message}`, extra);
-  } else {
-    console.log(`[Notification] ${message}`);
-  }
+  logger.debug(
+    "Notification",
+    message,
+    typeof extra === "string" || typeof extra === "number" ? extra : undefined,
+  );
 }

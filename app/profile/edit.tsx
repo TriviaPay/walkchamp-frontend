@@ -21,9 +21,9 @@ import { PROFILE_ME_CACHE_KEY } from "@/hooks/useAvatarCache";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { SkeletonEditForm } from '@/components/SkeletonRows';
 
-// Same palette used throughout the app. Not red by default (#00E676 is the first entry).
+// Same palette used throughout the app. Not red by default (#006B3F dark green is the first entry).
 const AVATAR_COLORS = [
-  "#00E676", "#00B4FF", "#FFD700",
+  "#006B3F", "#00B4FF", "#FFD700",
   "#FF6B35", "#A855F7", "#F472B6",
 ];
 

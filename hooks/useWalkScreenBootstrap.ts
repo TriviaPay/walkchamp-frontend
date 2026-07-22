@@ -2,6 +2,7 @@
  * Walk screen focus bootstrap — coordinates parallel fetches without changing
  * endpoint contracts or displayed data. Dedupes against recent login hydration.
  */
+// Not wired: behavior parity not verified against Walk focus effects
 import { useCallback, useRef } from "react";
 import { useFocusEffect } from "expo-router";
 import { useDispatch } from "react-redux";

@@ -27,5 +27,5 @@ export const ONBOARDING_ROUTES = {
   healthConnect: "/onboarding/health-connect",
   notifications: "/onboarding/notifications",
   completion: "/onboarding/completion",
-  signIn: "/(auth)",
+  home: "/(tabs)/walk",
 } as const;

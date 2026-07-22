@@ -2,6 +2,7 @@ import type { Channel } from "pusher-js";
 import { getStoredSession } from "./authService";
 import { markPusherConnected, markPusherEvent } from "./pusherHealth";
 import { perf } from "@/utils/perfLogger";
+import { ChannelRefCounter } from "./channelRefCount";
 
 type PusherClass = typeof import("pusher-js").default;
 type PusherInstance = InstanceType<PusherClass>;
@@ -11,6 +12,17 @@ const PUSHER_KEY = process.env.EXPO_PUBLIC_PUSHER_KEY ?? "";
 const PUSHER_CLUSTER = process.env.EXPO_PUBLIC_PUSHER_CLUSTER ?? "mt1";
 
 let _client: PusherInstance | null = null;
+const _channelRefs = new ChannelRefCounter<ChannelAdapter>();
+
+/** Test-only: clear ref-count map (does not touch network). */
+export function __resetChannelRefsForTests(): void {
+  _channelRefs.clear(() => {});
+}
+
+/** Test-only: inspect ref counts. */
+export function __getChannelRefCountForTests(channelName: string): number {
+  return _channelRefs.count(channelName);
+}
 
 // ── ChannelAdapter ─────────────────────────────────────────────────────────────
 // Thin wrapper so call sites don't need to change when we swap Pusher internals.
@@ -127,6 +139,7 @@ export function connectPusher(): void {
 
 export function disconnectPusher(): void {
   if (!_client) return;
+  _channelRefs.clear(() => {});
   _client.disconnect();
   _client = null;
 }
@@ -135,25 +148,31 @@ export function getPusherClient(): PusherInstance | null {
   return getClient();
 }
 
-// ── Channel helpers ────────────────────────────────────────────────────────────
+// ── Channel helpers (reference-counted) ───────────────────────────────────────
 export function subscribeToChannel(channelName: string): ChannelAdapter | null {
-  const client = getClient();
-  if (!client) return null;
-  const channel = client.subscribe(channelName);
-  return new ChannelAdapter(channel);
+  return _channelRefs.acquire(channelName, () => {
+    const client = getClient();
+    if (!client) return null;
+    return new ChannelAdapter(client.subscribe(channelName));
+  });
 }
 
 export function unsubscribeFromChannel(channelName: string): void {
-  _client?.unsubscribe(channelName);
+  _channelRefs.release(channelName, (name) => {
+    _client?.unsubscribe(name);
+  });
 }
 
 export function unsubscribeAll(): void {
-  if (!_client) return;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const channels = Object.keys((_client as any).channels?.channels ?? {});
-  for (const ch of channels) {
-    _client.unsubscribe(ch);
-  }
+  _channelRefs.clear((names) => {
+    if (!_client) return;
+    // Prefer known refs; also sweep any leftover client channels.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
+    const leftover = Object.keys((_client as any).channels?.channels ?? {});
+    for (const ch of new Set([...names, ...leftover])) {
+      _client.unsubscribe(ch);
+    }
+  });
 }
 
 // ── Well-known channel names ──────────────────────────────────────────────────

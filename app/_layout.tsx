@@ -63,14 +63,16 @@ import { FirstLaunchPermissionBootstrap } from "@/components/FirstLaunchPermissi
 import { SessionRealtimeGuard } from "@/components/SessionRealtimeGuard";
 import { SessionNoticeHost } from "@/components/SessionNoticeHost";
 import { StepTrackingNotificationPrompt } from "@/components/StepTrackingNotificationPrompt";
+import { logger } from "@/utils/logger";
 
 // ── App startup diagnostics ────────────────────────────────────────────────
 initCrashReporting();
 perf.appStartStart();
-if (__DEV__) {
-  console.log(`[AppStart] platform: ${Platform.OS}`);
-  console.log(`[AppStart] env loaded: API_URL=${process.env.EXPO_PUBLIC_API_URL ?? "(unset)"} DESCOPE=${process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID ? "set" : "(unset)"} PUSHER_KEY=${process.env.EXPO_PUBLIC_PUSHER_KEY ? "set" : "(unset)"}`);
-}
+logger.debug("AppStart", `platform: ${Platform.OS}`);
+logger.debug(
+  "AppStart",
+  `env loaded: API_URL=${process.env.EXPO_PUBLIC_API_URL ? "set" : "(unset)"} DESCOPE=${process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID ? "set" : "(unset)"} PUSHER_KEY=${process.env.EXPO_PUBLIC_PUSHER_KEY ? "set" : "(unset)"}`,
+);
 
 // ── Suppress fontfaceobserver timeout crash on web ─────────────────────────
 // fontfaceobserver throws an uncaught Error after 6s when fonts can't load in
@@ -144,7 +146,7 @@ if (Platform.OS === "android" && typeof (global as unknown as { ErrorUtils?: { s
   ErrorUtils.setGlobalHandler((error, isFatal) => {
     const msg = String(error?.message ?? "");
     if (msg.includes("Unable to activate keep awake")) return;
-    console.log(`[Startup] global error fatal=${isFatal} message=${msg}`);
+    logger.warn("Startup", `global error fatal=${isFatal} message=${msg}`);
     prev(error, isFatal);
   });
 }
@@ -174,11 +176,11 @@ function RootLayoutNav() {
   useEffect(() => {
     void waitForAppStartupReady().then(() => {
       try {
-        console.log("[Startup] begin");
+        logger.debug("Startup", "begin");
         initStepProgressCoordinator();
         void initDynamicIconService().catch(() => {});
       } catch (err) {
-        console.log("[Startup] step coordinator failed", err);
+        logger.warn("Startup", "step coordinator failed", err);
       }
     });
   }, []);
@@ -282,7 +284,7 @@ function PushNotificationSetup() {
         handleDeepLink(initialUrl);
         linkingSub = Linking.addEventListener("url", ({ url }) => handleDeepLink(url));
       } catch (err) {
-        console.log("[Startup] push setup failed", err);
+        logger.warn("Startup", "push setup failed", err);
       }
     });
 

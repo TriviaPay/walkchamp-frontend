@@ -68,10 +68,10 @@ export async function getDeviceCapabilitySnapshot(): Promise<DeviceCapabilitySna
 
     if (Platform.OS === "android") {
       try {
-        const { androidHealthConnectService } = await import(
+        const { androidHCService } = await import(
           "@/services/steps/androidHealthConnectService"
         );
-        const init = await androidHealthConnectService.initialize();
+        const init = await androidHCService.initialize();
         if (init.availability === "available") healthConnectStatus = "available";
         else if (init.availability === "not_installed") healthConnectStatus = "not_installed";
         else if (init.availability === "needs_update") healthConnectStatus = "update_required";

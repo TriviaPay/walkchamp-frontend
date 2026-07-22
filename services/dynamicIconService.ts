@@ -1,31 +1,30 @@
 /**
  * dynamicIconService — launcher icon by daily goal milestone (0 / 25 / 50 / 75 / 100 %).
  *
- * iOS: applies immediately.
- * Android: queues while in-app, applies only in true background (avoids Profile crash).
- * KEY_MILESTONE is written only after a successful native apply — never on queue.
+ * iOS: applies immediately via expo-alternate-app-icons.
+ * Android: queues while foreground; applies only when backgrounded (OEM / ActivityManager safety).
+ * KEY_MILESTONE is written only after a successful native apply — never on queue alone.
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ensureExpoNativeModulesInstalled, requireOptionalExpoNativeModule } from "@/utils/expoNativeModule";
 import { AppState, Platform, type AppStateStatus } from "react-native";
 import { getLocalDateStr } from "@/utils/timezone";
+import { logger } from "@/utils/logger";
+import {
+  type DynamicAppIcon,
+  iconForMilestone,
+  milestoneForIconName,
+  milestoneForProgress,
+  normalizeDynamicAppIcon,
+  shouldReplacePendingIcon,
+} from "@/utils/dynamicAppIcon";
 
-const ICON_FOR_MILESTONE: Record<number, string> = {
-  0: "WalkChampProgress0",
-  25: "WalkChampProgress25",
-  50: "WalkChampProgress50",
-  75: "WalkChampProgress75",
-  100: "WalkChampProgress100",
-};
-
-const MILESTONE_FOR_ICON: Record<string, number> = {
-  WalkChampProgress0: 0,
-  WalkChampProgress25: 25,
-  WalkChampProgress50: 50,
-  WalkChampProgress75: 75,
-  WalkChampProgress100: 100,
-};
+export {
+  milestoneForProgress,
+  iconForMilestone as iconNameForMilestone,
+  type DynamicAppIcon,
+} from "@/utils/dynamicAppIcon";
 
 export const PROGRESS_ICON_SOURCES = {
   0: require("@/assets/icons/WalkChampProgress0.png"),
@@ -48,11 +47,18 @@ const KEY_PENDING_DATE = "@dyn_icon_pending_date";
 /** Delay after entering background before native apply (ms). */
 const ANDROID_BACKGROUND_APPLY_DELAY_MS = 1_500;
 
-/** Launcher alias toggles crash bridgeless RN during dev reload — release only. */
-const SKIP_ANDROID_LAUNCHER_NATIVE =
-  Platform.OS === "android" && __DEV__;
+/**
+ * Android launcher alias toggles are unsafe while the activity is foreground
+ * (OEM / bridgeless crashes). We still queue milestones in all builds and apply
+ * only when backgrounded (see setNativeIconOnce).
+ *
+ * Set EXPO_PUBLIC_DYNAMIC_ICON_ANDROID_DISABLE=1 to fully disable Android updates.
+ */
+const ANDROID_LAUNCHER_DISABLED =
+  Platform.OS === "android" &&
+  process.env.EXPO_PUBLIC_DYNAMIC_ICON_ANDROID_DISABLE === "1";
 
-let pendingIconName: string | null = null;
+let pendingIconName: DynamicAppIcon | null = null;
 let pendingMilestone: number | null = null;
 let pendingUserId: string | null = null;
 let androidApplyInFlight = false;
@@ -62,26 +68,17 @@ let checkDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let notifyDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let lastAppliedMilestoneMemory: number | null = null;
 
+/** Single-flight: only one native set at a time; latest requested icon wins. */
+let latestRequestedIcon: DynamicAppIcon | null = null;
+
 type AndroidLauncherIconNative = {
   getLauncherIconName?: () => Promise<string | null>;
   setLauncherIcon?: (iconName: string | null) => Promise<boolean>;
 };
 
 let androidLauncherIconNative: AndroidLauncherIconNative | null | undefined;
-
-function toMilestone(pct: number): number {
-  if (pct >= 100) return 100;
-  if (pct >= 75) return 75;
-  if (pct >= 50) return 50;
-  if (pct >= 25) return 25;
-  return 0;
-}
-
-export function milestoneForProgress(steps: number, goal: number): number {
-  if (goal <= 0) return 0;
-  const pct = Math.min(100, Math.floor((steps / goal) * 100));
-  return toMilestone(pct);
-}
+/** True once resolved after app startup (success or confirmed missing). */
+let androidLauncherIconNativeResolved = false;
 
 export function progressIconSourceForSteps(steps: number, goal: number) {
   const safeSteps = Math.max(0, Math.floor(Number.isFinite(steps) ? steps : 0));
@@ -94,15 +91,18 @@ export function progressIconSourceForSteps(steps: number, goal: number) {
 }
 
 function log(msg: string): void {
-  console.warn(`[DynamicIcon] ${msg}`);
+  // Prefer warn so Metro shows queue/apply status while diagnosing home-screen icons.
+  if (__DEV__) {
+    console.warn(`[DynamicIcon] ${msg}`);
+  }
+  logger.debug("DynamicIcon", msg);
 }
 
-function iconNameForMilestone(milestone: number): string {
-  return ICON_FOR_MILESTONE[milestone] ?? ICON_FOR_MILESTONE[0];
-}
-
-function milestoneForIconName(iconName: string): number {
-  return MILESTONE_FOR_ICON[iconName] ?? 0;
+function warn(msg: string): void {
+  if (__DEV__) {
+    console.warn(`[DynamicIcon] ${msg}`);
+  }
+  logger.warn("DynamicIcon", msg);
 }
 
 function cancelBackgroundApplyTimer(): void {
@@ -173,19 +173,40 @@ async function loadAlternateIconModule() {
 
 function getAndroidLauncherIconNative(): AndroidLauncherIconNative | null {
   if (Platform.OS !== "android") return null;
-  if (androidLauncherIconNative !== undefined) return androidLauncherIconNative;
+  if (androidLauncherIconNativeResolved) {
+    return androidLauncherIconNative ?? null;
+  }
 
   try {
     ensureExpoNativeModulesInstalled();
-    androidLauncherIconNative =
-      requireOptionalExpoNativeModule<AndroidLauncherIconNative>(
-        "WalkChampRaceProgress",
-      ) ?? null;
+    const mod = requireOptionalExpoNativeModule<AndroidLauncherIconNative>(
+      "WalkChampRaceProgress",
+    );
+    if (mod == null) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { isAppStartupReady } = require("@/services/appStartup") as {
+        isAppStartupReady: () => boolean;
+      };
+      // Do not permanently cache a miss caused by startup-not-ready.
+      if (!isAppStartupReady()) {
+        return null;
+      }
+      androidLauncherIconNative = null;
+      androidLauncherIconNativeResolved = true;
+      warn(
+        "WalkChampRaceProgress native module unavailable — home-screen icon cannot update",
+      );
+      return null;
+    }
+    androidLauncherIconNative = mod;
+    androidLauncherIconNativeResolved = true;
+    log("WalkChampRaceProgress launcher API ready");
+    return mod;
   } catch {
     androidLauncherIconNative = null;
+    androidLauncherIconNativeResolved = true;
+    return null;
   }
-
-  return androidLauncherIconNative;
 }
 
 async function getHighestMilestoneForToday(userId?: string): Promise<number> {
@@ -198,12 +219,13 @@ async function getHighestMilestoneForToday(userId?: string): Promise<number> {
   return values.length > 0 ? Math.max(...values) : 0;
 }
 
-async function setNativeIcon(iconName: string): Promise<boolean> {
+async function setNativeIconOnce(iconName: DynamicAppIcon): Promise<boolean> {
   if (Platform.OS === "web") return false;
 
   if (Platform.OS === "android") {
-    // Launcher alias toggles must run only when backgrounded (OEM / ActivityManager crash).
+    // Never toggle activity-aliases while foreground — OEMs may kill the process.
     if (AppState.currentState === "active") {
+      log(`defer android apply until background icon=${iconName}`);
       return false;
     }
     const native = getAndroidLauncherIconNative();
@@ -211,34 +233,68 @@ async function setNativeIcon(iconName: string): Promise<boolean> {
       try {
         const ok = await native.setLauncherIcon(iconName);
         if (ok) {
-          log(`native launcher icon applied: ${iconName}`);
+          log(`native launcher icon applied platform=android icon=${iconName}`);
           return true;
         }
+        warn(`native launcher icon rejected platform=android icon=${iconName}`);
       } catch (err: unknown) {
-        log(
-          `native launcher icon failed: ${err instanceof Error ? err.message : String(err)}`,
+        warn(
+          `native launcher icon failed platform=android icon=${iconName} err=${err instanceof Error ? err.message : "unknown"}`,
         );
       }
+    } else {
+      warn(
+        `android launcher API missing — cannot update home-screen icon (in-app progress icon still works)`,
+      );
     }
-    if (AppState.currentState !== "background") {
-      return false;
-    }
+    // ExpoAlternateAppIcons needs a live Activity; skip when backgrounded without one.
+    // Prefer the WalkChampRaceProgress module above for reliable home-screen updates.
+    return false;
   }
 
   try {
     const mod = await loadAlternateIconModule();
-    if (!mod) return false;
+    if (!mod) {
+      warn(`alternate icon module unavailable platform=${Platform.OS}`);
+      return false;
+    }
     await mod.setAlternateAppIcon(iconName);
-    log(`native icon applied: ${iconName}`);
+    log(`native icon applied platform=${Platform.OS} icon=${iconName}`);
     return true;
   } catch (err: unknown) {
-    log(`native icon failed: ${err instanceof Error ? err.message : String(err)}`);
+    warn(
+      `native icon failed platform=${Platform.OS} icon=${iconName} err=${err instanceof Error ? err.message : "unknown"}`,
+    );
     return false;
   }
 }
 
+/** Single-flight + latest-wins queue for native icon changes. */
+let nativeChain: Promise<void> = Promise.resolve();
+
+async function setNativeIcon(iconName: DynamicAppIcon): Promise<boolean> {
+  latestRequestedIcon = iconName;
+  const requested = iconName;
+
+  const result = new Promise<boolean>((resolve) => {
+    nativeChain = nativeChain
+      .catch(() => undefined)
+      .then(async () => {
+        const target = latestRequestedIcon ?? requested;
+        try {
+          const ok = await setNativeIconOnce(target);
+          resolve(ok && latestRequestedIcon === target);
+        } catch {
+          resolve(false);
+        }
+      });
+  });
+
+  return result;
+}
+
 async function persistPendingQueue(
-  iconName: string,
+  iconName: DynamicAppIcon,
   milestone: number,
   userId?: string,
 ): Promise<void> {
@@ -286,16 +342,23 @@ async function flushPendingAndroidIcon(): Promise<boolean> {
   const userId = pendingUserId;
 
   try {
-    log(`flushing icon in background: ${iconName}`);
-    const ok = await setNativeIcon(iconName);
-    if (ok && milestone != null) {
-      await persistAppliedState(milestone, userId);
-      pendingIconName = null;
-      pendingMilestone = null;
-      pendingUserId = null;
-      log(`milestone ${milestone}% applied`);
-      return true;
+    // Retry briefly if native module was not ready on first touch after startup.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      log(`flushing icon in background: ${iconName} attempt=${attempt + 1}`);
+      const ok = await setNativeIcon(iconName);
+      if (ok && milestone != null) {
+        await persistAppliedState(milestone, userId);
+        pendingIconName = null;
+        pendingMilestone = null;
+        pendingUserId = null;
+        log(`milestone ${milestone}% applied stored=${iconName}`);
+        return true;
+      }
+      const native = getAndroidLauncherIconNative();
+      if (native?.setLauncherIcon) break;
+      await new Promise((r) => setTimeout(r, 400));
     }
+    warn(`flush failed for ${iconName} — will retry on next background`);
     return false;
   } finally {
     androidApplyInFlight = false;
@@ -323,7 +386,7 @@ async function queueIconChange(
   userId?: string,
   opts?: { force?: boolean },
 ): Promise<void> {
-  const iconName = iconNameForMilestone(milestone);
+  const iconName = iconForMilestone(milestone);
 
   if (Platform.OS === "ios") {
     const ok = await setNativeIcon(iconName);
@@ -337,7 +400,7 @@ async function queueIconChange(
 
   const applied = await getAppliedMilestoneForToday(userId);
   const highest = await getHighestMilestoneForToday(userId);
-  let targetMilestone = milestone;
+  const targetMilestone = milestone;
   if (!opts?.force && targetMilestone < highest) {
     log(`skip downgrade queue ${targetMilestone}% < highest ${highest}%`);
     return;
@@ -347,10 +410,17 @@ async function queueIconChange(
     return;
   }
 
-  const targetIcon = iconNameForMilestone(targetMilestone);
+  const targetIcon = iconForMilestone(targetMilestone);
   if (
     pendingIconName === targetIcon &&
     pendingMilestone === targetMilestone
+  ) {
+    return;
+  }
+  if (
+    !shouldReplacePendingIcon(pendingIconName, targetIcon, {
+      force: opts?.force,
+    })
   ) {
     return;
   }
@@ -369,7 +439,7 @@ async function queueIconChange(
   pendingMilestone = targetMilestone;
   pendingUserId = userId ?? null;
   await persistPendingQueue(targetIcon, targetMilestone, userId);
-  log(`queued ${targetIcon} (${targetMilestone}%)`);
+  log(`queued ${targetIcon} (${targetMilestone}%) storedPending=${targetIcon}`);
 
   scheduleAndroidBackgroundApply();
 }
@@ -393,9 +463,10 @@ async function restorePendingFromStorage(): Promise<void> {
       }
       return;
     }
-    pendingIconName = pending;
-    pendingMilestone = pendingMs != null ? Number(pendingMs) : milestoneForIconName(pending);
-    log(`restored pending queue: ${pending}`);
+    pendingIconName = normalizeDynamicAppIcon(pending);
+    pendingMilestone =
+      pendingMs != null ? Number(pendingMs) : milestoneForIconName(pending);
+    log(`restored pending queue: ${pendingIconName}`);
     ensureAppStateListener();
     scheduleAndroidBackgroundApply();
   } catch {
@@ -408,7 +479,10 @@ async function reconcileMilestone(
   userId?: string,
   opts?: { force?: boolean },
 ): Promise<void> {
-  if (SKIP_ANDROID_LAUNCHER_NATIVE) return;
+  if (ANDROID_LAUNCHER_DISABLED) {
+    log("android launcher updates disabled via EXPO_PUBLIC_DYNAMIC_ICON_ANDROID_DISABLE");
+    return;
+  }
   if (!(await dynamicIconService.isEnabled())) return;
 
   const highest = await getHighestMilestoneForToday(userId);
@@ -424,9 +498,20 @@ async function reconcileMilestone(
   await queueIconChange(milestone, userId, opts);
 }
 
+/**
+ * Flush any pending Android launcher icon when the process is already backgrounded.
+ * Call after notifyStepsChanged on AppState background transitions.
+ */
+export function flushAndroidIconIfBackground(): void {
+  if (Platform.OS !== "android" || ANDROID_LAUNCHER_DISABLED) return;
+  if (AppState.currentState === "active") return;
+  ensureAppStateListener();
+  scheduleAndroidBackgroundApply();
+}
+
 /** Call once after scheduleAppStartupReady — never at module import time. */
 export async function initDynamicIconService(): Promise<void> {
-  if (Platform.OS !== "android" || SKIP_ANDROID_LAUNCHER_NATIVE) return;
+  if (Platform.OS !== "android" || ANDROID_LAUNCHER_DISABLED) return;
   try {
     const { waitForAppStartupReady } = await import("@/services/appStartup");
     await waitForAppStartupReady();
@@ -437,6 +522,8 @@ export async function initDynamicIconService(): Promise<void> {
 }
 
 export const dynamicIconService = {
+  flushAndroidIconIfBackground,
+
   /** Profile/settings — cancel in-flight background timer only (does not block queue). */
   beginUiSensitivePeriod(): void {
     cancelBackgroundApplyTimer();
@@ -479,37 +566,43 @@ export const dynamicIconService = {
     allowApiFetch?: boolean;
   }): Promise<void> {
     const run = async () => {
-      if (opts?.steps !== undefined && opts?.goal !== undefined && opts.goal > 0) {
+      try {
+        if (opts?.steps !== undefined && opts?.goal !== undefined && opts.goal > 0) {
+          await reconcileMilestone(
+            milestoneForProgress(opts.steps, opts.goal),
+            opts.userId,
+          );
+          return;
+        }
+
+        if (Platform.OS === "android" && !opts?.allowApiFetch) {
+          const applied = await getAppliedMilestoneForToday(opts?.userId);
+          if (applied != null) await reconcileMilestone(applied, opts?.userId);
+          return;
+        }
+
+        const today = getLocalDateStr();
+        const { getValidSession } = await import("@/services/authService");
+        const session = await getValidSession();
+        if (!session) return;
+
+        const res = await fetch(`${API_BASE}/api/walk/today?localDate=${today}`, {
+          headers: { Authorization: `Bearer ${session}` },
+        }).catch(() => null);
+        if (!res?.ok) return;
+
+        const data = (await res.json()) as { today?: { steps: number; goal: number } };
+        const steps = data.today?.steps ?? 0;
+        const goal = Math.max(1, data.today?.goal ?? 10_000);
         await reconcileMilestone(
-          milestoneForProgress(opts.steps, opts.goal),
-          opts.userId,
+          milestoneForProgress(steps, goal),
+          opts?.userId,
         );
-        return;
+      } catch (err: unknown) {
+        warn(
+          `checkAndUpdate failed err=${err instanceof Error ? err.message : "unknown"}`,
+        );
       }
-
-      if (Platform.OS === "android" && !opts?.allowApiFetch) {
-        const applied = await getAppliedMilestoneForToday(opts?.userId);
-        if (applied != null) await reconcileMilestone(applied, opts?.userId);
-        return;
-      }
-
-      const today = getLocalDateStr();
-      const { getValidSession } = await import("@/services/authService");
-      const session = await getValidSession();
-      if (!session) return;
-
-      const res = await fetch(`${API_BASE}/api/walk/today?localDate=${today}`, {
-        headers: { Authorization: `Bearer ${session}` },
-      }).catch(() => null);
-      if (!res?.ok) return;
-
-      const data = (await res.json()) as { today?: { steps: number; goal: number } };
-      const steps = data.today?.steps ?? 0;
-      const goal = Math.max(1, data.today?.goal ?? 10_000);
-      await reconcileMilestone(
-        milestoneForProgress(steps, goal),
-        opts?.userId,
-      );
     };
 
     if (checkDebounceTimer) clearTimeout(checkDebounceTimer);
@@ -520,32 +613,38 @@ export const dynamicIconService = {
   },
 
   notifyStepsChanged(steps: number, goal: number, userId?: string): void {
-    if (SKIP_ANDROID_LAUNCHER_NATIVE) return;
+    if (ANDROID_LAUNCHER_DISABLED) return;
     if (goal <= 0) return;
     const milestone = milestoneForProgress(steps, goal);
     const run = () => {
       void (async () => {
-        const highest = await getHighestMilestoneForToday(userId);
-        if (steps <= 0 && milestone === 0 && highest > 0) {
-          log(`ignore transient 0 steps (highest=${highest}%)`);
-          return;
-        }
+        try {
+          const highest = await getHighestMilestoneForToday(userId);
+          if (steps <= 0 && milestone === 0 && highest > 0) {
+            log(`ignore transient 0 steps (highest=${highest}%)`);
+            return;
+          }
 
-        const applied = await getAppliedMilestoneForToday(userId);
-        const targetIcon = iconNameForMilestone(milestone);
-        if (
-          applied === milestone &&
-          pendingIconName === targetIcon &&
-          pendingMilestone === milestone
-        ) {
-          return;
-        }
-        if (applied === milestone && milestone === 0 && steps <= 0) {
-          return;
-        }
+          const applied = await getAppliedMilestoneForToday(userId);
+          const targetIcon = iconForMilestone(milestone);
+          if (
+            applied === milestone &&
+            pendingIconName === targetIcon &&
+            pendingMilestone === milestone
+          ) {
+            return;
+          }
+          if (applied === milestone && milestone === 0 && steps <= 0) {
+            return;
+          }
 
-        log(`steps=${steps} goal=${goal} -> milestone=${milestone}%`);
-        void reconcileMilestone(milestone, userId).catch(() => {});
+          log(
+            `steps update platform=${Platform.OS} requested=${targetIcon} stored=${applied ?? "none"}`,
+          );
+          void reconcileMilestone(milestone, userId).catch(() => {});
+        } catch {
+          // never throw into step pipeline
+        }
       })();
     };
     if (AppState.currentState === "background") {
@@ -570,6 +669,7 @@ export const dynamicIconService = {
       pendingMilestone = null;
       pendingUserId = null;
       lastAppliedMilestoneMemory = null;
+      latestRequestedIcon = null;
       await AsyncStorage.multiRemove([
         KEY_MILESTONE,
         KEY_USER_ID,
@@ -581,6 +681,7 @@ export const dynamicIconService = {
       if (Platform.OS === "android") {
         pendingIconName = "WalkChampProgress0";
         pendingMilestone = 0;
+        await persistPendingQueue("WalkChampProgress0", 0);
         if (AppState.currentState === "background") {
           scheduleAndroidBackgroundApply();
         }

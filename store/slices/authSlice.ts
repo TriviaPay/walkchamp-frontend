@@ -240,8 +240,15 @@ const authSlice = createSlice({
         state.isAuthenticated = !!action.payload.user;
       })
       .addCase(restoreSession.rejected, (state) => {
+        // Clear hydrateFromCache leftovers — otherwise user.id remains set while
+        // isAuthenticated is false and permission prompts fire on the sign-in screen.
         state.isRestoringSession = false;
         state.isAuthenticated = false;
+        state.isLoading = false;
+        state.sessionToken = null;
+        state.refreshToken = null;
+        state.user = null;
+        state.error = null;
       })
       // signIn
       .addCase(signIn.pending, (state) => {

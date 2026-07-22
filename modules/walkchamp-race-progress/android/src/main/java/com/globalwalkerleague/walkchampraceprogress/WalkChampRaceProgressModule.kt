@@ -278,9 +278,20 @@ class WalkChampRaceProgressModule : Module() {
     "WalkChampProgress100",
   )
 
-  private fun launcherComponent(ctx: android.content.Context, iconName: String?): ComponentName {
-    val suffix = iconName ?: ""
-    return ComponentName(ctx.packageName, "${ctx.packageName}.MainActivity$suffix")
+  /**
+   * Home-screen icons are activity-aliases only (MainActivity has no LAUNCHER).
+   * Never enable/disable `.MainActivity` itself — that broke OEM shortcut updates.
+   */
+  private fun resolveLauncherIconName(iconName: String?): String {
+    return when {
+      iconName == null || iconName.isBlank() -> "WalkChampProgress0"
+      launcherIconNames.contains(iconName) -> iconName
+      else -> "WalkChampProgress0"
+    }
+  }
+
+  private fun launcherAliasComponent(ctx: android.content.Context, iconName: String): ComponentName {
+    return ComponentName(ctx.packageName, "${ctx.packageName}.MainActivity$iconName")
   }
 
   private fun isLauncherComponentEnabled(
@@ -315,14 +326,8 @@ class WalkChampRaceProgressModule : Module() {
     var bestName: String? = null
     var bestValue = -1
 
-    val defaultComponent = launcherComponent(ctx, null)
-    if (isLauncherComponentEnabled(pm, defaultComponent)) {
-      bestName = "WalkChampProgress0"
-      bestValue = 0
-    }
-
     for (name in launcherIconNames) {
-      val component = launcherComponent(ctx, name)
+      val component = launcherAliasComponent(ctx, name)
       if (!isLauncherComponentEnabled(pm, component)) continue
       val value = milestoneValue(name)
       if (value > bestValue) {
@@ -335,35 +340,39 @@ class WalkChampRaceProgressModule : Module() {
   }
 
   private fun setLauncherIcon(ctx: android.content.Context, iconName: String?): Boolean {
-    if (iconName != null && !launcherIconNames.contains(iconName)) return false
+    if (iconName != null && iconName.isNotBlank() && !launcherIconNames.contains(iconName)) {
+      return false
+    }
+
+    val resolved = resolveLauncherIconName(iconName)
 
     return try {
       val pm = ctx.packageManager
-      val target = launcherComponent(ctx, iconName)
+      val target = launcherAliasComponent(ctx, resolved)
+
+      // Enable the target first so a launcher entry always remains available.
       pm.setComponentEnabledSetting(
         target,
         PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
         PackageManager.DONT_KILL_APP,
       )
 
-      val components =
-        listOf(launcherComponent(ctx, null)) +
-          launcherIconNames.map { launcherComponent(ctx, it) }
-      for (component in components) {
-        if (component.className == target.className) continue
+      for (name in launcherIconNames) {
+        if (name == resolved) continue
         pm.setComponentEnabledSetting(
-          component,
+          launcherAliasComponent(ctx, name),
           PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
           PackageManager.DONT_KILL_APP,
         )
       }
 
+      val targetEnabled = isLauncherComponentEnabled(pm, target)
       val applied = getEnabledLauncherIconName(ctx)
       android.util.Log.i(
         "DynamicIcon",
-        "[LauncherIcon] requested=${iconName ?: "default"} active=$applied",
+        "[LauncherIcon] requested=$resolved active=$applied targetEnabled=$targetEnabled",
       )
-      applied == (iconName ?: "WalkChampProgress0")
+      targetEnabled || applied == resolved
     } catch (e: Exception) {
       android.util.Log.w("DynamicIcon", "[LauncherIcon] apply failed: ${e.message}")
       false

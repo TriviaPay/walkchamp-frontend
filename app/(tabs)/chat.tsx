@@ -28,6 +28,7 @@ import {
   KeyboardAvoidingView,
   View} from "react-native";
 import { AppAlert } from "@/components/AppAlert";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { CachedAvatarImage } from "@/components/CachedAvatarImage";
 import { useSafeLayout, getSafeTop, getSafeBottom } from "@/hooks/useSafeLayout";
 import type { EdgeInsets } from "react-native-safe-area-context";
@@ -2137,6 +2138,14 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
 // ── Chat Screen ───────────────────────────────────────────────────────────────
 
 export default function ChatScreen() {
+  return (
+    <ErrorBoundary>
+      <ChatScreenContent />
+    </ErrorBoundary>
+  );
+}
+
+function ChatScreenContent() {
   useScreenMountPerf("Chat");
   const colors = useColors();
   const { insets, safeTop } = useSafeLayout();

@@ -18,9 +18,9 @@
  *   6. disconnectVoice()        — room.disconnect() → stopVoiceAudioSession() → releases resources
  *
  * AUDIO ROUTING:
- *   Default = earpiece/receiver (phone-call style).
- *   Speaker = explicit user selection via mic menu.
- *   Wired/BT = detected automatically by OS; routes are applied over user preference.
+ *   Default on connect = speaker.
+ *   Speaker / Phone / Bluetooth = user selection via mic menu + selectAudioOutput.
+ *   Menu Mute = local MICROPHONE mute (not output mute).
  *
  * CRITICAL NOTES:
  *   - Use AudioSession.configureAudio() — NOT AudioSession.configure() (doesn't exist).
@@ -38,6 +38,16 @@ import { PermissionsAndroid, Platform } from "react-native";
 import { getValidSession } from "@/services/authService";
 import { getApiBase } from "@/utils/apiUrl";
 import { timeoutSignal, CHAT_TIMEOUT } from "@/utils/authFetch";
+import { logger } from "@/utils/logger";
+import {
+  type LiveRaceAudioRoute,
+  androidPreferredOutputList,
+  isBluetoothOutputAvailable,
+  selectOutputDeviceId,
+} from "@/utils/liveRaceAudioRoute";
+
+export type { LiveRaceAudioRoute };
+export type AudioRoute = LiveRaceAudioRoute;
 
 // ── Runtime detection ─────────────────────────────────────────────────────────
 // "storeClient" == Expo Go. Native LiveKit/WebRTC modules are absent there.
@@ -110,28 +120,20 @@ function installLiveKitClosingRejectionGuard(): void {
 // ── Audio session helpers ─────────────────────────────────────────────────────
 
 /**
- * Configure AudioSession routing preferences.
+ * Configure AudioSession routing preferences, then callers should
+ * AudioSession.selectAudioOutput() so preferredOutputList is not the only path.
  *
- * route = "phone"     → earpiece/receiver (default phone-call style)
- * route = "speaker"   → loudspeaker
- * route = "bluetooth" → Bluetooth SCO/A2DP device (Android explicit; iOS auto)
- *
- * Wired headset always takes priority on Android regardless of route choice.
- * audioStreamType must be "voiceCall" to keep echo-cancellation and audio focus
- * working correctly in inCommunication mode.
+ * route = "phone"     → earpiece/receiver
+ * route = "speaker"   → loudspeaker (must be preferred first)
+ * route = "bluetooth" → Bluetooth when available
  */
-async function configureAudioSession(route: "phone" | "speaker" | "bluetooth"): Promise<void> {
+async function configureAudioSession(route: LiveRaceAudioRoute): Promise<void> {
   if (!rnModule) return;
-  if (__DEV__) console.log("[VoiceRoute] requested route:", route);
+  logger.debug("VoiceRoute", `configure requested=${route} platform=${Platform.OS}`);
   try {
     await rnModule.AudioSession.configureAudio({
       android: {
-        preferredOutputList:
-          route === "bluetooth"
-            ? ["bluetooth", "headset", "speaker", "earpiece"]
-            : route === "speaker"
-            ? ["headset", "bluetooth", "speaker", "earpiece"]
-            : ["headset", "bluetooth", "earpiece", "speaker"],
+        preferredOutputList: androidPreferredOutputList(route),
         audioTypeOptions: {
           manageAudioFocus:           true,
           audioMode:                  "inCommunication",
@@ -143,13 +145,37 @@ async function configureAudioSession(route: "phone" | "speaker" | "bluetooth"): 
         },
       },
       ios: {
-        // iOS auto-routes to Bluetooth when connected; defaultOutput controls phone vs speaker.
+        // iOS selectAudioOutput only supports force_speaker | default.
+        // Bluetooth uses default + allowBluetooth category options below.
         defaultOutput: route === "speaker" ? "speaker" : "earpiece",
       },
     });
-    if (__DEV__) console.log("[VoiceRoute] applied route:", route);
+
+    if (Platform.OS === "ios") {
+      const categoryOptions =
+        route === "speaker"
+          ? (["allowBluetooth", "allowBluetoothA2DP", "defaultToSpeaker"] as const)
+          : (["allowBluetooth", "allowBluetoothA2DP"] as const);
+      try {
+        await rnModule.AudioSession.setAppleAudioConfiguration({
+          audioCategory: "playAndRecord",
+          audioCategoryOptions: [...categoryOptions],
+          audioMode: "voiceChat",
+        });
+      } catch (e) {
+        logger.debug(
+          "VoiceRoute",
+          `setAppleAudioConfiguration failed err=${e instanceof Error ? e.message : "unknown"}`,
+        );
+      }
+    }
+
+    logger.debug("VoiceRoute", `configure applied=${route}`);
   } catch (e) {
-    if (__DEV__) console.log("[VoiceRoute] configureAudio failed (non-fatal):", e);
+    logger.warn(
+      "VoiceRoute",
+      `configureAudio failed err=${e instanceof Error ? e.message : "unknown"}`,
+    );
   }
 }
 
@@ -226,9 +252,11 @@ async function logAudioRoute(): Promise<void> {
 // ── Module state ──────────────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let activeRoom: any = null;
-let currentRoute: "phone" | "speaker" | "bluetooth" = "speaker";
+let currentRoute: LiveRaceAudioRoute = "speaker";
 /** @deprecated – kept for logAudioRoute compat */
 let currentSpeakerMode = true;
+let routeUpdateChain: Promise<void> = Promise.resolve();
+let latestRequestedRoute: LiveRaceAudioRoute | null = null;
 let onSpeakingCb:        ((speaking: boolean)                    => void) | null = null;
 let onStateCb:           ((state: string)                        => void) | null = null;
 let onActiveSpeakersCb:  ((userIds: string[])                    => void) | null = null;
@@ -462,8 +490,8 @@ export const voiceService = {
       });
 
       activeRoom.on(sdk.RoomEvent.Reconnected, async () => {
-        if (__DEV__) console.log("[Voice] reconnected — reapplying audio config");
-        await configureAudioSession(currentRoute);
+        if (__DEV__) console.log("[Voice] reconnected — reapplying audio route");
+        await voiceService.setAudioRoute(currentRoute).catch(() => {});
         onStateCb?.("reconnected");
       });
 
@@ -544,8 +572,11 @@ export const voiceService = {
       activeRoom.on(sdk.RoomEvent.ActiveSpeakersChanged, (speakers: any[]) => {
         const ids = (speakers as any[]).map((s: any) => s.identity as string);
         if (__DEV__) {
-          if (ids.length) if (__DEV__) console.log("[VoiceActivity] remote speaking started:", ids.join(", "));
-          else            if (__DEV__) console.log("[VoiceActivity] remote speaking stopped");
+          if (ids.length) {
+            console.log("[VoiceActivity] remote speaking started:", ids.join(", "));
+          } else {
+            console.log("[VoiceActivity] remote speaking stopped");
+          }
         }
         onActiveSpeakersCb?.(ids);
       });
@@ -622,8 +653,11 @@ export const voiceService = {
         "isSpeakingChanged",
         (speaking: boolean) => {
           if (__DEV__) {
-            if (speaking) if (__DEV__) console.log("[VoiceActivity] local speaking started:", "local user");
-            else          if (__DEV__) console.log("[VoiceActivity] local speaking stopped:", "local user");
+            if (speaking) {
+              console.log("[VoiceActivity] local speaking started:", "local user");
+            } else {
+              console.log("[VoiceActivity] local speaking stopped:", "local user");
+            }
           }
           onSpeakingCb?.(speaking);
         },
@@ -689,33 +723,108 @@ export const voiceService = {
   /**
    * Switch audio output route mid-session (phone / speaker / bluetooth).
    *
-   * Re-configures AVAudioSession / AudioManager preference and restarts the
-   * native audio session so the OS applies the change immediately.
-   * There will be a brief (~100 ms) audio interruption — acceptable for
-   * a user-initiated action.
+   * Uses LiveKit AudioSession.selectAudioOutput so the chosen device wins over
+   * preferredOutputList auto-selection. Serialized (latest-wins).
+   *
+   * Mute in the Live Race mic menu remains microphone mute (muteMic/unmuteMic) —
+   * this method only changes output routing.
    */
-  async setAudioRoute(route: "phone" | "speaker" | "bluetooth"): Promise<void> {
-    if (!rnModule) return;
-    currentRoute       = route;
-    currentSpeakerMode = route === "speaker" || route === "bluetooth";
-    if (__DEV__) console.log("[VoiceRoute] route switch started:", route);
-    try {
-      await configureAudioSession(route);
-      await rnModule.AudioSession.stopAudioSession();
-      await rnModule.AudioSession.startAudioSession();
-      await rnModule.AudioSession.setDefaultRemoteAudioTrackVolume(1.0);
-      if (__DEV__) {
-        if (__DEV__) console.log("[VoiceRoute] route switch success:", route);
-        await logAudioRoute();
-      }
-    } catch (e) {
-      if (__DEV__) console.log("[VoiceRoute] route switch failed:", e);
+  async setAudioRoute(
+    route: LiveRaceAudioRoute,
+  ): Promise<{ ok: boolean; route: LiveRaceAudioRoute; message?: string }> {
+    if (!rnModule) {
+      return { ok: false, route: currentRoute, message: "Audio is unavailable." };
     }
+
+    latestRequestedRoute = route;
+
+    const run = async (): Promise<{ ok: boolean; route: LiveRaceAudioRoute; message?: string }> => {
+      const target = latestRequestedRoute ?? route;
+
+      if (target === "bluetooth") {
+        const outputs = await voiceService.getAudioOutputs();
+        // iOS getAudioOutputs does not list "bluetooth" — allow attempt via default route.
+        if (Platform.OS === "android" && !isBluetoothOutputAvailable(outputs)) {
+          return {
+            ok: false,
+            route: currentRoute,
+            message: "No Bluetooth audio device is connected.",
+          };
+        }
+      }
+
+      logger.debug("VoiceRoute", `route switch started=${target}`);
+      try {
+        await configureAudioSession(target);
+        await rnModule!.AudioSession.stopAudioSession();
+        await rnModule!.AudioSession.startAudioSession();
+        await rnModule!.AudioSession.setDefaultRemoteAudioTrackVolume(1.0);
+
+        const deviceId = selectOutputDeviceId(target, Platform.OS);
+        try {
+          await rnModule!.AudioSession.selectAudioOutput(deviceId);
+        } catch (e) {
+          logger.warn(
+            "VoiceRoute",
+            `selectAudioOutput failed device=${deviceId} err=${e instanceof Error ? e.message : "unknown"}`,
+          );
+          if (target === "phone") {
+            return {
+              ok: false,
+              route: currentRoute,
+              message: "Phone audio is not available on this device.",
+            };
+          }
+          if (target === "bluetooth") {
+            return {
+              ok: false,
+              route: currentRoute,
+              message: "No Bluetooth audio device is connected.",
+            };
+          }
+          return {
+            ok: false,
+            route: currentRoute,
+            message: "We couldn’t switch the audio output. Please try again.",
+          };
+        }
+
+        currentRoute = target;
+        currentSpeakerMode = target === "speaker" || target === "bluetooth";
+        logger.debug("VoiceRoute", `route switch success=${target} device=${deviceId}`);
+        await logAudioRoute();
+        return { ok: true, route: target };
+      } catch (e) {
+        logger.warn(
+          "VoiceRoute",
+          `route switch failed err=${e instanceof Error ? e.message : "unknown"}`,
+        );
+        return {
+          ok: false,
+          route: currentRoute,
+          message: "We couldn’t switch the audio output. Please try again.",
+        };
+      }
+    };
+
+    const resultPromise = new Promise<{
+      ok: boolean;
+      route: LiveRaceAudioRoute;
+      message?: string;
+    }>((resolve) => {
+      routeUpdateChain = routeUpdateChain
+        .catch(() => undefined)
+        .then(async () => {
+          resolve(await run());
+        });
+    });
+
+    return resultPromise;
   },
 
   /** Convenience wrapper — kept for any existing callers. */
   async setSpeakerMode(enabled: boolean): Promise<void> {
-    return voiceService.setAudioRoute(enabled ? "speaker" : "phone");
+    await voiceService.setAudioRoute(enabled ? "speaker" : "phone");
   },
 
   /** Return array of currently-active output route names (e.g. ["bluetooth", "headset"]). */
@@ -729,7 +838,7 @@ export const voiceService = {
   },
 
   /** Current route preference. */
-  getCurrentRoute(): "phone" | "speaker" | "bluetooth" {
+  getCurrentRoute(): LiveRaceAudioRoute {
     return currentRoute;
   },
 

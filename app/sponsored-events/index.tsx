@@ -41,6 +41,7 @@ import { perf } from "@/utils/perfLogger";
 import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import { rf, rs } from "@/utils/responsive";
 import { SkeletonList } from "@/components/SkeletonRows";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { authFetch } from "@/utils/authFetch";
 import { getBadgeColor } from "@/utils/mockData";
 import { subscribeToChannel, SPONSORED_EVENTS_CHANNEL, EVENTS } from "@/services/realtimeService";
@@ -82,7 +83,7 @@ interface RegisteredUser {
   countryFlag: string | null;
   badge: string;
 }
-interface SponsoredEvent extends SponsoredEventDto {}
+type SponsoredEvent = SponsoredEventDto;
 
 // ── Countdown ──────────────────────────────────────────────────────────────────
 function useCountdown(iso: string | null): string {
@@ -985,6 +986,14 @@ function sponsoredCacheKey(userId: string | null | undefined): string {
 }
 
 export default function SponsoredEventsScreen() {
+  return (
+    <ErrorBoundary>
+      <SponsoredEventsScreenContent />
+    </ErrorBoundary>
+  );
+}
+
+function SponsoredEventsScreenContent() {
   const router = useRouter();
   const dispatch = useAppDispatch();
   const { markContentReady } = useScreenMountPerf("SponsoredEvents");

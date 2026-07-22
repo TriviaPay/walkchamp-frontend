@@ -28,6 +28,7 @@ import {
   ApiError,
 } from "@/services/authService";
 import { dbProfileToUserProfile } from "@/utils/profileMapper";
+import { beginPostSignupOnboarding, getPostSignupHomeHref } from "@/utils/onboardingStorage";
 import { COUNTRIES } from "@/constants/countries";
 import { DateOfBirthInput } from "@/components/DateOfBirthInput";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
@@ -211,7 +212,8 @@ export default function SignupScreen() {
         const { trackEvent } = await import("@/services/analytics");
         trackEvent("signup_completed");
       } catch { /* analytics must never block signup */ }
-      router.replace("/(tabs)/walk");
+      await beginPostSignupOnboarding();
+      router.replace(getPostSignupHomeHref());
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";
       if (msg.toLowerCase().includes("cancelled")) {
@@ -403,7 +405,8 @@ export default function SignupScreen() {
       await login(userProfile, otpSession.jwt, otpSession.refresh);
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.replace("/(tabs)/walk");
+      await beginPostSignupOnboarding();
+      router.replace(getPostSignupHomeHref());
     } catch (err) {
       if (err instanceof DescopeError) {
         const msg = err.message.toLowerCase();
@@ -797,7 +800,7 @@ export default function SignupScreen() {
                     <Feather name={showPw ? "eye-off" : "eye"} size={18} color={colors.mutedForeground} />
                   </TouchableOpacity>
                 </View>
-                {password.length > 0 && (
+                {password.length > 0 && !passwordValid(password) && (
                   <View style={[styles.pwChecks, { backgroundColor: colors.card, borderColor: colors.border }]}>
                     <PWCheck ok={pwChecks.length} label="8+ characters" />
                     <PWCheck ok={pwChecks.upper} label="Uppercase letter" />

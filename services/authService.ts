@@ -15,6 +15,7 @@ import * as AppleAuthentication from "expo-apple-authentication";
 import { Platform } from "react-native";
 import { authEvents } from "@/utils/authEvents";
 import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
+import { logger } from "@/utils/logger";
 
 export { getUserIdFromJwt, DescopeRestError as DescopeError };
 
@@ -54,11 +55,10 @@ function setMemorySession(session: string | null, refresh: string | null): void 
 
 export async function saveSession(sessionToken: string, refreshToken: string) {
   if (!refreshToken?.trim()) {
-    if (__DEV__) {
-      console.warn(
-        "[Auth] saveSession called without refresh JWT — session will expire when access token ends. Check Descope refresh token settings.",
-      );
-    }
+    logger.warn(
+      "Auth",
+      "saveSession called without refresh JWT — session will expire when access token ends",
+    );
   }
   // Update memory first so concurrent authFetch callers see the new token
   // without waiting for SecureStore I/O.
@@ -67,14 +67,15 @@ export async function saveSession(sessionToken: string, refreshToken: string) {
     secureSet(SESSION_KEY, sessionToken),
     refreshToken?.trim() ? secureSet(REFRESH_KEY, refreshToken) : secureDelete(REFRESH_KEY),
   ]);
-  if (__DEV__) {
+  {
     const mins = Math.round(getJwtSecsUntilExpiry(sessionToken) / 60);
-    console.log(`[Auth] session saved — access token ~${mins} min remaining`);
-    console.log("[Auth] access token", sessionToken);
+    logger.debug("Auth", `session saved — access ~${mins} min remaining`);
+    // Never log raw JWTs — even in development.
     if (refreshToken?.trim()) {
       const refreshDays = getJwtSecsUntilExpiry(refreshToken) / 86400;
-      console.log(
-        `[Auth] refresh token stored — valid ~${refreshDays >= 1 ? refreshDays.toFixed(1) + " days" : (refreshDays * 24).toFixed(1) + " hours"}`,
+      logger.debug(
+        "Auth",
+        `refresh token stored — valid ~${refreshDays >= 1 ? refreshDays.toFixed(1) + " days" : (refreshDays * 24).toFixed(1) + " hours"}`,
       );
     }
   }
@@ -191,9 +192,10 @@ export async function signInWithEmail(
     );
   }
   const data = normalizeJwtResponse(body);
-  if (!data.refreshJwt?.trim() && __DEV__) {
-    console.warn(
-      "[Auth] sign-in succeeded but no refresh JWT returned — user will be logged out when the 10-minute session token expires. Check Descope Session Management settings.",
+  if (!data.refreshJwt?.trim()) {
+    logger.warn(
+      "Auth",
+      "sign-in succeeded but no refresh JWT returned — session will expire with access token",
     );
   }
   await saveSession(data.sessionJwt, data.refreshJwt ?? "");
@@ -241,7 +243,7 @@ export async function sendPasswordResetEmail(email: string): Promise<void> {
   if (!redirectUrl) {
     throw new Error("Password reset redirect URL is not configured.");
   }
-  if (__DEV__) console.log("[Auth] password reset redirectUrl:", redirectUrl);
+  logger.debug("Auth", "password reset redirect configured");
   await descope.password.sendReset(email, redirectUrl);
 }
 
@@ -347,7 +349,7 @@ export async function refreshSession(refreshToken: string): Promise<string> {
   // existing one only if Descope didn't return a new one (non-rotating config).
   const newRefresh = data.refreshJwt ?? refreshToken;
   await saveSession(newSession, newRefresh);
-  if (__DEV__) console.log("[Auth] token storage updated");
+  logger.debug("Auth", "token storage updated");
   return newSession;
 }
 
@@ -426,11 +428,11 @@ let _refreshPromise: Promise<RefreshOutcome> | null = null;
 
 export async function refreshSessionSafely(): Promise<RefreshOutcome> {
   if (_refreshInFlight && _refreshPromise) {
-    if (__DEV__) console.log("[Auth] refresh joined existing request");
+    logger.debug("Auth", "refresh joined existing request");
     return _refreshPromise;
   }
   _refreshInFlight = true;
-  if (__DEV__) console.log("[Auth] refresh started");
+  logger.debug("Auth", "refresh started");
   _refreshPromise = _executeRefresh().finally(() => {
     _refreshInFlight = false;
     _refreshPromise = null;
@@ -442,7 +444,7 @@ async function _executeRefresh(): Promise<RefreshOutcome> {
   try {
     const { refresh } = await getStoredSession();
     if (!refresh?.trim()) {
-      if (__DEV__) console.log("[Auth] refresh failed — no refresh token stored");
+      logger.debug("Auth", "refresh failed — no refresh token stored");
       await clearSession();
       authEvents.emitSessionExpired();
       return { ok: false, definitive: true };
@@ -452,52 +454,49 @@ async function _executeRefresh(): Promise<RefreshOutcome> {
     // (a known storage bug symptom), its exp will already be past → we
     // diagnose and bail immediately rather than letting Descope return E011002.
     const refreshSecsLeft = getJwtSecsUntilExpiry(refresh);
-    if (__DEV__) {
+    {
       const daysLeft = refreshSecsLeft / 86400;
       if (daysLeft < 1) {
-        console.log(
-          "[Auth] WARNING: stored refresh token expires in",
-          (refreshSecsLeft / 3600).toFixed(1),
-          "hours — may be session JWT stored as refresh JWT",
+        logger.warn(
+          "Auth",
+          `stored refresh token expires in ${(refreshSecsLeft / 3600).toFixed(1)} hours — may be session JWT stored as refresh JWT`,
         );
       } else {
-        console.log("[Auth] refresh token valid for", daysLeft.toFixed(1), "days");
+        logger.debug("Auth", `refresh token valid for ${daysLeft.toFixed(1)} days`);
       }
     }
     if (refreshSecsLeft <= 0) {
       // The stored "refresh" token has already expired as a JWT.
       // This is a definitive failure — the user must re-authenticate.
-      if (__DEV__) console.log("[Auth] refresh token is expired (exp in the past) — clearing session");
+      logger.debug("Auth", "refresh token is expired (exp in the past) — clearing session");
       await clearSession();
       authEvents.emitSessionExpired();
       return { ok: false, definitive: true };
     }
 
     const token = await refreshSession(refresh);
-    if (__DEV__) console.log("[Auth] refresh success");
+    logger.debug("Auth", "refresh success");
     authEvents.emitTokenRefreshed(token);
     return { ok: true, token };
   } catch (err) {
     if (err instanceof DescopeRestError) {
       // 5xx = Descope server error / outage — transient, keep session.
       if (err.httpStatus >= 500) {
-        if (__DEV__) console.log("[Auth] refresh failed — Descope server error", err.httpStatus, "— keeping session");
+        logger.warn("Auth", `refresh failed — Descope server error ${err.httpStatus} — keeping session`);
         return { ok: false, definitive: false };
       }
       // 429 = rate-limited — transient, keep session.
       if (err.httpStatus === 429) {
-        if (__DEV__) console.log("[Auth] refresh rate-limited by Descope — keeping session");
+        logger.warn("Auth", "refresh rate-limited by Descope — keeping session");
         return { ok: false, definitive: false };
       }
       // 4xx = refresh token invalid or session window expired — definitive.
       // This happens when:
       //   a) the Descope session timeout has been exceeded (user must re-login), OR
       //   b) the refresh token was revoked / replaced on another device.
-      if (__DEV__) console.log(
-        "[Auth] refresh definitively rejected by Descope",
-        err.httpStatus, err.code,
-        // Print the human-readable description so the cause is visible in logs
-        "—", err.message,
+      logger.warn(
+        "Auth",
+        `refresh definitively rejected by Descope status=${err.httpStatus} code=${err.code ?? "unknown"}`,
       );
       const code = (err.code ?? "").toUpperCase();
       if (
@@ -515,7 +514,7 @@ async function _executeRefresh(): Promise<RefreshOutcome> {
     // AbortError = our 15 s timeout fired — transient.
     // Network error, DNS failure, etc. — also transient.
     // Preserve tokens — do NOT log the user out.
-    if (__DEV__) console.log("[Auth] refresh failed transiently (network/timeout/abort) — keeping session");
+    logger.debug("Auth", "refresh failed transiently (network/timeout/abort) — keeping session");
     return { ok: false, definitive: false };
   }
 }
@@ -531,7 +530,7 @@ export async function getValidSession(): Promise<string | null> {
   if (!session) return null;
   if (validateToken(session)) return session;
   if (!refresh?.trim()) {
-    if (__DEV__) console.log("[Auth] access token expired and no refresh JWT stored");
+    logger.debug("Auth", "access token expired and no refresh JWT stored");
     await clearSession();
     authEvents.emitSessionExpired();
     return null;
@@ -541,7 +540,7 @@ export async function getValidSession(): Promise<string | null> {
   // Transient failure (offline / timeout) — keep user logged in with stale token.
   // authFetch will retry refresh on the next API call.
   if (!outcome.definitive) {
-    if (__DEV__) console.log("[Auth] refresh transiently failed — keeping stale session");
+    logger.debug("Auth", "refresh transiently failed — keeping stale session");
     return session;
   }
   return null;
@@ -557,7 +556,7 @@ export async function logout(refreshToken: string): Promise<void> {
 // to POST /api/auth/apple/native for cryptographic verification + Descope session.
 // No nonce round-trip needed — the backend verifies the JWT signature directly.
 export async function signInWithAppleNative(): Promise<JwtResponse> {
-  if (__DEV__) console.log("[AppleSignIn] started");
+  logger.debug("AppleSignIn", "started");
 
   // Step 1: trigger native Apple Sign-In sheet
   let credential: AppleAuthentication.AppleAuthenticationCredential;
@@ -568,11 +567,11 @@ export async function signInWithAppleNative(): Promise<JwtResponse> {
         AppleAuthentication.AppleAuthenticationScope.EMAIL,
       ],
     });
-    if (__DEV__) console.log("[AppleSignIn] credential received");
+    logger.debug("AppleSignIn", "credential received");
   } catch (err: unknown) {
     const code = (err as { code?: string }).code;
     if (code === "ERR_REQUEST_CANCELED") {
-      if (__DEV__) console.log("[AppleSignIn] cancelled by user");
+      logger.debug("AppleSignIn", "cancelled by user");
       throw new Error("Apple sign-in was cancelled.");
     }
     throw new Error("Apple Sign-In failed. Please try again.");
@@ -615,7 +614,7 @@ export async function signInWithAppleNative(): Promise<JwtResponse> {
 
   const authData = (await res.json()) as JwtResponse;
   await saveSession(authData.sessionJwt, authData.refreshJwt ?? "");
-  if (__DEV__) console.log("[AppleSignIn] session stored");
+  logger.debug("AppleSignIn", "session stored");
   return authData;
 }
 
@@ -661,28 +660,27 @@ export async function signInWithProvider(
 
   // Step 1: get the Descope OAuth URL from the backend
   // (DESCOPE_PROJECT_ID stays server-side — never exposed to the bundle)
-  if (__DEV__) console.log(`[social-login] starting ${descopeProvider} OAuth, redirectUrl=${redirectUrl}`);
+  logger.debug("social-login", `starting ${descopeProvider} OAuth`);
   const startRes = await fetch(`${API_BASE}/api/auth/oauth/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ provider: descopeProvider, redirectUrl }),
   });
   if (!startRes.ok) {
-    const body = (await startRes.json().catch(() => ({}))) as { message?: string; error?: string };
-    const msg = body.message ?? body.error ?? "";
-    if (__DEV__) console.warn(`[social-login] start failed (status=${startRes.status}): ${msg}`);
+    await startRes.json().catch(() => ({}));
+    logger.warn("social-login", `start failed status=${startRes.status}`);
     // E062202 = "Invalid OAuth provider" — provider not enabled in Descope Console
     throw new Error(`${providerLabel} login is not configured in Descope. Please enable ${providerLabel} provider.`);
   }
   const { url } = (await startRes.json()) as { url: string };
-  if (__DEV__) console.log(`[social-login] received OAuth URL, opening browser`);
+  logger.debug("social-login", "received OAuth URL, opening browser");
 
   // Step 2: open the OAuth URL in the system browser
   // Native: SFAuthenticationSession / Chrome Custom Tab intercepts the deep-link scheme.
   // Web: openAuthSessionAsync monitors for the redirect URL in the popup window;
   //      auth-callback.tsx MUST call WebBrowser.maybeCompleteAuthSession() for this to work.
   const result = await WebBrowser.openAuthSessionAsync(url, redirectUrl);
-  if (__DEV__) console.log(`[social-login] browser result type=${result.type}`);
+  logger.debug("social-login", `browser result type=${result.type}`);
 
   if (result.type !== "success") {
     if (result.type === "cancel" || result.type === "dismiss") {
@@ -694,7 +692,7 @@ export async function signInWithProvider(
   // Step 3: extract the Descope authorization code from the callback URL
   // Descope appends ?code=<authorization-code> after the user authenticates
   const codeMatch = result.url.match(/[?&]code=([^&]+)/);
-  if (__DEV__) console.log(`[social-login] callback received, code present=${!!codeMatch}`);
+  logger.debug("social-login", `callback received, code present=${!!codeMatch}`);
   if (!codeMatch) {
     // Check for error in the callback URL
     const errMatch = result.url.match(/[?&]error=([^&]+)/);
@@ -705,7 +703,7 @@ export async function signInWithProvider(
 
   // Step 4: exchange the Descope code for a session JWT via the backend
   // The backend calls client.oauth.exchange(code) and returns { sessionJwt, refreshJwt, user }
-  if (__DEV__) console.log(`[social-login] exchanging code with backend`);
+  logger.debug("social-login", "exchanging code with backend");
   const { getDeviceSessionMetadata } = await import("@/services/deviceIdentity");
   const device = await getDeviceSessionMetadata().catch(() => null);
   const exchangeRes = await fetch(`${API_BASE}/api/auth/oauth/exchange`, {
@@ -725,12 +723,11 @@ export async function signInWithProvider(
     }),
   });
   if (!exchangeRes.ok) {
-    const body = (await exchangeRes.json().catch(() => ({}))) as { message?: string; error?: string };
-    const msg = body.message ?? body.error ?? "";
-    if (__DEV__) console.warn(`[social-login] exchange failed: ${msg}`);
+    await exchangeRes.json().catch(() => ({}));
+    logger.warn("social-login", `exchange failed status=${exchangeRes.status}`);
     throw new Error(`Unable to complete ${providerLabel} login. Please try again.`);
   }
-  if (__DEV__) console.log(`[social-login] exchange succeeded`);
+  logger.debug("social-login", "exchange succeeded");
   const authData = (await exchangeRes.json()) as JwtResponse;
   await saveSession(authData.sessionJwt, authData.refreshJwt ?? "");
   return authData;

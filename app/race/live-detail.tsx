@@ -1,5 +1,6 @@
 import { AnimatedTrackOverlay } from "@/components/race/AnimatedTrackOverlay";
 import { BlueShoe } from "@/components/BlueShoe";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getApiBase } from "@/utils/apiUrl";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
@@ -38,6 +39,7 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { formatRaceSteps, resolveLiveRaceDisplaySteps } from "@/utils/liveRaceDisplay";
 import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
 import { LiveTaglineRotator, type LiveTaglineAlt } from "@/components/LiveTaglineRotator";
+import { RaceClockInfoBar } from "@/components/race/RaceClockInfoBar";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
@@ -141,6 +143,7 @@ interface RaceData {
   height?: number;
   challengeEndAt?: string | null;
   challengeDurationDays?: number | null;
+  createdAt?: string;
   timeLeftSeconds?: number | null;
   daysLeft?: number | null;
   hoursLeft?: number | null;
@@ -204,17 +207,6 @@ interface Player {
   isForfeited?: boolean; }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function fmtTime(seconds: number) {
-  const s = Math.max(0, Math.floor(seconds));
-  return `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`; }
-
-function fmtCountdown(seconds: number) {
-  const s = Math.max(0, Math.floor(seconds));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`; }
 
 function formatSteps(n: number): string {
   return formatRaceSteps(n);
@@ -1419,6 +1411,14 @@ function SpeakingBars() {
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
 export default function LiveRaceDetailScreen() {
+  return (
+    <ErrorBoundary>
+      <LiveRaceDetailScreenContent />
+    </ErrorBoundary>
+  );
+}
+
+function LiveRaceDetailScreenContent() {
   const { id: raceId, trackLayout: initialTrackLayout } = useLocalSearchParams<{ id: string; trackLayout?: string }>();
   const initialCache =
     raceId && typeof raceId === "string"
@@ -1471,6 +1471,8 @@ export default function LiveRaceDetailScreen() {
   const raceResumedRef = useRef(false);
   const raceCompletedRef = useRef(false);
   const [finalRaceSteps, setFinalRaceSteps] = useState<number | null>(null);
+  // Declared above finalizeLiveRace so the callback can read race.targetSteps safely.
+  const [race, setRace] = useState<RaceData | null>(initialCache?.race ?? null);
   const finalizeLiveRace = useCallback((
     backendSteps?: number,
     allResults?: Array<{ userId?: string; currentSteps?: number }>,
@@ -1547,7 +1549,6 @@ export default function LiveRaceDetailScreen() {
   const rs = (n: number) => Math.round(n * rsFactor);
 
   // ── Shared race state ─────────────────────────────────────────────────────
-  const [race,           setRace]           = useState<RaceData | null>(initialCache?.race ?? null);
   const [participants,   setParticipants]   = useState<RaceParticipant[]>(initialCache?.participants ?? []);
   const [comments,       setComments]       = useState<RaceComment[]>([]);
   const [reactionCounts, setReactionCounts] = useState<ReactionCount[]>([]);
@@ -1582,7 +1583,7 @@ export default function LiveRaceDetailScreen() {
   const { resetForRace, setConfirmedSteps, getDisplaySteps } = useParticipantStepAnimator();
 
   // ── Track-specific state ──────────────────────────────────────────────────
-  const [now,                  setNow]                  = useState(Date.now());
+  const [completionPollArmed, setCompletionPollArmed] = useState(false);
   const [heroHeight,           setHeroHeight]           = useState(400);
   const [isLeaderboardVisible, setIsLeaderboardVisible] = useState(true);
   const [showReactionPicker,   setShowReactionPicker]   = useState(false);
@@ -1787,13 +1788,27 @@ export default function LiveRaceDetailScreen() {
     [isActive, isCompleted, finalRaceSteps, liveRaceSteps],
   );
 
-  // ── Clock tick — stops once race is completed ──────────────────────────────
-  useEffect(() => {
-    if (isCompleted) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id); }, [isCompleted]);
+  const startedAtMs   = race?.startedAt   ? new Date(race.startedAt).getTime()   : null;
+  const completedAtMs = race?.completedAt ? new Date(race.completedAt).getTime() : null;
 
-  useEffect(() => { if (!isActive) setShowReactionPicker(false); });
+  // Clock display is isolated in RaceClockInfoBar (useTickingNow).
+  // Only arm completion-poll once elapsed crosses 60s — no parent 1s setState.
+  useEffect(() => {
+    if (!isActive || isCompleted || !startedAtMs) {
+      setCompletionPollArmed(false);
+      return;
+    }
+    const armIfDue = () => {
+      const elapsedS = Math.floor((Date.now() - startedAtMs) / 1000);
+      if (elapsedS >= 60) setCompletionPollArmed(true);
+    };
+    armIfDue();
+    if (completionPollArmed) return;
+    const id = setInterval(armIfDue, 1000);
+    return () => clearInterval(id);
+  }, [isActive, isCompleted, startedAtMs, completionPollArmed]);
+
+  useEffect(() => { if (!isActive) setShowReactionPicker(false); }, [isActive]);
   // Disconnect voice when race ends — never keep mic active after the race.
   useEffect(() => { if (!isActive) disconnectVoice(); }, [isActive, disconnectVoice]);
   // Auto-connect all participants as listeners when race becomes active so
@@ -1812,21 +1827,7 @@ export default function LiveRaceDetailScreen() {
     ? localizeSponsoredEventTitle(raceTitle, race?.startedAt)
     : raceTitle.replace(/^LIVE\s+/i, "");
 
-  const startedAtMs   = race?.startedAt   ? new Date(race.startedAt).getTime()   : null;
-  const completedAtMs = race?.completedAt ? new Date(race.completedAt).getTime() : null;
-  const elapsed       = startedAtMs ? Math.max(0, Math.floor(((completedAtMs ?? now) - startedAtMs) / 1000)) : 0;
   const statusLabel = isCompleted ? "FINISHED" : isActive ? "LIVE" : race ? "WAITING" : "NO RACE";
-  const SPONSORED_DURATION_S = 3 * 60 * 60;
-  const sponsoredRemaining = Math.max(0, SPONSORED_DURATION_S - elapsed);
-  const infoTimeLabel = isCompleted ? "TIME" : isActive && isSponsored ? "TIME LEFT" : isActive ? "TIME" : "STATUS";
-  const infoTimeValue = isCompleted || isActive
-    ? (isActive && isSponsored ? fmtCountdown(sponsoredRemaining) : fmtTime(elapsed))
-    : statusLabel;
-  const timerColor = isActive && isSponsored
-    ? sponsoredRemaining < 30 * 60 ? "#FF4444"
-      : sponsoredRemaining < 60 * 60 ? "#FFAA00"
-      : "#00E676"
-    : undefined;
 
   /** Multi-day end strip — alternates with tagline every 3s in the same slot. */
   const challengeEndsLabel = useMemo(
@@ -1842,7 +1843,7 @@ export default function LiveRaceDetailScreen() {
           hoursLeft: race?.hoursLeft,
           timeLeftLabel: race?.timeLeftLabel ?? race?.remainingLabel,
         },
-        now,
+        Date.now(),
       ),
     [
       race?.challengeEndAt,
@@ -1855,7 +1856,6 @@ export default function LiveRaceDetailScreen() {
       race?.hoursLeft,
       race?.timeLeftLabel,
       race?.remainingLabel,
-      now,
     ],
   );
 
@@ -2416,7 +2416,7 @@ export default function LiveRaceDetailScreen() {
   // event may have been missed. Poll every 3s until backend confirms completion.
   // Use a boolean threshold so this effect only re-runs once (false → true),
   // not every second — otherwise the interval is cleared before it can fire.
-  const shouldPoll = isActive && elapsed >= 60;
+  const shouldPoll = isActive && completionPollArmed;
   useEffect(() => {
     if (!shouldPoll || !sessionToken) return;
     const id = setInterval(() => {
@@ -2605,11 +2605,15 @@ export default function LiveRaceDetailScreen() {
       }
 
       setParticipants((prev) => {
-        const { next, changed } = applyParticipantProgressEvent(prev, data, {
-          currentUserId: meId,
-          targetSteps: raceRef.current?.targetSteps,
-          raceCompleted: raceCompletedRef.current,
-        });
+        const { next, changed } = applyParticipantProgressEvent(
+          prev,
+          { ...data, steps: newSteps },
+          {
+            currentUserId: meId,
+            targetSteps: raceRef.current?.targetSteps,
+            raceCompleted: raceCompletedRef.current,
+          },
+        );
         if (changed) {
           stepEngineLog(
             "LiveRace",
@@ -3069,18 +3073,23 @@ export default function LiveRaceDetailScreen() {
 
       {/* ── Info bar ── */}
       <View style={s.infoBar}>
-        {[
-          { icon: isActive ? "⏱" : isCompleted ? "🏁" : "•", label: infoTimeLabel, value: infoTimeValue, color: timerColor },
-          { icon: "👥", label: "PARTICIPANTS", value: participantValue, color: undefined as string | undefined },
-        ].map((card) => (
-          <View key={card.label} style={s.infoCard}>
-            <View style={s.infoRow}>
-              <Text style={s.infoIcon}>{card.icon}</Text>
-              <Text style={[s.infoLbl, card.color ? { color: card.color } : null]}>{card.label}</Text>
-            </View>
-            <Text style={[s.infoVal, card.color ? { color: card.color } : null]} numberOfLines={1}>{card.value}</Text>
-          </View>
-        ))}
+        <RaceClockInfoBar
+          enabled={!!race}
+          isActive={isActive}
+          isCompleted={isCompleted}
+          isSponsored={isSponsored}
+          startedAtMs={startedAtMs}
+          completedAtMs={completedAtMs}
+          statusLabel={statusLabel}
+          participantValue={participantValue}
+          styles={{
+            infoCard: s.infoCard,
+            infoRow: s.infoRow,
+            infoIcon: s.infoIcon,
+            infoLbl: s.infoLbl,
+            infoVal: s.infoVal,
+          }}
+        />
       </View>
 
       {/* ── View toggle ── */}

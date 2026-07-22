@@ -4,7 +4,7 @@
     "slug": "walkchamp",
     "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/icons/WalkChampProgress0.png",
+    "icon": "./assets/icons/ios/WalkChampProgress0.png",
     "scheme": ["globalwalkerleague", "walkchamp"],
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
@@ -122,7 +122,7 @@
         [
           {
             "name": "WalkChampProgress0",
-            "ios": "./assets/icons/WalkChampProgress0.png",
+            "ios": "./assets/icons/ios/WalkChampProgress0.png",
             "android": {
               "foregroundImage": "./assets/icons/adaptive/WalkChampProgress0.png",
               "backgroundColor": "#0A0B14"
@@ -130,7 +130,7 @@
           },
           {
             "name": "WalkChampProgress25",
-            "ios": "./assets/icons/WalkChampProgress25.png",
+            "ios": "./assets/icons/ios/WalkChampProgress25.png",
             "android": {
               "foregroundImage": "./assets/icons/adaptive/WalkChampProgress25.png",
               "backgroundColor": "#0A0B14"
@@ -138,7 +138,7 @@
           },
           {
             "name": "WalkChampProgress50",
-            "ios": "./assets/icons/WalkChampProgress50.png",
+            "ios": "./assets/icons/ios/WalkChampProgress50.png",
             "android": {
               "foregroundImage": "./assets/icons/adaptive/WalkChampProgress50.png",
               "backgroundColor": "#0A0B14"
@@ -146,7 +146,7 @@
           },
           {
             "name": "WalkChampProgress75",
-            "ios": "./assets/icons/WalkChampProgress75.png",
+            "ios": "./assets/icons/ios/WalkChampProgress75.png",
             "android": {
               "foregroundImage": "./assets/icons/adaptive/WalkChampProgress75.png",
               "backgroundColor": "#0A0B14"
@@ -154,7 +154,7 @@
           },
           {
             "name": "WalkChampProgress100",
-            "ios": "./assets/icons/WalkChampProgress100.png",
+            "ios": "./assets/icons/ios/WalkChampProgress100.png",
             "android": {
               "foregroundImage": "./assets/icons/adaptive/WalkChampProgress100.png",
               "backgroundColor": "#0A0B14"
@@ -174,7 +174,8 @@
       "./plugins/withWalkChampProgressIcons.js",
       "./plugins/withWalkChampRaceProgress.js",
       "./plugins/withWalkChampForegroundService.js",
-      "./plugins/withPaymentAppLinks.js"
+      "./plugins/withPaymentAppLinks.js",
+      "./plugins/withWalkChampLauncherAliases.js"
     ],
     "experiments": {
       "typedRoutes": true

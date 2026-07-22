@@ -5,6 +5,7 @@ import { Feather } from "@expo/vector-icons";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { RaceJoinBadge, JoinProgressOverlay } from "@/components/RaceJoinBadge";
 import { useTheme } from "@/context/ThemeContext";
+import themeColors from "@/constants/colors";
 
 export const ENABLE_CHALLENGE_CATEGORY_CARDS = true;
 
@@ -55,6 +56,7 @@ export function ChallengeCategoryCard({
   isJoining, hideChevron, onPress, onHostNew, onWatchLive,
 }: Props) {
   const { isDark } = useTheme();
+  const primary = isDark ? themeColors.dark.primary : themeColors.light.primary;
 
   const statusLabel  = cs?.label ?? "Host";
   const liveCount    = cs?.liveCount ?? 0;
@@ -64,6 +66,14 @@ export function ChallengeCategoryCard({
   const displaySubtitle = (isJoinAvailable && liveCount > 0)
     ? `● ${liveCount} live  ·  ${subtitle}`
     : subtitle;
+
+  const hostAccent = isDark ? "rgba(255,255,255,0.85)" : primary;
+  const hostBtnLightStyle = !isDark
+    ? {
+        borderColor: primary + "AA",
+        backgroundColor: primary + "14",
+      }
+    : null;
 
   // Always render with the gradient (dark) style regardless of theme
   const cardInner = (
@@ -127,10 +137,10 @@ export function ChallengeCategoryCard({
           <TouchableOpacity
             onPress={onHostNew}
             activeOpacity={0.82}
-            style={cStyles.hostBtn}
+            style={[cStyles.hostBtn, hostBtnLightStyle]}
           >
-            <Feather name="plus-circle" size={14} color="rgba(255,255,255,0.85)" />
-            <Text style={cStyles.hostBtnText}>Host New</Text>
+            <Feather name="plus-circle" size={14} color={hostAccent} />
+            <Text style={[cStyles.hostBtnText, { color: hostAccent }]}>Host New</Text>
           </TouchableOpacity>
         </View>
       </View>

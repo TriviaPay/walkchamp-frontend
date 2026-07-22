@@ -2,8 +2,12 @@
  * Merges WalkChampProgress icon folders (android/res) into main/res with
  * expo-alternate-app-icons naming (ic_launcher_walk_champ_progress*).
  *
- * Source of truth: android/app/src/main/WalkChampProgress{0,25,50,75,100}/
- * Also syncs in-app PNGs to assets/icons/ from xxxhdpi/ic_launcher.png.
+ * Android mipmap source of truth (when present):
+ *   android/app/src/main/WalkChampProgress{0,25,50,75,100}/
+ * Fallback / Expo config sources (committed):
+ *   assets/icons/*.png              — in-app UI
+ *   assets/icons/adaptive/*.png     — Android adaptive foreground
+ *   assets/icons/ios/*.png          — iOS alternate icons (1024 opaque)
  *
  * Usage (from project root):
  *   node scripts/sync-walk-champ-progress-icons.js
@@ -197,9 +201,19 @@ function syncMilestone(projectRoot, mainDir, resDir, milestoneName, isDefault) {
 }
 
 function syncInAppAssets(mainDir, assetsDir) {
+  /**
+   * assets/icons/*.png and assets/icons/adaptive/*.png are the committed source
+   * for in-app display and Android adaptive foregrounds.
+   * Do NOT overwrite them from mipmap packs (that erased user icon replacements).
+   *
+   * Only backfill missing files from xxxhdpi packs when assets are absent.
+   */
   ensureDir(assetsDir);
   const adaptiveDir = path.join(assetsDir, "adaptive");
   ensureDir(adaptiveDir);
+  const iosDir = path.join(assetsDir, "ios");
+  ensureDir(iosDir);
+
   for (const milestoneName of MILESTONES) {
     const xxxhdpi = path.join(
       mainDir,
@@ -212,11 +226,27 @@ function syncInAppAssets(mainDir, assetsDir) {
     const foregroundSrc = path.join(xxxhdpi, "ic_launcher_foreground.png");
     const dest = path.join(assetsDir, `${milestoneName}.png`);
     const adaptiveDest = path.join(adaptiveDir, `${milestoneName}.png`);
-    if (copyFile(launcherSrc, dest)) {
-      console.log(`in-app asset: ${milestoneName}.png`);
+    const iosDest = path.join(iosDir, `${milestoneName}.png`);
+    const iosMarketing = path.join(
+      mainDir,
+      milestoneName,
+      "ios",
+      "AppIcon~ios-marketing.png",
+    );
+
+    if (!fs.existsSync(dest) && copyFile(launcherSrc, dest)) {
+      console.log(`backfill in-app asset: ${milestoneName}.png`);
     }
-    if (copyFile(foregroundSrc, adaptiveDest)) {
-      console.log(`adaptive asset: adaptive/${milestoneName}.png`);
+    if (!fs.existsSync(adaptiveDest) && copyFile(foregroundSrc, adaptiveDest)) {
+      console.log(`backfill adaptive asset: adaptive/${milestoneName}.png`);
+    }
+    // Committed iOS alternate icons must be 1024 opaque — prefer marketing pack.
+    if (!fs.existsSync(iosDest) && copyFile(iosMarketing, iosDest)) {
+      console.log(`backfill ios asset: ios/${milestoneName}.png`);
+    } else if (!fs.existsSync(iosDest) && fs.existsSync(dest)) {
+      console.warn(
+        `missing ios/${milestoneName}.png — add a 1024x1024 opaque icon before iOS prebuild`,
+      );
     }
   }
 }

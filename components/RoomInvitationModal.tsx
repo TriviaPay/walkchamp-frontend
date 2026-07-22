@@ -107,7 +107,7 @@ export function RoomInvitationModal({ invitation, onDismiss }: Props) {
         return;
       }
 
-      const data = await res.json().catch(() => null) as { raceId?: string; room?: { entryAmountCents: number; targetSteps: number; maxPlayers: number; isPrivate: boolean; entryType: string } } | null;
+      const data = await res.json().catch(() => null) as { raceId?: string; room?: { entryAmountCents: number; targetSteps: number; maxPlayers: number; isPrivate: boolean; entryType: string; currentPlayers?: number } } | null;
       if (!data?.raceId) { onDismiss(); return; }
 
       const raceId = data.raceId;

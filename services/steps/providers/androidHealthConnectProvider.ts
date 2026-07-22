@@ -14,6 +14,7 @@ import {
   type StepProvider,
   type StepReadResult,
 } from "../stepProviderTypes";
+import { logger } from "@/utils/logger";
 
 function todayMidnight(): Date {
   const d = new Date();
@@ -56,8 +57,8 @@ export const androidHealthConnectProvider: StepProvider = {
         init.availability === "available" &&
         !androidHCService.isRangeReadBlocked()
       );
-    } catch (e) {
-      if (__DEV__) console.log("[StepProvider] Health Connect isAvailable error", e);
+    } catch {
+      logger.debug("StepProvider", "Health Connect isAvailable error");
       return false;
     }
   },
@@ -79,8 +80,8 @@ export const androidHealthConnectProvider: StepProvider = {
         status,
         providerId: status === "granted" ? "android_health_connect" : null,
       };
-    } catch (e) {
-      if (__DEV__) console.log("[StepProvider] Health Connect requestPermission error", e);
+    } catch {
+      logger.debug("StepProvider", "Health Connect requestPermission error");
       return { status: "unavailable", providerId: null };
     }
   },
@@ -95,8 +96,8 @@ export const androidHealthConnectProvider: StepProvider = {
         caloriesBurned: data.caloriesBurned,
         activeMinutes: data.activeMinutes,
       });
-    } catch (e) {
-      if (__DEV__) console.log("[StepProvider] Health Connect getTodaySteps error", e);
+    } catch {
+      logger.debug("StepProvider", "Health Connect getTodaySteps error");
       return emptyStepResult("android_health_connect", "verified", from, to);
     }
   },
@@ -109,8 +110,8 @@ export const androidHealthConnectProvider: StepProvider = {
         caloriesBurned: data.caloriesBurned,
         activeMinutes: data.activeMinutes,
       });
-    } catch (e) {
-      if (__DEV__) console.log("[StepProvider] Health Connect getStepsForRange error", e);
+    } catch {
+      logger.debug("StepProvider", "Health Connect getStepsForRange error");
       return emptyStepResult("android_health_connect", "verified", start, end);
     }
   },
@@ -151,8 +152,8 @@ export const androidHealthConnectProvider: StepProvider = {
       try {
         const result = await this.getTodaySteps();
         if (!stopped) callback(result);
-      } catch (e) {
-        if (__DEV__) console.log("[StepProvider] Health Connect watch tick error", e);
+      } catch {
+        logger.debug("StepProvider", "Health Connect watch tick error");
       } finally {
         inFlight = false;
       }
