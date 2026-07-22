@@ -177,7 +177,19 @@ export default function JoinByCode() {
         {/* Room details summary */}
         {room && !resolveError && (
           <View style={[styles.summaryBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <SummaryRow label="Entry Fee" value={room.entryAmountCents > 0 ? `$${(room.entryAmountCents / 100).toFixed(2)}` : "Free"} valueStyle={room.entryAmountCents > 0 ? { color: "#3B82F6", fontWeight: "700" as const } : {}} colors={colors} />
+            <SummaryRow
+              label="Entry Fee"
+              value={room.entryAmountCents > 0 ? `$${(room.entryAmountCents / 100).toFixed(2)}` : "Free"}
+              valueStyle={room.entryAmountCents > 0 ? {
+                color: "#FBBF24",
+                fontSize: 18,
+                fontWeight: "900" as const,
+                textShadowColor: "rgba(251,191,36,0.65)",
+                textShadowOffset: { width: 0, height: 0 },
+                textShadowRadius: 6,
+              } : {}}
+              colors={colors}
+            />
             <SummaryRow label="Target Steps" value={`${room.targetSteps.toLocaleString()} steps`} colors={colors} />
             <SummaryRow label="Players" value={`${room.currentPlayers}/${room.maxPlayers}`} colors={colors} />
           </View>

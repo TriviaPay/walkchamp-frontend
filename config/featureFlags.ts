@@ -53,6 +53,19 @@ export const ENABLE_LEGACY_CASH_RACE_CARDS =
   process.env.EXPO_PUBLIC_ENABLE_LEGACY_CASH_RACE_CARDS === "true";
 
 /**
+ * Premium signed-out onboarding (Welcome → … → Sign In).
+ *
+ * One-command disable (reverts to legacy Sign In-first for signed-out users):
+ *   npm run onboarding:disable
+ *
+ * Or set ENABLE_PREMIUM_ONBOARDING = false below / EXPO_PUBLIC_ENABLE_PREMIUM_ONBOARDING=false
+ */
+export const ENABLE_PREMIUM_ONBOARDING =
+  process.env.EXPO_PUBLIC_ENABLE_PREMIUM_ONBOARDING !== "false" &&
+  // Local hard switch — flip to false for instant revert without env vars.
+  true;
+
+/**
  * Client-side cash UX + actions.
  *
  * Aligns with backend `PAYMENTS_LIVE_MODE` + cash feature flags:

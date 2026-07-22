@@ -34,6 +34,8 @@ interface AppContextType {
   userRank: number;
   walletBalance: number;
   pendingBalance: number;
+  /** Lifetime cash earnings from `/api/wallet`. */
+  totalEarned: number;
   walletCurrency: string;
   transactions: WalletTransaction[];
   requestWithdrawal: (amount: number, method: string, payoutDetails?: Record<string, string>) => Promise<void>;
@@ -126,6 +128,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const [walletBalance, setWalletBalance] = useState(0);
   const [pendingBalance, setPendingBalance] = useState(0);
+  const [totalEarned, setTotalEarned] = useState(0);
   const [walletCurrency, setWalletCurrency] = useState("USD");
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardUser[]>([]);
@@ -143,6 +146,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (data?.wallet) {
           setWalletBalance(data.wallet.availableBalance);
           setPendingBalance(data.wallet.pendingBalance);
+          setTotalEarned(Number(data.wallet.totalEarned) || 0);
           if (data.wallet.currency) setWalletCurrency(data.wallet.currency.toUpperCase());
           if (uid) persistWalletBalance(uid, data.wallet.availableBalance);
           hasWalletCacheRef.current = true;
@@ -255,6 +259,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (prev && prev !== uid) {
       setWalletBalance(0);
       setPendingBalance(0);
+      setTotalEarned(0);
       setTransactions([]);
       setLeaderboard([]);
       setUserRank(9999);
@@ -373,6 +378,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const addReward = useCallback((amount: number, description: string) => {
     const newBalance = walletBalance + amount;
     setWalletBalance(newBalance);
+    setTotalEarned((prev) => prev + amount);
     if (user?.id) persistWalletBalance(user.id, newBalance);
 
     const tx: WalletTransaction = {
@@ -396,6 +402,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       userRank,
       walletBalance,
       pendingBalance,
+      totalEarned,
       walletCurrency,
       transactions,
       requestWithdrawal,
@@ -410,6 +417,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       userRank,
       walletBalance,
       pendingBalance,
+      totalEarned,
       walletCurrency,
       transactions,
       requestWithdrawal,

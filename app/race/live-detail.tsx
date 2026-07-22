@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 import { Alert,
   AppState,
+  Easing as RNEasing,
   Image,
   Modal,
   Pressable,
@@ -646,6 +647,88 @@ function fmtCoins(n: number) {
   return n.toLocaleString();
 }
 
+function PremiumPoolText({
+  children,
+  color,
+  compact = false,
+}: {
+  children: React.ReactNode;
+  color: string;
+  compact?: boolean;
+}) {
+  const shimmer = useRef(new RNAnimated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.delay(3600),
+        RNAnimated.timing(shimmer, {
+          toValue: 1,
+          duration: 900,
+          easing: RNEasing.inOut(RNEasing.quad),
+          useNativeDriver: true,
+        }),
+        RNAnimated.timing(shimmer, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [shimmer]);
+
+  return (
+    <View style={premiumPoolStyles.wrap}>
+      <Text
+        style={[
+          premiumPoolStyles.amount,
+          compact && premiumPoolStyles.amountCompact,
+          { color, textShadowColor: `${color}99` },
+        ]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {children}
+      </Text>
+      <RNAnimated.View
+        pointerEvents="none"
+        style={[
+          premiumPoolStyles.shimmer,
+          {
+            transform: [{
+              translateX: shimmer.interpolate({
+                inputRange: [0, 1],
+                outputRange: [-18, 110],
+              }),
+            }],
+            opacity: shimmer.interpolate({
+              inputRange: [0, 0.2, 0.5, 0.8, 1],
+              outputRange: [0, 0.18, 0.4, 0.18, 0],
+            }),
+          },
+        ]}
+      />
+    </View>
+  );
+}
+
+const premiumPoolStyles = StyleSheet.create({
+  wrap: { minWidth: 54, maxWidth: "48%", overflow: "hidden", alignItems: "flex-end" },
+  amount: {
+    fontSize: 21,
+    fontWeight: "900",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 7,
+  },
+  amountCompact: { fontSize: 19 },
+  shimmer: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: 12,
+    backgroundColor: "rgba(255,255,255,0.4)",
+    transform: [{ skewX: "-18deg" }],
+  },
+});
+
 function CompactPrizeCard({ race, colors }: { race: RaceData; colors: ReturnType<typeof useColors> }) {
   if (race.entryType === "free") {
     return (
@@ -673,7 +756,7 @@ function CompactPrizeCard({ race, colors }: { race: RaceData; colors: ReturnType
         <View style={cpStyles.headerRow}>
           <Image source={COIN_IMG} style={{ width: 18, height: 18 }} />
           <Text style={[cpStyles.label, { color: "#F59E0B" }]}>Coins Prize Pool</Text>
-          <Text style={[cpStyles.pool, { color: "#F59E0B" }]}>{fmtCoins(winnersPool)}</Text>
+          <PremiumPoolText color="#F59E0B" compact>{fmtCoins(winnersPool)} Coins</PremiumPoolText>
         </View>
         <View style={cpStyles.tiersRow}>
           {splits.map((ratio, i) => (
@@ -1144,7 +1227,7 @@ function PrizePanel({ race, participants, colors }: { race: RaceData; participan
         <View style={pzStyles.header}>
           <Image source={COIN_IMG} style={{ width: 20, height: 20 }} />
           <Text style={[pzStyles.title, { color: "#F59E0B" }]}>Coins Prize Pool</Text>
-          <Text style={[pzStyles.pool, { color: "#F59E0B" }]}>{fmtCoins(winnersPool)}</Text>
+          <PremiumPoolText color="#F59E0B">{fmtCoins(winnersPool)} Coins</PremiumPoolText>
         </View>
         <View style={[pzStyles.divider, { backgroundColor: colors.border }]} />
         {isCompleted && completedCoinRows.length > 0
@@ -1192,7 +1275,7 @@ function PrizePanel({ race, participants, colors }: { race: RaceData; participan
       <View style={pzStyles.header}>
         <Text style={{ fontSize: 18 }}>🏆</Text>
         <Text style={[pzStyles.title, { color: colors.gold }]}>Prize Pool</Text>
-        <Text style={[pzStyles.pool, { color: colors.foreground }]}>${(race.prizePool ?? 0).toFixed(2)}</Text>
+        <PremiumPoolText color={colors.gold}>${(race.prizePool ?? 0).toFixed(2)}</PremiumPoolText>
       </View>
       <View style={[pzStyles.divider, { backgroundColor: colors.border }]} />
       {isCompleted && completedRows.length > 0

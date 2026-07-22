@@ -200,6 +200,7 @@ function RootLayoutNav() {
       <ThemedStatusBar />
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: isDark ? "#0A0B14" : "#EDEEF2" } }}>
         <Stack.Screen name="index" />
+        <Stack.Screen name="onboarding" />
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="reset-password" />

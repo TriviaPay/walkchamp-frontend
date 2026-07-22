@@ -1,11 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   Animated,
   Easing,
-  Image,
   StyleSheet,
   Text,
   View,
+  type StyleProp,
+  type ViewStyle,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
@@ -15,8 +17,6 @@ import {
   getSponsoredPrizePerWinnerUsd,
   SPONSORED_DEFAULT_TARGET_STEPS,
 } from "@/utils/sponsoredEventsApi";
-
-const COIN_IMG = require("@/assets/images/game-coin.png");
 
 export type RaceStartingSoonPhase = "registered" | "join_window" | "racing";
 export type RaceStartingSoonChallengeType = "free" | "coins" | "cash" | "sponsored";
@@ -37,6 +37,8 @@ export type RaceStartingSoonCardProps = {
   /** Cash entry fee in cents. */
   entryAmountCents?: number;
   onPressCta: () => void;
+  /** Optional outer wrapper style (e.g. carousel card width). */
+  style?: StyleProp<ViewStyle>;
 };
 
 type Theme = {
@@ -55,7 +57,6 @@ type Theme = {
   progressGrad: [string, string];
   ctaGrad: [string, string];
   ctaLiveGrad: [string, string];
-  particle: string;
   startsIn: string;
   colon: string;
   pillBorder: string;
@@ -78,7 +79,6 @@ const THEMES: Record<RaceStartingSoonChallengeType, Theme> = {
     progressGrad: ["#059669", "#6EE7B7"],
     ctaGrad: ["#047857", "#10B981"],
     ctaLiveGrad: ["#059669", "#10B981"],
-    particle: "#A7F3D0",
     startsIn: "rgba(167,243,208,0.9)",
     colon: "#A7F3D0",
     pillBorder: "rgba(52,211,153,0.28)",
@@ -99,31 +99,29 @@ const THEMES: Record<RaceStartingSoonChallengeType, Theme> = {
     progressGrad: ["#EA580C", "#FDBA74"],
     ctaGrad: ["#C2410C", "#F97316"],
     ctaLiveGrad: ["#059669", "#10B981"],
-    particle: "#FED7AA",
     startsIn: "rgba(254,215,170,0.9)",
     colon: "#FDBA74",
     pillBorder: "rgba(251,146,60,0.28)",
   },
   cash: {
     badgeLabel: "CASH",
-    badgeBg: "rgba(234,179,8,0.35)",
-    badgeBorder: "rgba(253,224,71,0.55)",
-    badgeText: "#FEF9C3",
-    cardGrad: ["#1c1917", "#1e3a5f", "#0c4a6e"],
+    badgeBg: "rgba(250,204,21,0.28)",
+    badgeBorder: "rgba(253,224,71,0.75)",
+    badgeText: "#FEF08A",
+    cardGrad: ["#0c0a09", "#1a1408", "#292010"],
     cardLiveGrad: ["#052e16", "#065f46", "#064e3b"],
-    shadow: "#F59E0B",
-    neon: "rgba(251,191,36,0.5)",
+    shadow: "#FBBF24",
+    neon: "rgba(251,191,36,0.65)",
     neonLive: "rgba(52,211,153,0.75)",
-    timeGrad: ["#0C4A6E", "#0369A1"],
-    timeUrgentGrad: ["#B45309", "#F59E0B"],
-    trophyGrad: ["#D97706", "#FBBF24"],
-    progressGrad: ["#0284C7", "#FBBF24"],
-    ctaGrad: ["#0369A1", "#EAB308"],
+    timeGrad: ["#292524", "#44403C"],
+    timeUrgentGrad: ["#78350F", "#EAB308"],
+    trophyGrad: ["#CA8A04", "#FDE047"],
+    progressGrad: ["#A16207", "#FACC15"],
+    ctaGrad: ["#A16207", "#EAB308"],
     ctaLiveGrad: ["#059669", "#10B981"],
-    particle: "#FDE68A",
-    startsIn: "rgba(253,230,138,0.9)",
-    colon: "#FDE68A",
-    pillBorder: "rgba(56,189,248,0.28)",
+    startsIn: "rgba(253,230,138,0.95)",
+    colon: "#FDE047",
+    pillBorder: "rgba(250,204,21,0.35)",
   },
   sponsored: {
     badgeLabel: "SPONSORED",
@@ -141,7 +139,6 @@ const THEMES: Record<RaceStartingSoonChallengeType, Theme> = {
     progressGrad: ["#7C3AED", "#C084FC"],
     ctaGrad: ["#6D28D9", "#A855F7"],
     ctaLiveGrad: ["#059669", "#10B981"],
-    particle: "#E9D5FF",
     startsIn: "rgba(216,180,254,0.9)",
     colon: "#C4B5FD",
     pillBorder: "rgba(167,139,250,0.28)",
@@ -179,6 +176,35 @@ function useStartsInParts(iso: string | null) {
   return parts;
 }
 
+function useReducedMotion() {
+  const [reducedMotion, setReducedMotion] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
+      if (mounted) setReducedMotion(enabled);
+    });
+    const subscription = AccessibilityInfo.addEventListener(
+      "reduceMotionChanged",
+      setReducedMotion,
+    );
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, []);
+
+  return reducedMotion;
+}
+
+/** Display-only countdown status copy from remaining ms. */
+function daysToGoMessage(totalMs: number): string {
+  if (totalMs <= 0) return "Almost time! Keep your steps going";
+  const days = Math.ceil(totalMs / 86_400_000);
+  if (days <= 1) return "Almost time! Keep your steps going";
+  return `${days} days to go`;
+}
+
 function prizePoolLabel(
   challengeType: RaceStartingSoonChallengeType,
   opts: {
@@ -207,7 +233,7 @@ function prizePoolLabel(
     }
     case "sponsored": {
       const usd = getSponsoredPrizePerWinnerUsd(opts.prizePerWinnerCents);
-      return `$${usd} Gift`;
+      return `$${usd}`;
     }
   }
 }
@@ -227,7 +253,10 @@ function TimeBox({
     <View style={styles.timeBoxWrap}>
       <LinearGradient
         colors={urgent ? theme.timeUrgentGrad : theme.timeGrad}
-        style={[styles.timeBox, urgent && { borderColor: theme.badgeBorder }]}
+        style={[
+          styles.timeBox,
+          { borderColor: urgent ? theme.badgeBorder : theme.pillBorder },
+        ]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
       >
@@ -242,17 +271,181 @@ function InfoPill({
   icon,
   text,
   borderColor,
+  style,
 }: {
   icon: React.ReactNode;
   text: string;
   borderColor: string;
+  style?: StyleProp<ViewStyle>;
 }) {
   return (
-    <View style={[styles.infoPill, { borderColor }]}>
+    <View style={[styles.infoPill, style, { borderColor }]}>
       {icon}
-      <Text style={styles.infoPillText} numberOfLines={1}>
+      <Text
+        style={styles.infoPillText}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.78}
+      >
         {text}
       </Text>
+    </View>
+  );
+}
+
+function EntryFeePill({
+  challengeType,
+  entryAmountCents,
+  coinEntryAmount,
+  borderColor,
+  accentColor,
+}: {
+  challengeType: RaceStartingSoonChallengeType;
+  entryAmountCents?: number;
+  coinEntryAmount?: number;
+  borderColor: string;
+  accentColor: string;
+}) {
+  const isCash = challengeType === "cash";
+  const isCoins = challengeType === "coins";
+  const cashAmount =
+    entryAmountCents && entryAmountCents > 0
+      ? `$${(entryAmountCents / 100).toFixed(entryAmountCents % 100 === 0 ? 0 : 2)}`
+      : "Cash";
+  const coinsAmount =
+    coinEntryAmount && coinEntryAmount > 0
+      ? `${coinEntryAmount.toLocaleString()} Coins`
+      : "Coins";
+
+  return (
+    <View
+      style={[
+        styles.infoPill,
+        styles.entryFeePill,
+        isCoins && styles.coinsEntryFeePill,
+        { borderColor },
+      ]}
+    >
+      {!isCoins && (
+        <Feather
+          name={challengeType === "sponsored" ? "award" : "credit-card"}
+          size={rf(isCash ? 14 : 12)}
+          color={accentColor}
+        />
+      )}
+      <View style={[styles.entryFeeCopy, isCoins && styles.entryFeeCopyCoins]}>
+        <Text
+          style={styles.entryFeeLabel}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+        >
+          {isCash ? "Entry Fee" : isCoins ? "Entry" : challengeType === "free" ? "Entry" : "Reward"}
+        </Text>
+        <Text
+          style={[
+            styles.entryFeeAmount,
+            isCoins && styles.coinsEntryFeeAmount,
+            isCash && styles.cashEntryFeeAmount,
+            { color: accentColor },
+          ]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.72}
+        >
+          {isCash ? cashAmount : isCoins ? coinsAmount : challengeType === "free" ? "FREE" : "Prize"}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+/** Reserved prize/reward section shared by every challenge type. */
+function PrizeSection({
+  label,
+  amount,
+  accentColor,
+  shimmerEnabled,
+  reducedMotion,
+  descriptive = false,
+  emphasis = "default",
+}: {
+  label: string;
+  amount: string;
+  accentColor: string;
+  shimmerEnabled: boolean;
+  reducedMotion: boolean;
+  /** Word-based reward copy (e.g. "Coins + Badges") renders smaller / two lines. */
+  descriptive?: boolean;
+  emphasis?: "default" | "coins" | "cash";
+}) {
+  const shimmer = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (reducedMotion || !shimmerEnabled) {
+      shimmer.setValue(0);
+      return;
+    }
+    const shimmerLoop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(emphasis === "coins" ? 3600 : 3000),
+        Animated.timing(shimmer, {
+          toValue: 1,
+          duration: 1100,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(shimmer, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ]),
+    );
+    shimmerLoop.start();
+    return () => shimmerLoop.stop();
+  }, [emphasis, reducedMotion, shimmer, shimmerEnabled]);
+
+  const shimmerX = shimmer.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-80, 220],
+  });
+
+  return (
+    <View style={styles.prizeSection}>
+      <View style={styles.prizeHeading}>
+        <View style={[styles.prizeRule, { backgroundColor: accentColor }]} />
+        <Text style={[styles.prizeLabel, { color: accentColor }]}>{label}</Text>
+        <View style={[styles.prizeRule, { backgroundColor: accentColor }]} />
+      </View>
+      <View style={styles.prizeAmountWrap}>
+        <Text
+          style={[
+            descriptive ? styles.prizeAmountDescriptive : styles.prizeAmount,
+            emphasis === "coins" && styles.prizeAmountCoins,
+            emphasis === "cash" && styles.prizeAmountCash,
+            {
+              color: accentColor,
+              textShadowColor: `${accentColor}80`,
+            },
+          ]}
+          numberOfLines={descriptive ? 2 : 1}
+          adjustsFontSizeToFit
+          minimumFontScale={descriptive ? 0.7 : 0.8}
+        >
+          {amount}
+        </Text>
+        {!reducedMotion && shimmerEnabled && (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.prizeShimmer,
+              {
+                transform: [{ translateX: shimmerX }],
+                opacity: shimmer.interpolate({
+                  inputRange: [0, 0.15, 0.5, 0.85, 1],
+                  outputRange: [0, 0.2, 0.38, 0.2, 0],
+                }),
+              },
+            ]}
+          />
+        )}
+      </View>
     </View>
   );
 }
@@ -267,10 +460,13 @@ export function RaceStartingSoonCard({
   prizePoolCents,
   prizePerWinnerCents,
   coinEntryAmount,
-  entryAmountCents: _entryAmountCents,
+  entryAmountCents,
   onPressCta,
+  style,
 }: RaceStartingSoonCardProps) {
   const theme = THEMES[challengeType];
+  const isCash = challengeType === "cash";
+  const reducedMotion = useReducedMotion();
   const hasStart = Boolean(scheduledStartAt);
   const parts = useStartsInParts(phase === "racing" ? null : scheduledStartAt);
   const urgent =
@@ -279,11 +475,12 @@ export function RaceStartingSoonCard({
   const isLive = phase === "racing" || (hasStart && parts.expired && phase !== "registered");
 
   const glow = useRef(new Animated.Value(0.45)).current;
-  const shimmer = useRef(new Animated.Value(0)).current;
-  const particleY = useRef(new Animated.Value(0)).current;
-  const pulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
+    if (reducedMotion) {
+      glow.setValue(0.7);
+      return;
+    }
     const breathe = Animated.loop(
       Animated.sequence([
         Animated.timing(glow, { toValue: 0.9, duration: 1800, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
@@ -292,45 +489,7 @@ export function RaceStartingSoonCard({
     );
     breathe.start();
     return () => breathe.stop();
-  }, [glow]);
-
-  useEffect(() => {
-    const shimmerLoop = Animated.loop(
-      Animated.sequence([
-        Animated.delay(7000),
-        Animated.timing(shimmer, { toValue: 1, duration: 900, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.timing(shimmer, { toValue: 0, duration: 0, useNativeDriver: true }),
-      ]),
-    );
-    shimmerLoop.start();
-    return () => shimmerLoop.stop();
-  }, [shimmer]);
-
-  useEffect(() => {
-    const float = Animated.loop(
-      Animated.sequence([
-        Animated.timing(particleY, { toValue: -6, duration: 2200, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-        Animated.timing(particleY, { toValue: 0, duration: 2200, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-      ]),
-    );
-    float.start();
-    return () => float.stop();
-  }, [particleY]);
-
-  useEffect(() => {
-    if (!urgent || isLive) {
-      pulse.setValue(1);
-      return;
-    }
-    const pulseLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1.04, duration: 500, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 1, duration: 500, useNativeDriver: true }),
-      ]),
-    );
-    pulseLoop.start();
-    return () => pulseLoop.stop();
-  }, [urgent, isLive, pulse]);
+  }, [glow, reducedMotion]);
 
   const slotPct = maxSlots > 0 ? Math.min(1, registeredCount / maxSlots) : 0;
   const prizeText = prizePoolLabel(challengeType, {
@@ -346,22 +505,52 @@ export function RaceStartingSoonCard({
     ? "Your race is live. Join now!"
     : "You're registered.\nGet ready for the challenge.";
   const ctaLabel = isLive ? "Join Race" : urgent ? "Join Waiting Room" : "Open Waiting Room";
+  const progressMsg = !isLive && !parts.expired
+    ? daysToGoMessage(parts.totalMs)
+    : "Almost time! Keep your steps going";
 
-  const shimmerX = shimmer.interpolate({
-    inputRange: [0, 1],
-    outputRange: [-120, 320],
-  });
-
-  const particles = useMemo(
-    () => [
-      { top: rs(18), left: rs(22), size: 3, opacity: 0.55 },
-      { top: rs(42), right: rs(34), size: 2.5, opacity: 0.4 },
-      { bottom: rs(54), left: rs(48), size: 2, opacity: 0.35 },
-      { bottom: rs(28), right: rs(58), size: 3, opacity: 0.5 },
-      { top: rs(68), left: "46%" as const, size: 2, opacity: 0.3 },
-    ],
-    [],
-  );
+  const thirdInfoText =
+    challengeType === "cash"
+      ? entryAmountCents && entryAmountCents > 0
+        ? `Entry $${(entryAmountCents / 100).toFixed(entryAmountCents % 100 === 0 ? 0 : 2)}`
+        : "Cash Entry"
+      : challengeType === "sponsored"
+        ? `Reward ${prizeText}`
+        : challengeType === "coins"
+          ? coinEntryAmount && coinEntryAmount > 0
+            ? `Entry ${coinEntryAmount.toLocaleString()} Coins`
+            : "Coins Entry"
+          : "Entry Free";
+  const prizeLabel =
+    challengeType === "sponsored"
+      ? "REWARD"
+      : challengeType === "free"
+        ? "REWARDS"
+        : challengeType === "coins"
+          ? "COINS PRIZE POOL"
+          : "PRIZE POOL";
+  // Positive, challenge-specific reward copy — never "No cash prize".
+  const coinsPoolText =
+    coinEntryAmount && coinEntryAmount > 0
+      ? `${(coinEntryAmount * Math.max(1, registeredCount)).toLocaleString()} Coins`
+      : null;
+  const prizeDisplay =
+    challengeType === "free"
+      ? "Coins + Badges"
+      : challengeType === "coins"
+        ? coinsPoolText ?? "Coin prize updates as players join"
+        : prizeText;
+  // Descriptive (word) rewards use a smaller two-line style; numeric pools stay large.
+  const prizeDescriptive =
+    challengeType === "free" || (challengeType === "coins" && !coinsPoolText);
+  const prizeAccent =
+    challengeType === "cash"
+      ? "#FDE047"
+      : challengeType === "sponsored"
+        ? "#D8B4FE"
+        : challengeType === "coins"
+          ? "#FDBA74"
+          : "#6EE7B7";
 
   const showCountdown = !isLive && hasStart && !parts.expired;
 
@@ -369,16 +558,20 @@ export function RaceStartingSoonCard({
     <Animated.View
       style={[
         styles.wrap,
+        style,
         {
           shadowColor: theme.shadow,
-          transform: [{ scale: pulse }],
           opacity: glow.interpolate({ inputRange: [0.45, 0.9], outputRange: [0.98, 1] }),
         },
       ]}
     >
       <LinearGradient
         colors={isLive ? theme.cardLiveGrad : theme.cardGrad}
-        style={[styles.card, urgent && !isLive && styles.cardUrgent, isLive && styles.cardLive]}
+        style={[
+          styles.card,
+          urgent && !isLive && styles.cardUrgent,
+          isLive && styles.cardLive,
+        ]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
       >
@@ -391,39 +584,6 @@ export function RaceStartingSoonCard({
           pointerEvents="none"
         />
 
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.shimmer,
-            {
-              transform: [{ translateX: shimmerX }],
-              opacity: shimmer.interpolate({ inputRange: [0, 0.2, 0.8, 1], outputRange: [0, 0.35, 0.35, 0] }),
-            },
-          ]}
-        />
-
-        {particles.map((p, i) => (
-          <Animated.View
-            key={i}
-            pointerEvents="none"
-            style={[
-              styles.particle,
-              {
-                top: (p as { top?: number }).top,
-                bottom: (p as { bottom?: number }).bottom,
-                left: (p as { left?: number | `${number}%` }).left,
-                right: (p as { right?: number }).right,
-                width: p.size,
-                height: p.size,
-                borderRadius: p.size,
-                opacity: p.opacity,
-                backgroundColor: theme.particle,
-                transform: [{ translateY: particleY }],
-              },
-            ]}
-          />
-        ))}
-
         <View style={styles.topRow}>
           <View
             style={[
@@ -432,6 +592,7 @@ export function RaceStartingSoonCard({
                 backgroundColor: isLive ? "rgba(16,185,129,0.35)" : theme.badgeBg,
                 borderColor: isLive ? "rgba(110,231,183,0.55)" : theme.badgeBorder,
               },
+              isCash && !isLive && styles.badgeCash,
             ]}
           >
             <Text style={[styles.badgeText, { color: isLive ? "#D1FAE5" : theme.badgeText }]}>
@@ -443,21 +604,24 @@ export function RaceStartingSoonCard({
           </View>
         </View>
 
-        <Text style={styles.title}>{title}</Text>
-        <Text style={styles.subtitle}>{subtitle}</Text>
+        <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+          {title}
+        </Text>
+        <Text style={styles.subtitle} numberOfLines={2}>
+          {subtitle}
+        </Text>
 
         <View style={styles.midRow}>
-          <Animated.View style={[styles.trophyWrap, { transform: [{ translateY: particleY }] }]}>
-            <LinearGradient colors={theme.trophyGrad} style={styles.trophyOrb} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
-              <Text style={styles.trophyEmoji}>{isLive ? "🏁" : "🏆"}</Text>
+          <View style={styles.countdownIconWrap}>
+            <LinearGradient
+              colors={theme.trophyGrad}
+              style={styles.countdownIcon}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+            >
+              <Feather name="clock" size={rf(20)} color="#FFF" />
             </LinearGradient>
-            {(challengeType === "coins" || challengeType === "sponsored") && (
-              <>
-                <Image source={COIN_IMG} style={styles.floatCoin1} resizeMode="contain" />
-                <Image source={COIN_IMG} style={styles.floatCoin2} resizeMode="contain" />
-              </>
-            )}
-          </Animated.View>
+          </View>
 
           <View style={styles.countdownBlock}>
             {showCountdown && (
@@ -485,27 +649,60 @@ export function RaceStartingSoonCard({
           </View>
         </View>
 
-        <View style={styles.infoRow}>
+        <View
+          style={[
+            styles.infoRow,
+            (isCash || challengeType === "coins") && styles.infoRowEmphasized,
+          ]}
+        >
           <InfoPill
             icon={<Text style={styles.infoEmoji}>👥</Text>}
             text={`${registeredCount} / ${maxSlots}`}
             borderColor={theme.pillBorder}
+            style={challengeType === "coins" ? styles.coinsSecondaryInfoPill : undefined}
           />
           <InfoPill
             icon={<Text style={styles.infoEmoji}>🎯</Text>}
             text={`${targetSteps.toLocaleString()} Steps`}
             borderColor={theme.pillBorder}
+            style={challengeType === "coins" ? styles.coinsStepInfoPill : undefined}
           />
-          <InfoPill
-            icon={<Text style={styles.infoEmoji}>🎁</Text>}
-            text={prizeText}
-            borderColor={theme.pillBorder}
-          />
+          {isCash || challengeType === "coins" ? (
+            <EntryFeePill
+              challengeType={challengeType}
+              entryAmountCents={entryAmountCents}
+              coinEntryAmount={coinEntryAmount}
+              borderColor={theme.pillBorder}
+              accentColor={prizeAccent}
+            />
+          ) : (
+            <InfoPill
+              icon={
+                challengeType === "free" ? (
+                  <Text style={styles.infoEmoji}>🎁</Text>
+                ) : (
+                  <Feather name="award" size={rf(11)} color={theme.startsIn} />
+                )
+              }
+              text={thirdInfoText}
+              borderColor={theme.pillBorder}
+            />
+          )}
         </View>
+
+        <PrizeSection
+          label={prizeLabel}
+          amount={prizeDisplay}
+          accentColor={prizeAccent}
+          shimmerEnabled={(isCash || challengeType === "coins") && !isLive}
+          reducedMotion={reducedMotion}
+          descriptive={prizeDescriptive}
+          emphasis={isCash ? "cash" : challengeType === "coins" ? "coins" : "default"}
+        />
 
         {!isLive && (
           <View style={styles.progressBlock}>
-            <Text style={styles.progressMsg}>Almost time! Keep your steps going 💪</Text>
+            <Text style={[styles.progressMsg, isCash && styles.progressMsgCash]}>{progressMsg}</Text>
             <View style={styles.progressTrack}>
               <LinearGradient
                 colors={theme.progressGrad}
@@ -535,6 +732,7 @@ export function RaceStartingSoonCard({
 
 const styles = StyleSheet.create({
   wrap: {
+    height: Math.max(rs(455), 410),
     marginBottom: rs(12),
     borderRadius: rs(24),
     shadowOpacity: 0.45,
@@ -543,6 +741,7 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   card: {
+    flex: 1,
     borderRadius: rs(24),
     padding: rs(16),
     overflow: "hidden",
@@ -563,19 +762,9 @@ const styles = StyleSheet.create({
   neonBorderLive: {
     borderWidth: 2,
   },
-  shimmer: {
-    position: "absolute",
-    top: 0,
-    bottom: 0,
-    width: rs(70),
-    backgroundColor: "rgba(255,255,255,0.14)",
-    transform: [{ skewX: "-18deg" }],
-  },
-  particle: {
-    position: "absolute",
-  },
   topRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: rs(8),
@@ -587,12 +776,19 @@ const styles = StyleSheet.create({
     paddingVertical: rs(4),
     borderRadius: rs(8),
   },
+  badgeCash: {
+    shadowColor: "#FACC15",
+    shadowOpacity: 0.25,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 0 },
+  },
   badgeText: {
     fontSize: rf(9),
     fontWeight: "800",
     letterSpacing: 0.6,
   },
   registeredBadge: {
+    marginLeft: "auto",
     backgroundColor: "rgba(16,185,129,0.22)",
     borderColor: "rgba(52,211,153,0.65)",
     borderWidth: 1,
@@ -606,12 +802,14 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   title: {
+    minHeight: rf(24),
     color: "#FFF",
     fontSize: rf(20),
     fontWeight: "900",
     letterSpacing: 0.2,
   },
   subtitle: {
+    minHeight: rf(32),
     color: "rgba(237,233,254,0.82)",
     fontSize: rf(12),
     lineHeight: rf(16),
@@ -619,43 +817,32 @@ const styles = StyleSheet.create({
     marginBottom: rs(12),
   },
   midRow: {
+    minHeight: rs(54),
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: rs(10),
     marginBottom: rs(12),
   },
-  trophyWrap: {
-    width: rs(64),
-    height: rs(64),
+  countdownIconWrap: {
+    width: rs(54),
+    height: rs(54),
     alignItems: "center",
     justifyContent: "center",
   },
-  trophyOrb: {
-    width: rs(56),
-    height: rs(56),
-    borderRadius: rs(18),
+  countdownIcon: {
+    width: rs(48),
+    height: rs(48),
+    borderRadius: rs(24),
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.25)",
   },
-  trophyEmoji: { fontSize: rf(28) },
-  floatCoin1: {
-    position: "absolute",
-    width: rs(16),
-    height: rs(16),
-    top: -2,
-    right: -2,
+  countdownBlock: {
+    flex: 1,
+    minWidth: rs(160),
   },
-  floatCoin2: {
-    position: "absolute",
-    width: rs(13),
-    height: rs(13),
-    bottom: 2,
-    left: -4,
-    opacity: 0.85,
-  },
-  countdownBlock: { flex: 1 },
   startsIn: {
     fontSize: rf(10),
     fontWeight: "800",
@@ -668,8 +855,8 @@ const styles = StyleSheet.create({
   },
   timeBoxWrap: { alignItems: "center" },
   timeBox: {
-    minWidth: rs(42),
-    paddingHorizontal: rs(8),
+    minWidth: rs(36),
+    paddingHorizontal: rs(5),
     paddingVertical: rs(7),
     borderRadius: rs(10),
     alignItems: "center",
@@ -691,7 +878,7 @@ const styles = StyleSheet.create({
   colon: {
     fontSize: rf(18),
     fontWeight: "800",
-    marginHorizontal: rs(4),
+    marginHorizontal: rs(2),
     marginTop: rs(6),
   },
   livePill: {
@@ -708,10 +895,83 @@ const styles = StyleSheet.create({
     fontSize: rf(13),
     fontWeight: "800",
   },
+  prizeSection: {
+    minHeight: rs(62),
+    alignItems: "center",
+    marginBottom: rs(12),
+    paddingTop: rs(2),
+  },
+  prizeHeading: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: rs(6),
+    marginBottom: rs(5),
+  },
+  prizeRule: {
+    flex: 1,
+    maxWidth: rs(64),
+    height: StyleSheet.hairlineWidth,
+    opacity: 0.5,
+  },
+  prizeLabel: {
+    fontSize: rf(10),
+    fontWeight: "800",
+    letterSpacing: 1.4,
+  },
+  prizeAmountWrap: {
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: rs(130),
+    paddingHorizontal: rs(8),
+  },
+  prizeAmount: {
+    maxWidth: rs(220),
+    fontSize: rf(28),
+    fontWeight: "900",
+    letterSpacing: 0.5,
+    fontVariant: ["tabular-nums"],
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 7,
+  },
+  prizeAmountCoins: {
+    maxWidth: rs(250),
+    fontSize: rf(35),
+    textShadowRadius: 9,
+  },
+  prizeAmountCash: {
+    maxWidth: rs(250),
+    fontSize: rf(38),
+    textShadowRadius: 10,
+  },
+  prizeAmountDescriptive: {
+    maxWidth: rs(240),
+    fontSize: rf(17),
+    lineHeight: rf(21),
+    fontWeight: "900",
+    letterSpacing: 0.3,
+    textAlign: "center",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 6,
+  },
+  prizeShimmer: {
+    position: "absolute",
+    top: rs(4),
+    bottom: rs(4),
+    width: rs(26),
+    backgroundColor: "rgba(255,255,255,0.45)",
+    transform: [{ skewX: "-18deg" }],
+  },
   infoRow: {
+    height: rs(36),
     flexDirection: "row",
     gap: rs(6),
     marginBottom: rs(10),
+  },
+  infoRowEmphasized: {
+    height: rs(42),
   },
   infoPill: {
     flex: 1,
@@ -722,7 +982,56 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: rs(10),
     paddingHorizontal: rs(7),
-    paddingVertical: rs(7),
+    paddingVertical: rs(6),
+  },
+  entryFeePill: {
+    flex: 1.32,
+    minWidth: 0,
+    minHeight: rs(42),
+    paddingHorizontal: rs(7),
+  },
+  coinsEntryFeePill: {
+    flex: 1.62,
+    paddingHorizontal: rs(9),
+  },
+  coinsSecondaryInfoPill: {
+    flex: 0.82,
+  },
+  coinsStepInfoPill: {
+    flex: 0.96,
+  },
+  entryFeeCopy: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: "center",
+  },
+  entryFeeCopyCoins: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: rs(3),
+  },
+  entryFeeLabel: {
+    color: "rgba(237,233,254,0.72)",
+    fontSize: rf(7.5),
+    lineHeight: rf(9),
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  entryFeeAmount: {
+    fontSize: rf(11),
+    lineHeight: rf(14),
+    fontWeight: "900",
+  },
+  coinsEntryFeeAmount: {
+    fontSize: rf(13),
+    lineHeight: rf(15),
+  },
+  cashEntryFeeAmount: {
+    fontSize: rf(15),
+    lineHeight: rf(17),
+    textShadowColor: "rgba(253,224,71,0.7)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 6,
   },
   infoEmoji: { fontSize: rf(11) },
   infoPillText: {
@@ -738,6 +1047,10 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginBottom: rs(6),
   },
+  progressMsgCash: {
+    color: "rgba(253,230,138,0.9)",
+    fontWeight: "700",
+  },
   progressTrack: {
     height: rs(6),
     borderRadius: rs(999),
@@ -747,8 +1060,16 @@ const styles = StyleSheet.create({
   progressFill: {
     height: "100%",
     borderRadius: rs(999),
+    shadowColor: "#FACC15",
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 0 },
   },
-  ctaTouch: { borderRadius: rs(14), overflow: "hidden" },
+  ctaTouch: {
+    marginTop: "auto",
+    borderRadius: rs(14),
+    overflow: "hidden",
+  },
   cta: {
     height: rs(48),
     borderRadius: rs(14),

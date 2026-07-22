@@ -5,7 +5,7 @@ import { SkeletonList, SkeletonRaceRow } from "@/components/SkeletonRows";
 import { screenCache } from "@/utils/screenCache";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -65,7 +65,7 @@ function calcFreeCoins(rank: number, isTied: boolean, tieGroupSize: number): num
   return FREE_TIER_COINS[rank - 1] ?? 0;
 }
 
-const FILTERS = ["All", "Free", "Coins Battle", "Cash Challenges", "Sponsored Events"] as const;
+const FILTERS = ["All", "My Races", "Free", "Coins Battle", "Cash Challenges", "Sponsored Events"] as const;
 type FilterType = (typeof FILTERS)[number];
 
 const CASH_ENTRY_TYPES = new Set([
@@ -99,6 +99,10 @@ export interface LiveRacePlayer {
   targetSteps: number;
   rank: number;
   isHost: boolean;
+  status?: string | null;
+  participantStatus?: string | null;
+  registrationStatus?: string | null;
+  isForfeited?: boolean;
   prizeAmount?: number;
   isTied?: boolean;
   tieGroupSize?: number;
@@ -136,6 +140,10 @@ export interface LiveRace {
   daysLeft?: number | null;
   hoursLeft?: number | null;
   timeLeftLabel?: string | null;
+  hostUserId?: string | null;
+  currentUserRole?: string | null;
+  currentUserParticipantStatus?: string | null;
+  currentUserParticipating?: boolean;
 }
 
 export function formatElapsed(seconds: number): string {
@@ -160,6 +168,8 @@ function computeElapsed(startedAt: string | null, completedAt?: string | null): 
 
 function filterToParam(filter: FilterType): string {
   if (filter === "All") return "all";
+  // "My Races" reuses the normal live-races payload and filters it locally.
+  if (filter === "My Races") return "all";
   if (filter === "Free") return "free";
   if (filter === "Coins Battle") return "coins_battle";
   if (filter === "Cash Challenges") return "cash_challenges";
@@ -225,6 +235,23 @@ function mapRaceRow(r: Record<string, unknown>): LiveRace {
       (r.remainingLabel as string | undefined) ??
       (r.remaining_label as string | undefined) ??
       null,
+    hostUserId:
+      (r.hostUserId as string | null | undefined) ??
+      (r.host_user_id as string | null | undefined) ??
+      null,
+    currentUserRole:
+      (r.currentUserRole as string | null | undefined) ??
+      (r.current_user_role as string | null | undefined) ??
+      null,
+    currentUserParticipantStatus:
+      (r.currentUserParticipantStatus as string | null | undefined) ??
+      (r.current_user_participant_status as string | null | undefined) ??
+      (r.participantStatus as string | null | undefined) ??
+      null,
+    currentUserParticipating:
+      (r.currentUserParticipating as boolean | undefined) ??
+      (r.current_user_participating as boolean | undefined) ??
+      (r.current_user_registered as boolean | undefined),
   };
 }
 
@@ -288,20 +315,53 @@ interface MyActiveRace {
   type?: string;
 }
 
-/** True when the signed-in user appears in this race's participant list. */
+const NON_PARTICIPATING_STATUSES = new Set([
+  "withdrawn",
+  "withdrew",
+  "left",
+  "removed",
+  "disqualified",
+  "forfeited",
+  "cancelled",
+  "canceled",
+]);
+
+/** True only when the signed-in user is the host or an eligible participant. */
 export function isUserParticipatingInRace(
   race: LiveRace,
   opts: { userId?: string | null; username?: string | null; myActiveRaceIds?: Set<string> | null },
 ): boolean {
-  if (opts.myActiveRaceIds?.has(race.id)) return true;
   const uid = opts.userId;
   const uname = opts.username?.trim().toLowerCase();
   if (!uid && !uname) return false;
-  return race.players.some((p) => {
-    if (uid && p.userId === uid) return true;
-    if (uname && p.username?.trim().toLowerCase() === uname) return true;
-    return false;
-  });
+
+  const player = race.players.find((p) =>
+    (uid && p.userId === uid) ||
+    (uname && p.username?.trim().toLowerCase() === uname),
+  );
+  const status = (
+    race.currentUserParticipantStatus ??
+    player?.participantStatus ??
+    player?.registrationStatus ??
+    player?.status ??
+    (player?.isForfeited ? "forfeited" : "")
+  ).trim().toLowerCase();
+  if (NON_PARTICIPATING_STATUSES.has(status)) return false;
+
+  const role = race.currentUserRole?.trim().toLowerCase();
+  if (role === "spectator" || role === "watcher" || role === "viewer") return false;
+  if (role === "host" || role === "participant" || role === "racer" || role === "racing") return true;
+  if (uid && race.hostUserId === uid) return true;
+  if (race.currentUserParticipating === true) return true;
+  if (opts.myActiveRaceIds?.has(race.id)) return true;
+  return !!player;
+}
+
+function filterMyRaces(
+  races: LiveRace[],
+  opts: { userId?: string | null; username?: string | null; myActiveRaceIds?: Set<string> | null },
+): LiveRace[] {
+  return races.filter((race) => isUserParticipatingInRace(race, opts));
 }
 
 async function fetchMyActiveRaces(): Promise<{ primary: MyActiveRace | null; all: MyActiveRace[] }> {
@@ -672,6 +732,16 @@ function RaceCardBase({
     });
   }, [race.id, race.trackLayout, race.imageSet, race.imageUrl, race.assetVersion, race.width, race.height]);
 
+  const openSpectatorRace = useCallback(() => {
+    // Same real race track / live board as participants — live-detail already
+    // supports spectator mode (no step tracking, watch count, etc.).
+    prefetchTrackTheme(trackMedia, "full");
+    router.push({
+      pathname: "/race/live-detail",
+      params: { id: race.id, trackLayout: race.trackLayout },
+    });
+  }, [race.id, race.trackLayout, race.imageSet, race.imageUrl, race.assetVersion, race.width, race.height]);
+
   const entryColor: Record<string, string> = {
     Free: NEON_GREEN,
     "$1": "#60A5FA",
@@ -847,7 +917,7 @@ function RaceCardBase({
             <View style={st.statItem}>
               <View style={st.statValueRow}>
                 <Text style={{ fontSize: 11 }}>🏆</Text>
-                <Text style={[st.statValue, { color: colors.gold }]}>{prizePoolDisplay}</Text>
+                <Text style={[st.statValue, st.prizeStatValue, { color: colors.gold }]}>{prizePoolDisplay}</Text>
               </View>
                 <Text style={[st.statLabel, { color: colors.gold + "AA" }]}>Prize Pool</Text>
             </View>
@@ -1000,13 +1070,13 @@ function RaceCardBase({
             ))}
           </View>
           {prizePoolDisplay && (
-            <Text style={[st.footerPrize, { color: colors.gold }]}>🏆 Prize Pool {prizePoolDisplay}</Text>
+            <Text style={[st.footerPrize, st.prizeFooterValue, { color: colors.gold }]}>🏆 Prize Pool {prizePoolDisplay}</Text>
           )}
         </View>
       )}
 
       {/* ── CTA button ──────────────────────────────────────────────────── */}
-      {isFinished ? (
+      {isFinished && participating ? (
         <TouchableOpacity
           onPress={openLiveRace}
           activeOpacity={0.85}
@@ -1060,7 +1130,7 @@ function RaceCardBase({
         </TouchableOpacity>
       ) : (
         <TouchableOpacity
-          onPress={openLiveRace}
+          onPress={openSpectatorRace}
           activeOpacity={0.85}
           style={st.ctaBtn}
         >
@@ -1223,6 +1293,7 @@ export default function LiveTab() {
   const [hasMoreFinished, setHasMoreFinished] = useState(true);
   const [myRace, setMyRace] = useState<MyActiveRace | null>(null);
   const [myActiveRaceIds, setMyActiveRaceIds] = useState<Set<string>>(() => new Set());
+  const [realtimeRaceIds, setRealtimeRaceIds] = useState<string[]>([]);
   const [scheduledEvents,  setScheduledEvents]  = useState<ScheduledEvt[]>([]);
   const [scheduledLoading, setScheduledLoading] = useState(false);
   // True after the first successful fetch — subsequent filter switches skip the skeleton.
@@ -1245,6 +1316,7 @@ export default function LiveTab() {
     );
   }, [liveChallenges]);
   const loadRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const hasFocusedOnceRef = useRef(false);
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [profileInitialData, setProfileInitialData] = useState<PublicProfileInitialData | undefined>();
 
@@ -1281,16 +1353,26 @@ export default function LiveTab() {
         fetchLiveChallenges(activeFilter),
         fetchMyActiveRaces(),
       ]);
+      const idSet = new Set(myRaceResult.all.map((r) => r.id));
+      const participation = {
+        userId: user?.id,
+        username: user?.username,
+        myActiveRaceIds: idSet,
+      };
+      const visibleLive =
+        activeFilter === "My Races" ? filterMyRaces(live, participation) : live;
+      const visibleFinished =
+        activeFilter === "My Races" ? filterMyRaces(finished, participation) : finished;
       if (ok) {
-        setLiveChallenges(live);
-        setFinishedChallenges(finished);
+        setRealtimeRaceIds(live.map((race) => race.id));
+        setLiveChallenges(visibleLive);
+        setFinishedChallenges(visibleFinished);
         setFinishedOffset(FINISHED_PAGE_SIZE);
         setHasMoreFinished(finished.length >= FINISHED_PAGE_SIZE);
         // ── 3. Persist fresh data so the next open is instant ─────────────────
-        void screenCache.set(cacheKey, { live, finished });
+        void screenCache.set(cacheKey, { live: visibleLive, finished: visibleFinished });
       }
       setMyRace(myRaceResult.primary);
-      const idSet = new Set(myRaceResult.all.map((r) => r.id));
       setMyActiveRaceIds(idSet);
       try {
         const { activeChallengeSync } = await import("@/services/activeChallengeSync");
@@ -1300,22 +1382,39 @@ export default function LiveTab() {
     } catch {
       setLoading(false);
     }
-  }, [activeFilter]);
+  }, [activeFilter, user?.id, user?.username]);
 
   const loadMoreFinished = useCallback(async () => {
     if (loadingMore || !hasMoreFinished) return;
     setLoadingMore(true);
-    const more = await fetchMoreFinished(activeFilter, finishedOffset);
+    const fetched = await fetchMoreFinished(activeFilter, finishedOffset);
+    const more = activeFilter === "My Races"
+      ? filterMyRaces(fetched, {
+          userId: user?.id,
+          username: user?.username,
+          myActiveRaceIds,
+        })
+      : fetched;
     if (more.length > 0) {
       const existingIds = new Set(finishedChallenges.map((r) => r.id));
       const newRaces = more.filter((r) => !existingIds.has(r.id));
       setFinishedChallenges((prev) => [...prev, ...newRaces]);
-      setFinishedOffset((prev) => prev + more.length);
     }
-    if (more.length < FINISHED_PAGE_SIZE) setHasMoreFinished(false);
+    setFinishedOffset((prev) => prev + fetched.length);
+    if (fetched.length < FINISHED_PAGE_SIZE) setHasMoreFinished(false);
     setLoadingMore(false);
-  }, [activeFilter, finishedOffset, finishedChallenges, loadingMore, hasMoreFinished]);
+  }, [activeFilter, finishedOffset, finishedChallenges, loadingMore, hasMoreFinished, myActiveRaceIds, user?.id, user?.username]);
   useEffect(() => { loadRef.current = load; }, [load]);
+
+  // Joining, withdrawing, or forfeiting often happens on another tab/screen.
+  // Refresh immediately when the user returns, in addition to Pusher updates.
+  useFocusEffect(useCallback(() => {
+    if (!hasFocusedOnceRef.current) {
+      hasFocusedOnceRef.current = true;
+      return;
+    }
+    void loadRef.current();
+  }, []));
 
   // Refresh data when app returns from the background (e.g. user locks phone, re-opens app).
   // useFocusEffect only fires on tab navigation, not on OS-level app resume.
@@ -1394,11 +1493,10 @@ export default function LiveTab() {
   useEffect(() => {
     connectPusher();
     const handlers: Array<() => void> = [];
-    for (const race of liveChallenges) {
-      const channelName = CHANNELS.liveRace(race.id);
+    for (const raceId of realtimeRaceIds) {
+      const channelName = CHANNELS.liveRace(raceId);
       const channel = subscribeToChannel(channelName);
       if (!channel) continue;
-      const raceId = race.id;
       const onProgress = (data: { participantId: string; userId?: string; steps: number; rank: number }) => {
         setLiveChallenges((prev) =>
           prev.map((r) => {
@@ -1435,18 +1533,41 @@ export default function LiveTab() {
         }
         void loadRef.current();
       };
+      const onParticipationChanged = (data?: { userId?: string; participantId?: string }) => {
+        // Keep "My Races" membership and card CTAs in sync without per-race
+        // profile requests. Events without a user id are treated as room-wide.
+        if (!data?.userId || !user?.id || data.userId === user.id) {
+          void loadRef.current();
+        }
+      };
       channel.bind(EVENTS.RACE_PROGRESS, onProgress);
       channel.bind(EVENTS.RACE_REACTION, onReaction);
       channel.bind(EVENTS.RACE_COMPLETED, onCompleted);
+      channel.bind(EVENTS.RACE_JOINED, onParticipationChanged);
+      channel.bind(EVENTS.LEADERBOARD_UPDATED, onParticipationChanged);
+      channel.bind("race:participant-forfeited", onParticipationChanged);
+      channel.bind("race:participant-withdrew", onParticipationChanged);
+      channel.bind("race:participant-removed", onParticipationChanged);
+      channel.bind("race:closed", onParticipationChanged);
+      channel.bind("race:cancelled", onParticipationChanged);
+      channel.bind("race:results-available", onParticipationChanged);
       handlers.push(() => {
         channel.unbind(EVENTS.RACE_PROGRESS, onProgress);
         channel.unbind(EVENTS.RACE_REACTION, onReaction);
         channel.unbind(EVENTS.RACE_COMPLETED, onCompleted);
+        channel.unbind(EVENTS.RACE_JOINED, onParticipationChanged);
+        channel.unbind(EVENTS.LEADERBOARD_UPDATED, onParticipationChanged);
+        channel.unbind("race:participant-forfeited", onParticipationChanged);
+        channel.unbind("race:participant-withdrew", onParticipationChanged);
+        channel.unbind("race:participant-removed", onParticipationChanged);
+        channel.unbind("race:closed", onParticipationChanged);
+        channel.unbind("race:cancelled", onParticipationChanged);
+        channel.unbind("race:results-available", onParticipationChanged);
       });
     }
     return () => handlers.forEach((h) => h());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveChallenges.map((r) => r.id).join(",")]);
+  }, [user?.id, realtimeRaceIds.join(",")]);
 
   useEffect(() => {
     connectPusher();
@@ -1475,9 +1596,10 @@ export default function LiveTab() {
         origin,
         myRaceId: myRace?.id ?? "",
         myRaceIsHost: myRace?.isHost ? "1" : "",
+        myRaceIds: [...myActiveRaceIds].join(","),
       },
     });
-  }, [activeFilter, myRace?.id, myRace?.isHost]);
+  }, [activeFilter, myRace?.id, myRace?.isHost, myActiveRaceIds]);
 
   // Live rows are rebuilt on every elapsed-timer tick (the live races change
   // each second). Kept in its own memo so it doesn't touch finished rows.
@@ -1653,24 +1775,37 @@ export default function LiveTab() {
         </View>
       ) : liveCount === 0 && finishedCount === 0 ? (
         <View style={st.emptyBox}>
-          <Feather name="zap-off" size={32} color={colors.mutedForeground} />
-          <Text style={[st.emptyText, { color: colors.mutedForeground }]}>
-            {activeFilter === "Cash Challenges"
-              ? "No cash challenges available right now."
-              : "No races found."}
-          </Text>
-          {activeFilter === "Cash Challenges" && (
-            <Text style={[st.emptySubText, { color: colors.mutedForeground }]}>
-              Host or join a cash challenge when one becomes available.
-            </Text>
+          {activeFilter === "My Races" ? (
+            <>
+              <Feather name="activity" size={32} color={colors.mutedForeground} />
+              <Text style={[st.emptyTitle, { color: colors.foreground }]}>No Active Races</Text>
+              <Text style={[st.emptySubText, { color: colors.mutedForeground }]}>
+                You are not participating in any live races right now.
+              </Text>
+              <TouchableOpacity style={st.refreshBtn} onPress={() => setActiveFilter("All")}>
+                <Feather name="grid" size={14} color={NEON_PURPLE} />
+                <Text style={st.refreshText}>Browse Live Races</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <Feather name="zap-off" size={32} color={colors.mutedForeground} />
+              <Text style={[st.emptyText, { color: colors.mutedForeground }]}>
+                {activeFilter === "Cash Challenges"
+                  ? "No cash challenges available right now."
+                  : "No races found."}
+              </Text>
+              {activeFilter === "Cash Challenges" && (
+                <Text style={[st.emptySubText, { color: colors.mutedForeground }]}>
+                  Host or join a cash challenge when one becomes available.
+                </Text>
+              )}
+              <TouchableOpacity style={st.refreshBtn} onPress={load}>
+                <Feather name="refresh-cw" size={14} color={NEON_PURPLE} />
+                <Text style={st.refreshText}>Refresh</Text>
+              </TouchableOpacity>
+            </>
           )}
-          <TouchableOpacity
-            style={st.refreshBtn}
-            onPress={load}
-          >
-            <Feather name="refresh-cw" size={14} color={NEON_PURPLE} />
-            <Text style={st.refreshText}>Refresh</Text>
-          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
@@ -1753,6 +1888,7 @@ const st = StyleSheet.create({
   list:             { padding: rs(14), gap: 12 },
   loadingBox:       { flex: 1, alignItems: "center", justifyContent: "center" },
   emptyBox:         { flex: 1, alignItems: "center", justifyContent: "center", gap: 14 },
+  emptyTitle:       { fontSize: rf(18), fontWeight: "800", textAlign: "center" },
   emptyText:        { fontSize: rf(15), textAlign: "center" },
   emptySubText:     { fontSize: rf(13), textAlign: "center", paddingHorizontal: rs(24), lineHeight: rf(19) },
   refreshBtn:       { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: rs(20), paddingVertical: rs(10), borderRadius: 12, borderWidth: 1, borderColor: NEON_PURPLE + "50", backgroundColor: NEON_PURPLE + "15" },
@@ -1820,6 +1956,13 @@ const st = StyleSheet.create({
   statItem:         { flex: 1, alignItems: "center" },
   statValueRow:     { flexDirection: "row", alignItems: "center", gap: 4 },
   statValue:        { fontSize: rf(13), fontWeight: "800" },
+  prizeStatValue:   {
+    fontSize: rf(16),
+    fontWeight: "900",
+    textShadowColor: "rgba(245,158,11,0.65)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 6,
+  },
   statLabel:        { fontSize: rf(10), marginTop: 2 },
   statDiv:          { width: 1, height: 30 },
 
@@ -1852,6 +1995,13 @@ const st = StyleSheet.create({
   reactRow:         { flexDirection: "row", gap: 12 },
   reactItem:        { fontSize: rf(12) },
   footerPrize:      { fontSize: rf(12), fontWeight: "700" },
+  prizeFooterValue: {
+    fontSize: rf(14),
+    fontWeight: "900",
+    textShadowColor: "rgba(245,158,11,0.55)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 5,
+  },
 
   // Finished race — reactions inside View Results row
   finishedReactRow:   { flexDirection: "row", alignItems: "center", gap: 6 },

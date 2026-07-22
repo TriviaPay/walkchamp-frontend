@@ -32,6 +32,7 @@ import {
   ActivityIndicator,
   Animated,
   Easing,
+  FlatList,
   Image,
   InteractionManager,
   Linking,
@@ -68,7 +69,7 @@ import { resolveDisplayTodaySteps } from "@/utils/liveRaceDisplay";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import { useRace } from "@/context/RaceContext";
-import { formatDistance, formatCalories, stepsToDistance } from "@/utils/format";
+import { formatDistance, formatCalories, stepsToDistance, formatWalletAmount } from "@/utils/format";
 import { getApiBase } from "@/utils/apiUrl";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import MyTitlesModal, { type ActiveTitle, difficultyColor } from "@/components/MyTitlesModal";
@@ -105,7 +106,7 @@ import { store } from "@/store";
 import { activeChallengeSync } from "@/services/activeChallengeSync";
 import CoinsInfoModal from "@/components/CoinsInfoModal";
 import CoinsStoreModal from "@/components/CoinsStoreModal";
-import ActiveRaceModal, { type ActiveRaceInfo, isSponsoredActiveRaceConflict } from "@/components/ActiveRaceModal";
+import ActiveRaceModal, { type ActiveRaceInfo, isSponsoredActiveRaceConflict, normalizeActiveRaceInfo } from "@/components/ActiveRaceModal";
 import AlreadyHostingModal from "@/components/AlreadyHostingModal";
 import CoinIcon from "@/components/CoinIcon";
 import DraggableShopIcon from "@/components/DraggableShopIcon";
@@ -125,6 +126,9 @@ import {
 } from "@/components/CashChallengePaymentBreakdown";
 import { WalkProgressIcon } from "@/components/WalkProgressIcon";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { FaqAccordionList } from "@/components/FaqAccordionList";
+import { PrivacyPolicyDocument } from "@/components/PrivacyPolicyDocument";
+import { TermsAndConditionsDocument } from "@/components/TermsAndConditionsDocument";
 import { clampDailyProgress } from "@/utils/stepProgress";
 import CoinsBattleModal from "@/components/CoinsBattleModal";
 import { screenCache } from "@/utils/screenCache";
@@ -767,75 +771,62 @@ function HelpSubpage({ colors, onBack }: { colors: ReturnType<typeof useColors>;
 
 function FAQSubpage({ colors, onBack }: { colors: ReturnType<typeof useColors>; onBack: () => void }) {
   const { safeBottom } = useSafeLayout();
-  const [expanded, setExpanded] = useState<number | null>(null);
-  const items = [
-    { q: "How does Walk Champ track steps?", a: "Walk Champ reads your daily steps from Apple Health (iOS) or Health Connect (Android). Steps are synced automatically and stored securely on our servers." },
-    { q: "How do I connect Apple Health?", a: "Go to Profile → Wearable Setup and follow the step-by-step guide." },
-    { q: "How do Free Challenges work?", a: "Free challenges are step-racing competitions with no entry fee. Finish first to win coins. Join one from the Walk tab." },
-    { q: "How do Coins Battle challenges work?", a: "Coins Battle challenges require a coin entry fee. The prize pool is distributed to the top finishers — 100% to 1st in a 2-player race, 60%/40% for 3 players, 50%/30%/20% for 4+." },
-    { q: "How do Groups work?", a: "Groups let you compete with friends or teammates. Join or create a group in the Groups section. Daily group step totals are tracked separately from the global leaderboard." },
-    { q: "How do coins work?", a: "Coins are virtual in-app items earned by walking, completing challenges, streaks, and winning races. Coins have no cash value and cannot be withdrawn." },
-    { q: "Can I withdraw coins?", a: "No. Coins are virtual in-app items. They cannot be withdrawn or exchanged for real money." },
-    { q: "How do I delete my account?", a: "Go to Profile → Delete Account. Confirm the action. Once deleted, your account and all data are permanently removed." },
-    { q: "How do I contact support?", a: "Go to Profile → Help & Troubleshooting to email us or report an issue directly from the app." },
-  ];
   return (
     <View style={{ flex: 1 }}>
       <View style={[spStyles.header, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity onPress={onBack} hitSlop={12}><Feather name="arrow-left" size={22} color={colors.foreground} /></TouchableOpacity>
+        <TouchableOpacity onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Go back">
+          <Feather name="arrow-left" size={22} color={colors.foreground} />
+        </TouchableOpacity>
         <Text style={[spStyles.headerTitle, { color: colors.foreground }]}>FAQ</Text>
         <View style={{ width: 22 }} />
       </View>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[spStyles.body, { paddingBottom: safeBottom + 40 }]}>
-        {items.map((item, i) => (
-          <TouchableOpacity key={i} activeOpacity={0.75}
-            style={[spStyles.faqItem, { backgroundColor: colors.card, borderColor: expanded === i ? colors.primary + "50" : colors.border }]}
-            onPress={() => setExpanded(p => p === i ? null : i)}>
-            <View style={spStyles.faqHeader}>
-              <Text style={[spStyles.faqQ, { color: colors.foreground, flex: 1 }]}>{item.q}</Text>
-              <Feather name={expanded === i ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
-            </View>
-            {expanded === i && <Text style={[spStyles.faqA, { color: colors.mutedForeground }]}>{item.a}</Text>}
-          </TouchableOpacity>
-        ))}
+        <FaqAccordionList intro="Frequently asked questions about Walk Champ." />
       </ScrollView>
     </View>
   );
 }
 
-function LegalSubpage({ colors, onBack }: { colors: ReturnType<typeof useColors>; onBack: () => void }) {
+/** Opens inside My Profile modal so the Walk tab never flashes under a dismissed RN Modal. */
+function PrivacySubpage({ colors, onBack }: { colors: ReturnType<typeof useColors>; onBack: () => void }) {
   const { safeBottom } = useSafeLayout();
-  const [openSec, setOpenSec] = useState<string | null>(null);
-  const sections = [
-    { id: "platform", icon: "activity" as const, title: "Skill-Based Activity Platform", body: "Walk Champ Global is a skill-based race and activity platform. All races are competitions where your result is determined entirely by your physical performance (steps). Walk Champ is NOT a gambling platform — outcomes are determined by your activity, not by chance." },
-    { id: "fairplay", icon: "flag" as const, title: "Fair Play & Anti-Fraud Policy", body: "Strictly prohibited: falsified step counts, third-party apps to inflate steps, multiple accounts for unfair advantage, and coordinating with participants to manipulate results. Violations result in immediate account suspension and permanent ban." },
-    { id: "coins", icon: "zap" as const, title: "Coins Battles", body: "Coins Battles are skill-based races where participants wager Walk Champ coins. The participant with the highest verified step count wins the prize pool. Coins are deducted when the race begins. Walk Champ coins have no guaranteed monetary value." },
-    { id: "privacy", icon: "lock" as const, title: "Privacy & Data", body: "Walk Champ collects step count data and session metadata solely for operating the race platform and preventing fraud. We do not sell your personal data to third parties. Payout details are encrypted and visible only to authorized payment processing staff." },
-    { id: "contact", icon: "mail" as const, title: "Contact & Disputes", body: "Questions, disputes, or compliance concerns:\n\nEmail: legal@walkchamp.app\nSupport: support@walkchamp.app\n\nDisputes regarding race results must be submitted within 7 days of race completion. Walk Champ's decision on disputes is final." },
-  ];
   return (
     <View style={{ flex: 1 }}>
       <View style={[spStyles.header, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity onPress={onBack} hitSlop={12}><Feather name="arrow-left" size={22} color={colors.foreground} /></TouchableOpacity>
-        <Text style={[spStyles.headerTitle, { color: colors.foreground }]}>Terms & Privacy</Text>
+        <TouchableOpacity onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Go back">
+          <Feather name="arrow-left" size={22} color={colors.foreground} />
+        </TouchableOpacity>
+        <View style={{ flex: 1, alignItems: "center" }}>
+          <Text style={[spStyles.headerTitle, { color: colors.foreground }]}>Privacy Policy</Text>
+          <Text style={{ fontSize: 11, color: colors.mutedForeground, marginTop: 2, fontWeight: "600" }}>
+            Last Updated: July 21, 2026
+          </Text>
+        </View>
         <View style={{ width: 22 }} />
       </View>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[spStyles.body, { paddingBottom: safeBottom + 40 }]}>
-        {sections.map(s => (
-          <View key={s.id} style={[spStyles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <TouchableOpacity style={spStyles.sectionHeader} activeOpacity={0.75} onPress={() => setOpenSec(p => p === s.id ? null : s.id)}>
-              <View style={[spStyles.rowIcon, { backgroundColor: colors.primary + "18" }]}><Feather name={s.icon} size={17} color={colors.primary} /></View>
-              <Text style={[spStyles.rowLabel, { flex: 1, color: colors.foreground }]}>{s.title}</Text>
-              <Feather name={openSec === s.id ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
-            </TouchableOpacity>
-            {openSec === s.id && (
-              <View style={[spStyles.sectionBody, { borderTopColor: colors.border }]}>
-                <Text style={[spStyles.sectionText, { color: colors.mutedForeground }]}>{s.body}</Text>
-              </View>
-            )}
-          </View>
-        ))}
-      </ScrollView>
+      <PrivacyPolicyDocument contentBottomPad={safeBottom + 24} />
+    </View>
+  );
+}
+
+/** Opens inside My Profile modal so the Walk tab never flashes under a dismissed RN Modal. */
+function TermsSubpage({ colors, onBack }: { colors: ReturnType<typeof useColors>; onBack: () => void }) {
+  const { safeBottom } = useSafeLayout();
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={[spStyles.header, { borderBottomColor: colors.border }]}>
+        <TouchableOpacity onPress={onBack} hitSlop={12} accessibilityRole="button" accessibilityLabel="Go back">
+          <Feather name="arrow-left" size={22} color={colors.foreground} />
+        </TouchableOpacity>
+        <View style={{ flex: 1, alignItems: "center" }}>
+          <Text style={[spStyles.headerTitle, { color: colors.foreground }]}>Terms and Conditions</Text>
+          <Text style={{ fontSize: 11, color: colors.mutedForeground, marginTop: 2, fontWeight: "600" }}>
+            Last Updated: July 21, 2026
+          </Text>
+        </View>
+        <View style={{ width: 22 }} />
+      </View>
+      <TermsAndConditionsDocument contentBottomPad={safeBottom + 24} />
     </View>
   );
 }
@@ -868,10 +859,15 @@ const AVATAR_COLORS = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySteps, allTimeSteps, currentStreak, logout, colors }: {
+function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", user, totalEarned, walletCurrency, userRank, todaySteps, allTimeSteps, currentStreak, logout, colors }: {
   visible: boolean; onClose: () => void;
+  /** Close modal without slide-down animation, then navigate (avoids Walk tab flash). */
+  onNavigate: (href: string) => void;
+  animationType?: "none" | "slide" | "fade";
   user: ReturnType<typeof useAuth>["user"];
-  walletBalance: number; userRank: number;
+  totalEarned: number;
+  walletCurrency: string;
+  userRank: number;
   todaySteps: number; allTimeSteps: number; currentStreak: number;
   logout: () => Promise<void>;
   colors: ReturnType<typeof useColors>; }) {
@@ -879,6 +875,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
   const { refreshUserProfile, updateUser } = useAuth();
   const { beginLocalAvatarPick, applyAvatarUploadSuccess, applyAvatarRemoved } = useAvatarCache();
   const { requestStepPermission, completeStepSetup } = useWalkContext();
+  const { refreshWallet } = useApp();
   const ac = user?.avatarColor ?? colors.primary;
 
   // Avatar + server stats
@@ -907,7 +904,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
   const deleteConfirmScale   = useRef(new Animated.Value(0.92)).current;
 
   // Inline sub-page state — reset to "main" whenever the modal closes
-  const [profilePage, setProfilePage] = useState<"main" | "help" | "faq" | "legal">("main");
+  const [profilePage, setProfilePage] = useState<"main" | "help" | "faq" | "privacy" | "terms">("main");
   useEffect(() => { if (!visible) setProfilePage("main"); }, [visible]);
 
   // Local rank from profile fetch (real all-time global rank from the API)
@@ -995,6 +992,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
 
   useEffect(() => {
     if (!visible) { setIsEditing(false); return; }
+    void refreshWallet({ silent: true });
     if (!apiFetchAllowed("walk_profile_modal", 90_000)) return;
     markApiFetched("walk_profile_modal");
     void (async () => {
@@ -1034,7 +1032,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
       }
       if (json.data?.stepSource !== undefined) setStepSourceInfo(json.data.stepSource);
     })();
-  }, [visible, todaySteps]);
+  }, [visible, todaySteps, refreshWallet]);
 
   // Load editable fields when edit panel opens
   useEffect(() => {
@@ -1179,7 +1177,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
   };
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet"
+    <Modal visible={visible} animationType={animationType} presentationStyle="pageSheet"
       onRequestClose={() => { if (profilePage !== "main") { setProfilePage("main"); } else { onClose(); } }}>
       <SafeAreaView
         edges={["top", "left", "right", "bottom"]}
@@ -1189,8 +1187,9 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
 
         {profilePage !== "main" ? (
           profilePage === "help" ? <HelpSubpage colors={colors} onBack={() => setProfilePage("main")} /> :
-          profilePage === "faq"  ? <FAQSubpage  colors={colors} onBack={() => setProfilePage("main")} /> :
-                                   <LegalSubpage colors={colors} onBack={() => setProfilePage("main")} />
+          profilePage === "faq" ? <FAQSubpage colors={colors} onBack={() => setProfilePage("main")} /> :
+          profilePage === "privacy" ? <PrivacySubpage colors={colors} onBack={() => setProfilePage("main")} /> :
+          <TermsSubpage colors={colors} onBack={() => setProfilePage("main")} />
         ) : (<>
 
         {/* Header: X close | title | edit pencil/X */}
@@ -1379,7 +1378,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
               { label: "Total Steps",  value: (profileStats?.allTimeSteps ?? allTimeSteps ?? 0).toLocaleString(), color: colors.primary },
               { label: "Login Streak", value: `${profileStats?.dayStreak ?? currentStreak ?? 0}d`,               color: colors.destructive },
               { label: "Global Rank",  value: `#${profileRank}`,                                                  color: colors.gold },
-              { label: "Coins Earned", value: (profileStats?.coinsEarned ?? 0).toLocaleString(),                  color: "#FFD700" },
+              { label: "Total Earnings", value: formatWalletAmount(totalEarned, walletCurrency),                  color: "#FFD700" },
             ]).map((s) => (
               <View key={s.label} style={[pmStyles.statCard, { backgroundColor: colors.card, borderColor: s.color + "30" }]}>
                 <Text style={[pmStyles.statValue, { color: s.color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{s.value}</Text>
@@ -1462,12 +1461,7 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
           <View style={[pmStyles.settingsList, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <TouchableOpacity
               style={[pmStyles.toggleRow]}
-              onPress={async () => {
-                const url = process.env.EXPO_PUBLIC_APP_INVITE_URL ?? "https://walkchamp.app/invite";
-                try {
-                  await Share.share({ title: "Join Walk Champ", message: `Join me on Walk Champ!\n${url}`, url });
-                } catch {}
-              }}
+              onPress={() => onNavigate("/profile/invite-friends")}
             >
               <View style={[pmStyles.toggleIcon, { backgroundColor: colors.gold + "18" }]}>
                 <Feather name="gift" size={17} color={colors.gold} />
@@ -1500,13 +1494,27 @@ function ProfileModal({ visible, onClose, user, walletBalance, userRank, todaySt
               <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
             </TouchableOpacity>
             <TouchableOpacity
+              style={[pmStyles.toggleRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
+              onPress={() => setProfilePage("privacy")}
+              accessibilityRole="button"
+              accessibilityLabel="Privacy Policy"
+            >
+              <View style={[pmStyles.toggleIcon, { backgroundColor: colors.neonBlue + "18" }]}>
+                <Feather name="shield" size={17} color={colors.neonBlue} />
+              </View>
+              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>Privacy Policy</Text>
+              <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+            </TouchableOpacity>
+            <TouchableOpacity
               style={[pmStyles.toggleRow]}
-              onPress={() => setProfilePage("legal")}
+              onPress={() => setProfilePage("terms")}
+              accessibilityRole="button"
+              accessibilityLabel="Terms and Conditions"
             >
               <View style={[pmStyles.toggleIcon, { backgroundColor: colors.mutedForeground + "18" }]}>
                 <Feather name="file-text" size={17} color={colors.mutedForeground} />
               </View>
-              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>Terms & Privacy</Text>
+              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>Terms and Conditions</Text>
               <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
             </TouchableOpacity>
           </View>
@@ -1718,6 +1726,9 @@ function WalkScreenContent() {
   useScreenMountPerf("Walk");
   const colors = useColors();
   const { isDark } = useTheme();
+  const { width: screenWidth } = useWindowDimensions();
+  const [nextRaceCarouselWidth, setNextRaceCarouselWidth] = useState(0);
+  const [activeNextRaceIndex, setActiveNextRaceIndex] = useState(0);
   const { insets, safeTop, safeBottom } = useSafeLayout();
   const {
     trackingStatus,
@@ -1744,7 +1755,7 @@ function WalkScreenContent() {
     authReady,
   } = useWalkContext();
   const { guardRewardAction, canJoinRewardRaces, verificationLevel } = useStepSourceGuard();
-  const { userRank, walletBalance } = useApp();
+  const { userRank, walletBalance, totalEarned, walletCurrency } = useApp();
   const { user, logout, loading: authLoading, sessionToken } = useAuth();
   const navToMatchmaking = useCallback(
     (opts: Omit<Parameters<typeof buildMatchmakingParams>[0], "user">) => {
@@ -1800,6 +1811,15 @@ function WalkScreenContent() {
   const createFillAnim = useRef(new Animated.Value(0)).current;
 
   const [showProfile, setShowProfile] = useState(false);
+  const [profileModalAnimated, setProfileModalAnimated] = useState(true);
+  const navigateFromProfile = useCallback((href: string) => {
+    // Dismiss My Profile instantly so the destination screen isn't covered by
+    // the native Modal layer, and so Walk doesn't flash during a slide-down.
+    setProfileModalAnimated(false);
+    setShowProfile(false);
+    router.push(href as never);
+    setTimeout(() => setProfileModalAnimated(true), 250);
+  }, []);
   const [setupModal, setSetupModal] = useState<{ fee: number; label: string; gradients: [string, string] } | null>(null);
   const [setupModalAnimated, setSetupModalAnimated] = useState(true);
   const [playerCount, setPlayerCount] = useState<number>(10);
@@ -2159,10 +2179,14 @@ function WalkScreenContent() {
       if (!res.ok) return;
       const data = await res.json() as { rooms?: WalkUpcomingRoom[] };
       const now = Date.now();
+      const uid = user?.id;
       setRegisteredUpcomingRooms(
         (data.rooms ?? []).filter(
           (r) =>
-            r.current_user_registered &&
+            // Include rooms the user hosts too — a host is not a "registered"
+            // participant, so their own (incl. private) future room would
+            // otherwise never appear in Next Race.
+            (r.current_user_registered || (!!uid && r.host_user_id === uid)) &&
             !!r.scheduled_start_at &&
             new Date(r.scheduled_start_at).getTime() > now,
         ),
@@ -2170,7 +2194,7 @@ function WalkScreenContent() {
     } catch {
       /* keep previous Next Race list */
     }
-  }, []);
+  }, [user?.id]);
 
   useFocusEffect(useCallback(() => {
     void fetchRoomCounts();
@@ -2828,7 +2852,13 @@ function WalkScreenContent() {
     user?.id,
   ]);
 
-  const buildActiveRaceInfoFromStatus = useCallback((entryKey: string, cs: { status: string; raceId: string | null; isHost: boolean; targetSteps?: number }): ActiveRaceInfo => {
+  useEffect(() => {
+    setActiveNextRaceIndex((current) =>
+      Math.max(0, Math.min(current, nextRaceCards.length - 1)),
+    );
+  }, [nextRaceCards.length]);
+
+  const buildActiveRaceInfoFromStatus = useCallback((entryKey: string, cs: ChallengeStatus): ActiveRaceInfo => {
     const isActiveRace = cs.status === "user_hosting_active" || cs.status === "user_joined_active";
     return {
       room_id: cs.raceId!,
@@ -2839,8 +2869,96 @@ function WalkScreenContent() {
       current_user_role: cs.isHost ? "host" : "participant",
       can_leave: true,
       next_screen: isActiveRace ? "race_track" : "waiting_room",
+      started_at: cs.startedAt ?? null,
+      scheduled_start_at: cs.scheduledStartAt ?? null,
+      registered_count: typeof cs.joinedCount === "number" ? cs.joinedCount : undefined,
+      max_players: typeof cs.maxPlayers === "number" && cs.maxPlayers > 0 ? cs.maxPlayers : undefined,
     };
   }, []);
+
+  /** Show modal immediately, then enrich start time / participant counts from the API. */
+  const openActiveRaceModalFromStatus = useCallback(
+    (entryKey: string, cs: ChallengeStatus) => {
+      const base = buildActiveRaceInfoFromStatus(entryKey, cs);
+      setActiveRaceModal(base);
+      const raceId = cs.raceId;
+      if (!raceId) return;
+      void (async () => {
+        try {
+          const currentRes = await authFetch("/api/races/current-active");
+          if (currentRes.ok) {
+            const data = (await currentRes.json()) as {
+              has_active_race?: boolean;
+              active_race?: Record<string, unknown> | null;
+            };
+            if (data.has_active_race && data.active_race) {
+              const normalized = normalizeActiveRaceInfo(data.active_race);
+              if (normalized.room_id === raceId || !normalized.room_id) {
+                setActiveRaceModal({
+                  ...base,
+                  ...normalized,
+                  room_id: normalized.room_id || raceId,
+                  challenge_type: normalized.challenge_type || base.challenge_type,
+                  entry_fee: typeof normalized.entry_fee === "number" ? normalized.entry_fee : base.entry_fee,
+                  target_steps: normalized.target_steps || base.target_steps,
+                  current_user_role: normalized.current_user_role || base.current_user_role,
+                  started_at: normalized.started_at ?? base.started_at,
+                  scheduled_start_at: normalized.scheduled_start_at ?? base.scheduled_start_at,
+                  registered_count: normalized.registered_count ?? base.registered_count,
+                  max_players: normalized.max_players ?? base.max_players,
+                });
+                return;
+              }
+            }
+          }
+        } catch { /* fall through to race detail */ }
+
+        try {
+          const detailRes = await authFetch(`/api/races/${raceId}`);
+          if (!detailRes.ok) return;
+          const detail = (await detailRes.json()) as {
+            race?: {
+              startedAt?: string | null;
+              scheduledStartAt?: string | null;
+              currentPlayers?: number;
+              maxPlayers?: number;
+              targetSteps?: number;
+              status?: string;
+            };
+            participants?: unknown[];
+          };
+          const race = detail.race;
+          if (!race) return;
+          const fromParticipants = Array.isArray(detail.participants) ? detail.participants.length : undefined;
+          setActiveRaceModal((prev) => {
+            if (!prev || prev.room_id !== raceId) return prev;
+            return {
+              ...prev,
+              started_at: race.startedAt ?? prev.started_at,
+              scheduled_start_at: race.scheduledStartAt ?? prev.scheduled_start_at,
+              registered_count:
+                typeof race.currentPlayers === "number"
+                  ? race.currentPlayers
+                  : fromParticipants ?? prev.registered_count,
+              max_players:
+                typeof race.maxPlayers === "number" && race.maxPlayers > 0
+                  ? race.maxPlayers
+                  : prev.max_players,
+              target_steps:
+                typeof race.targetSteps === "number" && race.targetSteps > 0
+                  ? race.targetSteps
+                  : prev.target_steps,
+              room_status:
+                race.status === "in_progress" || race.status === "completed"
+                  ? "in_progress"
+                  : prev.room_status,
+            };
+          });
+        } catch { /* keep base modal data */ }
+      })();
+    },
+    [buildActiveRaceInfoFromStatus],
+  );
 
   const saveRaceTrackLayout = useCallback(async (raceId: string) => {
     const current = (await storageGet<Record<string, TrackLayoutId>>(STORAGE_KEYS.RACE_TRACK_LAYOUTS)) ?? {};
@@ -2909,7 +3027,9 @@ function WalkScreenContent() {
           const body1 = await res.json().catch(() => ({})) as Record<string, unknown>;
           if (res.status === 409 && body1.code === "ACTIVE_RACE_EXISTS") {
             pendingRaceActionRef.current = handleJoinRace;
-            setActiveRaceModal(body1.active_race as ActiveRaceInfo);
+            if (body1.active_race) {
+              setActiveRaceModal(normalizeActiveRaceInfo(body1.active_race as Record<string, unknown>));
+            }
             return;
           }
           // Room gone — fall through to host a new one
@@ -2921,7 +3041,9 @@ function WalkScreenContent() {
             const body2 = await res2.json().catch(() => ({})) as Record<string, unknown>;
             if (res2.status === 409 && body2.code === "ACTIVE_RACE_EXISTS") {
               pendingRaceActionRef.current = handleJoinRace;
-              setActiveRaceModal(body2.active_race as ActiveRaceInfo);
+              if (body2.active_race) {
+                setActiveRaceModal(normalizeActiveRaceInfo(body2.active_race as Record<string, unknown>));
+              }
               return;
             }
             AppAlert.alert("Could not join", cashChallengeBlockedMessage(body2.error as string | undefined));
@@ -2941,7 +3063,9 @@ function WalkScreenContent() {
           const body = await res.json().catch(() => ({})) as Record<string, unknown>;
           if (res.status === 409 && body.code === "ACTIVE_RACE_EXISTS") {
             pendingRaceActionRef.current = handleJoinRace;
-            setActiveRaceModal(body.active_race as ActiveRaceInfo);
+            if (body.active_race) {
+              setActiveRaceModal(normalizeActiveRaceInfo(body.active_race as Record<string, unknown>));
+            }
             return;
           }
           AppAlert.alert("Could not create room", cashChallengeBlockedMessage(body.error as string | undefined));
@@ -3004,7 +3128,9 @@ function WalkScreenContent() {
         if (res.status === 409 && body.code === "ACTIVE_RACE_EXISTS") {
           // User already consented — re-try join directly after resolving conflict
           pendingRaceActionRef.current = () => doDirectJoin(raceId, fee, maxPlayers, entryKey);
-          setActiveRaceModal(body.active_race as ActiveRaceInfo);
+          if (body.active_race) {
+            setActiveRaceModal(normalizeActiveRaceInfo(body.active_race as Record<string, unknown>));
+          }
           return;
         }
         AppAlert.alert("Could not join", (body.error as string) ?? "Room may be full or closed.");
@@ -3051,7 +3177,13 @@ function WalkScreenContent() {
       const data = await res.json() as { raceId?: string; error?: string; code?: string; currentPlayers?: number };
       if (!res.ok) {
         if (data.code === "ACTIVE_RACE_EXISTS") {
-          AppAlert.alert("Already In A Race", "You are already in an active race.");
+          const ar = (data as { active_race?: Record<string, unknown> }).active_race;
+          if (ar) {
+            pendingRaceActionRef.current = () => handleCoinsBattleJoin(raceId);
+            setActiveRaceModal(normalizeActiveRaceInfo(ar));
+          } else {
+            AppAlert.alert("Already In A Race", "You are already in an active race.");
+          }
         } else if (data.code === "INSUFFICIENT_COINS") {
           AppAlert.alert("Not Enough Coins", "You don't have enough coins to join this battle.");
         } else if (data.code === "ROOM_NOT_OPEN") {
@@ -3205,7 +3337,9 @@ function WalkScreenContent() {
       const data = await res.json() as {
         raceId?: string;
         code?: string;
-        error?: string;
+        error?: string | { message?: string; code?: string };
+        message?: string;
+        detail?: string;
         isScheduled?: boolean;
         scheduledStartAt?: string;
         inviteCode?: string;
@@ -3214,6 +3348,32 @@ function WalkScreenContent() {
       };
 
       if (!res.ok) {
+        const nestedError =
+          typeof data.error === "object" && data.error
+            ? data.error
+            : null;
+        const serverError =
+          (typeof data.error === "string" ? data.error : null) ??
+          nestedError?.message ??
+          data.message ??
+          data.detail ??
+          "";
+        const serverCode = data.code ?? nestedError?.code ?? "";
+        const isScheduledRoomConflict =
+          /scheduled/i.test(serverCode) ||
+          /already.*scheduled|scheduled.*already|scheduled (room|race)/i.test(serverError) ||
+          // The create endpoint currently returns a bare 409 for this rule in
+          // some deployments, without a code/message field.
+          (isScheduled && res.status === 409 && !data.active_race);
+
+        if (isScheduledRoomConflict) {
+          AppAlert.alert(
+            "Cannot create room",
+            "You already have a scheduled room. You can create a new future room only after your current scheduled room has been completed, cancelled, or closed.",
+          );
+          return;
+        }
+
         if (res.status === 409 && data.code === "ACTIVE_RACE_EXISTS" && data.active_race) {
           const ar = data.active_race as ActiveRaceInfo & {
             room_type?: string;
@@ -3238,25 +3398,10 @@ function WalkScreenContent() {
             );
             return;
           }
-          setActiveRaceModal({
-            room_id: ar.room_id,
-            room_status: ar.room_status,
-            challenge_type: ar.challenge_type,
-            room_type: ar.room_type,
-            is_sponsored: ar.is_sponsored,
-            entry_fee: ar.entry_fee,
-            target_steps: ar.target_steps,
-            current_user_role: ar.current_user_role,
-            can_leave: ar.can_leave ?? true,
-            next_screen: ar.next_screen ?? "waiting_room",
-            scheduled_start_at: ar.scheduled_start_at ?? null,
-            started_at: ar.started_at ?? null,
-            max_players: ar.max_players,
-            registered_count: ar.registered_count,
-          });
+          setActiveRaceModal(normalizeActiveRaceInfo(ar as unknown as Record<string, unknown>));
           return;
         }
-        AppAlert.alert("Error", cashChallengeBlockedMessage(data.error));
+        AppAlert.alert("Error", cashChallengeBlockedMessage(serverError));
         return;
       }
 
@@ -3287,7 +3432,11 @@ function WalkScreenContent() {
         setChallengeEndDate(null);
         setChallengeStartTimeIdx(0);
         setChallengeCreating(false);
+        // Immediately resync every room-derived widget so the Walk tab reflects
+        // the new scheduled room without needing a focus change or manual refresh.
         void loadChallengeStatuses();
+        void fetchRoomCounts();
+        void fetchRegisteredUpcomingRooms();
         return;
       }
 
@@ -3544,29 +3693,108 @@ function WalkScreenContent() {
 
 
         {/* Next Race — user's active/upcoming registrations (UI only) */}
-        {nextRaceCards.length > 0 && (
-          <View style={{ marginBottom: rs(8) }}>
-            <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: rs(10) }]}>
-              🏁 Next Race 🏃‍♂️
-            </Text>
-            {nextRaceCards.map((card) => (
-              <RaceStartingSoonCard
-                key={card.key}
-                challengeType={card.challengeType}
-                phase={card.phase}
-                scheduledStartAt={card.scheduledStartAt}
-                registeredCount={card.registeredCount}
-                maxSlots={card.maxSlots}
-                targetSteps={card.targetSteps}
-                prizePoolCents={card.prizePoolCents}
-                prizePerWinnerCents={card.prizePerWinnerCents}
-                coinEntryAmount={card.coinEntryAmount}
-                entryAmountCents={card.entryAmountCents}
-                onPressCta={card.onPressCta}
-              />
-            ))}
-          </View>
-        )}
+        {nextRaceCards.length > 0 && (() => {
+          const nextRaceGap = rs(12);
+          const availableWidth =
+            nextRaceCarouselWidth > 0
+              ? nextRaceCarouselWidth
+              : screenWidth - rs(32);
+          // Leave a small preview of the next card without making compact
+          // phones too narrow for the countdown.
+          const nextRaceCardW = Math.max(
+            248,
+            Math.min(availableWidth - rs(44), 520),
+          );
+          const snapInterval = nextRaceCardW + nextRaceGap;
+          const carouselSideInset = Math.max(
+            0,
+            (availableWidth - nextRaceCardW) / 2,
+          );
+
+          const renderNextRaceCard = (card: (typeof nextRaceCards)[number], width?: number) => (
+            <RaceStartingSoonCard
+              key={card.key}
+              challengeType={card.challengeType}
+              phase={card.phase}
+              scheduledStartAt={card.scheduledStartAt}
+              registeredCount={card.registeredCount}
+              maxSlots={card.maxSlots}
+              targetSteps={card.targetSteps}
+              prizePoolCents={card.prizePoolCents}
+              prizePerWinnerCents={card.prizePerWinnerCents}
+              coinEntryAmount={card.coinEntryAmount}
+              entryAmountCents={card.entryAmountCents}
+              onPressCta={card.onPressCta}
+              style={width != null ? { width, marginBottom: 0 } : undefined}
+            />
+          );
+
+          return (
+            <View
+              style={{ marginBottom: rs(8) }}
+              onLayout={(event) => {
+                const width = event.nativeEvent.layout.width;
+                if (width > 0 && width !== nextRaceCarouselWidth) {
+                  setNextRaceCarouselWidth(width);
+                }
+              }}
+            >
+              <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: rs(10) }]}>
+                🏁 Next Race 🏃‍♂️
+              </Text>
+              {nextRaceCards.length === 1 ? (
+                renderNextRaceCard(nextRaceCards[0])
+              ) : (
+                <>
+                <FlatList
+                  data={nextRaceCards}
+                  horizontal
+                  keyExtractor={(card) => card.key}
+                  renderItem={({ item }) => renderNextRaceCard(item, nextRaceCardW)}
+                  ItemSeparatorComponent={() => <View style={{ width: nextRaceGap }} />}
+                  showsHorizontalScrollIndicator={false}
+                  decelerationRate="fast"
+                  snapToInterval={snapInterval}
+                  snapToAlignment="start"
+                  disableIntervalMomentum
+                  bounces={false}
+                  removeClippedSubviews={false}
+                  initialNumToRender={2}
+                  maxToRenderPerBatch={3}
+                  windowSize={3}
+                  getItemLayout={(_, index) => ({
+                    length: nextRaceCardW,
+                    offset: snapInterval * index,
+                    index,
+                  })}
+                  onMomentumScrollEnd={(event) => {
+                    const nextIndex = Math.round(
+                      event.nativeEvent.contentOffset.x / snapInterval,
+                    );
+                    setActiveNextRaceIndex(
+                      Math.max(0, Math.min(nextRaceCards.length - 1, nextIndex)),
+                    );
+                  }}
+                  contentContainerStyle={{
+                    paddingHorizontal: carouselSideInset,
+                  }}
+                />
+                <View style={styles.nextRacePagination} accessibilityRole="adjustable">
+                  {nextRaceCards.map((card, index) => (
+                    <View
+                      key={`dot:${card.key}`}
+                      style={[
+                        styles.nextRaceDot,
+                        index === activeNextRaceIndex && styles.nextRaceDotActive,
+                      ]}
+                    />
+                  ))}
+                </View>
+                </>
+              )}
+            </View>
+          );
+        })()}
 
         {/* Race section */}
         <View style={styles.sectionRow}>
@@ -3606,7 +3834,7 @@ function WalkScreenContent() {
                 : opt.fee === -1
                   ? () => { setCoinsBattleVisible(true); return Promise.resolve(); }
                   : () => { setConfirmChecks([false, false, false]); setConfirmEntry({ fee: opt.fee, label: opt.label, gradients: opt.gradientColors }); return Promise.resolve(); };
-              setActiveRaceModal(buildActiveRaceInfoFromStatus(otherActive.entryKey, otherActive.cs));
+              openActiveRaceModalFromStatus(otherActive.entryKey, otherActive.cs);
               return;
             }
             if (opt.fee === 0) {
@@ -3667,7 +3895,7 @@ function WalkScreenContent() {
                         : opt.fee === -1
                           ? () => { setCoinsBattleVisible(true); return Promise.resolve(); }
                           : () => { setConfirmChecks([false, false, false]); setConfirmEntry({ fee: opt.fee, label: opt.label, gradients: opt.gradientColors }); return Promise.resolve(); };
-                    setActiveRaceModal(buildActiveRaceInfoFromStatus(otherActive.entryKey, otherActive.cs));
+                    openActiveRaceModalFromStatus(otherActive.entryKey, otherActive.cs);
                     return;
                   }
                   if (s === "join_available" && cs?.raceId) {
@@ -3732,7 +3960,7 @@ function WalkScreenContent() {
                         ? () => { setCoinsBattleVisible(true); return Promise.resolve(); }
                         : () => { setConfirmChecks([false, false, false]); setConfirmEntry({ fee: opt.fee, label: opt.label, gradients: opt.gradientColors }); return Promise.resolve(); };
                   pendingRaceActionRef.current = pendingAction;
-                  setActiveRaceModal(buildActiveRaceInfoFromStatus(otherActive.entryKey, otherActive.cs));
+                  openActiveRaceModalFromStatus(otherActive.entryKey, otherActive.cs);
                   return;
                 }
                 if (s === "join_available" && cs?.raceId) {
@@ -3856,6 +4084,37 @@ function WalkScreenContent() {
                 }
                 return;
               }
+
+              // Same active-race guard as Free / Coins Battle / Create Challenge —
+              // block before confirm entry or any payment path.
+              const otherActive = findActiveRaceForOtherChallenge(premKey);
+              if (otherActive) {
+                if (otherActive.cs.isHost) {
+                  const isActiveRace = otherActive.cs.status === "user_hosting_active";
+                  setAlreadyHostingModal({
+                    isActiveRace,
+                    raceId: otherActive.cs.raceId ?? null,
+                    entryKey: otherActive.entryKey,
+                  });
+                  return;
+                }
+                const raceIdForJoin =
+                  premS === "join_available" ? premCs?.raceId ?? null : null;
+                pendingRaceActionRef.current = raceIdForJoin
+                  ? () => handleDirectJoin(raceIdForJoin, 3, premCs!.maxPlayers, premKey)
+                  : () => {
+                      setConfirmChecks([false, false, false]);
+                      setConfirmEntry({
+                        fee: 3,
+                        label: "$3 Premium Challenge",
+                        gradients: premOpt.gradientColors,
+                      });
+                      return Promise.resolve();
+                    };
+                openActiveRaceModalFromStatus(otherActive.entryKey, otherActive.cs);
+                return;
+              }
+
               if (premS === "join_available" && premCs?.raceId) {
                 if (__DEV__) console.log("[PremiumChallenge] join flow opened", { raceId: premCs.raceId });
                 void handleDirectJoin(premCs.raceId, 3, premCs.maxPlayers, premKey);
@@ -4054,7 +4313,7 @@ function WalkScreenContent() {
                   openCreateChallengeModal();
                   return Promise.resolve();
                 };
-                setActiveRaceModal(buildActiveRaceInfoFromStatus(anyActive.entryKey, anyActive.cs));
+                openActiveRaceModalFromStatus(anyActive.entryKey, anyActive.cs);
                 return;
               }
               openCreateChallengeModal();
@@ -5366,9 +5625,15 @@ function WalkScreenContent() {
       {/* Profile Modal */}
       <ProfileModal
         visible={showProfile}
-        onClose={() => setShowProfile(false)}
+        animationType={profileModalAnimated ? "slide" : "none"}
+        onClose={() => {
+          setShowProfile(false);
+          setProfileModalAnimated(true);
+        }}
+        onNavigate={navigateFromProfile}
         user={user}
-        walletBalance={walletBalance}
+        totalEarned={totalEarned}
+        walletCurrency={walletCurrency}
         userRank={userRank}
         todaySteps={safeTodaySteps}
         allTimeSteps={allTimeSteps}
@@ -5607,6 +5872,24 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: rf(10), textAlign: "center" },
   sectionTitle: { fontSize: rf(18), fontWeight: "700", marginBottom: 12 },
   sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
+  nextRacePagination: {
+    minHeight: rs(18),
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: rs(6),
+    paddingTop: rs(8),
+  },
+  nextRaceDot: {
+    width: rs(6),
+    height: rs(6),
+    borderRadius: rs(3),
+    backgroundColor: "rgba(148,163,184,0.35)",
+  },
+  nextRaceDotActive: {
+    width: rs(18),
+    backgroundColor: "#FACC15",
+  },
   roomsBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: rs(5), paddingHorizontal: rs(10), borderRadius: 10 },
   roomsBtnText: { fontSize: rf(13), fontWeight: "700" },
   roomsBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: rs(7), paddingVertical: rs(2), borderRadius: 8, borderWidth: 1 },

@@ -4,6 +4,8 @@ import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
 import { perf } from "@/utils/perfLogger";
+import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
+import { ONBOARDING_ROUTES } from "@/constants/onboarding";
 
 export default function RootIndex() {
   const { user, loading, isAuthenticating } = useAuth();
@@ -28,7 +30,13 @@ export default function RootIndex() {
     );
   }
 
-  if (!user) return <Redirect href="/(auth)" />;
+  if (!user) {
+    return (
+      <Redirect
+        href={ENABLE_PREMIUM_ONBOARDING ? ONBOARDING_ROUTES.welcome : "/(auth)"}
+      />
+    );
+  }
 
   // Restricted account
   if (user.accountStatus === "suspended" || user.accountStatus === "banned") {

@@ -17,7 +17,9 @@
     "android:release": "node scripts/run-android-release.js",
     "ios": "expo run:ios",
     "postinstall": "patch-package && node scripts/ensure-walkchamp-native-module.js",
-    "lock:verify": "npm ci --include=dev"
+    "lock:verify": "npm ci --include=dev",
+    "onboarding:disable": "node scripts/toggle-premium-onboarding.js disable",
+    "onboarding:enable": "node scripts/toggle-premium-onboarding.js enable"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

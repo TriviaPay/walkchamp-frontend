@@ -123,6 +123,7 @@ export default function SignupScreen() {
   // Step 3 — Terms
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
+  const [ageAccepted, setAgeAccepted] = useState(false);
   const [rewardAccepted, setRewardAccepted] = useState(false);
   const [confirmInfoAccepted, setConfirmInfoAccepted] = useState(false);
   const [marketingOptIn, setMarketingOptIn] = useState(false);
@@ -353,8 +354,8 @@ export default function SignupScreen() {
   // ── Step 3: Terms next ────────────────────────────────────────────────────
   function handleStep3Next() {
     setStep3Error("");
-    if (!termsAccepted || !privacyAccepted || !rewardAccepted || !confirmInfoAccepted) {
-      setStep3Error("Please accept all required agreements to continue.");
+    if (!termsAccepted || !privacyAccepted || !ageAccepted || !rewardAccepted || !confirmInfoAccepted) {
+      setStep3Error("Please accept all required agreements, including confirming you are 18 or older.");
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -754,6 +755,7 @@ export default function SignupScreen() {
 
               <CheckBox value={termsAccepted} onToggle={() => setTermsAccepted((v) => !v)} label="I agree to the Terms & Conditions" required />
               <CheckBox value={privacyAccepted} onToggle={() => setPrivacyAccepted((v) => !v)} label="I agree to the Privacy Policy" required />
+              <CheckBox value={ageAccepted} onToggle={() => setAgeAccepted((v) => !v)} label="I confirm that I am 18 or older" required />
               <CheckBox value={rewardAccepted} onToggle={() => setRewardAccepted((v) => !v)} label="I understand rewards are subject to verification" required />
               <CheckBox value={confirmInfoAccepted} onToggle={() => setConfirmInfoAccepted((v) => !v)} label="I confirm my information is accurate" required />
               <CheckBox value={marketingOptIn} onToggle={() => setMarketingOptIn((v) => !v)} label="I want to receive race and reward notifications (optional)" />

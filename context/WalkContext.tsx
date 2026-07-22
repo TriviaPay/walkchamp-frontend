@@ -25,6 +25,7 @@ import { useAuth } from "@/context/AuthContext";
 import { storageGet, storageSet, storageFlushDebounced } from "@/utils/storage";
 import { stepsToCalories, stepsToDistance, getTodayKey } from "@/utils/format";
 import { msUntilNextLocalMidnight } from "@/utils/timezone";
+import { getSelectedDailyGoal } from "@/utils/onboardingStorage";
 import {
   readDailyStepsForUserDate,
   readWeeklyStepsForUser,
@@ -733,6 +734,10 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             }
             if (parsed && parsed.goalSteps > 0) {
               setTodayDailyGoal(parsed.goalSteps);
+            } else {
+              // Prefer onboarding selection when profile has no goal yet.
+              const onboardingGoal = await getSelectedDailyGoal();
+              if (onboardingGoal > 0) setTodayDailyGoal(onboardingGoal);
             }
             const backendSteps = parsed?.todaySteps ?? 0;
             backendTodayStepsRef.current =
@@ -1025,6 +1030,9 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       }
       if (parsed && parsed.goalSteps > 0) {
         setTodayDailyGoal(parsed.goalSteps);
+      } else {
+        const onboardingGoal = await getSelectedDailyGoal();
+        if (onboardingGoal > 0) setTodayDailyGoal(onboardingGoal);
       }
 
       const backendSteps = parsed?.todaySteps ?? backendTodayStepsRef.current;

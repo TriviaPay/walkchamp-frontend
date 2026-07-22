@@ -8,7 +8,6 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
-import { formatLocalDate, formatLocalTime } from "@/utils/timezone";
 
 export interface ActiveRaceInfo {
   room_id: string;
@@ -26,6 +25,52 @@ export interface ActiveRaceInfo {
   started_at?: string | null;
   max_players?: number;
   registered_count?: number;
+  /** CamelCase aliases some APIs may return — normalized via normalizeActiveRaceInfo. */
+  participantCount?: number;
+  maxParticipants?: number;
+  startedAt?: string | null;
+  scheduledStartAt?: string | null;
+  currentPlayers?: number;
+  maxPlayers?: number;
+}
+
+/** Normalize snake_case / camelCase active-race payloads into ActiveRaceInfo. */
+export function normalizeActiveRaceInfo(
+  raw: Partial<ActiveRaceInfo> & Record<string, unknown>,
+): ActiveRaceInfo {
+  const registered =
+    (typeof raw.registered_count === "number" ? raw.registered_count : undefined) ??
+    (typeof raw.participantCount === "number" ? raw.participantCount : undefined) ??
+    (typeof raw.currentPlayers === "number" ? raw.currentPlayers : undefined);
+  const max =
+    (typeof raw.max_players === "number" ? raw.max_players : undefined) ??
+    (typeof raw.maxParticipants === "number" ? raw.maxParticipants : undefined) ??
+    (typeof raw.maxPlayers === "number" ? raw.maxPlayers : undefined);
+  const started =
+    (typeof raw.started_at === "string" ? raw.started_at : null) ??
+    (typeof raw.startedAt === "string" ? raw.startedAt : null) ??
+    null;
+  const scheduled =
+    (typeof raw.scheduled_start_at === "string" ? raw.scheduled_start_at : null) ??
+    (typeof raw.scheduledStartAt === "string" ? raw.scheduledStartAt : null) ??
+    null;
+
+  return {
+    room_id: String(raw.room_id ?? ""),
+    room_status: String(raw.room_status ?? "in_progress"),
+    challenge_type: String(raw.challenge_type ?? "free"),
+    room_type: typeof raw.room_type === "string" ? raw.room_type : undefined,
+    is_sponsored: raw.is_sponsored === true,
+    entry_fee: typeof raw.entry_fee === "number" ? raw.entry_fee : 0,
+    target_steps: typeof raw.target_steps === "number" ? raw.target_steps : 0,
+    current_user_role: String(raw.current_user_role ?? "participant"),
+    can_leave: raw.can_leave !== false,
+    next_screen: String(raw.next_screen ?? "race_track"),
+    scheduled_start_at: scheduled,
+    started_at: started,
+    max_players: max,
+    registered_count: registered,
+  };
 }
 
 /** True when the "active race" conflict is only a sponsored event (should not block host). */
@@ -57,12 +102,40 @@ function challengeLabel(info: ActiveRaceInfo): string {
 }
 
 function formatStartTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
+  if (!iso) return "…";
   try {
-    return `${formatLocalDate(iso)}, ${formatLocalTime(iso)}`;
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "…";
+    const datePart = d.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+    const timePart = d.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+    return `${datePart} • ${timePart}`;
   } catch {
-    return "—";
+    return "…";
   }
+}
+
+function formatParticipants(info: ActiveRaceInfo): string {
+  const count =
+    (typeof info.registered_count === "number" ? info.registered_count : undefined) ??
+    (typeof info.participantCount === "number" ? info.participantCount : undefined) ??
+    (typeof info.currentPlayers === "number" ? info.currentPlayers : undefined);
+  const max =
+    (typeof info.max_players === "number" ? info.max_players : undefined) ??
+    (typeof info.maxParticipants === "number" ? info.maxParticipants : undefined) ??
+    (typeof info.maxPlayers === "number" ? info.maxPlayers : undefined);
+  if (typeof count === "number" && typeof max === "number" && max > 0) {
+    return `${count} / ${max}`;
+  }
+  if (typeof count === "number") return String(count);
+  return "Not available";
 }
 
 function DetailRow({
@@ -116,13 +189,9 @@ export default function ActiveRaceModal({
     : `You are currently racing in a ${label}. Quitting removes you from this race only — other players will continue.`;
 
   const role = activeRace?.current_user_role === "host" ? "Host" : "Participant";
-  const startIso = activeRace?.scheduled_start_at ?? activeRace?.started_at ?? null;
-  const participants =
-    activeRace &&
-    typeof activeRace.registered_count === "number" &&
-    typeof activeRace.max_players === "number"
-      ? `${activeRace.registered_count} / ${activeRace.max_players}`
-      : "—";
+  // Prefer actual start, then scheduled start.
+  const startIso = activeRace?.started_at ?? activeRace?.scheduled_start_at ?? null;
+  const participants = activeRace ? formatParticipants(activeRace) : "Not available";
 
   return (
     <Modal
@@ -162,7 +231,12 @@ export default function ActiveRaceModal({
                 showDivider
               />
               <DetailRow icon="user" label="Your Role" value={role} showDivider />
-              <DetailRow icon="calendar" label="Start Time" value={formatStartTime(startIso)} showDivider />
+              <DetailRow
+                icon="calendar"
+                label="Start Time"
+                value={formatStartTime(startIso)}
+                showDivider
+              />
               <DetailRow icon="users" label="Participants" value={participants} />
             </View>
           ) : null}
