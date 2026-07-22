@@ -16,7 +16,7 @@ interface RaceJoinBadgeProps {
 export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label = "Host" }: RaceJoinBadgeProps) {
   const pulseAnim  = useRef(new Animated.Value(1)).current;
   const glowAnim   = useRef(new Animated.Value(0.5)).current;
-  const scaleAnim  = useRef(new Animated.Value(1)).current;
+  const blinkAnim  = useRef(new Animated.Value(1)).current;
 
   const isJoinable      = status === "join_available";
   const isActiveHost    = status === "user_hosting_active";
@@ -27,7 +27,7 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
   const isFinished      = status === "finished";
   const isWaiting       = isWaitingHost || isWaitingJoined;
 
-  // Pulse + glow for joinable; gentle scale-bounce for waiting (player count changes)
+  // Joinable: pulse + glow. Waiting: blink the status dot only (no badge bounce).
   useEffect(() => {
     if (isJoinable) {
       const pulse = Animated.loop(
@@ -47,17 +47,20 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
       return () => { pulse.stop(); glow.stop(); };
     }
     if (isWaiting) {
-      const bounce = Animated.sequence([
-        Animated.timing(scaleAnim, { toValue: 1.12, duration: 180, useNativeDriver: true }),
-        Animated.timing(scaleAnim, { toValue: 1,    duration: 180, useNativeDriver: true }),
-      ]);
-      bounce.start();
-    } else {
-      pulseAnim.setValue(1);
-      glowAnim.setValue(0.5);
+      const blink = Animated.loop(
+        Animated.sequence([
+          Animated.timing(blinkAnim, { toValue: 0.25, duration: 520, useNativeDriver: true }),
+          Animated.timing(blinkAnim, { toValue: 1,    duration: 520, useNativeDriver: true }),
+        ]),
+      );
+      blink.start();
+      return () => blink.stop();
     }
+    pulseAnim.setValue(1);
+    glowAnim.setValue(0.5);
+    blinkAnim.setValue(1);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isJoinable, isWaiting, joinedCount]);
+  }, [isJoinable, isWaiting]);
 
   // ── Join available — solid gradient badge, prominent ──────────────────────
   if (isJoinable) {
@@ -87,33 +90,36 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
     if (isWaitingHost) {
       // Solid amber gradient — matches the prominence of the "Join" badge
       return (
-        <Animated.View style={{ transform: [{ scale: scaleAnim }] }} accessibilityLabel={`Hosting, ${joinedCount} of ${maxPlayers} players joined`}>
+        <View accessibilityLabel={`Hosting, ${joinedCount} of ${maxPlayers} players joined`}>
           <LinearGradient
             colors={["#F59E0B", "#D97706"]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 0 }}
             style={bjStyles.hostingPill}
           >
-            <Animated.View style={bjStyles.hostingDot} />
+            <Animated.View style={[bjStyles.hostingDot, { opacity: blinkAnim }]} />
             <Text style={bjStyles.hostingLabel}>Hosting</Text>
             <View style={bjStyles.hostingCountBox}>
               <Text style={bjStyles.hostingCountText}>{joinedCount}/{maxPlayers}</Text>
             </View>
           </LinearGradient>
-        </Animated.View>
+        </View>
       );
     }
-    // Waiting (joined, not host)
+    // Waiting (joined, not host) — green gradient (same family as Join), count inline (no separate box).
     return (
-      <Animated.View
-        style={[bjStyles.waitingPill, { backgroundColor: "rgba(0,230,118,0.22)", borderColor: "rgba(0,230,118,0.60)", transform: [{ scale: scaleAnim }] }]}
-      >
-        <Animated.View style={[bjStyles.waitingDot, { backgroundColor: "#00E676" }]} />
-        <View style={bjStyles.waitingInner}>
-          <Text style={[bjStyles.waitingLabel, { color: "#00E676" }]}>Waiting</Text>
-          <Text style={[bjStyles.waitingCount, { color: "#00E676" }]}>{joinedCount}/{maxPlayers}</Text>
-        </View>
-      </Animated.View>
+      <View accessibilityLabel={`Waiting, ${joinedCount} of ${maxPlayers} players joined`}>
+        <LinearGradient
+          colors={["#00E676", "#00C853"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={bjStyles.waitingPill}
+        >
+          <Animated.View style={[bjStyles.waitingDot, { opacity: blinkAnim }]} />
+          <Text style={bjStyles.waitingLabel}>Waiting</Text>
+          <Text style={bjStyles.waitingCountText}>{joinedCount}/{maxPlayers}</Text>
+        </LinearGradient>
+      </View>
     );
   }
 
@@ -173,12 +179,18 @@ const bjStyles = StyleSheet.create({
   joinCountBox: { backgroundColor: "rgba(0,0,0,0.22)", borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   joinCountText:{ fontSize: 12, fontWeight: "900", color: "#FFF" },
 
-  // Waiting pill — slightly larger to show count (joined, non-host)
-  waitingPill:  { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 10, paddingHorizontal: 9, paddingVertical: 5, borderWidth: 1.5 },
-  waitingDot:   { width: 7, height: 7, borderRadius: 3.5 },
-  waitingInner: { gap: 1 },
-  waitingLabel: { fontSize: 9, fontWeight: "800", letterSpacing: 0.3, opacity: 0.85 },
-  waitingCount: { fontSize: 13, fontWeight: "900", lineHeight: 14 },
+  // Waiting pill — green gradient (matches Join); count sits inline, no separate box
+  waitingPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  waitingDot:       { width: 7, height: 7, borderRadius: 3.5, backgroundColor: "#FFFFFF" },
+  waitingLabel:     { fontSize: 11, fontWeight: "800", color: "#FFFFFF", letterSpacing: 0.2 },
+  waitingCountText: { fontSize: 15, fontWeight: "900", color: "#FFFFFF" },
 
   // Hosting pill — solid amber gradient (mirrors join pill prominence)
   hostingPill:     { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },

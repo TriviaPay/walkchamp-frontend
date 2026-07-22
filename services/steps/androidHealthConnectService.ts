@@ -174,6 +174,7 @@ let _availability: HCAvailability = "not_supported";
 /** True after requestPermission() was shown at least once this session. */
 let _permissionRequested = false;
 let _permissionRequestInFlight = false;
+let _permissionRequestWaiters: Array<() => void> = [];
 /** In-memory cache — last confirmed today total. Updated on every successful HC read. */
 let _cachedTodaySteps = 0;
 let _lastInitResult: HCInitResult | null = null;
@@ -474,7 +475,10 @@ export const androidHCService = {
       return "unavailable";
     }
     if (_permissionRequestInFlight) {
-      hcLog("requestPermission skipped — already in flight");
+      hcLog("requestPermission waiting — already in flight");
+      await new Promise<void>((resolve) => {
+        _permissionRequestWaiters.push(resolve);
+      });
       return this.getPermissionStatus();
     }
 
@@ -570,6 +574,8 @@ export const androidHCService = {
       return "denied";
     } finally {
       _permissionRequestInFlight = false;
+      const waiters = _permissionRequestWaiters.splice(0);
+      for (const resolve of waiters) resolve();
     }
   },
 

@@ -175,6 +175,28 @@ export function unsubscribeAll(): void {
   });
 }
 
+/**
+ * Member user IDs currently subscribed to a Pusher presence-* channel.
+ * Returns [] if the channel is missing, not a presence channel, or not ready.
+ */
+export function getPresenceMemberIds(channelName: string): string[] {
+  const client = getClient();
+  if (!client) return [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+  const raw =
+    (client as any).channel?.(channelName) ??
+    (client as any).channels?.find?.(channelName);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
+  const members = raw?.members;
+  if (!members || typeof members.each !== "function") return [];
+  const ids: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+  members.each((member: { id?: string }) => {
+    if (member?.id) ids.push(String(member.id));
+  });
+  return ids;
+}
+
 // ── Well-known channel names ──────────────────────────────────────────────────
 export const CHANNELS = {
   GLOBAL_CHAT: "public-global-chat",

@@ -28,7 +28,7 @@ export type StepTrackingEnableResult = {
   message?: string;
 };
 
-let activateInFlight: Promise<StepTrackingEnableResult> | null = null;
+let activateChain: Promise<void> = Promise.resolve();
 
 export async function activateStepTracking(options: {
   userId: string;
@@ -40,12 +40,10 @@ export async function activateStepTracking(options: {
   /** Skip ongoing-notification permission during setup (e.g. wearable wizard). */
   skipOngoingNotificationPermission?: boolean;
 }): Promise<StepTrackingEnableResult> {
-  if (activateInFlight) {
-    console.log("[Steps] enable skipped — already in flight");
-    return activateInFlight;
-  }
-
-  const pending = (async (): Promise<StepTrackingEnableResult> => {
+  // Serialize enables: wait for prior attempt, then always run this request.
+  // Returning a shared in-flight promise broke "Enable Step Tracking" after a
+  // failed first-launch attempt (user received the stale failure).
+  const run = async (): Promise<StepTrackingEnableResult> => {
     const {
       userId,
       username,
@@ -204,10 +202,12 @@ export async function activateStepTracking(options: {
         message: error instanceof Error ? error.message : "Step tracking failed.",
       };
     }
-  })().finally(() => {
-    activateInFlight = null;
-  });
+  };
 
-  activateInFlight = pending;
-  return pending;
+  const resultPromise = activateChain.then(run, run);
+  activateChain = resultPromise.then(
+    () => undefined,
+    () => undefined,
+  );
+  return resultPromise;
 }

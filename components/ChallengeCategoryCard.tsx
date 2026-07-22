@@ -40,7 +40,7 @@ interface Props {
   subtitle: string;
   icon: string;
   iconImage?: ReturnType<typeof require>;
-  gradientColors: [string, string];
+  gradientColors: [string, string] | [string, string, string];
   lightAccent?: string;
   entryKey: string;
   cs: ChallengeStatus | undefined;
@@ -52,7 +52,7 @@ interface Props {
 }
 
 export function ChallengeCategoryCard({
-  label, subtitle, icon, iconImage, gradientColors, lightAccent, cs,
+  fee, label, subtitle, icon, iconImage, gradientColors, lightAccent, cs,
   isJoining, hideChevron, onPress, onHostNew, onWatchLive,
 }: Props) {
   const { isDark } = useTheme();
@@ -75,14 +75,24 @@ export function ChallengeCategoryCard({
       }
     : null;
 
-  // Always render with the gradient (dark) style regardless of theme
+  const isFreeCard = fee === 0;
+
+  // Always render with the gradient (dark) style regardless of theme.
+  // Free Challenge uses Available Rooms–style diagonal multi-stop gradient.
   const cardInner = (
     <LinearGradient
       colors={gradientColors}
-      style={cStyles.gradient}
+      style={[cStyles.gradient, isFreeCard && cStyles.freeGradient]}
       start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 0 }}
+      end={isFreeCard ? { x: 1, y: 1 } : { x: 1, y: 0 }}
     >
+      {isFreeCard ? (
+        <>
+          <View style={cStyles.freeGlow1} />
+          <View style={cStyles.freeGlow2} />
+          <View style={cStyles.freeGlow3} />
+        </>
+      ) : null}
       <View style={[cStyles.iconBox, { backgroundColor: "rgba(255,255,255,0.18)" }]}>
         {iconImage
           ? <Image source={iconImage} style={cStyles.iconImg} resizeMode="contain" />
@@ -202,6 +212,38 @@ const cStyles = StyleSheet.create({
   activeOtherWrap: { marginBottom: 10 },
 
   gradient:  { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 18, paddingVertical: 18 },
+  freeGradient: {
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#FFFFFF10",
+  },
+  freeGlow1: {
+    position: "absolute",
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "#10B98130",
+    top: -20,
+    right: 40,
+  },
+  freeGlow2: {
+    position: "absolute",
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "#34D39920",
+    bottom: -10,
+    left: 60,
+  },
+  freeGlow3: {
+    position: "absolute",
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#6EE7B818",
+    top: 10,
+    right: 10,
+  },
   iconBox:   { width: 46, height: 46, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   iconImg:   { width: 28, height: 28 },
   textBlock: { flex: 1 },

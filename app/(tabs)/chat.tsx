@@ -552,8 +552,7 @@ function GlobalChatTab({ colors, insets, user, headerHeight }: {
   user: ReturnType<typeof useAuth>["user"];
   headerHeight: number; }) {
   const { getAvatarVersion } = useAvatarVersionContext();
-  const { counts, formatCount } = usePresence();
-  const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
+  const { counts, formatCount, isUserOnline, refreshOnlineIds } = usePresence();
   const [messages, setMessages] = useState<GlobalMessage[]>(
     () => screenCache.getSync<GlobalMessage[]>("screen_globalchat") ?? []
   );
@@ -599,21 +598,8 @@ function GlobalChatTab({ colors, insets, user, headerHeight }: {
 
   useEffect(() => { loadMessages(); }, [loadMessages]);
 
-  // Fetch online user IDs so we can show per-user presence dots in the chat
-  const fetchOnlineIds = useCallback(async () => {
-    try {
-      const res = await authFetch("/api/presence/online-ids");
-      if (res.ok) {
-        const data = await res.json() as { userIds?: string[] };
-        setOnlineUserIds(new Set(data.userIds ?? []));
-      }
-    } catch {}
-  }, []);
-
-  useEffect(() => { void fetchOnlineIds(); }, [fetchOnlineIds]);
-
-  // Refresh online IDs when tab comes into focus or app returns to foreground
-  useFocusEffect(useCallback(() => { void fetchOnlineIds(); }, [fetchOnlineIds]));
+  // Shared presence (same source as Waiting Room)
+  useFocusEffect(useCallback(() => { void refreshOnlineIds(); }, [refreshOnlineIds]));
 
   // Refetch when app comes back to foreground — throttled to avoid duplicate storms.
   useEffect(() => {
@@ -623,14 +609,14 @@ function GlobalChatTab({ colors, insets, user, headerHeight }: {
           markApiFetched("chat_global_resume");
           perf.backgroundRefresh("chat_global");
           void loadMessages();
-          void fetchOnlineIds();
+          void refreshOnlineIds();
         } else {
           perf.apiSkipped("chat_global_resume_throttled");
         }
       }
     });
     return () => sub.remove();
-  }, [loadMessages, fetchOnlineIds]);
+  }, [loadMessages, refreshOnlineIds]);
 
   useEffect(() => {
     connectPusher();
@@ -861,7 +847,7 @@ function GlobalChatTab({ colors, insets, user, headerHeight }: {
                             ) : (
                               <Avatar color={item.avatarColor} letter={item.username[0]} size={32} />
                             )}
-                            <View style={{ position: "absolute", bottom: 0, right: 0, width: 10, height: 10, borderRadius: 5, backgroundColor: onlineUserIds.has(item.userId) ? "#00E676" : "#505060", borderWidth: 1.5, borderColor: colors.card }} />
+                            <View style={{ position: "absolute", bottom: 0, right: 0, width: 10, height: 10, borderRadius: 5, backgroundColor: isUserOnline(item.userId) ? "#00E676" : "#505060", borderWidth: 1.5, borderColor: colors.card }} />
                           </View>
                         </TouchableOpacity>
                       )}

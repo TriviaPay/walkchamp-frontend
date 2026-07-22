@@ -11,7 +11,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, AppState, InteractionManager, LogBox, Platform, View } from "react-native";
+import { ActivityIndicator, AppState, InteractionManager, LogBox, Platform, Text, TextInput, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -38,6 +38,19 @@ import { CoinBalanceBootstrap } from "@/components/CoinBalanceBootstrap";
 import { RoomInvitationModal, type RoomInvitation } from "@/components/RoomInvitationModal";
 import { TitleUnlockProvider } from "@/context/TitleUnlockContext";
 import { TopBannerProvider } from "@/context/TopBannerContext";
+
+// Cap OS accessibility font scaling so the whole UI doesn't blow up when
+// system "Font size" / Display size is set high (keeps prior design look).
+const MAX_FONT_MULT = 1.15;
+type TextDefaults = { defaultProps?: { maxFontSizeMultiplier?: number } };
+(Text as unknown as TextDefaults).defaultProps = {
+  ...(Text as unknown as TextDefaults).defaultProps,
+  maxFontSizeMultiplier: MAX_FONT_MULT,
+};
+(TextInput as unknown as TextDefaults).defaultProps = {
+  ...(TextInput as unknown as TextDefaults).defaultProps,
+  maxFontSizeMultiplier: MAX_FONT_MULT,
+};
 import TitleUnlockModal from "@/components/TitleUnlockModal";
 import { useAuth } from "@/context/AuthContext";
 import { connectPusher, subscribeToChannel, unsubscribeFromChannel, CHANNELS } from "@/services/realtimeService";

@@ -186,7 +186,7 @@ const RACE_OPTIONS = [
     fee: 0,
     label: "Free Challenge",
     subtitle: "No entry fee · Walk & compete for fun",
-    gradientColors: ["#064E3B", "#059669"] as [string, string],
+    gradientColors: ["#064E3B", "#059669", "#047857"] as [string, string, string],
     lightAccent: "#10B981",
     icon: "gift",
     iconImage: undefined as (ReturnType<typeof require> | undefined), },
@@ -1829,7 +1829,7 @@ function WalkScreenContent() {
     router.push(href as never);
     setTimeout(() => setProfileModalAnimated(true), 250);
   }, []);
-  const [setupModal, setSetupModal] = useState<{ fee: number; label: string; gradients: [string, string] } | null>(null);
+  const [setupModal, setSetupModal] = useState<{ fee: number; label: string; gradients: readonly string[] } | null>(null);
   const [setupModalAnimated, setSetupModalAnimated] = useState(true);
   const [playerCount, setPlayerCount] = useState<number>(10);
   const [challengeModal, setChallengeModal] = useState(false);
@@ -1958,7 +1958,7 @@ function WalkScreenContent() {
   const [joinWithCodeVisible, setJoinWithCodeVisible] = useState(false);
   const [coinsBattleVisible, setCoinsBattleVisible] = useState(false);
   const [alreadyHostingModal, setAlreadyHostingModal] = useState<{ isActiveRace: boolean; raceId: string | null; entryKey: string } | null>(null);
-  const [confirmEntry, setConfirmEntry] = useState<{ fee: number; label: string; gradients: [string, string] } | null>(null);
+  const [confirmEntry, setConfirmEntry] = useState<{ fee: number; label: string; gradients: readonly string[] } | null>(null);
   const [confirmEntryAnimated, setConfirmEntryAnimated] = useState(true);
   const [confirmChecks, setConfirmChecks] = useState<boolean[]>([false, false, false]);
   const [showCreateConfirm, setShowCreateConfirm] = useState(false);
@@ -3907,7 +3907,7 @@ function WalkScreenContent() {
                 entryKey={entryKey}
                 cs={cs}
                 isJoining={joiningEntryKey === entryKey}
-                hideChevron={opt.fee === -1}
+                hideChevron={opt.fee === -1 || opt.fee === 0}
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                   if (showSponsoredBlockAlert()) return;
@@ -4026,7 +4026,8 @@ function WalkScreenContent() {
               <LinearGradient
                 colors={opt.gradientColors}
                 style={styles.raceCardGradient}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                start={{ x: 0, y: 0 }}
+                end={opt.fee === 0 ? { x: 1, y: 1 } : { x: 1, y: 0 }}
               >
                 <View style={[styles.raceCardIcon, { backgroundColor: "rgba(255,255,255,0.18)" }]}>
                   <Feather name={opt.icon as never} size={22} color="#FFF" />
@@ -4042,7 +4043,9 @@ function WalkScreenContent() {
                     maxPlayers={cs?.maxPlayers ?? 10}
                     label={statusLabel}
                   />
-                  <Feather name="chevron-right" size={18} color="rgba(255,255,255,0.8)" />
+                  {opt.fee !== 0 && opt.fee !== -1 ? (
+                    <Feather name="chevron-right" size={18} color="rgba(255,255,255,0.8)" />
+                  ) : null}
                 </View>
               </LinearGradient>
               <JoinProgressOverlay isJoining={joiningEntryKey === entryKey} />

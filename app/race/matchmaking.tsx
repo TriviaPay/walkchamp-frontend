@@ -33,11 +33,11 @@ import {
   Easing,
   InteractionManager,
   Modal,
-  Platform,
   ScrollView,
   Share,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
@@ -62,6 +62,7 @@ import {
   connectPusher,
   subscribeToChannel,
   unsubscribeFromChannel,
+  getPresenceMemberIds,
   CHANNELS,
   EVENTS,
 } from "@/services/realtimeService";
@@ -79,8 +80,17 @@ import {
   type WaitingRoomLiveMeta,
 } from "@/utils/waitingRoomSeed";
 import { screenCache } from "@/utils/screenCache";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { usePresence } from "@/context/PresenceContext";
+import { normalizeUserId } from "@/utils/presenceIds";
 
 const SCREEN_W = Dimensions.get("window").width;
+
+// ── Responsive slot grid — always exactly 5 per row ──────────────────────────
+const SLOTS_PER_ROW = 5;
+const SLOT_PAD = 3;
+/** Fallback avatar size at module load; runtime uses window-based `slotSize`. */
+const SLOT_SIZE = Math.floor(SCREEN_W * 0.2 - SLOT_PAD * 2 - rs(20));
 
 /** Image format: "Sat, Jun 21, 2025 • 08:00 PM IST" */
 function formatWaitingRoomSchedule(iso: string): string {
@@ -219,10 +229,11 @@ function coerceRoomParticipant(
   const profile = raw.user ?? null;
   const userId = raw.userId ?? raw.user_id ?? profile?.userId ?? profile?.id;
   if (!userId) return null;
+  const userIdStr = String(userId);
 
   return {
-    id: raw.id ?? `registration-${userId}`,
-    userId,
+    id: String(raw.id ?? `registration-${userIdStr}`),
+    userId: userIdStr,
     username: firstNonEmpty(raw.username, profile?.username) ?? "Player",
     country: cleanString(raw.country) ?? cleanString(profile?.country),
     countryFlag:
@@ -250,7 +261,10 @@ function coerceRoomParticipant(
       profile?.avatarVersion ??
       0,
     isHost: raw.isHost ?? raw.is_host ?? false,
-    isCurrentUser: raw.isCurrentUser ?? userId === currentUserId,
+    isCurrentUser:
+      raw.isCurrentUser ??
+      (!!currentUserId &&
+        normalizeUserId(userIdStr) === normalizeUserId(currentUserId)),
     friendStatus: raw.friendStatus ?? "none",
     friendRequestId: raw.friendRequestId ?? null,
     activeTitle: raw.activeTitle ?? null,
@@ -331,10 +345,11 @@ function normalizeWaitingRoomParticipants(
   // must always occupy a slot — even when a far-future scheduled race has not
   // yet materialized them in the server participant list. Only injected when the
   // server list omits them; a richer server record (with registeredAt) wins.
-  if (currentUser?.id && !byUserId.has(currentUser.id)) {
-    byUserId.set(currentUser.id, {
-      id: `self-${currentUser.id}`,
-      userId: currentUser.id,
+  const selfKey = currentUser?.id ? String(currentUser.id) : "";
+  if (selfKey && currentUser && !byUserId.has(selfKey) && ![...byUserId.keys()].some((k) => normalizeUserId(k) === normalizeUserId(selfKey))) {
+    byUserId.set(selfKey, {
+      id: `self-${selfKey}`,
+      userId: selfKey,
       username: firstNonEmpty(currentUser.username) ?? "You",
       country: cleanString(currentUser.country),
       countryFlag: cleanString(currentUser.countryFlag),
@@ -355,11 +370,18 @@ function normalizeWaitingRoomParticipants(
   }
 
   if (hostId) {
-    const existing = byUserId.get(hostId);
-    const isCurrentUser = currentUser?.id === hostId;
-    byUserId.set(hostId, {
-      id: existing?.id ?? `host-${hostId}`,
-      userId: hostId,
+    const hostIdStr = String(hostId);
+    const existing =
+      byUserId.get(hostIdStr) ??
+      [...byUserId.entries()].find(
+        ([k]) => normalizeUserId(k) === normalizeUserId(hostIdStr),
+      )?.[1];
+    const isCurrentUser =
+      !!selfKey &&
+      normalizeUserId(hostIdStr) === normalizeUserId(selfKey);
+    byUserId.set(hostIdStr, {
+      id: existing?.id ?? `host-${hostIdStr}`,
+      userId: hostIdStr,
       username:
         firstNonEmpty(
           existing?.username,
@@ -412,10 +434,16 @@ function normalizeWaitingRoomParticipants(
     });
   }
 
+  const hostKey = hostId != null ? String(hostId) : "";
   const normalized = [...byUserId.values()].map((participant) => ({
     ...participant,
-    isHost: !!hostId && participant.userId === hostId,
-    isCurrentUser: participant.userId === currentUser?.id,
+    userId: String(participant.userId),
+    isHost:
+      !!hostKey &&
+      normalizeUserId(participant.userId) === normalizeUserId(hostKey),
+    isCurrentUser:
+      !!selfKey &&
+      normalizeUserId(participant.userId) === normalizeUserId(selfKey),
   }));
 
   return normalized.sort((a, b) => {
@@ -465,16 +493,19 @@ function PlayerSlot({
   isOnline,
   loading,
   colors,
+  slotSize,
 }: {
   participant: RoomParticipant | null;
   onPress?: () => void;
   isOnline: boolean;
   loading: boolean;
   colors: ReturnType<typeof useColors>;
+  slotSize: number;
 }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const opacityAnim = useRef(new Animated.Value(participant ? 1 : 0.45)).current;
   const prevFilledRef = useRef<boolean>(!!participant);
+  const avatarSize = Math.min(44, Math.max(28, slotSize - 8));
 
   useEffect(() => {
     const filled = !!participant;
@@ -517,7 +548,7 @@ function PlayerSlot({
             avatarVersion={participant.avatarVersion}
             avatarColor={participant.avatarColor ?? colors.primary}
             displayName={participant.username}
-            size={Math.min(44, SLOT_SIZE - 8)}
+            size={avatarSize}
             borderWidth={0}
             onPress={onPress}
           />
@@ -533,10 +564,19 @@ function PlayerSlot({
         </View>
       ) : loading ? (
         <View style={styles.slotSkeleton}>
-          <View style={styles.slotSkeletonAvatar} />
+          <View
+            style={[
+              styles.slotSkeletonAvatar,
+              {
+                width: Math.max(24, avatarSize - 6),
+                height: Math.max(24, avatarSize - 6),
+                borderRadius: Math.max(12, (avatarSize - 6) / 2),
+              },
+            ]}
+          />
         </View>
       ) : (
-        <Feather name="user" size={16} color={colors.mutedForeground} />
+        <Feather name="user" size={Math.min(16, Math.round(avatarSize * 0.4))} color={colors.mutedForeground} />
       )}
       {participant?.isHost && (
         <View style={styles.hostBadgeSlot}>
@@ -706,6 +746,10 @@ export default function MatchmakingScreen() {
 function MatchmakingScreenContent() {
   const colors = useColors();
   const { safeTop, safeBottom } = useSafeLayout();
+  const { width: windowWidth } = useWindowDimensions();
+  // Portrait-safe width for 5-column grid sizing across phones/tablets.
+  const layoutWidth = Math.min(windowWidth, Dimensions.get("window").height);
+  const slotSize = Math.floor(layoutWidth * 0.2 - SLOT_PAD * 2 - rs(20));
   const params = useLocalSearchParams<{
     raceId?: string;
     isHost?: string;
@@ -721,6 +765,7 @@ function MatchmakingScreenContent() {
   }>();
 
   const { user } = useAuth();
+  const { isUserOnline, refreshOnlineIds, setUserStatus } = usePresence();
 
   const {
     racePhase,
@@ -844,41 +889,77 @@ function MatchmakingScreenContent() {
   const [onlineCandidates, setOnlineCandidates] = useState<OnlineCandidate[]>([]);
   const [friendsList, setFriendsList] = useState<FriendItem[]>([]);
   const [inviteStatuses, setInviteStatuses] = useState<Record<string, InviteStatus>>({});
-  const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
+  /** Users currently on this race's Pusher presence channel (in Waiting Room now). */
+  const [racePresenceIds, setRacePresenceIds] = useState<Set<string>>(new Set());
+  const [friendsOnlineIds, setFriendsOnlineIds] = useState<Set<string>>(new Set());
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [loadingFriends, setLoadingFriends] = useState(false);
   const candidatesLoadedRef = useRef(false);
   const friendsLoadedRef = useRef(false);
 
-  const refreshOnlineUserIds = useCallback(async () => {
-    try {
-      const res = await authFetch("/api/presence/online-ids");
-      if (!res.ok) return;
-      const data = await res.json() as { userIds?: string[] };
-      setOnlineUserIds(new Set(data.userIds ?? []));
-    } catch {
-      // Keep the last reliable state; the initial safe default is offline.
-    }
-  }, []);
-
-  useFocusEffect(
-    useCallback(() => {
-      void refreshOnlineUserIds();
-    }, [refreshOnlineUserIds]),
+  const isParticipantOnline = useCallback(
+    (participant: RoomParticipant | null | undefined) => {
+      if (!participant) return false;
+      if (participant.isCurrentUser) return true;
+      const id = normalizeUserId(participant.userId);
+      if (!id) return false;
+      if (isUserOnline(id)) return true;
+      if (racePresenceIds.has(id)) return true;
+      if (friendsOnlineIds.has(id)) return true;
+      // Open lobby (no schedule): joined players are in-room together → show online.
+      // Scheduled rooms keep true presence so absent registrants stay grey.
+      if (!scheduledStartAt) return true;
+      return false;
+    },
+    [isUserOnline, racePresenceIds, friendsOnlineIds, scheduledStartAt],
   );
 
+  // Shared global presence (same source as Chat) + mark this device online.
+  useFocusEffect(
+    useCallback(() => {
+      setUserStatus("online");
+      void refreshOnlineIds();
+      const id = setInterval(() => {
+        void refreshOnlineIds();
+      }, 5_000);
+      return () => clearInterval(id);
+    }, [refreshOnlineIds, setUserStatus]),
+  );
+
+  // Race-scoped presence: everyone currently in this Waiting Room.
   useEffect(() => {
-    const channel = subscribeToChannel(CHANNELS.PRESENCE);
+    if (!backendRaceId) return;
+    connectPusher();
+    const channelName = CHANNELS.presenceRace(backendRaceId);
+    const channel = subscribeToChannel(channelName);
     if (!channel) return;
-    const onPresenceUpdated = () => {
-      void refreshOnlineUserIds();
+
+    const syncMembers = () => {
+      const next = new Set<string>();
+      for (const id of getPresenceMemberIds(channelName)) {
+        const n = normalizeUserId(id);
+        if (n) next.add(n);
+      }
+      // Always include self while viewing this room.
+      const selfId = normalizeUserId(user?.id);
+      if (selfId) next.add(selfId);
+      setRacePresenceIds(next);
     };
-    channel.bind(EVENTS.PRESENCE_UPDATED, onPresenceUpdated);
+
+    channel.bind("pusher:subscription_succeeded", syncMembers);
+    channel.bind("pusher:member_added", syncMembers);
+    channel.bind("pusher:member_removed", syncMembers);
+    // First sync in case subscription already completed.
+    syncMembers();
+
     return () => {
-      channel.unbind(EVENTS.PRESENCE_UPDATED, onPresenceUpdated);
-      // PresenceProvider and AvatarVersionProvider share this channel.
+      channel.unbind("pusher:subscription_succeeded", syncMembers);
+      channel.unbind("pusher:member_added", syncMembers);
+      channel.unbind("pusher:member_removed", syncMembers);
+      unsubscribeFromChannel(channelName);
+      setRacePresenceIds(new Set());
     };
-  }, [refreshOnlineUserIds]);
+  }, [backendRaceId, user?.id]);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -1241,6 +1322,7 @@ function MatchmakingScreenContent() {
         setParticipantsLoading(false);
         setParticipantsError(null);
         persistWaitingRoomCache(nextParticipants, nextLiveRoom);
+        void refreshOnlineIds();
         if (
           data.race.status === "in_progress" &&
           startPhaseRef.current === "idle"
@@ -1260,6 +1342,7 @@ function MatchmakingScreenContent() {
       persistWaitingRoomCache,
       user,
       isHostMode,
+      refreshOnlineIds,
     ],
   );
 
@@ -1576,7 +1659,7 @@ function MatchmakingScreenContent() {
   }, [invitePanelOpen, openInvitePanel, closeInvitePanel]);
 
   const loadOnlineCandidates = useCallback(async () => {
-    if (!backendRaceId || !isHostMode) return;
+    if (!backendRaceId) return;
     if (!candidatesLoadedRef.current) setLoadingCandidates(true);
     try {
       const res = await authFetch(`/api/races/${backendRaceId}/online-invite-candidates`);
@@ -1602,7 +1685,7 @@ function MatchmakingScreenContent() {
       candidatesLoadedRef.current = true;
     } catch { /* silent */ }
     setLoadingCandidates(false);
-  }, [backendRaceId, isHostMode]);
+  }, [backendRaceId]);
 
   const loadFriends = useCallback(async () => {
     if (!friendsLoadedRef.current) setLoadingFriends(true);
@@ -1625,11 +1708,29 @@ function MatchmakingScreenContent() {
             isOnline: f.isOnline ?? false,
           })),
         );
+        const onlineFriends = new Set<string>();
+        for (const f of data.friends ?? []) {
+          if (!f.isOnline) continue;
+          const id = normalizeUserId(f.id);
+          if (id) onlineFriends.add(id);
+        }
+        setFriendsOnlineIds(onlineFriends);
       }
       friendsLoadedRef.current = true;
     } catch { /* silent */ }
     setLoadingFriends(false);
   }, []);
+
+  // Keep friend online flags fresh for Waiting Room dots (same /api/friends as Chat).
+  useFocusEffect(
+    useCallback(() => {
+      void loadFriends();
+      const id = setInterval(() => {
+        void loadFriends();
+      }, 10_000);
+      return () => clearInterval(id);
+    }, [loadFriends]),
+  );
 
   const sendInvite = useCallback(async (inviteeId: string) => {
     if (!backendRaceId) return;
@@ -1641,7 +1742,7 @@ function MatchmakingScreenContent() {
       });
       if (res.ok) {
         setInviteStatuses((prev) => ({ ...prev, [inviteeId]: "pending" }));
-        // Auto-reset after 20s (server-side invite expires) so host can resend
+        // Auto-reset after 20s (server-side invite expires) so inviter can resend
         setTimeout(() => {
           setInviteStatuses((prev) =>
             prev[inviteeId] === "pending" ? { ...prev, [inviteeId]: "idle" } : prev,
@@ -1655,21 +1756,22 @@ function MatchmakingScreenContent() {
     }
   }, [backendRaceId]);
 
-  // Poll online candidates every 5s while the panel is open (also seeds onlineUserIds for friend dots)
+  // Poll online candidates every 5s while the panel is open.
+  // Available to host and participants for free / coins / cash waiting rooms.
   useEffect(() => {
-    if (!isHostMode || !invitePanelOpen) return;
+    if (!invitePanelOpen || !backendRaceId) return;
     loadOnlineCandidates(); // immediate first load
     const id = setInterval(loadOnlineCandidates, 5_000);
     return () => clearInterval(id);
-  }, [invitePanelOpen, isHostMode, loadOnlineCandidates]);
+  }, [invitePanelOpen, backendRaceId, loadOnlineCandidates]);
 
   // Poll friends every 5s when Friends tab is open
   useEffect(() => {
-    if (!isHostMode || !invitePanelOpen || inviteTab !== "friends") return;
+    if (!invitePanelOpen || !backendRaceId || inviteTab !== "friends") return;
     loadFriends(); // immediate first load
     const id = setInterval(loadFriends, 5_000);
     return () => clearInterval(id);
-  }, [inviteTab, invitePanelOpen, isHostMode, loadFriends]);
+  }, [inviteTab, invitePanelOpen, backendRaceId, loadFriends]);
 
   // ── Invite list derived values (computed before render, stable references) ─
   const isOnlineTab = inviteTab === "online";
@@ -1685,7 +1787,10 @@ function MatchmakingScreenContent() {
   const cashEntry = liveRoom?.entryAmountCents != null ? liveRoom.entryAmountCents / 100 : raceEntryFee;
 
   return (
-    <View style={[styles.container, { backgroundColor: "#050711" }]}>
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: "#050711" }]}
+      edges={["top", "left", "right", "bottom"]}
+    >
       <LinearGradient
         colors={["#1E1B4B88", "#05071100", "#7C3AED22"]}
         start={{ x: 0, y: 0 }}
@@ -1694,8 +1799,17 @@ function MatchmakingScreenContent() {
       />
 
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingTop: safeTop + 16, paddingBottom: safeBottom + 28 }]}
+        style={{ flex: 1 }}
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingTop: rs(12),
+            paddingBottom: rs(20),
+            paddingHorizontal: rs(20),
+          },
+        ]}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         <View style={styles.topBar}>
           <TouchableOpacity
@@ -1772,9 +1886,10 @@ function MatchmakingScreenContent() {
                 <PlayerSlot
                   participant={p}
                   onPress={p ? () => setSelectedParticipant(p) : undefined}
-                  isOnline={!!p && (p.isCurrentUser || onlineUserIds.has(p.userId))}
+                  isOnline={isParticipantOnline(p)}
                   loading={participantsLoading && !p}
                   colors={colors}
+                  slotSize={slotSize}
                 />
               </View>
             ))}
@@ -1883,7 +1998,10 @@ function MatchmakingScreenContent() {
             </View>
           </View>
         ) : null}
+      </ScrollView>
 
+      {/* Sticky actions — same SafeArea bottom pattern as Available Rooms / Walk */}
+      <View style={styles.footerActions}>
         {isHostMode ? (
           <>
             <TouchableOpacity
@@ -1908,7 +2026,12 @@ function MatchmakingScreenContent() {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.cancelBtn, { borderColor: colors.destructive + "40" }]}
+              style={[
+                styles.cancelBtn,
+                {
+                  borderColor: colors.destructive + "40",
+                },
+              ]}
               onPress={handleCancel}
             >
               <Text style={[styles.cancelText, { color: colors.destructive }]}>
@@ -1918,7 +2041,12 @@ function MatchmakingScreenContent() {
           </>
         ) : (
           <TouchableOpacity
-            style={[styles.cancelBtn, { borderColor: colors.border }]}
+            style={[
+              styles.cancelBtn,
+              {
+                borderColor: colors.border,
+              },
+            ]}
             onPress={handleCancel}
             disabled={leaving}
           >
@@ -1927,10 +2055,10 @@ function MatchmakingScreenContent() {
             </Text>
           </TouchableOpacity>
         )}
-      </ScrollView>
+      </View>
 
-      {/* ── Floating Invite tab (host only, right edge) ─────────────────── */}
-      {isHostMode && !showingOverlay && (
+      {/* ── Floating Invite tab (host + participants, all race types) ──── */}
+      {!!backendRaceId && !showingOverlay && (
         <TouchableOpacity
           style={styles.inviteFloatTab}
           onPress={toggleInvitePanel}
@@ -1992,7 +2120,9 @@ function MatchmakingScreenContent() {
                     const hasJoined = participantIds.has(person.userId);
                     const isOnline = isOnlineTab
                       ? true
-                      : (person as FriendItem).isOnline ?? onlineUserIds.has(person.userId);
+                      : Boolean((person as FriendItem).isOnline) ||
+                        isUserOnline(person.userId) ||
+                        racePresenceIds.has(normalizeUserId(person.userId));
                     return (
                       <View key={`${inviteTab}-${person.userId}`} style={styles.sheetRow}>
                         <View style={styles.avatarWrap}>
@@ -2202,22 +2332,17 @@ function MatchmakingScreenContent() {
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
-// ── Responsive slot grid — always exactly 5 per row, fitted inside the card ─
-const SLOTS_PER_ROW = 5;
-const SLOT_PAD = 3;
-/** Approx size for avatar (20% of screen minus pads); exact layout is % width. */
-const SLOT_SIZE = Math.floor(SCREEN_W * 0.2 - SLOT_PAD * 2 - rs(20));
-
 // ── Styles ────────────────────────────────────────────────────────────────────
+// Slot grid constants (SLOTS_PER_ROW / SLOT_PAD / SLOT_SIZE) are declared near top.
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
   glow: { position: "absolute", top: 0, left: 0, right: 0, height: 300 },
-  content: { paddingHorizontal: rs(20), alignItems: "center", gap: 12 },
+  content: { alignItems: "center", gap: rs(12) },
   topBar: {
     width: "100%",
     flexDirection: "row",
@@ -2226,8 +2351,8 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   iconBtn: {
-    width: 40,
-    height: 40,
+    width: rs(40),
+    height: rs(40),
     borderRadius: 12,
     backgroundColor: "#12162A",
     borderWidth: 1,
@@ -2252,8 +2377,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  title: { fontSize: rf(28), fontWeight: "800", letterSpacing: -0.5, color: "#FFFFFF" },
-  subtitle: { fontSize: rf(14), textAlign: "center", color: "#94A3B8", marginBottom: 6 },
+  title: { fontSize: rf(26), fontWeight: "800", letterSpacing: -0.5, color: "#FFFFFF" },
+  subtitle: { fontSize: rf(13), textAlign: "center", color: "#94A3B8", marginBottom: 6, paddingHorizontal: rs(8) },
   scheduleRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2411,8 +2536,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   slotSkeletonAvatar: {
-    width: Math.min(38, SLOT_SIZE - 12),
-    height: Math.min(38, SLOT_SIZE - 12),
+    width: Math.min(38, Math.max(24, SLOT_SIZE - 12)),
+    height: Math.min(38, Math.max(24, SLOT_SIZE - 12)),
     borderRadius: 20,
     backgroundColor: "#252A3D",
     opacity: 0.72,
@@ -2498,7 +2623,24 @@ const styles = StyleSheet.create({
     gap: 10, paddingVertical: rs(16),
   },
   startBtnText: { fontSize: rf(17), fontWeight: "800" },
-  cancelBtn: { borderRadius: 14, borderWidth: 1, paddingHorizontal: rs(28), paddingVertical: rs(14) },
+  footerActions: {
+    width: "100%",
+    paddingHorizontal: rs(20),
+    paddingTop: rs(8),
+    paddingBottom: rs(8),
+    gap: rs(10),
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#2A2F45",
+    backgroundColor: "#050711",
+  },
+  cancelBtn: {
+    width: "100%",
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: rs(28),
+    paddingVertical: rs(14),
+    alignItems: "center",
+  },
   cancelText: { fontSize: rf(15), fontWeight: "600" },
 
   // Invite button
@@ -2614,19 +2756,19 @@ const styles = StyleSheet.create({
   onlineDotGreen: { backgroundColor: "#00E676" },
   onlineDotGrey: { backgroundColor: "#3A4060" },
 
-  // Floating side-tab
+  // Floating side-tab — keep clear of status bar / large headers
   inviteFloatTab: {
     position: "absolute",
     right: 0,
-    top: "36%",
+    top: "34%",
     marginTop: 0,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     backgroundColor: "#00E676",
-    paddingVertical: 10,
-    paddingLeft: 14,
-    paddingRight: 10,
+    paddingVertical: rs(10),
+    paddingLeft: rs(14),
+    paddingRight: rs(10),
     borderTopLeftRadius: 20,
     borderBottomLeftRadius: 20,
     shadowColor: "#00E676",
@@ -2636,7 +2778,7 @@ const styles = StyleSheet.create({
     elevation: 8,
     zIndex: 50,
   },
-  inviteFloatText: { fontSize: 13, fontWeight: "800", color: "#000" },
+  inviteFloatText: { fontSize: rf(13), fontWeight: "800", color: "#000" },
 });
 
 const cStyles = StyleSheet.create({

@@ -83,26 +83,22 @@ export default function WearableSetupModal({
       setHcAvailability(result.availability);
 
       const hcBlocked = androidHCService.isRangeReadBlocked();
-      if (
-        hcBlocked ||
-        (result.availability !== "available" || !result.initialized)
-      ) {
-        if (legacyOk) {
-          setAndroidPhase("legacy_ready");
-          return;
-        }
-      }
+      const hcUsable =
+        !hcBlocked &&
+        result.availability === "available" &&
+        result.initialized;
 
-      if (result.availability === "available" && result.initialized && !hcBlocked) {
-        if (result.permission !== "granted" && legacyOk) {
-          setAndroidPhase("legacy_ready");
-          return;
-        }
+      // Prefer Health Connect setup when HC is usable — do not divert to
+      // Android Steps solely because Steps permission is not granted yet.
+      if (hcUsable) {
         setAndroidPhase("setup");
         setStep(0);
         setPermStatus(
-          result.permission === "granted" ? "granted" :
-          result.permission === "denied"  ? "denied"  : "unknown",
+          result.permission === "granted"
+            ? "granted"
+            : result.permission === "denied"
+              ? "denied"
+              : "unknown",
         );
         return;
       }
@@ -181,6 +177,10 @@ export default function WearableSetupModal({
         setPermStatus("granted");
         setAndroidPhase("setup");
         setStep(TOTAL_ANDROID - 1);
+      } else if (__DEV__) {
+        console.log(
+          `[WearableSetup] grantAndroidSteps status=${result.status} provider=${result.providerId ?? "none"} msg=${result.message ?? ""}`,
+        );
       }
       return granted;
     } catch (e) {
@@ -194,16 +194,30 @@ export default function WearableSetupModal({
       if (isIOS) {
         Linking.openSettings();
       } else {
-        void grantAndroidSteps();
+        setPermLoading(true);
+        try {
+          await grantAndroidSteps();
+        } finally {
+          setPermLoading(false);
+        }
       }
       return;
     }
     setPermLoading(true);
     try {
       if (isIOS) {
-        const { stepTracker } = await import("@/services/StepTrackingService");
-        const s = await stepTracker.requestPermission();
-        setPermStatus(s as typeof permStatus);
+        // Use the same provider path as WalkContext so HealthKit grant
+        // activates tracking consistently after first install.
+        const result = await stepProviderManager.requestStepPermission();
+        setPermStatus(
+          result.status === "granted"
+            ? "granted"
+            : result.status === "denied"
+              ? "denied"
+              : result.status === "unavailable"
+                ? "unavailable"
+                : "unknown",
+        );
       } else {
         await grantAndroidSteps();
       }

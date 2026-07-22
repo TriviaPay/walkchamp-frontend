@@ -18,6 +18,8 @@ import {
   markPermissionEducationShown,
   wasPermissionEducationShown,
 } from "@/services/permissions/permissionCoordinator";
+import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
+import { getOnboardingStatus } from "@/utils/onboardingStorage";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -51,6 +53,20 @@ export async function runFirstLaunchPermissionFlow(options: {
   if (!userId?.trim()) return;
 
   try {
+    // Let premium onboarding own Health Connect / HealthKit Enable UI —
+    // competing auto-prompts make the HC/HK sheet fail to show.
+    if (ENABLE_PREMIUM_ONBOARDING) {
+      const onboarding = await getOnboardingStatus();
+      if (onboarding === "in_progress") {
+        if (__DEV__) {
+          console.log(
+            "[Permission] first_launch deferred — onboarding in progress",
+          );
+        }
+        return;
+      }
+    }
+
     const snap = await getDeviceCapabilitySnapshot();
     const educationShown = await wasPermissionEducationShown(userId);
 
@@ -87,10 +103,13 @@ export async function runFirstLaunchPermissionFlow(options: {
       );
     }
 
+    // Skip notification modal here so HC/HealthKit permission sheet can present.
+    // Notifications remain available via PushPermissionPrompt / Walk enable path.
     const result = await activateStepTracking({
       userId,
       username: username ?? null,
       requestPermission: true,
+      skipOngoingNotificationPermission: true,
     });
 
     if (__DEV__) {
@@ -99,9 +118,12 @@ export async function runFirstLaunchPermissionFlow(options: {
       );
     }
 
-    await markPermissionEducationShown(userId);
+    // Only mark shown after a successful grant — a failed/raced attempt must
+    // remain retryable (WearableSetup / next cold start).
+    if (result.success) {
+      await markPermissionEducationShown(userId);
+    }
   } catch (e) {
     if (__DEV__) console.log("[Permission] first_launch error", e);
-    await markPermissionEducationShown(userId).catch(() => {});
   }
 }
