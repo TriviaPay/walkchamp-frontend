@@ -539,6 +539,99 @@ const m = StyleSheet.create({
   leaveConfirmText: { fontSize: rf(13.5), fontWeight: "700", color: "#FF7777" },
 });
 
+// ── Registration error modal (e.g. already registered for another event) ───────
+interface RegistrationErrorModalProps {
+  visible: boolean;
+  title: string;
+  message: string;
+  onClose: () => void;
+}
+function RegistrationErrorModal({ visible, title, message, onClose }: RegistrationErrorModalProps) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={m.backdrop} onPress={onClose}>
+        <Pressable onPress={() => {}} style={m.card}>
+          <LinearGradient colors={["#12003A", "#0A001E"]} style={err.grad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
+            <TouchableOpacity
+              style={err.closeBtn}
+              onPress={onClose}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+            >
+              <Feather name="x" size={18} color="rgba(255,255,255,0.55)" />
+            </TouchableOpacity>
+
+            <View style={err.iconBadge}>
+              <Feather name="alert-triangle" size={22} color="#FFB020" />
+            </View>
+
+            <Text style={err.title}>{title}</Text>
+            <Text style={err.message}>{message}</Text>
+
+            <TouchableOpacity style={err.okBtn} onPress={onClose} activeOpacity={0.85}>
+              <Text style={err.okText}>OK</Text>
+            </TouchableOpacity>
+          </LinearGradient>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+const err = StyleSheet.create({
+  grad: { padding: rs(22), paddingTop: rs(28) },
+  closeBtn: {
+    position: "absolute",
+    top: rs(14),
+    right: rs(14),
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1,
+  },
+  iconBadge: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: "rgba(255,176,32,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(255,176,32,0.28)",
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "center",
+    marginBottom: rs(14),
+  },
+  title: {
+    fontSize: rf(18),
+    fontWeight: "800",
+    color: "#FFF",
+    textAlign: "center",
+    marginBottom: rs(10),
+  },
+  message: {
+    fontSize: rf(14),
+    color: "rgba(255,255,255,0.55)",
+    textAlign: "center",
+    lineHeight: rf(21),
+    marginBottom: rs(20),
+  },
+  okBtn: {
+    backgroundColor: "rgba(124,58,255,0.25)",
+    borderWidth: 1,
+    borderColor: "#7C3AFF66",
+    borderRadius: 14,
+    paddingVertical: rs(14),
+    alignItems: "center",
+  },
+  okText: { fontSize: rf(15), fontWeight: "800", color: "#C4B5FD" },
+});
+
 // ── Event Card ─────────────────────────────────────────────────────────────────
 interface CardProps {
   ev: SponsoredEvent;
@@ -937,6 +1030,11 @@ export default function SponsoredEventsScreen() {
   // Modal state
   const [registerModal, setRegisterModal] = useState<{ visible: boolean; ev: SponsoredEvent | null }>({ visible: false, ev: null });
   const [leaveModal, setLeaveModal]       = useState<{ visible: boolean; ev: SponsoredEvent | null }>({ visible: false, ev: null });
+  const [errorModal, setErrorModal]       = useState<{ visible: boolean; title: string; message: string }>({
+    visible: false,
+    title: "",
+    message: "",
+  });
   const [profileModal, setProfileModal]   = useState<{
     visible: boolean; userId: string | null; initialData?: PublicProfileInitialData;
   }>({ visible: false, userId: null });
@@ -948,6 +1046,7 @@ export default function SponsoredEventsScreen() {
   const handleBack = useCallback(() => {
     if (registerModal.visible) { setRegisterModal({ visible: false, ev: null }); return true; }
     if (leaveModal.visible)    { setLeaveModal({ visible: false, ev: null });    return true; }
+    if (errorModal.visible)    { setErrorModal({ visible: false, title: "", message: "" }); return true; }
     if (profileModal.visible)  { setProfileModal({ visible: false, userId: null }); return true; }
     if (backLockRef.current) return true;
     backLockRef.current = true;
@@ -955,7 +1054,7 @@ export default function SponsoredEventsScreen() {
     if (router.canGoBack()) router.back();
     else router.replace("/(tabs)/live");
     return true;
-  }, [router, registerModal.visible, leaveModal.visible, profileModal.visible]);
+  }, [router, registerModal.visible, leaveModal.visible, errorModal.visible, profileModal.visible]);
 
   useFocusEffect(useCallback(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", handleBack);
@@ -1096,6 +1195,19 @@ export default function SponsoredEventsScreen() {
   const handleRegister = (roomId: string) => {
     const ev = events.find((e) => e.id === roomId);
     if (!ev) return;
+
+    // Already registered for a different sponsored event — show modal before confirm/API.
+    const otherRegistered = events.find((e) => e.id !== roomId && e.isRegistered);
+    if (otherRegistered) {
+      setErrorModal({
+        visible: true,
+        title: "Registration Failed",
+        message:
+          "You can register for only one Sponsored Event at a time. Leave your current Sponsored Event or wait until it has been completed before registering for another.",
+      });
+      return;
+    }
+
     setRegisterModal({ visible: true, ev });
   };
 
@@ -1108,7 +1220,13 @@ export default function SponsoredEventsScreen() {
       const data = await res.json() as { success?: boolean; error?: string; coinBalance?: number };
       setRegisterModal({ visible: false, ev: null });
       if (!res.ok) {
-        Alert.alert("Registration Failed", data.error ?? "Please try again.");
+        setErrorModal({
+          visible: true,
+          title: "Registration Failed",
+          message:
+            data.error ??
+            "You can register for only one Sponsored Event at a time. Leave your current Sponsored Event or wait until it has been completed before registering for another.",
+        });
         return;
       }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -1124,7 +1242,11 @@ export default function SponsoredEventsScreen() {
       }
     } catch {
       setRegisterModal({ visible: false, ev: null });
-      Alert.alert("Error", "Registration failed. Please try again.");
+      setErrorModal({
+        visible: true,
+        title: "Registration Failed",
+        message: "Registration failed. Please try again.",
+      });
     } finally {
       setRegisteringId(null);
     }
@@ -1270,6 +1392,12 @@ export default function SponsoredEventsScreen() {
         busy={leavingId !== null}
         onConfirm={confirmLeave}
         onCancel={() => setLeaveModal({ visible: false, ev: null })}
+      />
+      <RegistrationErrorModal
+        visible={errorModal.visible}
+        title={errorModal.title}
+        message={errorModal.message}
+        onClose={() => setErrorModal({ visible: false, title: "", message: "" })}
       />
       <PublicProfileModal
         visible={profileModal.visible}

@@ -114,13 +114,8 @@ async function main() {
   setupAdbReverse();
 
   console.log("[android] Installing / launching (Metro stays running)...");
-  const child = run(NPX, [
-    "expo",
-    "run:android",
-    "--no-bundler",
-    "--port",
-    String(PORT),
-  ]);
+  // Expo CLI: --port and --no-bundler are mutually exclusive; Metro already owns PORT.
+  const child = run(NPX, ["expo", "run:android", "--no-bundler"]);
 
   child.on("exit", (code) => {
     process.exit(code ?? 0);

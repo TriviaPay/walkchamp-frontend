@@ -262,7 +262,7 @@ export default function JoinWithCodeModal({ visible, onClose, onJoined }: Props)
               <SummaryRow
                 label="Entry Fee"
                 value={`$${((roomPreview?.entryAmountCents ?? 0) / 100).toFixed(2)}`}
-                valueStyle={{ color: "#3B82F6", fontWeight: "700" }}
+                valueStyle={{ color: "#FBBF24", fontSize: 18, fontWeight: "900" }}
                 colors={colors}
               />
               <SummaryRow label="Type" value="Skill-based race" colors={colors} />

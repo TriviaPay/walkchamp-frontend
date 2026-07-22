@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BackHandler,
   FlatList,
@@ -30,6 +30,7 @@ export default function DateRoomsScreen() {
     count,
     myRaceId,
     myRaceIsHost,
+    myRaceIds,
   } = useLocalSearchParams<{
     cacheKey?: string;
     dateLabel?: string;
@@ -37,6 +38,7 @@ export default function DateRoomsScreen() {
     origin?: string;
     myRaceId?: string;
     myRaceIsHost?: string;
+    myRaceIds?: string;
   }>();
 
   const [races, setRaces] = useState<LiveRace[]>(
@@ -85,6 +87,15 @@ export default function DateRoomsScreen() {
 
   const roomCount = count ? Number(count) : races.length;
   const myRace = myRaceId ? { id: myRaceId, isHost: myRaceIsHost === "1" } : null;
+  const myActiveRaceIds = useMemo(
+    () => new Set(
+      String(myRaceIds ?? "")
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+    [myRaceIds],
+  );
 
   return (
     <SafeAreaView style={[st.root, { backgroundColor: colors.background }]} edges={["top", "bottom"]}>
@@ -117,9 +128,11 @@ export default function DateRoomsScreen() {
             <RaceCard
               race={item}
               colors={colors}
-              isMyRace={item.id === myRace?.id}
+              isMyRace={item.id === myRace?.id || myActiveRaceIds.has(item.id)}
               isHost={myRace?.isHost}
               myUsername={user?.username}
+              myUserId={user?.id}
+              myActiveRaceIds={myActiveRaceIds}
               onAvatarPress={handleAvatarPress}
             />
           )}

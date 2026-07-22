@@ -1,6 +1,8 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   FlatList,
   Image,
   Modal,
@@ -97,6 +99,59 @@ function useCountdown(scheduledStartAt: string | null): string {
 function fmtDateTime(iso: string | null) {
   if (!iso) return "";
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function PremiumDetailAmount({
+  children,
+  primary = false,
+}: {
+  children: React.ReactNode;
+  primary?: boolean;
+}) {
+  const shimmer = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!primary) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(3600),
+        Animated.timing(shimmer, {
+          toValue: 1,
+          duration: 900,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(shimmer, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [primary, shimmer]);
+
+  return (
+    <View style={dc.premiumAmountWrap}>
+      <Text style={[dc.statValue, primary ? dc.prizeAmount : dc.entryAmount]} numberOfLines={1} adjustsFontSizeToFit>
+        {children}
+      </Text>
+      {primary && (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            dc.prizeShimmer,
+            {
+              transform: [{
+                translateX: shimmer.interpolate({ inputRange: [0, 1], outputRange: [-18, 90] }),
+              }],
+              opacity: shimmer.interpolate({
+                inputRange: [0, 0.2, 0.5, 0.8, 1],
+                outputRange: [0, 0.18, 0.4, 0.18, 0],
+              }),
+            },
+          ]}
+        />
+      )}
+    </View>
+  );
 }
 
 function DetailCard({
@@ -261,10 +316,15 @@ function DetailCard({
             <View style={[dc.statIconWrap, { backgroundColor: entryColor + "18" }]}>
               {isCash ? <Feather name="dollar-sign" size={14} color={entryColor} /> :
                isSponsored ? <Text style={{ fontSize: rf(12) }}>🏆</Text> :
+               isCoins ? <CoinIcon size={16} /> :
                <Ionicons name="walk-outline" size={14} color={GREEN} />}
             </View>
-            <Text style={[dc.statValue, { color: entryColor }]}>{entryLabel}</Text>
-            <Text style={dc.statLabel}>entry</Text>
+            {isCash || isCoins ? (
+              <PremiumDetailAmount>{entryLabel}</PremiumDetailAmount>
+            ) : (
+              <Text style={[dc.statValue, { color: entryColor }]}>{entryLabel}</Text>
+            )}
+            <Text style={dc.statLabel}>{isCash ? "cash entry" : isCoins ? "coins entry" : "entry"}</Text>
           </View>
           <View style={[dc.statDivider, { backgroundColor: accent + "22" }]} />
           <View style={dc.statChip}>
@@ -280,9 +340,9 @@ function DetailCard({
               <View style={[dc.statIconWrap, { backgroundColor: GOLD + "22" }]}>
                 <Feather name="award" size={14} color={GOLD} />
               </View>
-              <Text style={[dc.statValue, { color: GOLD }]}>
-                {isCash ? `$${prizePoolDollars}` : `${prizePoolCoins.toLocaleString()}`}
-              </Text>
+              <PremiumDetailAmount primary>
+                {isCash ? `$${prizePoolDollars}` : `${prizePoolCoins.toLocaleString()} Coins`}
+              </PremiumDetailAmount>
               <Text style={dc.statLabel}>prize pool</Text>
             </View>
           </>)}
@@ -408,6 +468,31 @@ const dc = StyleSheet.create({
   statChip: { flex: 1, alignItems: "center", gap: 4 },
   statIconWrap: { width: rs(28), height: rs(28), borderRadius: rs(14), alignItems: "center", justifyContent: "center" },
   statValue: { fontSize: rf(13), fontWeight: "800", color: "#E2E8F8" },
+  premiumAmountWrap: { maxWidth: "100%", minWidth: rs(48), overflow: "hidden", alignItems: "center" },
+  entryAmount: {
+    color: "#FDE68A",
+    fontSize: rf(16),
+    fontWeight: "900",
+    textShadowColor: GOLD + "88",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 5,
+  },
+  prizeAmount: {
+    color: GOLD,
+    fontSize: rf(18),
+    fontWeight: "900",
+    textShadowColor: GOLD + "AA",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 7,
+  },
+  prizeShimmer: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: rs(10),
+    backgroundColor: "rgba(255,255,255,0.4)",
+    transform: [{ skewX: "-18deg" }],
+  },
   statLabel: { fontSize: rf(9), color: "#6B7FA8" },
   statDivider: { width: 1, height: rs(38) },
 

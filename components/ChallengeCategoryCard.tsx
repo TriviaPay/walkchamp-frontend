@@ -18,6 +18,8 @@ export interface ChallengeStatus {
   targetSteps?: number;
   /** Present for scheduled challenges when the available API includes it. */
   scheduledStartAt?: string | null;
+  /** Actual race start when the challenge is already live. */
+  startedAt?: string | null;
   entryAmountCents?: number;
   coinEntryAmount?: number;
   prizePoolCents?: number;

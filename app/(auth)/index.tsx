@@ -1,6 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
-import { router } from "expo-router";
-import React, { useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -20,9 +20,12 @@ import { signInWithEmail, signInWithProvider, signInWithAppleNative, fetchMe, ge
 import { dbProfileToUserProfile } from "@/utils/profileMapper";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { rf, rs, MAX_CONTENT_WIDTH } from "@/utils/responsive";
+import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
 
 const EMAIL_DOMAINS = ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com"];
 const APP_LOGO = require("@/assets/icons/WalkChampProgress0.png");
+const LEGAL_CONFIRM_MSG =
+  "Please confirm that you are 18 or older and agree to the Terms and Privacy Policy.";
 
 function getEmailSuggestions(email: string): string[] {
   const atIdx = email.indexOf("@");
@@ -47,6 +50,18 @@ export default function LoginScreen() {
   const [socialLoading, setSocialLoading] = useState<"google" | "apple" | null>(null);
   const [error, setError] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [legalAccepted, setLegalAccepted] = useState(false);
+
+  // Never preserve legal confirmation across visits / after sign-out.
+  useFocusEffect(
+    useCallback(() => {
+      setLegalAccepted(false);
+      setError("");
+    }, []),
+  );
+
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const canSubmit = emailValid && password.length > 0 && legalAccepted;
 
   const handleEmailChange = (t: string) => {
     setEmail(t);
@@ -65,6 +80,10 @@ export default function LoginScreen() {
     const e = email.trim().toLowerCase();
     if (!e || !password) {
       setError("Please enter your email and password.");
+      return;
+    }
+    if (!legalAccepted) {
+      setError(LEGAL_CONFIRM_MSG);
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -152,6 +171,10 @@ export default function LoginScreen() {
     if (socialLoading || loading) return;
     setSuggestions([]);
     setError("");
+    if (!legalAccepted) {
+      setError(LEGAL_CONFIRM_MSG);
+      return;
+    }
     setSocialLoading(provider);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
@@ -312,14 +335,56 @@ export default function LoginScreen() {
               </TouchableOpacity>
             </View>
 
+            <View style={styles.legalRow}>
+              <TouchableOpacity
+                onPress={() => {
+                  setLegalAccepted((v) => !v);
+                  setError("");
+                }}
+                style={styles.checkboxHit}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: legalAccepted }}
+                accessibilityLabel="Confirm age and legal agreements"
+              >
+                <View
+                  style={[
+                    styles.checkbox,
+                    {
+                      borderColor: legalAccepted ? colors.primary : colors.border,
+                      backgroundColor: legalAccepted ? colors.primary : "transparent",
+                    },
+                  ]}
+                >
+                  {legalAccepted ? <Feather name="check" size={14} color="#000" /> : null}
+                </View>
+              </TouchableOpacity>
+              <Text style={[styles.legalText, { color: colors.mutedForeground }]}>
+                I confirm that I am 18 or older and agree to the{" "}
+                <Text
+                  style={{ color: colors.accent, fontWeight: "700" }}
+                  onPress={() => router.push("/terms")}
+                >
+                  Terms and Conditions
+                </Text>{" "}
+                and{" "}
+                <Text
+                  style={{ color: colors.accent, fontWeight: "700" }}
+                  onPress={() => router.push("/legal")}
+                >
+                  Privacy Policy
+                </Text>
+                .
+              </Text>
+            </View>
+
             <TouchableOpacity style={styles.forgotRow} onPress={() => router.push("/(auth)/forgot-password")}>
               <Text style={[styles.forgot, { color: colors.accent }]}>Forgot password?</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.loginBtn, { opacity: loading ? 0.7 : 1 }]}
+              style={[styles.loginBtn, { opacity: loading || !canSubmit ? 0.55 : 1 }]}
               onPress={handleLogin}
-              disabled={loading}
+              disabled={loading || !canSubmit}
             >
               <LinearGradient colors={[colors.primary, colors.accent]} style={styles.loginGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
                 <Text style={[styles.loginBtnText, { color: "#000000" }]}>
@@ -378,7 +443,11 @@ export default function LoginScreen() {
 
             <View style={styles.signupRow}>
               <Text style={[styles.signupText, { color: colors.mutedForeground }]}>New here? </Text>
-              <TouchableOpacity onPress={() => router.push("/(auth)/onboarding")}>
+              <TouchableOpacity
+                onPress={() =>
+                  router.push(ENABLE_PREMIUM_ONBOARDING ? "/(auth)/signup" : "/(auth)/onboarding")
+                }
+              >
                 <Text style={[styles.signupLink, { color: colors.primary }]}>Create account</Text>
               </TouchableOpacity>
             </View>
@@ -407,6 +476,23 @@ const styles = StyleSheet.create({
   emailWrapper: { gap: 0 },
   inputContainer: { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 14, borderWidth: 1, paddingHorizontal: rs(16), paddingVertical: rs(14) },
   input: { flex: 1, fontSize: rf(16) },
+  legalRow: { flexDirection: "row", alignItems: "flex-start", gap: 12, paddingVertical: 4 },
+  checkboxHit: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: -4,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  legalText: { flex: 1, fontSize: rf(13), lineHeight: rf(19), paddingTop: 4 },
   suggestionsDropdown: {
     borderRadius: 12,
     borderWidth: 1,

@@ -29,6 +29,7 @@ import {
   ActivityIndicator,
   Animated,
   Dimensions,
+  Easing,
   InteractionManager,
   Modal,
   Platform,
@@ -118,7 +119,309 @@ type RoomParticipant = {
   friendRequestId: string | null;
   activeTitle: { code: string; title: string } | null;
   currentSteps: number;
+  status?: string | null;
+  joinedAt?: string | null;
+  registeredAt?: string | null;
+  createdAt?: string | null;
 };
+
+type RaceHostProfile = {
+  id?: string;
+  userId?: string;
+  username?: string;
+  country?: string | null;
+  countryFlag?: string | null;
+  avatarColor?: string | null;
+  avatarUrl?: string | null;
+  profileImageUrl?: string | null;
+  avatarVersion?: number | null;
+};
+
+type RawParticipantRecord = Partial<RoomParticipant> & {
+  user_id?: string;
+  username?: string;
+  country_flag?: string | null;
+  avatar_color?: string | null;
+  avatar_url?: string | null;
+  avatar_version?: number | null;
+  is_host?: boolean;
+  joined_at?: string | null;
+  registered_at?: string | null;
+  created_at?: string | null;
+  user?: RaceHostProfile | null;
+};
+
+type WaitingRoomRacePayload = {
+  creatorId?: string | null;
+  creator_id?: string | null;
+  ownerId?: string | null;
+  owner_id?: string | null;
+  hostUserId?: string | null;
+  host_user_id?: string | null;
+  hostUsername?: string | null;
+  host_username?: string | null;
+  hostAvatarColor?: string | null;
+  host_avatar_color?: string | null;
+  hostAvatarUrl?: string | null;
+  host_avatar_url?: string | null;
+  hostAvatarVersion?: number | null;
+  creator?: RaceHostProfile | null;
+  host?: RaceHostProfile | null;
+  owner?: RaceHostProfile | null;
+};
+
+const NON_ACTIVE_REGISTRATION_STATUSES = new Set([
+  "cancelled",
+  "canceled",
+  "withdrawn",
+  "rejected",
+  "removed",
+  "left",
+  "spectating",
+  "spectator",
+  "invalid",
+]);
+
+function participantTime(participant: RoomParticipant): number {
+  const value =
+    participant.registeredAt ??
+    participant.joinedAt ??
+    participant.createdAt;
+  if (!value) return Number.MAX_SAFE_INTEGER;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+/** Trim to null so ""/"null"/"undefined" never win during avatar/name merging. */
+function cleanString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "null" || trimmed === "undefined") return null;
+  return trimmed;
+}
+
+/** First non-empty string across candidates (empty strings are skipped). */
+function firstNonEmpty(...candidates: unknown[]): string | null {
+  for (const candidate of candidates) {
+    const cleaned = cleanString(candidate);
+    if (cleaned) return cleaned;
+  }
+  return null;
+}
+
+function coerceRoomParticipant(
+  value: unknown,
+  currentUserId?: string,
+): RoomParticipant | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as RawParticipantRecord;
+  const profile = raw.user ?? null;
+  const userId = raw.userId ?? raw.user_id ?? profile?.userId ?? profile?.id;
+  if (!userId) return null;
+
+  return {
+    id: raw.id ?? `registration-${userId}`,
+    userId,
+    username: firstNonEmpty(raw.username, profile?.username) ?? "Player",
+    country: cleanString(raw.country) ?? cleanString(profile?.country),
+    countryFlag:
+      cleanString(raw.countryFlag) ??
+      cleanString(raw.country_flag) ??
+      cleanString(profile?.countryFlag),
+    avatarColor:
+      cleanString(raw.avatarColor) ??
+      cleanString(raw.avatar_color) ??
+      cleanString(profile?.avatarColor),
+    avatarUrl: firstNonEmpty(
+      raw.avatarUrl,
+      raw.avatar_url,
+      (raw as { profileImageUrl?: string | null }).profileImageUrl,
+      (raw as { profile_image_url?: string | null }).profile_image_url,
+      (raw as { profilePhotoUrl?: string | null }).profilePhotoUrl,
+      (raw as { photoURL?: string | null }).photoURL,
+      (raw as { imageUrl?: string | null }).imageUrl,
+      profile?.avatarUrl,
+      profile?.profileImageUrl,
+    ),
+    avatarVersion:
+      raw.avatarVersion ??
+      raw.avatar_version ??
+      profile?.avatarVersion ??
+      0,
+    isHost: raw.isHost ?? raw.is_host ?? false,
+    isCurrentUser: raw.isCurrentUser ?? userId === currentUserId,
+    friendStatus: raw.friendStatus ?? "none",
+    friendRequestId: raw.friendRequestId ?? null,
+    activeTitle: raw.activeTitle ?? null,
+    currentSteps: raw.currentSteps ?? 0,
+    status: raw.status ?? null,
+    joinedAt: raw.joinedAt ?? raw.joined_at ?? null,
+    registeredAt: raw.registeredAt ?? raw.registered_at ?? null,
+    createdAt: raw.createdAt ?? raw.created_at ?? null,
+  };
+}
+
+/**
+ * One source of truth for the grid:
+ * host first, then active registrations in join-time order, deduped by user ID.
+ */
+function normalizeWaitingRoomParticipants(
+  rawParticipants: unknown[],
+  race: WaitingRoomRacePayload | null | undefined,
+  currentUser: {
+    id: string;
+    username: string;
+    country?: string | null;
+    countryFlag?: string | null;
+    avatarColor?: string | null;
+    profileImageUrl?: string | null;
+    avatarVersion?: number | null;
+  } | null | undefined,
+  currentUserIsHost: boolean,
+): RoomParticipant[] {
+  const active = rawParticipants
+    .map((participant) => coerceRoomParticipant(participant, currentUser?.id))
+    .filter((participant): participant is RoomParticipant => !!participant)
+    .filter((participant) => {
+    const status = participant.status?.trim().toLowerCase();
+    return !status || !NON_ACTIVE_REGISTRATION_STATUSES.has(status);
+  });
+
+  const explicitHost = active.find((participant) => participant.isHost);
+  const nestedHost = race?.host ?? race?.creator ?? race?.owner ?? null;
+  const hostId =
+    race?.hostUserId ??
+    race?.host_user_id ??
+    race?.creatorId ??
+    race?.creator_id ??
+    race?.ownerId ??
+    race?.owner_id ??
+    nestedHost?.userId ??
+    nestedHost?.id ??
+    explicitHost?.userId ??
+    (currentUserIsHost ? currentUser?.id : null);
+
+  const byUserId = new Map<string, RoomParticipant>();
+  active.forEach((participant) => {
+    const existing = byUserId.get(participant.userId);
+    if (!existing) {
+      byUserId.set(participant.userId, participant);
+      return;
+    }
+    // Merge duplicates without dropping populated fields (e.g. a valid avatar
+    // must never be overwritten by a null from a leaner record).
+    byUserId.set(participant.userId, {
+      ...existing,
+      ...participant,
+      username: firstNonEmpty(participant.username, existing.username) ?? "Player",
+      avatarUrl: firstNonEmpty(participant.avatarUrl, existing.avatarUrl),
+      avatarColor: cleanString(participant.avatarColor) ?? cleanString(existing.avatarColor),
+      country: cleanString(participant.country) ?? cleanString(existing.country),
+      countryFlag: cleanString(participant.countryFlag) ?? cleanString(existing.countryFlag),
+      avatarVersion: Math.max(participant.avatarVersion ?? 0, existing.avatarVersion ?? 0),
+      isHost: existing.isHost || participant.isHost,
+      joinedAt: existing.joinedAt ?? participant.joinedAt,
+      registeredAt: existing.registeredAt ?? participant.registeredAt,
+      createdAt: existing.createdAt ?? participant.createdAt,
+    });
+  });
+
+  // The viewer reached this room via their own confirmed registration, so they
+  // must always occupy a slot — even when a far-future scheduled race has not
+  // yet materialized them in the server participant list. Only injected when the
+  // server list omits them; a richer server record (with registeredAt) wins.
+  if (currentUser?.id && !byUserId.has(currentUser.id)) {
+    byUserId.set(currentUser.id, {
+      id: `self-${currentUser.id}`,
+      userId: currentUser.id,
+      username: firstNonEmpty(currentUser.username) ?? "You",
+      country: cleanString(currentUser.country),
+      countryFlag: cleanString(currentUser.countryFlag),
+      avatarColor: cleanString(currentUser.avatarColor),
+      avatarUrl: firstNonEmpty(currentUser.profileImageUrl),
+      avatarVersion: currentUser.avatarVersion ?? 0,
+      isHost: currentUserIsHost,
+      isCurrentUser: true,
+      friendStatus: "none",
+      friendRequestId: null,
+      activeTitle: null,
+      currentSteps: 0,
+      status: null,
+      joinedAt: null,
+      registeredAt: null,
+      createdAt: null,
+    });
+  }
+
+  if (hostId) {
+    const existing = byUserId.get(hostId);
+    const isCurrentUser = currentUser?.id === hostId;
+    byUserId.set(hostId, {
+      id: existing?.id ?? `host-${hostId}`,
+      userId: hostId,
+      username:
+        firstNonEmpty(
+          existing?.username,
+          nestedHost?.username,
+          race?.hostUsername,
+          race?.host_username,
+          isCurrentUser ? currentUser?.username : null,
+        ) ?? "Host",
+      country: firstNonEmpty(
+        existing?.country,
+        nestedHost?.country,
+        isCurrentUser ? currentUser?.country : null,
+      ),
+      countryFlag: firstNonEmpty(
+        existing?.countryFlag,
+        nestedHost?.countryFlag,
+        isCurrentUser ? currentUser?.countryFlag : null,
+      ),
+      avatarColor: firstNonEmpty(
+        existing?.avatarColor,
+        nestedHost?.avatarColor,
+        race?.hostAvatarColor,
+        race?.host_avatar_color,
+        isCurrentUser ? currentUser?.avatarColor : null,
+      ),
+      avatarUrl: firstNonEmpty(
+        existing?.avatarUrl,
+        nestedHost?.avatarUrl,
+        nestedHost?.profileImageUrl,
+        race?.hostAvatarUrl,
+        race?.host_avatar_url,
+        isCurrentUser ? currentUser?.profileImageUrl : null,
+      ),
+      avatarVersion:
+        existing?.avatarVersion ??
+        nestedHost?.avatarVersion ??
+        race?.hostAvatarVersion ??
+        (isCurrentUser ? currentUser?.avatarVersion : null) ??
+        0,
+      isHost: true,
+      isCurrentUser,
+      friendStatus: existing?.friendStatus ?? "none",
+      friendRequestId: existing?.friendRequestId ?? null,
+      activeTitle: existing?.activeTitle ?? null,
+      currentSteps: existing?.currentSteps ?? 0,
+      status: existing?.status ?? "host",
+      joinedAt: existing?.joinedAt ?? null,
+      registeredAt: existing?.registeredAt ?? null,
+      createdAt: existing?.createdAt ?? null,
+    });
+  }
+
+  const normalized = [...byUserId.values()].map((participant) => ({
+    ...participant,
+    isHost: !!hostId && participant.userId === hostId,
+    isCurrentUser: participant.userId === currentUser?.id,
+  }));
+
+  return normalized.sort((a, b) => {
+    if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
+    return participantTime(a) - participantTime(b);
+  });
+}
 
 type OnlineCandidate = {
   userId: string;
@@ -158,10 +461,14 @@ type StartPhase =
 function PlayerSlot({
   participant,
   onPress,
+  isOnline,
+  loading,
   colors,
 }: {
   participant: RoomParticipant | null;
   onPress?: () => void;
+  isOnline: boolean;
+  loading: boolean;
   colors: ReturnType<typeof useColors>;
 }) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
@@ -199,22 +506,41 @@ function PlayerSlot({
       ]}
     >
       {participant ? (
-        <ProfileAvatar
-          userId={participant.userId}
-          profileImageUrl={participant.avatarUrl}
-          avatarVersion={participant.avatarVersion}
-          avatarColor={participant.avatarColor ?? colors.primary}
-          displayName={participant.username}
-          size={Math.min(44, SLOT_SIZE - 8)}
-          borderWidth={0}
-          onPress={onPress}
-        />
+        <View style={styles.slotAvatarWrap}>
+          <ProfileAvatar
+            userId={participant.userId}
+            // Avatars are served by user ID (/api/profile/avatar/:id), so always
+            // attempt resolution when we have a userId — matches Available Rooms.
+            // Initials remain the base layer and show only if the image errors.
+            profileImageUrl={participant.avatarUrl ?? participant.userId}
+            avatarVersion={participant.avatarVersion}
+            avatarColor={participant.avatarColor ?? colors.primary}
+            displayName={participant.username}
+            size={Math.min(44, SLOT_SIZE - 8)}
+            borderWidth={0}
+            onPress={onPress}
+          />
+          <View
+            accessibilityLabel={isOnline ? "Online" : "Offline"}
+            style={[
+              styles.participantStatusDot,
+              isOnline
+                ? styles.participantStatusOnline
+                : styles.participantStatusOffline,
+            ]}
+          />
+        </View>
+      ) : loading ? (
+        <View style={styles.slotSkeleton}>
+          <View style={styles.slotSkeletonAvatar} />
+        </View>
       ) : (
         <Feather name="user" size={16} color={colors.mutedForeground} />
       )}
       {participant?.isHost && (
-        <View style={[styles.hostBadgeSlot, { backgroundColor: colors.gold }]}>
-          <Feather name="star" size={7} color="#000" />
+        <View style={styles.hostBadgeSlot}>
+          <Feather name="star" size={6} color="#1A1200" />
+          <Text style={styles.hostBadgeSlotText}>HOST</Text>
         </View>
       )}
     </Animated.View>
@@ -312,6 +638,62 @@ function CountdownOverlay({
 
 // ── MatchmakingScreen ─────────────────────────────────────────────────────────
 
+function PremiumWaitingRoomValue({
+  children,
+  primary = false,
+}: {
+  children: React.ReactNode;
+  primary?: boolean;
+}) {
+  const shimmer = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!primary) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(3600),
+        Animated.timing(shimmer, {
+          toValue: 1,
+          duration: 900,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(shimmer, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [primary, shimmer]);
+
+  return (
+    <View style={styles.premiumStatValueWrap}>
+      <Text style={[styles.statValue, primary ? styles.prizeStatValue : styles.entryStatValue]}>
+        {children}
+      </Text>
+      {primary && (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.premiumStatShimmer,
+            {
+              transform: [{
+                translateX: shimmer.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [-20, 100],
+                }),
+              }],
+              opacity: shimmer.interpolate({
+                inputRange: [0, 0.2, 0.5, 0.8, 1],
+                outputRange: [0, 0.18, 0.4, 0.18, 0],
+              }),
+            },
+          ]}
+        />
+      )}
+    </View>
+  );
+}
+
 export default function MatchmakingScreen() {
   const colors = useColors();
   const { safeTop, safeBottom } = useSafeLayout();
@@ -326,6 +708,7 @@ export default function MatchmakingScreen() {
     initialIsPrivate?: string;
     initialInviteCode?: string;
     initialCurrentPlayers?: string;
+    initialScheduledStartAt?: string;
   }>();
 
   const { user } = useAuth();
@@ -380,6 +763,13 @@ export default function MatchmakingScreen() {
   const [participants, setParticipants] = useState<RoomParticipant[]>(
     () => parseInitialParticipants(params.initialParticipants) ?? [],
   );
+  const participantsRef = useRef(participants);
+  const [participantsLoading, setParticipantsLoading] = useState(true);
+  const [participantsError, setParticipantsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    participantsRef.current = participants;
+  }, [participants]);
 
   // ── Local start-phase state machine ──────────────────────────────────────
   const [startPhase, setStartPhase] = useState<StartPhase>("idle");
@@ -450,6 +840,36 @@ export default function MatchmakingScreen() {
   const [loadingFriends, setLoadingFriends] = useState(false);
   const candidatesLoadedRef = useRef(false);
   const friendsLoadedRef = useRef(false);
+
+  const refreshOnlineUserIds = useCallback(async () => {
+    try {
+      const res = await authFetch("/api/presence/online-ids");
+      if (!res.ok) return;
+      const data = await res.json() as { userIds?: string[] };
+      setOnlineUserIds(new Set(data.userIds ?? []));
+    } catch {
+      // Keep the last reliable state; the initial safe default is offline.
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshOnlineUserIds();
+    }, [refreshOnlineUserIds]),
+  );
+
+  useEffect(() => {
+    const channel = subscribeToChannel(CHANNELS.PRESENCE);
+    if (!channel) return;
+    const onPresenceUpdated = () => {
+      void refreshOnlineUserIds();
+    };
+    channel.bind(EVENTS.PRESENCE_UPDATED, onPresenceUpdated);
+    return () => {
+      channel.unbind(EVENTS.PRESENCE_UPDATED, onPresenceUpdated);
+      // PresenceProvider and AvatarVersionProvider share this channel.
+    };
+  }, [refreshOnlineUserIds]);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -752,7 +1172,11 @@ export default function MatchmakingScreen() {
       }
       try {
         const res = await authFetch(`/api/races/${backendRaceId}`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          setParticipantsLoading(false);
+          setParticipantsError("Could not refresh registered players.");
+          return;
+        }
         markLiveRaceFetched(gateKey);
         const data = await res.json();
         const nextLiveRoom = {
@@ -784,20 +1208,50 @@ export default function MatchmakingScreen() {
         if (data.race.startedAt && !raceStartedAtRef.current) {
           raceStartedAtRef.current = new Date(data.race.startedAt);
         }
-        if (Array.isArray(data.participants) && data.participants.length > 0) {
-          const nextParticipants = data.participants as RoomParticipant[];
-          setParticipants(nextParticipants);
-          persistWaitingRoomCache(nextParticipants, nextLiveRoom);
-        }
+        const participantCollections: unknown[] = [
+          data.participants,
+          data.registrations,
+          data.registeredParticipants,
+          data.race?.participants,
+          data.race?.registrations,
+          data.race?.registeredParticipants,
+        ];
+        const hasServerParticipantCollection = participantCollections.some(Array.isArray);
+        const rawParticipants = hasServerParticipantCollection
+          ? participantCollections.flatMap((collection) =>
+              Array.isArray(collection) ? collection : [],
+            )
+          : participantsRef.current;
+        const nextParticipants = normalizeWaitingRoomParticipants(
+          rawParticipants,
+          data.race as WaitingRoomRacePayload,
+          user,
+          isHostMode,
+        ).slice(0, nextLiveRoom.maxPlayers);
+        setParticipants(nextParticipants);
+        setParticipantsLoading(false);
+        setParticipantsError(null);
+        persistWaitingRoomCache(nextParticipants, nextLiveRoom);
         if (
           data.race.status === "in_progress" &&
           startPhaseRef.current === "idle"
         ) {
           beginCountdown(3, data.race.currentPlayers ?? 2);
         }
-      } catch { /* silent */ }
+      } catch {
+        setParticipantsLoading(false);
+        setParticipantsError("Could not refresh registered players.");
+      }
     },
-    [backendRaceId, raceMaxPlayers, beginCountdown, setRaceTargetSteps, persistWaitingRoomCache],
+    [
+      backendRaceId,
+      raceMaxPlayers,
+      beginCountdown,
+      setRaceTargetSteps,
+      persistWaitingRoomCache,
+      user,
+      isHostMode,
+    ],
   );
 
   useEffect(() => {
@@ -833,8 +1287,9 @@ export default function MatchmakingScreen() {
 
     const currentPlayers = () => liveRoomRef.current?.currentPlayers ?? 2;
 
-    const refreshRoomFromServer = (data?: { raceId?: string }) => {
-      if (data?.raceId && data.raceId !== backendRaceId) return;
+    const refreshRoomFromServer = (data?: { raceId?: string; room_id?: string }) => {
+      const eventRoomId = data?.raceId ?? data?.room_id;
+      if (eventRoomId && eventRoomId !== backendRaceId) return;
       void pollRoomRef.current?.(true);
     };
 
@@ -904,6 +1359,10 @@ export default function MatchmakingScreen() {
     channel.bind("race:player-left", onLeft);
     channel.bind("race:player-joined", refreshRoomFromServer);
     channel.bind("coins_battle.joined", refreshRoomFromServer);
+    channel.bind("room:registered", refreshRoomFromServer);
+    channel.bind("room:registration_cancelled", refreshRoomFromServer);
+    channel.bind("room:participant_joined", refreshRoomFromServer);
+    channel.bind("room:participant_left", refreshRoomFromServer);
 
     return () => {
       channel.unbind("race:starting", onStarting);
@@ -913,9 +1372,40 @@ export default function MatchmakingScreen() {
       channel.unbind("race:player-left", onLeft);
       channel.unbind("race:player-joined", refreshRoomFromServer);
       channel.unbind("coins_battle.joined", refreshRoomFromServer);
+      channel.unbind("room:registered", refreshRoomFromServer);
+      channel.unbind("room:registration_cancelled", refreshRoomFromServer);
+      channel.unbind("room:participant_joined", refreshRoomFromServer);
+      channel.unbind("room:participant_left", refreshRoomFromServer);
       unsubscribeFromChannel(CHANNELS.liveRace(backendRaceId));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backendRaceId]);
+
+  // Scheduled registration events are emitted on the existing public rooms
+  // channel before the race join window opens.
+  useEffect(() => {
+    if (!backendRaceId) return;
+    const channel = subscribeToChannel("public-rooms-available");
+    if (!channel) return;
+
+    const refreshScheduledRoom = (data?: { room_id?: string; raceId?: string }) => {
+      const eventRoomId = data?.room_id ?? data?.raceId;
+      if (eventRoomId && eventRoomId !== backendRaceId) return;
+      void pollRoomRef.current?.(true);
+    };
+
+    channel.bind("room:registered", refreshScheduledRoom);
+    channel.bind("room:registration_cancelled", refreshScheduledRoom);
+    channel.bind("room:participant_joined", refreshScheduledRoom);
+    channel.bind("room:participant_left", refreshScheduledRoom);
+
+    return () => {
+      channel.unbind("room:registered", refreshScheduledRoom);
+      channel.unbind("room:registration_cancelled", refreshScheduledRoom);
+      channel.unbind("room:participant_joined", refreshScheduledRoom);
+      channel.unbind("room:participant_left", refreshScheduledRoom);
+      // Do not unsubscribe the shared channel: Walk/Rooms may own it too.
+    };
   }, [backendRaceId]);
 
   // Keep a ref to liveRoom so Pusher callbacks can read it without stale closure
@@ -1022,18 +1512,38 @@ export default function MatchmakingScreen() {
   // Fall back to raceEntryFee===0 for the brief moment before the first poll returns.
   const isFreeRace = liveRoom?.entryType === "free" || (!liveRoom && raceEntryFee === 0);
 
-  // Build sorted + padded slot grid
-  const sortedParticipants = useMemo(() => [...participants].sort((a, b) => {
-    if (a.isHost && !b.isHost) return -1;
-    if (!a.isHost && b.isHost) return 1;
-    if (a.isCurrentUser && !b.isCurrentUser) return -1;
-    if (!a.isCurrentUser && b.isCurrentUser) return 1;
-    return 0;
-  }), [participants]);
-  const slots: Array<RoomParticipant | null> = useMemo(() => [
-    ...sortedParticipants,
-    ...Array(Math.max(0, realMaxPlayers - sortedParticipants.length)).fill(null),
-  ], [sortedParticipants, realMaxPlayers]);
+  // The normalized occupied list is the only source for grid order and count.
+  const sortedParticipants = useMemo(() => {
+    const deduped = new Map<string, RoomParticipant>();
+    participants.forEach((participant) => {
+      if (!participant.userId || deduped.has(participant.userId)) return;
+      const status = participant.status?.trim().toLowerCase();
+      if (status && NON_ACTIVE_REGISTRATION_STATUSES.has(status)) return;
+      deduped.set(participant.userId, participant);
+    });
+    return [...deduped.values()]
+      .sort((a, b) => {
+        if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
+        return participantTime(a) - participantTime(b);
+      })
+      .slice(0, realMaxPlayers);
+  }, [participants, realMaxPlayers]);
+  const occupiedPlayerCount = sortedParticipants.length;
+  const slots: Array<RoomParticipant | null> = useMemo(() => {
+    // A non-host viewer's seed only contains "self", so before the first poll
+    // resolves the host, self would briefly render in slot 1 and then jump to
+    // slot 2 once the host arrives. Reserve slot 1 as a host skeleton while
+    // loading so the current user's avatar never flashes in the host position.
+    const hostKnown = sortedParticipants.some((p) => p.isHost);
+    const reserveHostSlot = !isHostMode && !hostKnown && participantsLoading;
+    const occupied: Array<RoomParticipant | null> = reserveHostSlot
+      ? [null, ...sortedParticipants]
+      : [...sortedParticipants];
+    return [
+      ...occupied,
+      ...Array(Math.max(0, realMaxPlayers - occupied.length)).fill(null),
+    ].slice(0, realMaxPlayers);
+  }, [sortedParticipants, realMaxPlayers, isHostMode, participantsLoading]);
 
   const showingOverlay = startPhase !== "idle";
 
@@ -1065,8 +1575,6 @@ export default function MatchmakingScreen() {
         const data = await res.json() as { candidates: OnlineCandidate[] };
         const list = data.candidates ?? [];
         setOnlineCandidates(list);
-        // Track who is online (for friend dot)
-        setOnlineUserIds(new Set(list.map((c) => c.userId)));
         // Sync local invite statuses with server truth:
         // reset anyone who is no longer pending server-side
         setInviteStatuses((prev) => {
@@ -1245,7 +1753,7 @@ export default function MatchmakingScreen() {
           <View style={styles.panelHead}>
             <Text style={styles.panelLabel}>PLAYERS JOINED</Text>
             <Text style={styles.panelCount}>
-              {realPlayerCount} / {realMaxPlayers}
+              {participantsLoading ? "—" : occupiedPlayerCount} / {realMaxPlayers}
             </Text>
           </View>
 
@@ -1255,6 +1763,8 @@ export default function MatchmakingScreen() {
                 <PlayerSlot
                   participant={p}
                   onPress={p ? () => setSelectedParticipant(p) : undefined}
+                  isOnline={!!p && (p.isCurrentUser || onlineUserIds.has(p.userId))}
+                  loading={participantsLoading && !p}
                   colors={colors}
                 />
               </View>
@@ -1265,10 +1775,27 @@ export default function MatchmakingScreen() {
             <Text style={styles.tapHint}>Tap a player to view their profile</Text>
           )}
 
+          {participantsError && !participantsLoading && (
+            <View style={styles.participantErrorRow}>
+              <Text style={styles.participantErrorText}>{participantsError}</Text>
+              <TouchableOpacity
+                style={styles.participantRetryBtn}
+                onPress={() => {
+                  setParticipantsLoading(true);
+                  setParticipantsError(null);
+                  void pollRoomRef.current?.(true);
+                }}
+              >
+                <Feather name="refresh-cw" size={12} color="#C4B5FD" />
+                <Text style={styles.participantRetryText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           <View style={styles.progressTrack}>
             <LinearGradient
               colors={["#60A5FA", "#A78BFA"]}
-              style={[styles.progressFill, { width: `${Math.min(100, (realPlayerCount / realMaxPlayers) * 100)}%` }]}
+              style={[styles.progressFill, { width: `${Math.min(100, (occupiedPlayerCount / realMaxPlayers) * 100)}%` }]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
             />
@@ -1284,8 +1811,8 @@ export default function MatchmakingScreen() {
           <View style={styles.statCol}>
             {liveRoom?.entryType === "coins_battle" ? (
               <>
-                <Feather name="award" size={16} color="#F59E0B" />
-                <Text style={styles.statValue}>{coinEntry.toLocaleString()}</Text>
+                <Feather name="award" size={18} color="#F59E0B" />
+                <PremiumWaitingRoomValue>{coinEntry.toLocaleString()} Coins</PremiumWaitingRoomValue>
                 <Text style={styles.statLabel}>Coins Entry</Text>
               </>
             ) : isFreeRace ? (
@@ -1296,21 +1823,25 @@ export default function MatchmakingScreen() {
               </>
             ) : (
               <>
-                <Feather name="dollar-sign" size={16} color="#F59E0B" />
-                <Text style={styles.statValue}>${cashEntry.toFixed(0)}</Text>
+                <Feather name="dollar-sign" size={18} color="#F59E0B" />
+                <PremiumWaitingRoomValue>${cashEntry.toFixed(0)}</PremiumWaitingRoomValue>
                 <Text style={styles.statLabel}>Cash Entry</Text>
               </>
             )}
           </View>
           <View style={styles.statCol}>
-            <Feather name="trophy" size={16} color="#F59E0B" />
-            <Text style={styles.statValue}>
-              {liveRoom?.entryType === "coins_battle"
-                ? coinPool.toLocaleString()
-                : isFreeRace
-                  ? "—"
+            <Feather name="trophy" size={18} color="#F59E0B" />
+            {liveRoom?.entryType === "coins_battle" || !isFreeRace ? (
+              <PremiumWaitingRoomValue primary>
+                {liveRoom?.entryType === "coins_battle"
+                  ? `${coinPool.toLocaleString()} Coins`
                   : `$${(cashEntry * realPlayerCount).toFixed(0)}`}
-            </Text>
+              </PremiumWaitingRoomValue>
+            ) : (
+              <Text style={styles.statValue}>
+                —
+              </Text>
+            )}
             <Text style={styles.statLabel}>Prize Pool</Text>
           </View>
         </View>
@@ -1765,6 +2296,36 @@ const styles = StyleSheet.create({
   },
   statCol: { flex: 1, alignItems: "center", gap: 4 },
   statValue: { fontSize: rf(15), fontWeight: "800", color: "#FFFFFF" },
+  premiumStatValueWrap: {
+    minWidth: rs(66),
+    maxWidth: "100%",
+    overflow: "hidden",
+    alignItems: "center",
+  },
+  entryStatValue: {
+    color: "#FDE68A",
+    fontSize: rf(18),
+    fontWeight: "900",
+    textShadowColor: "rgba(245,158,11,0.55)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 5,
+  },
+  prizeStatValue: {
+    color: "#FBBF24",
+    fontSize: rf(20),
+    fontWeight: "900",
+    textShadowColor: "rgba(245,158,11,0.72)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 7,
+  },
+  premiumStatShimmer: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: rs(12),
+    backgroundColor: "rgba(255,255,255,0.4)",
+    transform: [{ skewX: "-18deg" }],
+  },
   statLabel: { fontSize: rf(10), color: "#94A3B8" },
   roomIdCard: {
     width: "100%",
@@ -1800,7 +2361,9 @@ const styles = StyleSheet.create({
   /** Exactly 5 columns — percentage width cannot wrap to 4. */
   slotCell: {
     width: `${100 / SLOTS_PER_ROW}%` as `${number}%`,
-    padding: SLOT_PAD,
+    paddingHorizontal: SLOT_PAD,
+    paddingTop: 7,
+    paddingBottom: SLOT_PAD,
   },
   playerSlot: {
     width: "100%",
@@ -1809,17 +2372,89 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     alignItems: "center",
     justifyContent: "center",
-    overflow: "hidden",
+    overflow: "visible",
+  },
+  slotAvatarWrap: {
+    position: "relative",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  participantStatusDot: {
+    position: "absolute",
+    right: -1,
+    bottom: -1,
+    width: 11,
+    height: 11,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: "#0D101F",
+  },
+  participantStatusOnline: {
+    backgroundColor: "#00E676",
+  },
+  participantStatusOffline: {
+    backgroundColor: "#596174",
+  },
+  slotSkeleton: {
+    width: "100%",
+    height: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  slotSkeletonAvatar: {
+    width: Math.min(38, SLOT_SIZE - 12),
+    height: Math.min(38, SLOT_SIZE - 12),
+    borderRadius: 20,
+    backgroundColor: "#252A3D",
+    opacity: 0.72,
   },
   hostBadgeSlot: {
     position: "absolute",
-    top: 2,
-    right: 2,
-    width: rs(14),
-    height: rs(14),
-    borderRadius: rs(7),
+    top: -6,
+    left: 1,
+    minHeight: 14,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: 2,
+    paddingHorizontal: 4,
+    borderRadius: 7,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#FDE68A",
+    backgroundColor: "#D4A514",
+  },
+  hostBadgeSlotText: {
+    color: "#1A1200",
+    fontSize: 7,
+    fontWeight: "900",
+    letterSpacing: 0.35,
+  },
+  participantErrorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  participantErrorText: {
+    flexShrink: 1,
+    color: "#94A3B8",
+    fontSize: rf(10),
+  },
+  participantRetryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#7C3AED66",
+    backgroundColor: "#7C3AED18",
+  },
+  participantRetryText: {
+    color: "#C4B5FD",
+    fontSize: rf(10),
+    fontWeight: "700",
   },
   tapHint: { fontSize: rf(12), textAlign: "center", color: "#94A3B8" },
   progressTrack: { width: "100%", height: 6, borderRadius: 3, overflow: "hidden", backgroundColor: "#1E2438" },

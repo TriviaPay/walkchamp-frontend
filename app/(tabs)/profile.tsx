@@ -30,7 +30,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useWalk } from "@/context/WalkContext";
 import { useApp } from "@/context/AppContext";
 import { BadgePill } from "@/components/BadgePill";
-import { formatDistance, stepsToDistance } from "@/utils/format";
+import { formatDistance, stepsToDistance, formatWalletAmount } from "@/utils/format";
 import { getStoredSession } from "@/services/authService";
 import { authFetch } from "@/utils/authFetch";
 import {
@@ -355,7 +355,7 @@ export default function ProfileScreen() {
     : searchParams.openTitles;
   const { user, logout, refreshUserProfile, updateUser } = useAuth();
   const { allTimeSteps, currentStreak, weeklySteps, requestStepPermission } = useWalk();
-  const { userRank } = useApp();
+  const { userRank, totalEarned, walletCurrency, refreshWallet } = useApp();
 
   // Profile view state — seed from cache for instant paint
   const cachedProfile = screenCache.getSync<ProfileMeResponse>(PROFILE_ME_CACHE_KEY);
@@ -635,6 +635,8 @@ export default function ProfileScreen() {
         })();
       }
 
+      void refreshWallet({ silent: true });
+
       // If steps permission is already granted on-device but Profile still shows setup
       // (stale not_requested / missing row), heal the UI + server status.
       void (async () => {
@@ -703,7 +705,7 @@ export default function ProfileScreen() {
 
       void dispatch(fetchCoinBalance());
       void getNotificationPreferences().then((enabled) => setPushEnabled(enabled)).catch(() => {});
-    }, [dispatch, triggerUnlocks]),
+    }, [dispatch, triggerUnlocks, refreshWallet]),
   );
 
   // Load editable fields when edit mode opens
@@ -1043,8 +1045,10 @@ export default function ProfileScreen() {
             <Text style={[styles.statCard3Label, { color: colors.mutedForeground }]}>Day Streak</Text>
           </View>
           <View style={[styles.statCard3, { backgroundColor: colors.card, borderColor: "#FFD70030" }]}>
-            <Text style={[styles.statCard3Num, { color: "#FFD700" }]}>{serverStats?.coinsEarned?.toLocaleString() ?? "--"}</Text>
-            <Text style={[styles.statCard3Label, { color: colors.mutedForeground }]}>Coins Earned</Text>
+            <Text style={[styles.statCard3Num, { color: "#FFD700" }]}>
+              {formatWalletAmount(totalEarned, walletCurrency)}
+            </Text>
+            <Text style={[styles.statCard3Label, { color: colors.mutedForeground }]}>Total Earnings</Text>
           </View>
         </View>
 
@@ -1168,14 +1172,16 @@ export default function ProfileScreen() {
             <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
           </TouchableOpacity>
           <TouchableOpacity style={[styles.settingRow]}
-            onPress={() => AppAlert.alert("Referral Code", `Your code: ${user?.referralCode ?? "WC123456"}\n\nShare it — both of you earn $2 when they walk 5,000 steps!`)}
+            onPress={() => router.push("/profile/invite-friends")}
           >
             <View style={[styles.settingIcon, { backgroundColor: colors.gold + "15" }]}>
               <Feather name="gift" size={17} color={colors.gold} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={[styles.settingLabel, { color: colors.foreground }]}>Refer & Earn</Text>
-              <Text style={[styles.settingSubtitle, { color: colors.mutedForeground }]}>Code: {user?.referralCode ?? "WC123456"}</Text>
+              <Text style={[styles.settingSubtitle, { color: colors.mutedForeground }]}>
+                {user?.referralCode ? `Code: ${user.referralCode}` : "Invite friends and earn rewards"}
+              </Text>
             </View>
             <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
           </TouchableOpacity>
@@ -1185,14 +1191,17 @@ export default function ProfileScreen() {
         <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Support & Legal</Text>
         <View style={[styles.settingsList, { backgroundColor: colors.card, borderColor: colors.border }]}>
           {[
-            { icon: "help-circle", label: "Help & Troubleshooting", color: colors.primary,         onPress: () => router.push("/profile/help" as never) },
-            { icon: "message-circle", label: "FAQ",                 color: colors.accent,          onPress: () => router.push("/profile/faq" as never) },
-            { icon: "shield",      label: "Privacy & Security",    color: colors.neonBlue,         onPress: () => {} },
-            { icon: "file-text",   label: "Terms & Privacy Policy", color: colors.mutedForeground, onPress: () => Linking.openURL("https://walkchamp.app/legal") },
+            { icon: "help-circle", label: "Help & Troubleshooting", color: colors.primary,         onPress: () => router.push("/profile/help" as never), a11y: "Help and Troubleshooting" },
+            { icon: "message-circle", label: "FAQ",                 color: colors.accent,          onPress: () => router.push("/profile/faq" as never), a11y: "FAQ" },
+            { icon: "lock",        label: "Privacy & Security",    color: colors.neonBlue,         onPress: () => {}, a11y: "Privacy and Security" },
+            { icon: "shield",      label: "Privacy Policy",        color: colors.neonBlue,         onPress: () => router.push("/legal"), a11y: "Privacy Policy" },
+            { icon: "file-text",   label: "Terms and Conditions",  color: colors.mutedForeground,  onPress: () => router.push("/terms"), a11y: "Terms and Conditions" },
           ].map((item, i, arr) => (
             <TouchableOpacity key={item.label}
               style={[styles.settingRow, i < arr.length - 1 && { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
               onPress={item.onPress}
+              accessibilityRole="button"
+              accessibilityLabel={item.a11y}
             >
               <View style={[styles.settingIcon, { backgroundColor: item.color + "15" }]}>
                 <Feather name={item.icon as never} size={17} color={item.color} />

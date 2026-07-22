@@ -341,7 +341,7 @@ export default function LiveRacesScreen() {
             <RaceCard
               race={item}
               colors={colors}
-              onWatch={() => router.push({ pathname: "/spectator/[id]", params: { id: item.id } })}
+              onWatch={() => router.push({ pathname: "/race/live-detail", params: { id: item.id } })}
             />
           )}
         />

@@ -208,7 +208,12 @@ export function RoomInvitationModal({ invitation, onDismiss }: Props) {
           <View style={styles.details}>
             <DetailRow icon="activity" label="Target Steps" value={`${invitation.targetSteps.toLocaleString()} Steps`} />
             <View style={styles.divider} />
-            <DetailRow icon="dollar-sign" label="Entry Fee" value={entryLabel} valueColor={isFree ? "#00E676" : "#FFC107"} />
+            <DetailRow
+              icon="dollar-sign"
+              label="Entry Fee"
+              value={entryLabel}
+              valueColor={isFree ? "#00E676" : "#FBBF24"}
+            />
             <View style={styles.divider} />
             <DetailRow icon="users" label="Room Type" value={invitation.isPrivate ? "Private" : "Public"} />
             <View style={styles.divider} />

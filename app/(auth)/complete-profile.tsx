@@ -59,6 +59,7 @@ export default function CompleteProfileScreen() {
   const [usernameStatus, setUsernameStatus] = useState<"idle"|"checking"|"available"|"taken"|"invalid">("idle");
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
+  const [ageAccepted, setAgeAccepted] = useState(false);
   const [rewardAccepted, setRewardAccepted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -86,7 +87,7 @@ export default function CompleteProfileScreen() {
     if (!dob) { setError("Date of birth is required."); return; }
     if (calcAge(dob) < 13) { setError("You must be at least 13 years old."); return; }
     if (!selectedCountry) { setError("Please select your country."); return; }
-    if (!termsAccepted || !privacyAccepted || !rewardAccepted) { setError("Please accept all required agreements."); return; }
+    if (!termsAccepted || !privacyAccepted || !ageAccepted || !rewardAccepted) { setError("Please accept all required agreements, including confirming you are 18 or older."); return; }
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSubmitting(true);
@@ -247,6 +248,7 @@ export default function CompleteProfileScreen() {
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             <CheckBox value={termsAccepted} onToggle={() => setTermsAccepted((v) => !v)} label="I agree to the Terms & Conditions *" />
             <CheckBox value={privacyAccepted} onToggle={() => setPrivacyAccepted((v) => !v)} label="I agree to the Privacy Policy *" />
+            <CheckBox value={ageAccepted} onToggle={() => setAgeAccepted((v) => !v)} label="I confirm that I am 18 or older *" />
             <CheckBox value={rewardAccepted} onToggle={() => setRewardAccepted((v) => !v)} label="I understand rewards are subject to verification *" />
 
             <TouchableOpacity style={[styles.submitBtn, { opacity: submitting ? 0.7 : 1 }]} onPress={handleSubmit} disabled={submitting}>

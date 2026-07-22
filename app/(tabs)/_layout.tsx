@@ -14,6 +14,8 @@ import { useAppSelector } from "@/store/hooks";
 import { useSound } from "@/context/SoundContext";
 import { useUnread } from "@/context/UnreadContext";
 import * as Haptics from "@/utils/haptics";
+import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
+import { ONBOARDING_ROUTES } from "@/constants/onboarding";
 
 function NativeTabLayout() {
   const { totalUnread } = useUnread();
@@ -174,7 +176,11 @@ export default function TabLayout() {
   // Synchronous redirect — fires in the same render cycle as the state change,
   // preventing a one-frame flash of the walk screen before iOS/Android navigates.
   if (!isRestoring && !isAuthenticated) {
-    return <Redirect href="/(auth)" />;
+    return (
+      <Redirect
+        href={ENABLE_PREMIUM_ONBOARDING ? ONBOARDING_ROUTES.welcome : "/(auth)"}
+      />
+    );
   }
 
   if (isLiquidGlassAvailable()) {

@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   Dimensions,
+  Easing,
   FlatList,
   Image,
   Modal,
@@ -184,6 +186,64 @@ const GOLD_DARK = "#B45309";
 const CASH_BLUE = "#0EA5E9";
 const FREE_REWARDS = { first: 50, second: 30, third: 20 } as const;
 
+function PremiumPrizeAmount({
+  children,
+  color = GOLD,
+}: {
+  children: React.ReactNode;
+  color?: string;
+}) {
+  const shimmer = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(3600),
+        Animated.timing(shimmer, {
+          toValue: 1,
+          duration: 900,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(shimmer, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [shimmer]);
+
+  return (
+    <View style={cc.premiumPrizeAmountWrap}>
+      <Text
+        style={[cc.premiumPrizeAmount, { color, textShadowColor: `${color}80` }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.72}
+      >
+        {children}
+      </Text>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          cc.premiumPrizeShimmer,
+          {
+            transform: [{
+              translateX: shimmer.interpolate({
+                inputRange: [0, 1],
+                outputRange: [-20, 100],
+              }),
+            }],
+            opacity: shimmer.interpolate({
+              inputRange: [0, 0.2, 0.5, 0.8, 1],
+              outputRange: [0, 0.18, 0.4, 0.18, 0],
+            }),
+          },
+        ]}
+      />
+    </View>
+  );
+}
+
 function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCardProps) {
   const isPrivate = room.requires_code;
   const isFull = room.current_players >= room.max_players;
@@ -229,13 +289,24 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
             </Text>
           </View>
           {isCash && (
-            <View style={[cc.entryFeePill, { borderColor: CASH_BLUE, backgroundColor: CASH_BLUE + "30" }]}>
-              <Text style={[cc.entryFeePillText, { color: "#FFFFFF" }]}>Fee ${room.entry_fee.toFixed(0)}</Text>
+            <View style={[cc.entryFeePill, cc.cashEntryFeePill, { borderColor: CASH_BLUE, backgroundColor: CASH_BLUE + "30" }]}>
+              <View>
+                <Text style={[cc.entryFeeLabel, { color: "#BAE6FD" }]}>Entry Fee</Text>
+                <Text style={[cc.entryFeeAmount, cc.cashEntryFeeAmount]}>${room.entry_fee.toFixed(0)}</Text>
+              </View>
             </View>
           )}
           {isCoins && (
-            <View style={[cc.entryFeePill, { borderColor: GOLD + "90", backgroundColor: GOLD + "25" }]}>
-              <Text style={[cc.entryFeePillText, { color: GOLD }]}>Fee {(room.coin_entry_amount ?? 0).toLocaleString()}</Text>
+            <View style={[cc.entryFeePill, cc.coinsEntryFeePill, { borderColor: GOLD + "90", backgroundColor: GOLD + "25" }]}>
+              <Text style={[cc.entryFeeLabel, { color: GOLD }]}>Entry</Text>
+              <Text style={[cc.entryFeeAmount, { color: GOLD }]} numberOfLines={1}>
+                {(room.coin_entry_amount ?? 0).toLocaleString()} Coins
+              </Text>
+            </View>
+          )}
+          {!isCash && !isCoins && (
+            <View style={[cc.entryFeePill, { borderColor: GREEN + "90", backgroundColor: GREEN + "20" }]}>
+              <Text style={[cc.entryFeePillText, { color: GREEN }]}>Free Entry</Text>
             </View>
           )}
         </View>
@@ -313,15 +384,21 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
         {isCash && (
           <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
             <Image source={require("@/assets/images/trophy-cash.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
-            <Text style={[cc.chipText, { color: GOLD }]}>
-              {prizePoolDollars > 0 ? `Prize Pool $${prizePoolDollars.toFixed(0)}` : "Prize Pool updates as players join"}
-            </Text>
+            <View>
+              <Text style={cc.premiumPrizeLabel}>Prize Pool</Text>
+              <PremiumPrizeAmount>
+                {prizePoolDollars > 0 ? `$${prizePoolDollars.toFixed(0)}` : "Updates as players join"}
+              </PremiumPrizeAmount>
+            </View>
           </View>
         )}
         {isCoins && prizePoolCoins > 0 && (
           <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
             <CoinIcon size={9} />
-            <Text style={[cc.chipText, { color: GOLD }]}>Prize Pool {prizePoolCoins.toLocaleString()}</Text>
+            <View>
+              <Text style={cc.premiumPrizeLabel}>Prize Pool</Text>
+              <PremiumPrizeAmount>{prizePoolCoins.toLocaleString()} Coins</PremiumPrizeAmount>
+            </View>
           </View>
         )}
       </View>
@@ -1087,13 +1164,24 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
             </Text>
           </View>
           {isCash && (
-            <View style={[cc.entryFeePill, { borderColor: CASH_BLUE, backgroundColor: CASH_BLUE + "30" }]}>
-              <Text style={[cc.entryFeePillText, { color: "#FFFFFF" }]}>Fee ${room.entry_fee.toFixed(0)}</Text>
+            <View style={[cc.entryFeePill, cc.cashEntryFeePill, { borderColor: CASH_BLUE, backgroundColor: CASH_BLUE + "30" }]}>
+              <View>
+                <Text style={[cc.entryFeeLabel, { color: "#BAE6FD" }]}>Entry Fee</Text>
+                <Text style={[cc.entryFeeAmount, cc.cashEntryFeeAmount]}>${room.entry_fee.toFixed(0)}</Text>
+              </View>
             </View>
           )}
           {isCoins && (
-            <View style={[cc.entryFeePill, { borderColor: GOLD + "90", backgroundColor: GOLD + "25" }]}>
-              <Text style={[cc.entryFeePillText, { color: GOLD }]}>Fee {room.coin_entry_amount.toLocaleString()}</Text>
+            <View style={[cc.entryFeePill, cc.coinsEntryFeePill, { borderColor: GOLD + "90", backgroundColor: GOLD + "25" }]}>
+              <Text style={[cc.entryFeeLabel, { color: GOLD }]}>Entry</Text>
+              <Text style={[cc.entryFeeAmount, { color: GOLD }]} numberOfLines={1}>
+                {room.coin_entry_amount.toLocaleString()} Coins
+              </Text>
+            </View>
+          )}
+          {!isCash && !isCoins && !isSponsored && (
+            <View style={[cc.entryFeePill, { borderColor: GREEN + "90", backgroundColor: GREEN + "20" }]}>
+              <Text style={[cc.entryFeePillText, { color: GREEN }]}>Free Entry</Text>
             </View>
           )}
         </View>
@@ -1175,17 +1263,23 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
         {isCash && (
           <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
             <Image source={require("@/assets/images/trophy-cash.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
-            <Text style={[cc.chipText, { color: GOLD }]}>
-              {prizePoolDollars > 0 ? `Prize Pool $${prizePoolDollars}` : "Prize Pool updates as players join"}
-            </Text>
+            <View>
+              <Text style={cc.premiumPrizeLabel}>Prize Pool</Text>
+              <PremiumPrizeAmount>
+                {prizePoolDollars > 0 ? `$${prizePoolDollars}` : "Updates as players join"}
+              </PremiumPrizeAmount>
+            </View>
           </View>
         )}
         {isCoins && (
           <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
-            <CoinIcon size={9} />
-            <Text style={[cc.chipText, { color: GOLD }]}>
-              Prize Pool {prizePoolCoins > 0 ? prizePoolCoins.toLocaleString() : "—"}
-            </Text>
+            <CoinIcon size={11} />
+            <View>
+              <Text style={cc.premiumPrizeLabel}>Prize Pool</Text>
+              <PremiumPrizeAmount>
+                {prizePoolCoins > 0 ? `${prizePoolCoins.toLocaleString()} Coins` : "—"}
+              </PremiumPrizeAmount>
+            </View>
           </View>
         )}
       </View>
@@ -1300,8 +1394,20 @@ const cc = StyleSheet.create({
   typeBadgeText: { fontSize: rf(9), fontWeight: "800", letterSpacing: 0.7 },
   visBadge: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, borderWidth: 1 },
   visBadgeText: { fontSize: rf(9), fontWeight: "700" },
-  entryFeePill: { flexDirection: "row", alignItems: "center", paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, borderWidth: 1 },
+  entryFeePill: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, borderWidth: 1 },
+  cashEntryFeePill: { minHeight: rs(31), paddingVertical: 4 },
+  coinsEntryFeePill: { minWidth: rs(112), minHeight: rs(28), paddingVertical: 4 },
   entryFeePillText: { fontSize: rf(9), fontWeight: "700" },
+  entryFeeLabel: { fontSize: rf(7), lineHeight: rf(9), fontWeight: "700", textTransform: "uppercase" },
+  entryFeeAmount: { fontSize: rf(11), lineHeight: rf(13), fontWeight: "900" },
+  cashEntryFeeAmount: {
+    color: "#FFFFFF",
+    fontSize: rf(13),
+    lineHeight: rf(14),
+    textShadowColor: GOLD + "99",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 5,
+  },
 
   hostRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   hostAvatar: { width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center", flexShrink: 0 },
@@ -1319,6 +1425,23 @@ const cc = StyleSheet.create({
   chipsRow: { flexDirection: "row", gap: 5 },
   chip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: "#2A3550", backgroundColor: "rgba(8,11,24,0.7)" },
   chipText: { fontSize: rf(10), fontWeight: "600", color: "#BCC8E8" },
+  premiumPrizeLabel: { color: GOLD, fontSize: rf(7), lineHeight: rf(9), fontWeight: "700", textTransform: "uppercase" },
+  premiumPrizeAmountWrap: { overflow: "hidden", minWidth: rs(62) },
+  premiumPrizeAmount: {
+    fontSize: rf(13),
+    lineHeight: rf(16),
+    fontWeight: "900",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 6,
+  },
+  premiumPrizeShimmer: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: rs(12),
+    backgroundColor: "rgba(255,255,255,0.42)",
+    transform: [{ skewX: "-18deg" }],
+  },
 
   registerBtn: { borderRadius: 10, overflow: "hidden" },
   registerBtnGrad: { alignItems: "center", justifyContent: "center", paddingVertical: rs(9) },
@@ -1773,8 +1896,21 @@ export default function AvailableRoomsScreen() {
           onPress: async () => {
             setRegisteringRoomId(room.room_id);
             try {
-              const res = await authFetch(`/api/races/${room.room_id}/cancel`, { method: "POST" });
-              const body = await res.json().catch(() => ({})) as RaceCancelResponse & Record<string, unknown>;
+              // Scheduled rooms (notably coins battles) may not be cancellable
+              // via the races namespace — fall back to the rooms namespace, the
+              // same split used by withdraw (cancel-registration vs leave).
+              let res = await authFetch(`/api/races/${room.room_id}/cancel`, { method: "POST" });
+              let body = await res.json().catch(() => ({})) as RaceCancelResponse & Record<string, unknown>;
+              if (!res.ok) {
+                const altRes = await authFetch(`/api/rooms/${room.room_id}/cancel`, { method: "POST" }).catch(() => null);
+                if (altRes) {
+                  const altBody = await altRes.json().catch(() => ({})) as RaceCancelResponse & Record<string, unknown>;
+                  if (altRes.ok) {
+                    res = altRes;
+                    body = altBody;
+                  }
+                }
+              }
               if (!res.ok) {
                 AppAlert.alert("Could not cancel", (body.error as string) ?? "Please try again.");
                 return;
