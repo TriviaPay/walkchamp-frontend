@@ -2040,13 +2040,17 @@ function WalkScreenContent() {
   const loadChallengeStatuses = useCallback(async () => {
     if (!user?.id || !sessionToken) return;
     const cacheKey = walkChallengeCacheKey(user.id);
+    const markWalkCacheReady = () => {
+      if (walkCacheReadyRef.current) return;
+      walkCacheReadyRef.current = true;
+      setWalkCacheReady(true);
+    };
     try {
       if (!walkCacheReadyRef.current) {
         const cached = await screenCache.get<Record<string, ChallengeStatus>>(cacheKey);
         if (cached) {
           setChallengeStatuses(cached);
-          walkCacheReadyRef.current = true;
-          setWalkCacheReady(true);
+          markWalkCacheReady();
         }
       }
       const res = await authFetch(`/api/challenges/available`);
@@ -2057,12 +2061,12 @@ function WalkScreenContent() {
         map[c.entryType] = c;
       }
       setChallengeStatuses(map);
-      if (!walkCacheReadyRef.current) {
-        walkCacheReadyRef.current = true;
-        setWalkCacheReady(true);
-      }
       void screenCache.set(cacheKey, map);
-    } catch { /* silent */ }
+    } catch { /* silent — still clear skeleton below */ }
+    finally {
+      // Never leave Join-a-Challenge stuck on skeletons if the API fails/times out.
+      markWalkCacheReady();
+    }
   }, [sessionToken, user?.id]);
 
   // Initial load handled by useFocusEffect below (avoids duplicate fetch on mount + focus).

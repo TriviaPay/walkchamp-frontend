@@ -1076,7 +1076,7 @@ function RaceCardBase({
       )}
 
       {/* ── CTA button ──────────────────────────────────────────────────── */}
-      {isFinished && participating ? (
+      {isFinished ? (
         <TouchableOpacity
           onPress={openLiveRace}
           activeOpacity={0.85}
@@ -1085,32 +1085,42 @@ function RaceCardBase({
           <LinearGradient
             colors={[NEON_GREEN + "25", NEON_GREEN + "10"]}
             start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-            style={[st.ctaGrad, { borderWidth: 1, borderColor: NEON_GREEN + "60", justifyContent: "space-between", paddingHorizontal: 16 }]}
+            style={[
+              st.ctaGrad,
+              {
+                borderWidth: 1,
+                borderColor: NEON_GREEN + "60",
+                justifyContent: participating ? "space-between" : "center",
+                paddingHorizontal: 16,
+              },
+            ]}
           >
-            <TouchableOpacity
-              onPress={(e) => { e.stopPropagation?.(); handleReact("❤️"); }}
-              activeOpacity={0.7}
-              style={st.finishedReactBtn}
-            >
-              <View style={st.heartRow}>
-                <Ionicons
-                  name={liked ? "heart" : "heart-outline"}
-                  size={18}
-                  color={liked ? "#FF4D6D" : "#8B9AC0"}
-                />
-                <Text style={[st.finishedReactItem, { color: liked ? "#FF4D6D" : colors.mutedForeground }]}>
-                  {(() => {
-                    const total = Object.values(localReactions).reduce((s, v) => s + v, 0);
-                    return total > 99 ? "99+" : String(total);
-                  })()}
-                </Text>
-              </View>
-            </TouchableOpacity>
+            {participating ? (
+              <TouchableOpacity
+                onPress={(e) => { e.stopPropagation?.(); handleReact("❤️"); }}
+                activeOpacity={0.7}
+                style={st.finishedReactBtn}
+              >
+                <View style={st.heartRow}>
+                  <Ionicons
+                    name={liked ? "heart" : "heart-outline"}
+                    size={18}
+                    color={liked ? "#FF4D6D" : "#8B9AC0"}
+                  />
+                  <Text style={[st.finishedReactItem, { color: liked ? "#FF4D6D" : colors.mutedForeground }]}>
+                    {(() => {
+                      const total = Object.values(localReactions).reduce((s, v) => s + v, 0);
+                      return total > 99 ? "99+" : String(total);
+                    })()}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ) : null}
             <View style={st.viewResultsRight}>
               <Feather name="award" size={15} color={NEON_GREEN} />
               <Text style={[st.ctaText, { color: NEON_GREEN }]}>View Results</Text>
             </View>
-            <View style={st.finishedReactBtn} />
+            {participating ? <View style={st.finishedReactBtn} /> : null}
           </LinearGradient>
         </TouchableOpacity>
       ) : participating ? (

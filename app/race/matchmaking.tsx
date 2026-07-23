@@ -37,6 +37,8 @@ import {
   Share,
   StyleSheet,
   Text,
+  AppState,
+  type AppStateStatus,
   useWindowDimensions,
   View,
 } from "react-native";
@@ -83,6 +85,14 @@ import { screenCache } from "@/utils/screenCache";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { usePresence } from "@/context/PresenceContext";
 import { normalizeUserId } from "@/utils/presenceIds";
+import {
+  cancellationCopy,
+  getWaitingRoomBanner,
+  playersNeeded,
+  resolveMinimumParticipants,
+  resolveRoomExpiresAt,
+  resolveWaitingRoomMode,
+} from "@/utils/waitingRoomTiming";
 
 const SCREEN_W = Dimensions.get("window").width;
 
@@ -788,6 +798,13 @@ function MatchmakingScreenContent() {
   const [refundConfirming, setRefundConfirming] = useState(false);
   /** Inline confirm — opens instantly (no AppAlert dismiss delay, no pre-fetch). */
   const [confirmModal, setConfirmModal] = useState<"host_cancel" | "leave" | null>(null);
+  /** Terminal cancel/expire modal — keeps users off a closed waiting room. */
+  const [terminalModal, setTerminalModal] = useState<{
+    title: string;
+    message: string;
+    showCounts?: boolean;
+  } | null>(null);
+  const terminalHandledRef = useRef(false);
 
   const backendRaceId = params.raceId ?? contextRaceId;
   const isHostMode = params.isHost === "true";
@@ -853,6 +870,11 @@ function MatchmakingScreenContent() {
     coinPrizePool?: number;
     isPrivate?: boolean;
     inviteCode?: string | null;
+    minimumParticipants?: number;
+    canStart?: boolean | null;
+    roomExpiresAt?: string | null;
+    createdAt?: string | null;
+    cancellationReason?: string | null;
   } | null>(() => {
     if (!params.initialEntryType && !params.initialCurrentPlayers) return null;
     return {
@@ -874,6 +896,7 @@ function MatchmakingScreenContent() {
       ? params.initialScheduledStartAt
       : null),
   );
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [copiedCode, setCopiedCode] = useState(false);
   const [selectedParticipant, setSelectedParticipant] = useState<RoomParticipant | null>(null);
   const [wasRemoved, setWasRemoved] = useState(false);
@@ -963,11 +986,31 @@ function MatchmakingScreenContent() {
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
-  // ── Room expiry timer (5 min from createdAt) ──────────────────────────────
+  // ── Room expiry / schedule display clock ──────────────────────────────────
   const roomExpiresAtRef = useRef<Date | null>(null);
-  const [roomTimeLeft, setRoomTimeLeft] = useState<number | null>(null);
   const isHostModeRef = useRef(isHostMode);
   useEffect(() => { isHostModeRef.current = isHostMode; }, [isHostMode]);
+
+  const showTerminalRoomClosed = useCallback(
+    (reason?: string | null, modeHint?: "scheduled" | "open_window") => {
+      if (terminalHandledRef.current || exitingRef.current) return;
+      terminalHandledRef.current = true;
+      const mode = modeHint ?? resolveWaitingRoomMode(scheduledStartAt);
+      const copy = cancellationCopy(reason, mode);
+      const r = (reason ?? "").toUpperCase();
+      const showCounts =
+        r.includes("MINIMUM") ||
+        r.includes("PARTICIPANT") ||
+        (mode === "scheduled" && !r.includes("HOST_CANCEL"));
+      setTerminalModal({ ...copy, showCounts });
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
+      setStart("idle");
+    },
+    [scheduledStartAt, setStart],
+  );
 
   const entryFeeCents = liveRoom?.entryAmountCents ?? (raceEntryFee > 0 ? Math.round(raceEntryFee * 100) : 0);
   const isCoinsBattleRoom = liveRoom?.entryType === "coins_battle";
@@ -1269,6 +1312,12 @@ function MatchmakingScreenContent() {
         }
         markLiveRaceFetched(gateKey);
         const data = await res.json();
+        const minParticipants = resolveMinimumParticipants(
+          data.race.minimumParticipants ??
+            data.race.minParticipants ??
+            data.race.min_players ??
+            data.race.minimum_participants,
+        );
         const nextLiveRoom = {
           currentPlayers: data.race.currentPlayers ?? 1,
           maxPlayers: data.race.maxPlayers ?? raceMaxPlayers,
@@ -1280,18 +1329,51 @@ function MatchmakingScreenContent() {
           coinPrizePool: data.race.coinPrizePool,
           isPrivate: data.race.isPrivate,
           inviteCode: data.race.inviteCode ?? null,
+          minimumParticipants: minParticipants,
+          canStart:
+            typeof data.race.canStart === "boolean"
+              ? data.race.canStart
+              : (data.race.currentPlayers ?? 1) >= minParticipants,
+          roomExpiresAt:
+            data.race.roomExpiresAt ??
+            data.race.room_expires_at ??
+            null,
+          createdAt: data.race.createdAt ?? data.race.created_at ?? null,
+          cancellationReason:
+            data.race.cancellationReason ??
+            data.race.cancellation_reason ??
+            data.race.cancelReason ??
+            null,
         };
         setLiveRoom(nextLiveRoom);
-        const nextSchedule =
-          data.race.scheduledStartAt ??
-          data.race.scheduled_start_at ??
+        const apiSchedule =
+          (typeof data.race.scheduledStartAt === "string" && data.race.scheduledStartAt) ||
+          (typeof data.race.scheduled_start_at === "string" && data.race.scheduled_start_at) ||
           null;
-        if (typeof nextSchedule === "string" && nextSchedule) {
-          setScheduledStartAt(nextSchedule);
+        if (apiSchedule) {
+          setScheduledStartAt(apiSchedule);
         }
-        if (!roomExpiresAtRef.current && data.race.createdAt) {
-          // Expiry intentionally disabled — do not set roomExpiresAtRef.
+        const scheduleForMode = apiSchedule || scheduledStartAt;
+
+        const wrMode = resolveWaitingRoomMode(scheduleForMode);
+        const expiresAt = resolveRoomExpiresAt({
+          mode: wrMode,
+          roomExpiresAt: nextLiveRoom.roomExpiresAt,
+          createdAt: nextLiveRoom.createdAt,
+        });
+        roomExpiresAtRef.current = expiresAt;
+
+        const statusLower = String(data.race.status ?? "").toLowerCase();
+        if (
+          statusLower === "cancelled" ||
+          statusLower === "canceled" ||
+          statusLower === "expired" ||
+          statusLower === "closed"
+        ) {
+          showTerminalRoomClosed(nextLiveRoom.cancellationReason, wrMode);
+          return;
         }
+
         if (data.race.targetSteps) {
           setRaceTargetSteps(data.race.targetSteps);
         }
@@ -1343,6 +1425,8 @@ function MatchmakingScreenContent() {
       user,
       isHostMode,
       refreshOnlineIds,
+      scheduledStartAt,
+      showTerminalRoomClosed,
     ],
   );
 
@@ -1405,14 +1489,17 @@ function MatchmakingScreenContent() {
       } catch { /* silent */ }
     };
 
-    // race:cancelled
-    const onCancelled = (data: { raceId?: string }) => {
+    // race:cancelled / waiting_room_cancelled / expired
+    const onCancelled = (data: {
+      raceId?: string;
+      reason?: string;
+      cancellationReason?: string;
+    }) => {
       if (data.raceId && data.raceId !== backendRaceId) return;
       if (!screenFocusedRef.current || exitingRef.current) return;
-      navigateToWalkRef.current();
-      setTimeout(() => {
-        AppAlert.alert("Room Cancelled", "The host cancelled this race room.");
-      }, 300);
+      showTerminalRoomClosed(
+        data.cancellationReason ?? data.reason ?? "HOST_CANCELLED",
+      );
     };
 
     // room:participant_removed
@@ -1447,6 +1534,8 @@ function MatchmakingScreenContent() {
     channel.bind("race:starting", onStarting);
     channel.bind(EVENTS.RACE_STARTED, onStarted);
     channel.bind("race:cancelled", onCancelled);
+    channel.bind("waiting_room_cancelled", onCancelled);
+    channel.bind("waiting_room_expired", onCancelled);
     channel.bind("room:participant_removed", onRemoved);
     channel.bind("race:player-left", onLeft);
     channel.bind("race:player-joined", refreshRoomFromServer);
@@ -1460,6 +1549,8 @@ function MatchmakingScreenContent() {
       channel.unbind("race:starting", onStarting);
       channel.unbind(EVENTS.RACE_STARTED, onStarted);
       channel.unbind("race:cancelled", onCancelled);
+      channel.unbind("waiting_room_cancelled", onCancelled);
+      channel.unbind("waiting_room_expired", onCancelled);
       channel.unbind("room:participant_removed", onRemoved);
       channel.unbind("race:player-left", onLeft);
       channel.unbind("race:player-joined", refreshRoomFromServer);
@@ -1471,7 +1562,7 @@ function MatchmakingScreenContent() {
       unsubscribeFromChannel(CHANNELS.liveRace(backendRaceId));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backendRaceId]);
+  }, [backendRaceId, beginCountdown, showTerminalRoomClosed]);
 
   // Scheduled registration events are emitted on the existing public rooms
   // channel before the race join window opens.
@@ -1545,26 +1636,66 @@ function MatchmakingScreenContent() {
     return () => pulse.stop();
   }, [pulseAnim]);
 
-  // ── Room expiry UI disabled — stay in waiting room until user leaves ───────
-  // Keep interval only to clear local timer display if any; do NOT auto-cancel/leave.
+  // ── Room display clock + open_window expiry countdown ─────────────────────
+  const lastForcedReconcileRef = useRef(0);
   useEffect(() => {
     if (!backendRaceId) return;
-    // Clear any legacy expiry so Room Expired modal never fires.
-    roomExpiresAtRef.current = null;
-    setRoomTimeLeft(null);
+    const tick = () => {
+      const now = Date.now();
+      setNowMs(now);
+      if (terminalHandledRef.current) return;
+      const shouldReconcile = () => {
+        if (now - lastForcedReconcileRef.current < 3000) return false;
+        lastForcedReconcileRef.current = now;
+        void pollRoomRef.current?.(true);
+        return true;
+      };
+      const expires = roomExpiresAtRef.current;
+      // Authoritative close is backend-driven; force a reconcile when local clock hits 0.
+      if (expires && expires.getTime() - now <= 0) {
+        shouldReconcile();
+        return;
+      }
+      // At/after scheduled start, reconcile until backend starts or cancels.
+      if (scheduledStartAt && startPhaseRef.current === "idle") {
+        const startMs = new Date(scheduledStartAt).getTime();
+        if (Number.isFinite(startMs) && startMs <= now) {
+          shouldReconcile();
+        }
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [backendRaceId, scheduledStartAt, liveRoom?.createdAt, liveRoom?.roomExpiresAt]);
+
+  // App resume: immediately reconcile room status (do not extend timers).
+  useEffect(() => {
+    const onChange = (next: AppStateStatus) => {
+      if (next === "active" && backendRaceId && !exitingRef.current) {
+        void pollRoomRef.current?.(true);
+      }
+    };
+    const sub = AppState.addEventListener("change", onChange);
+    return () => sub.remove();
   }, [backendRaceId]);
 
-  // ── Host: start race ──────────────────────────────────────────────────────
+  // ── Host: start race (open_window only; scheduled starts via backend) ──────
   const startingRef = useRef(false);
 
   const handleStartRace = useCallback(async () => {
     if (startingRef.current) return;
-    // Read from liveRoomRef (always current) instead of `realPlayerCount` from
-    // the render-time closure — the useCallback deps don't include realPlayerCount
-    // so the closure would capture a stale 0 from the first render (when liveRoom
-    // is null) and silently abort every tap. The ref is kept in sync via useEffect.
+    if (resolveWaitingRoomMode(scheduledStartAt) === "scheduled") return;
+    const minNeeded = resolveMinimumParticipants(
+      liveRoomRef.current?.minimumParticipants,
+    );
     const currentCount = liveRoomRef.current?.currentPlayers ?? 1;
-    if (currentCount < 2) return;
+    const backendCanStart = liveRoomRef.current?.canStart;
+    if (typeof backendCanStart === "boolean") {
+      if (!backendCanStart) return;
+    } else if (currentCount < minNeeded) {
+      return;
+    }
     startingRef.current = true;
     setStart("api_call");
 
@@ -1590,7 +1721,7 @@ function MatchmakingScreenContent() {
       startingRef.current = false;
       AppAlert.alert("Couldn't Start", "Network error. Please try again.");
     }
-  }, [backendRaceId, setStart, beginCountdown]);
+  }, [backendRaceId, setStart, beginCountdown, scheduledStartAt]);
 
   // ── Derived values ────────────────────────────────────────────────────────
   const realPlayerCount = Math.max(
@@ -1599,7 +1730,46 @@ function MatchmakingScreenContent() {
     playersJoined,
   );
   const realMaxPlayers = liveRoom?.maxPlayers ?? raceMaxPlayers;
-  const canStart = isHostMode && realPlayerCount >= 2 && startPhase === "idle";
+  const waitingRoomMode = resolveWaitingRoomMode(scheduledStartAt, nowMs);
+  const minimumParticipants = resolveMinimumParticipants(liveRoom?.minimumParticipants);
+  const neededPlayers = playersNeeded(minimumParticipants, realPlayerCount);
+  const roomExpiresAtResolved = useMemo(
+    () =>
+      resolveRoomExpiresAt({
+        mode: waitingRoomMode,
+        roomExpiresAt: liveRoom?.roomExpiresAt,
+        createdAt: liveRoom?.createdAt,
+      }),
+    [waitingRoomMode, liveRoom?.roomExpiresAt, liveRoom?.createdAt],
+  );
+  useEffect(() => {
+    if (waitingRoomMode === "scheduled") {
+      roomExpiresAtRef.current = null;
+      return;
+    }
+    roomExpiresAtRef.current = roomExpiresAtResolved;
+  }, [waitingRoomMode, roomExpiresAtResolved]);
+  const backendCanStart =
+    typeof liveRoom?.canStart === "boolean"
+      ? liveRoom.canStart
+      : neededPlayers === 0;
+  const canStart =
+    isHostMode &&
+    waitingRoomMode === "open_window" &&
+    backendCanStart &&
+    startPhase === "idle";
+  const waitingBanner = getWaitingRoomBanner({
+    mode: waitingRoomMode,
+    status:
+      startPhase === "api_call" || startPhase === "countdown" || startPhase === "go"
+        ? "starting"
+        : liveRoom?.status,
+    scheduledStartAt,
+    roomExpiresAt: roomExpiresAtResolved,
+    participantCount: realPlayerCount,
+    minimumParticipants,
+    nowMs,
+  });
   // Use liveRoom.entryType as the authoritative source (populated from backend).
   // Fall back to raceEntryFee===0 for the brief moment before the first poll returns.
   const isFreeRace = liveRoom?.entryType === "free" || (!liveRoom && raceEntryFee === 0);
@@ -1844,7 +2014,9 @@ function MatchmakingScreenContent() {
 
         <Text style={styles.title}>Waiting Room</Text>
         <Text style={styles.subtitle}>
-          Race will start automatically at the Scheduled time
+          {waitingRoomMode === "scheduled"
+            ? "Race will start automatically at the Scheduled time."
+            : "The host can start once the minimum number of players joins."}
         </Text>
         {scheduledStartAt ? (
           <View style={styles.scheduleRow}>
@@ -1856,12 +2028,20 @@ function MatchmakingScreenContent() {
         ) : null}
 
         <View style={styles.infoBanner}>
-          <Feather name="clock" size={16} color="#A78BFA" />
+          <Feather
+            name={
+              waitingBanner.kind === "scheduled_starting"
+                ? "loader"
+                : waitingBanner.kind === "scheduled_soon" || waitingBanner.kind === "open_ready"
+                  ? "zap"
+                  : "clock"
+            }
+            size={16}
+            color="#A78BFA"
+          />
           <View style={{ flex: 1 }}>
-            <Text style={styles.infoBannerTitle}>No need to stay here.</Text>
-            <Text style={styles.infoBannerSub}>
-              We&apos;ll notify you when the race starts.
-            </Text>
+            <Text style={styles.infoBannerTitle}>{waitingBanner.title}</Text>
+            <Text style={styles.infoBannerSub}>{waitingBanner.message}</Text>
           </View>
         </View>
 
@@ -2004,26 +2184,46 @@ function MatchmakingScreenContent() {
       <View style={styles.footerActions}>
         {isHostMode ? (
           <>
-            <TouchableOpacity
-              style={[styles.startBtn, { opacity: canStart ? 1 : 0.45 }]}
-              onPress={handleStartRace}
-              disabled={!canStart}
-              activeOpacity={0.85}
-            >
-              <LinearGradient
-                colors={canStart ? [colors.primary, colors.accent] : [colors.border, colors.border]}
-                style={styles.startBtnGrad}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
+            {waitingRoomMode === "open_window" ? (
+              <TouchableOpacity
+                style={[styles.startBtn, { opacity: canStart ? 1 : 0.45 }]}
+                onPress={handleStartRace}
+                disabled={!canStart}
+                activeOpacity={0.85}
               >
-                <Feather name="play" size={18} color={canStart ? "#000" : colors.mutedForeground} />
-                <Text style={[styles.startBtnText, { color: canStart ? "#000" : colors.mutedForeground }]}>
-                  {realPlayerCount < 2
-                    ? `Need ${2 - realPlayerCount} more player${2 - realPlayerCount === 1 ? "" : "s"}`
-                    : "Start Race"}
-                </Text>
-              </LinearGradient>
-            </TouchableOpacity>
+                <LinearGradient
+                  colors={canStart ? [colors.primary, colors.accent] : [colors.border, colors.border]}
+                  style={styles.startBtnGrad}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                >
+                  <Feather name="play" size={18} color={canStart ? "#000" : colors.mutedForeground} />
+                  <Text style={[styles.startBtnText, { color: canStart ? "#000" : colors.mutedForeground }]}>
+                    {neededPlayers > 0
+                      ? `Need ${neededPlayers} more player${neededPlayers === 1 ? "" : "s"}`
+                      : "Start Race"}
+                  </Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            ) : (
+              <View style={[styles.startBtn, { opacity: 0.55 }]}>
+                <LinearGradient
+                  colors={[colors.border, colors.border]}
+                  style={styles.startBtnGrad}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                >
+                  <Feather name="clock" size={18} color={colors.mutedForeground} />
+                  <Text style={[styles.startBtnText, { color: colors.mutedForeground }]}>
+                    {neededPlayers > 0
+                      ? `Need ${neededPlayers} more player${neededPlayers === 1 ? "" : "s"}`
+                      : waitingBanner.kind === "scheduled_starting"
+                        ? "Starting race…"
+                        : "Starts automatically"}
+                  </Text>
+                </LinearGradient>
+              </View>
+            )}
 
             <TouchableOpacity
               style={[
@@ -2279,6 +2479,62 @@ function MatchmakingScreenContent() {
                 <Text style={{ color: "#fff", fontWeight: "700" }}>
                   {confirmModal === "host_cancel" ? "Cancel Room" : "Leave"}
                 </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Terminal: cancelled / expired waiting room ── */}
+      <Modal
+        visible={terminalModal !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setTerminalModal(null);
+          navigateToWalkInstant();
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", paddingHorizontal: 28 }}>
+          <View style={{ backgroundColor: colors.card, borderRadius: 18, borderWidth: 1, borderColor: colors.border, overflow: "hidden" }}>
+            <View style={{ paddingHorizontal: 22, paddingTop: 22, paddingBottom: 16, alignItems: "center" }}>
+              <View
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 26,
+                  backgroundColor: "rgba(239, 68, 68, 0.15)",
+                  borderWidth: 1,
+                  borderColor: "rgba(239, 68, 68, 0.35)",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginBottom: 14,
+                }}
+              >
+                <Feather name="x-circle" size={26} color={colors.destructive} />
+              </View>
+              <Text style={{ fontSize: rf(17), fontWeight: "700", color: colors.foreground, textAlign: "center" }}>
+                {terminalModal?.title ?? "Room Cancelled"}
+              </Text>
+              <Text style={{ fontSize: rf(14), color: colors.mutedForeground, textAlign: "center", marginTop: 8, lineHeight: 20 }}>
+                {terminalModal?.message}
+              </Text>
+              {terminalModal?.showCounts ? (
+                <Text style={{ fontSize: rf(12), color: colors.mutedForeground, textAlign: "center", marginTop: 10 }}>
+                  Required: {minimumParticipants} · Joined: {realPlayerCount}
+                </Text>
+              ) : null}
+            </View>
+            <View style={{ height: 1, backgroundColor: colors.border }} />
+            <View style={{ padding: 12 }}>
+              <TouchableOpacity
+                style={{ paddingVertical: 13, borderRadius: 11, backgroundColor: colors.primary, alignItems: "center" }}
+                onPress={() => {
+                  setTerminalModal(null);
+                  navigateToWalkInstant();
+                }}
+              >
+                <Text style={{ color: "#000", fontWeight: "800" }}>Return to Walk</Text>
               </TouchableOpacity>
             </View>
           </View>

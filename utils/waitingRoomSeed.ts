@@ -33,6 +33,11 @@ export interface WaitingRoomLiveMeta {
   coinPrizePool?: number;
   isPrivate?: boolean;
   inviteCode?: string | null;
+  minimumParticipants?: number;
+  canStart?: boolean | null;
+  roomExpiresAt?: string | null;
+  createdAt?: string | null;
+  cancellationReason?: string | null;
 }
 
 export interface WaitingRoomCacheEntry {
