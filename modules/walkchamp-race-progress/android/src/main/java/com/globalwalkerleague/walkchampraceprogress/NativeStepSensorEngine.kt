@@ -81,6 +81,27 @@ class NativeStepSensorEngine(
       Log.d(TAG, "[StepFGS] sensor listener already registered")
       return
     }
+    registerSensorListener()
+  }
+
+  /** Unregister + register again so OEM step delivery resumes after background. */
+  fun restart() {
+    if (registered.get()) {
+      try {
+        sensorManager?.unregisterListener(stepListener)
+      } catch (_: Exception) {
+      }
+      registered.set(false)
+      Log.d(TAG, "[StepFGS] sensor listener restarted")
+    }
+    registerSensorListener()
+  }
+
+  private fun registerSensorListener() {
+    if (registered.get()) {
+      Log.d(TAG, "[StepFGS] sensor listener already registered")
+      return
+    }
     sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
     stepCounterSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
     if (stepCounterSensor == null) {
@@ -101,16 +122,30 @@ class NativeStepSensorEngine(
     }
     ensureSensorHandler()
     try {
+      // SENSOR_DELAY_UI (~60ms) + maxReportLatencyUs=0 avoids OEM batching so live
+      // race UI can update within ~1–3s without SENSOR_DELAY_FASTEST battery cost.
       sensorManager?.registerListener(
         stepListener,
         stepCounterSensor,
-        SensorManager.SENSOR_DELAY_NORMAL,
+        SensorManager.SENSOR_DELAY_UI,
+        /* maxReportLatencyUs */ 0,
         sensorHandler,
       )
       registered.set(true)
-      Log.d(TAG, "[StepFGS] sensor listener registered TYPE_STEP_COUNTER (background thread)")
+      Log.d(TAG, "[StepFGS] sensor listener registered TYPE_STEP_COUNTER delay=UI maxLatency=0")
     } catch (e: Exception) {
-      Log.w(TAG, "[StepFGS] sensor register failed: ${e.message}")
+      try {
+        sensorManager?.registerListener(
+          stepListener,
+          stepCounterSensor,
+          SensorManager.SENSOR_DELAY_NORMAL,
+          sensorHandler,
+        )
+        registered.set(true)
+        Log.d(TAG, "[StepFGS] sensor listener registered TYPE_STEP_COUNTER (fallback NORMAL)")
+      } catch (e2: Exception) {
+        Log.w(TAG, "[StepFGS] sensor register failed: ${e2.message}")
+      }
     }
     ensureCurrentDay()
   }
@@ -388,10 +423,13 @@ class NativeStepSensorEngine(
     }
     lastSensorTotal = sensorTotal
 
-    // Always advance walk notification steps from TYPE_STEP_COUNTER while FGS is alive.
-    // Health Connect / HealthKit remain canonical in JS when the app is open; when the app
-    // is backgrounded/closed JS polls stop, so the hardware sensor must keep the ongoing
-    // notification live (previous working behavior before verified-source early-return).
+    val verifiedDaily = !isDeviceSensorSource(state.stepSource)
+
+    // Always advance todaySteps from TYPE_STEP_COUNTER for live Walk UI + ongoing
+    // notification. Health Connect remains the verified sync source in JS; when HC
+    // is delayed/empty (common on Samsung), sensor keeps the display moving.
+    // Keep stepSource as health_connect/healthkit when verified — do not flip to
+    // android_step_counter (that would claim sensor is the verified daily source).
     var dailyBaseline = state.dailyBaseline
     if (dailyBaseline == null) {
       val known = pendingKnownTodaySteps
@@ -404,10 +442,11 @@ class NativeStepSensorEngine(
       }
       pendingKnownTodaySteps = null
       state = state.copy(dailyBaseline = dailyBaseline)
-      Log.d(TAG, "[StepFGS] dailyBaseline=$dailyBaseline todaySteps=${(sensorTotal - dailyBaseline).toInt().coerceAtLeast(0)}")
+      Log.d(
+        TAG,
+        "[StepFGS] dailyBaseline=$dailyBaseline todaySteps=${(sensorTotal - dailyBaseline).toInt().coerceAtLeast(0)} verifiedDaily=$verifiedDaily",
+      )
     }
-
-    // Never regress below the last known (e.g. HC) total within the same day.
     val todaySteps = maxOf(
       (sensorTotal - dailyBaseline).toInt().coerceAtLeast(0),
       state.todaySteps,
@@ -435,20 +474,18 @@ class NativeStepSensorEngine(
       return
     }
 
-    val keepVerifiedLabel = !isDeviceSensorSource(state.stepSource)
     state = state.copy(
       sensorTotal = sensorTotal,
       todaySteps = todaySteps,
       raceSteps = raceSteps,
-      // Keep HC/HealthKit label for metadata; sensor still drives notification counts.
-      stepSource = if (keepVerifiedLabel) state.stepSource else "android_step_counter",
+      stepSource = if (verifiedDaily) state.stepSource else "android_step_counter",
       sensorSupported = true,
       updatedAt = System.currentTimeMillis(),
     )
     persistAndEmit(state, force = false)
     Log.d(
       TAG,
-      "[WalkChampFGS] todaySteps=$todaySteps raceSteps=$raceSteps sensorTotal=$sensorTotal source=${state.stepSource}",
+      "[WalkChampFGS] todaySteps=$todaySteps raceSteps=$raceSteps sensorTotal=$sensorTotal source=${state.stepSource} verifiedDaily=$verifiedDaily",
     )
   }
 
@@ -467,16 +504,36 @@ class NativeStepSensorEngine(
     return true
   }
 
+  /**
+   * TYPE_STEP_COUNTER reset (reboot / sensor wrap). Re-anchor baselines so
+   * already-accepted race progress is preserved:
+   *   newRaceBaseline = sensorTotal - previouslyAcceptedRaceSteps
+   */
   private fun resetBaselinesSafely(sensorTotal: Float) {
+    val verifiedDaily = !isDeviceSensorSource(state.stepSource)
+    val preservedRace =
+      if (!state.activeRaceId.isNullOrBlank()) state.raceSteps.coerceAtLeast(0) else 0
+    val newRaceBaseline =
+      if (!state.activeRaceId.isNullOrBlank()) {
+        (sensorTotal - preservedRace).coerceAtLeast(0f)
+      } else {
+        null
+      }
+    // Hybrid verified daily: keep HC-fed todaySteps; only re-seed sensor baseline.
+    // Legacy sensor daily: reset today and re-anchor from the new counter.
     state = state.copy(
       sensorTotal = sensorTotal,
-      dailyBaseline = sensorTotal,
-      raceBaseline = if (state.activeRaceId != null) sensorTotal else null,
-      todaySteps = 0,
-      raceSteps = 0,
+      dailyBaseline = if (verifiedDaily) state.dailyBaseline else sensorTotal,
+      raceBaseline = newRaceBaseline,
+      todaySteps = if (verifiedDaily) state.todaySteps else 0,
+      raceSteps = preservedRace,
       updatedAt = System.currentTimeMillis(),
     )
     lastSensorTotal = sensorTotal
+    Log.w(
+      TAG,
+      "[StepFGS] reboot re-anchor sensorTotal=$sensorTotal preservedRace=$preservedRace raceBaseline=$newRaceBaseline",
+    )
     persistAndEmit(state, force = true)
   }
 

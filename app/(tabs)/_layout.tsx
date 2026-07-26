@@ -176,7 +176,7 @@ export default function TabLayout() {
     return <Redirect href="/(auth)" />;
   }
 
-  if (isLiquidGlassAvailable()) {
+  if (Platform.OS === "ios" && isLiquidGlassAvailable()) {
     return <NativeTabLayout />;
   }
   return <ClassicTabLayout />;

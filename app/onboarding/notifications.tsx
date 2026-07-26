@@ -12,7 +12,9 @@ import { ONBOARDING_ASSETS, ONBOARDING_COLORS, ONBOARDING_ROUTES } from "@/const
 import { setNotificationOnboardingChoice } from "@/utils/onboardingStorage";
 import {
   optInNotifications,
+  optOutNotifications,
   requestNotificationPermission,
+  setNotificationPreferences,
 } from "@/services/notificationService";
 import { rf } from "@/utils/responsive";
 
@@ -33,8 +35,14 @@ export default function NotificationsOnboardingScreen() {
       const granted = await requestNotificationPermission();
       if (granted) {
         await optInNotifications();
+        await setNotificationPreferences(true);
+        const { applyOngoingNotificationPreference } = await import(
+          "@/services/ongoingNotificationPreference"
+        );
+        await applyOngoingNotificationPreference(true);
         await continueNext("accepted");
       } else {
+        await setNotificationPreferences(false);
         await continueNext("denied");
       }
     } catch {
@@ -42,6 +50,20 @@ export default function NotificationsOnboardingScreen() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const skipNotifications = async () => {
+    try {
+      await optOutNotifications();
+      await setNotificationPreferences(false);
+      const { applyOngoingNotificationPreference } = await import(
+        "@/services/ongoingNotificationPreference"
+      );
+      await applyOngoingNotificationPreference(false);
+    } catch {
+      /* ignore */
+    }
+    await continueNext("skipped");
   };
 
   return (
@@ -57,7 +79,7 @@ export default function NotificationsOnboardingScreen() {
           />
           <OnboardingSecondaryButton
             label="Maybe Later"
-            onPress={() => void continueNext("skipped")}
+            onPress={() => void skipNotifications()}
           />
         </>
       }

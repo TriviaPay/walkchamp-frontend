@@ -20,8 +20,14 @@ export const FEATURE_FLAGS = {
   ANDROID_STEP_TRACKING_ENABLED: true,
   /** Use Health Connect for Android step reads (range-based, like iOS HealthKit). */
   ENABLE_ANDROID_HEALTH_CONNECT: true,
-  /** Fall back to old expo-sensors Pedometer if HC fails (set true for debugging only). */
-  FALLBACK_ANDROID_PEDOMETER: false,
+  /**
+   * Live race path uses TYPE_STEP_COUNTER (Android) / Core Motion (iOS).
+   * Health Connect / HealthKit remain the verified daily + reconciliation sources.
+   * Do not use this as a daily-walk replacement.
+   */
+  ENABLE_LIVE_RACE_DEVICE_SENSOR: true,
+  /** @deprecated Prefer ENABLE_LIVE_RACE_DEVICE_SENSOR — kept for older call sites. */
+  FALLBACK_ANDROID_PEDOMETER: true,
   SERVER_TIME_RACE_VALIDATION_ENABLED: true,
   /**
    * Persistent daily step notification (Android FGS) / Live Activity (iOS).

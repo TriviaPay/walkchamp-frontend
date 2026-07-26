@@ -7,7 +7,7 @@ import java.util.Locale
 
 /**
  * Canonical native step state persisted while the foreground service runs.
- * This is the source of truth when the JS runtime is asleep.
+ * Display / sync helper only — Health Connect (via JS) is the step source of truth.
  */
 data class NativeStepState(
   val userId: String?,

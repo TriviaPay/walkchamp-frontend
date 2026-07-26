@@ -19,6 +19,7 @@ export interface RaceSyncBufferOptions {
   force?: boolean;
   atTarget?: boolean;
   deviceTotalSteps?: number;
+  trackingSessionId?: string;
 }
 
 class RaceStepSyncBuffer {
@@ -32,6 +33,7 @@ class RaceStepSyncBuffer {
   private pendingRaceId: string | null = null;
   private pendingSource: RaceProgressSource = "unknown";
   private pendingDeviceTotal: number | undefined;
+  private pendingTrackingSessionId: string | undefined;
   private syncSeq = 0;
   private inFlight = false;
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -100,13 +102,16 @@ class RaceStepSyncBuffer {
     source: RaceProgressSource,
     options: RaceSyncBufferOptions = {},
   ): void {
-    const { force = false, atTarget = false, deviceTotalSteps } = options;
+    const { force = false, atTarget = false, deviceTotalSteps, trackingSessionId } = options;
     if (Platform.OS === "android" && AppState.currentState !== "active") {
       this.pendingRaceId = raceId;
       this.pendingRaceSteps = Math.max(this.pendingRaceSteps, raceSteps);
       this.pendingSource = source;
       if (deviceTotalSteps !== undefined) {
         this.pendingDeviceTotal = deviceTotalSteps;
+      }
+      if (trackingSessionId) {
+        this.pendingTrackingSessionId = trackingSessionId;
       }
       if (__DEV__) {
         console.log(
@@ -123,6 +128,9 @@ class RaceStepSyncBuffer {
     this.pendingSource = source;
     if (deviceTotalSteps !== undefined) {
       this.pendingDeviceTotal = deviceTotalSteps;
+    }
+    if (trackingSessionId) {
+      this.pendingTrackingSessionId = trackingSessionId;
     }
 
     const delta = this.pendingRaceSteps - this.lastSentSteps;
@@ -215,6 +223,7 @@ class RaceStepSyncBuffer {
         seq,
         this.pendingDeviceTotal,
         this.pendingSource,
+        this.pendingTrackingSessionId,
       );
       ok = result.ok;
       if (ok && this.onProgressSynced && result.rank !== undefined) {

@@ -29,6 +29,10 @@ import {
 } from "@/services/authService";
 import { dbProfileToUserProfile } from "@/utils/profileMapper";
 import { beginPostSignupOnboarding, getPostSignupHomeHref } from "@/utils/onboardingStorage";
+import {
+  applyReferralCode,
+  validateReferralCode,
+} from "@/utils/referral";
 import { COUNTRIES } from "@/constants/countries";
 import { DateOfBirthInput } from "@/components/DateOfBirthInput";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
@@ -115,6 +119,11 @@ export default function SignupScreen() {
   // Profile color is auto-assigned from the default palette; user can change it in Edit Profile.
   const avatarColor = AVATAR_COLORS[0];
   const [referralCode, setReferralCode] = useState("");
+  const [referralStatus, setReferralStatus] = useState<
+    "idle" | "checking" | "valid" | "invalid"
+  >("idle");
+  const [referralHint, setReferralHint] = useState("");
+  const referralTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
   const [countrySearch, setCountrySearch] = useState("");
   const [usernameStatus, setUsernameStatus] = useState<"idle"|"checking"|"available"|"taken"|"invalid">("idle");
@@ -171,6 +180,45 @@ export default function SignupScreen() {
     }, 600);
   }, [username]);
 
+  // Live-validate referral code via GET /api/referral/validate (JWT from OTP step).
+  useEffect(() => {
+    const code = referralCode.trim();
+    if (!code) {
+      setReferralStatus("idle");
+      setReferralHint("");
+      return;
+    }
+    if (!otpSession.jwt) {
+      setReferralStatus("idle");
+      setReferralHint("Verify your email first to check this code.");
+      return;
+    }
+    setReferralStatus("checking");
+    setReferralHint("Checking code…");
+    if (referralTimer.current) clearTimeout(referralTimer.current);
+    referralTimer.current = setTimeout(async () => {
+      const result = await validateReferralCode(code, otpSession.jwt);
+      if (result.valid) {
+        setReferralStatus("valid");
+        const name = result.referrer.fullName || result.referrer.username;
+        setReferralHint(`Valid — invited by @${result.referrer.username}${name && name !== result.referrer.username ? ` (${name})` : ""}`);
+      } else if (result.reason === "network_error") {
+        setReferralStatus("idle");
+        setReferralHint("Could not verify right now — you can continue.");
+      } else {
+        setReferralStatus("invalid");
+        setReferralHint(
+          result.reason === "empty"
+            ? ""
+            : "This referral code is not valid.",
+        );
+      }
+    }, 500);
+    return () => {
+      if (referralTimer.current) clearTimeout(referralTimer.current);
+    };
+  }, [referralCode, otpSession.jwt]);
+
   // ── Step 0: Social login (Google / Apple) — shared with login screen ────────
   async function handleSocialLogin(provider: "google" | "apple") {
     if (socialLoading || sendingOtp) return;
@@ -185,7 +233,7 @@ export default function SignupScreen() {
         (authData.user as { email?: string } | undefined)?.email ??
         "";
 
-      const profile = await fetchMe(authData.sessionJwt);
+      const profile = await fetchMe(authData.sessionJwt, { includeSessionHeaders: false });
       if (!profile) {
         router.replace({
           pathname: "/(auth)/complete-profile",
@@ -293,7 +341,7 @@ export default function SignupScreen() {
       // Check if this email already belongs to a completed account.
       // Since sendSignupOtp now uses signUpOrIn, existing users pass verification —
       // we detect them here and redirect instead of letting them re-signup.
-      const existingProfile = await fetchMe(authData.sessionJwt).catch(() => null);
+      const existingProfile = await fetchMe(authData.sessionJwt, { includeSessionHeaders: false }).catch(() => null);
       if (existingProfile) {
         const completed = !!(existingProfile.profile_completed ?? existingProfile.profileCompleted);
         const authProvider = String(existingProfile.auth_provider ?? existingProfile.authProvider ?? "email");
@@ -342,13 +390,38 @@ export default function SignupScreen() {
   }
 
   // ── Step 2: Profile next ──────────────────────────────────────────────────
-  function handleStep2Next() {
+  async function handleStep2Next() {
     setStep2Error("");
     if (!fullName.trim()) { setStep2Error("Full name is required."); return; }
     if (usernameStatus !== "available") { setStep2Error("Please choose a valid, available username."); return; }
     if (!dob) { setStep2Error("Date of birth is required."); return; }
     const age = calcAge(dob);
     if (age < 13) { setStep2Error("You must be at least 13 years old to register."); return; }
+
+    // Referral is optional — skip when blank; validate only if the user typed one.
+    const code = referralCode.trim();
+    if (!code) {
+      setReferralStatus("idle");
+      setReferralHint("");
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setStep(3);
+      return;
+    }
+
+    if (otpSession.jwt) {
+      const result = await validateReferralCode(code, otpSession.jwt);
+      if (result.valid) {
+        setReferralStatus("valid");
+        setReferralHint(`Valid — invited by @${result.referrer.username}`);
+      } else if (result.reason !== "network_error") {
+        setReferralStatus("invalid");
+        setReferralHint("This referral code is not valid.");
+        setStep2Error("Please enter a valid referral code, or clear the field to continue without one.");
+        return;
+      }
+      // network_error → allow continue; apply can still be attempted after signup
+    }
+
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setStep(3);
   }
@@ -403,6 +476,17 @@ export default function SignupScreen() {
       // Persist session + update auth context → enters main app
       const userProfile = dbProfileToUserProfile(profile);
       await login(userProfile, otpSession.jwt, otpSession.refresh);
+
+      // Attach referral via POST /api/referral/apply (in addition to referredBy above).
+      // Ignore already_referred / window_closed — signup must not fail for this.
+      const codeToApply = referralCode.trim();
+      if (codeToApply) {
+        try {
+          await applyReferralCode(codeToApply);
+        } catch {
+          /* non-blocking */
+        }
+      }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       await beginPostSignupOnboarding();
@@ -489,9 +573,9 @@ export default function SignupScreen() {
         >
           {step === 0 && (
             <View style={styles.authLogoHeader}>
-              <View style={[styles.logoContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={styles.logoContainer}>
                 <Image
-                  source={require("@/assets/icons/WalkChampProgress0.png")}
+                  source={require("@/assets/icons/WalkChampProgress100.png")}
                   style={styles.logoImage}
                   resizeMode="contain"
                 />
@@ -728,11 +812,49 @@ export default function SignupScreen() {
               </View>
 
               <View>
-                <Text style={[styles.label, { color: colors.mutedForeground }]}>Referral code (optional)</Text>
-                <View style={[styles.inputContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Text style={[styles.label, { color: colors.mutedForeground }]}>
+                  Referral code (optional)
+                </Text>
+                <View style={[styles.inputContainer, {
+                  backgroundColor: colors.card,
+                  borderColor:
+                    referralStatus === "valid"
+                      ? "#00E67660"
+                      : referralStatus === "invalid"
+                        ? "#FF444460"
+                        : colors.border,
+                }]}>
                   <Feather name="gift" size={18} color={colors.mutedForeground} />
-                  <TextInput style={[styles.input, { color: colors.foreground }]} placeholder="Enter referral code" placeholderTextColor={colors.mutedForeground} value={referralCode} onChangeText={setReferralCode} autoCapitalize="characters" />
+                  <TextInput
+                    style={[styles.input, { color: colors.foreground }]}
+                    placeholder="Enter referral code"
+                    placeholderTextColor={colors.mutedForeground}
+                    value={referralCode}
+                    onChangeText={(t) => setReferralCode(t.replace(/\s/g, "").toUpperCase())}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                  />
+                  {referralStatus === "checking" && <ActivityIndicator size="small" color={colors.primary} />}
+                  {referralStatus === "valid" && <Feather name="check-circle" size={18} color="#00E676" />}
+                  {referralStatus === "invalid" && <Feather name="x-circle" size={18} color="#FF4444" />}
                 </View>
+                {!!referralHint && (
+                  <Text
+                    style={[
+                      styles.fieldHint,
+                      {
+                        color:
+                          referralStatus === "valid"
+                            ? "#00E676"
+                            : referralStatus === "invalid"
+                              ? "#FF4444"
+                              : colors.mutedForeground,
+                      },
+                    ]}
+                  >
+                    {referralHint}
+                  </Text>
+                )}
               </View>
 
               <TouchableOpacity style={styles.nextBtn} onPress={handleStep2Next}>
@@ -895,8 +1017,8 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   scroll: { paddingHorizontal: rs(24), maxWidth: MAX_CONTENT_WIDTH, alignSelf: "center", width: "100%" },
   authLogoHeader: { alignItems: "center", marginBottom: rs(20) },
-  logoContainer: { width: rs(70), height: rs(70), borderRadius: rs(20), borderWidth: 1, alignItems: "center", justifyContent: "center", marginBottom: rs(12) },
-  logoImage: { width: rs(48), height: rs(48) },
+  logoContainer: { width: rs(70), height: rs(70), alignItems: "center", justifyContent: "center", marginBottom: rs(12) },
+  logoImage: { width: rs(56), height: rs(56) },
   authAppName: { fontSize: rf(24), fontWeight: "800", letterSpacing: -0.5 },
   authTagline: { fontSize: rf(14), marginTop: 4 },
   topRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: rs(24) },

@@ -59,6 +59,29 @@ assert.equal(
 
 assert.equal(
   resolveTodayDisplayStepsCore({
+    providerSteps: 0,
+    backendSteps: 197,
+    previousProviderSteps: 197,
+    verifiedSource: true,
+  }),
+  197,
+  "verified empty HC keeps backend/previous floor",
+);
+
+assert.equal(
+  capWalkStepsForSyncCore(250, 0, true, 197),
+  197,
+  "verified empty HC syncs backend only — never provisional UI",
+);
+
+assert.equal(
+  capWalkStepsForSyncCore(100, 0, true, 197),
+  197,
+  "verified empty HC never syncs below backend floor",
+);
+
+assert.equal(
+  resolveTodayDisplayStepsCore({
     providerSteps: 4200,
     backendSteps: 8900,
     verifiedSource: true,

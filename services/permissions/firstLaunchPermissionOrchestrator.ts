@@ -1,129 +1,112 @@
 /**
  * First-launch permission orchestrator.
  *
- * Runs once per user+installation after auth + app startup are ready.
- * Reuses activateStepTracking (notifications → AR → HC/sensor/iOS) —
- * does NOT change provider selection, unsupported-device logic, or push flow.
- *
- * Push notifications remain owned by PushPermissionPrompt / runPostLoginPushSetup.
+ * Signup + premium onboarding in progress → do not open HC (onboarding owns the path).
+ * Login (home tabs ready) → show Health Connect / Apple Health setup only if still needed.
+ * Never open over splash/login, and never open-then-dismiss (confused flash).
  */
 
 import { AppState, Platform } from "react-native";
-import { waitForAppStartupReady } from "@/services/appStartup";
-import { activateStepTracking } from "@/services/stepTrackingStartup";
-import { stepProviderManager } from "@/services/steps/stepProviderManager";
-import { getDeviceCapabilitySnapshot } from "@/services/permissions/deviceCapability";
 import {
-  getDevicePermissionState,
   markPermissionEducationShown,
   wasPermissionEducationShown,
 } from "@/services/permissions/permissionCoordinator";
+import {
+  markHomeStepSetupPhaseDone,
+  requestHomeStepSetup,
+  setHomeStepSetupInProgress,
+} from "@/services/permissions/homePermissionFlow";
 import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
 import { getOnboardingStatus } from "@/utils/onboardingStorage";
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForForeground(): Promise<void> {
-  if (AppState.currentState === "active") return;
-  await new Promise<void>((resolve) => {
-    const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active") {
-        sub.remove();
-        resolve();
-      }
-    });
-  });
-}
-
 /**
- * Attempt the first-launch step/motion permission sequence for this user
- * on this installation. Safe to call multiple times.
- *
- * Subsequent logins on the same installation: re-check OS status; only request
- * missing permissions that can still be prompted — never treat another device's
- * grants as truth.
+ * True when Android still needs the HC setup wizard (install / update / grant READ).
+ * Skip only when permission is already granted.
  */
+async function androidNeedsHealthConnectSetup(): Promise<boolean> {
+  if (Platform.OS !== "android") return false;
+  try {
+    const { getAndroidStepTrackingStatus } = await import(
+      "@/services/steps/androidStepTrackingStatus"
+    );
+    const status = await getAndroidStepTrackingStatus(true);
+    if (status.status === "permission_granted") return false;
+    return (
+      status.status === "provider_update_required" ||
+      status.status === "provider_not_installed" ||
+      status.status === "available" ||
+      status.status === "permission_denied" ||
+      status.status === "error" ||
+      status.status === "unsupported" ||
+      status.status === "expo_go"
+    );
+  } catch {
+    return true;
+  }
+}
+
 export async function runFirstLaunchPermissionFlow(options: {
   userId: string;
   username?: string | null;
 }): Promise<void> {
-  const { userId, username } = options;
+  const { userId } = options;
   if (!userId?.trim()) return;
 
   try {
-    // Let premium onboarding own Health Connect / HealthKit Enable UI —
-    // competing auto-prompts make the HC/HK sheet fail to show.
+    // Signup → continue onboarding screens; HC setup comes after onboarding.
     if (ENABLE_PREMIUM_ONBOARDING) {
       const onboarding = await getOnboardingStatus();
       if (onboarding === "in_progress") {
         if (__DEV__) {
           console.log(
-            "[Permission] first_launch deferred — onboarding in progress",
+            "[Permission] first_launch deferred — signup onboarding in progress",
           );
         }
+        markHomeStepSetupPhaseDone();
         return;
       }
     }
 
-    const snap = await getDeviceCapabilitySnapshot();
+    if (AppState.currentState !== "active") {
+      await new Promise<void>((resolve) => {
+        const sub = AppState.addEventListener("change", (state) => {
+          if (state === "active") {
+            sub.remove();
+            resolve();
+          }
+        });
+      });
+    }
+
+    // Check BEFORE opening — never flash the wizard then hide it.
     const educationShown = await wasPermissionEducationShown(userId);
-
-    await waitForAppStartupReady();
-    await waitForForeground();
-    await delay(Platform.OS === "ios" ? 1800 : 1200);
-    if (AppState.currentState !== "active") return;
-
-    // Always re-check native / provider readiness (never trust cached "granted").
-    const permState = await getDevicePermissionState();
-    const ready = await stepProviderManager.isTrackingReady().catch(() => false);
-
-    if (__DEV__) {
-      console.log(
-        `[Permission] firstLoginOnInstallation=${!educationShown} provider=${snap.stepProvider} androidApiLevel=${snap.androidApiLevel ?? "n/a"} notificationRuntimeSupported=${snap.notificationRuntimePermissionSupported} allRequiredGranted=${permState.allRequiredGranted} trackingReady=${ready}`,
-      );
+    let needsHcSetup = Platform.OS === "android";
+    if (Platform.OS === "android") {
+      needsHcSetup = await androidNeedsHealthConnectSetup();
+    } else {
+      needsHcSetup = !educationShown;
     }
 
-    if (ready && permState.allRequiredGranted) {
-      if (__DEV__) console.log("[Permission] first_launch skipped — already tracking-ready");
+    if (!needsHcSetup) {
+      if (__DEV__) {
+        console.log("[Permission] first_launch skipped — HC already set up");
+      }
       await markPermissionEducationShown(userId);
-      return;
-    }
-
-    // Subsequent login: if education already shown and nothing requestable, skip prompts.
-    if (educationShown && ready) {
-      await markPermissionEducationShown(userId);
+      markHomeStepSetupPhaseDone();
       return;
     }
 
     if (__DEV__) {
       console.log(
-        `[Permission] flowStarted source=first_launch platform=${Platform.OS} userId=${userId.slice(0, 8)}…`,
+        `[Permission] flowStarted source=login_hc_setup platform=${Platform.OS} educationShown=${educationShown}`,
       );
     }
 
-    // Skip notification modal here so HC/HealthKit permission sheet can present.
-    // Notifications remain available via PushPermissionPrompt / Walk enable path.
-    const result = await activateStepTracking({
-      userId,
-      username: username ?? null,
-      requestPermission: true,
-      skipOngoingNotificationPermission: true,
-    });
-
-    if (__DEV__) {
-      console.log(
-        `[Permission] first_launch done success=${result.success} provider=${result.providerId ?? "none"} permission=${result.permission}`,
-      );
-    }
-
-    // Only mark shown after a successful grant — a failed/raced attempt must
-    // remain retryable (WearableSetup / next cold start).
-    if (result.success) {
-      await markPermissionEducationShown(userId);
-    }
+    setHomeStepSetupInProgress(true);
+    // Queues until splash/login shell is ready — no overlay on splash.
+    requestHomeStepSetup();
   } catch (e) {
     if (__DEV__) console.log("[Permission] first_launch error", e);
+    markHomeStepSetupPhaseDone();
   }
 }

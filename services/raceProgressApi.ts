@@ -1,5 +1,10 @@
 import { authFetch, STEP_SYNC_TIMEOUT, API_TIMEOUT_MS } from "@/utils/authFetch";
 import { logger } from "@/utils/logger";
+import {
+  isAcceptedVerifiedSource,
+  isLegacyStepSourceId,
+} from "@/services/steps/verifiedStepSources";
+// liveRaceSources used inside postRaceProgress (dynamic require avoids cycles)
 
 export type RaceProgressSource =
   | "healthkit"
@@ -20,6 +25,8 @@ export interface RaceProgressResult {
   raceStatus?: string;
   userId?: string;
   raceId?: string;
+  /** Present when backend / client rejects non-verified sources. */
+  code?: string;
 }
 
 function parseRaceProgressResult(
@@ -67,8 +74,47 @@ export async function postRaceProgress(
   sequenceId?: number,
   deviceTotalSteps?: number,
   stepSource?: RaceProgressSource,
+  trackingSessionId?: string,
 ): Promise<RaceProgressResult> {
   try {
+    // Allow verified health-store sources OR live device-sensor sources.
+    // Reject unknown / other legacy aliases that are not live-race approved.
+    if (stepSource != null) {
+      const { isAcceptedRaceProgressSource } = require(
+        "@/services/steps/liveRaceSources",
+      ) as typeof import("@/services/steps/liveRaceSources");
+      if (!isAcceptedRaceProgressSource(String(stepSource))) {
+        logger.debug(
+          "RaceSteps",
+          `rejected unsupported stepSource=${stepSource}`,
+        );
+        return {
+          ok: false,
+          acceptedSteps: 0,
+          skipped: true,
+          code: "VERIFIED_STEP_SOURCE_REQUIRED",
+        };
+      }
+    }
+
+    // Live race uploads must not use health sources as the live lane.
+    if (
+      typeof __DEV__ !== "undefined" &&
+      __DEV__ &&
+      stepSource &&
+      isAcceptedVerifiedSource(String(stepSource)) &&
+      !["simulation", "race_start"].includes(String(stepSource))
+    ) {
+      const { isAcceptedLiveRaceSource } = require(
+        "@/services/steps/liveRaceSources",
+      ) as typeof import("@/services/steps/liveRaceSources");
+      if (!isAcceptedLiveRaceSource(String(stepSource))) {
+        console.warn(
+          "[HybridSteps] race live upload should not use health source as live source",
+        );
+      }
+    }
+
     const body: Record<string, unknown> = {
       steps,
       deviceTime: new Date().toISOString(),
@@ -76,10 +122,16 @@ export async function postRaceProgress(
     if (sequenceId !== undefined) body.sequenceId = sequenceId;
     if (deviceTotalSteps !== undefined) body.deviceTotalSteps = deviceTotalSteps;
     if (stepSource !== undefined) body.stepSource = stepSource;
+    // Tracking session identity (restart/reboot/resume). Backend may ignore until
+    // contract is updated — still send for forward compatibility.
+    if (trackingSessionId) {
+      body.sessionId = trackingSessionId;
+      body.trackingSessionId = trackingSessionId;
+    }
 
     logger.debug(
       "RaceSteps",
-      `sending sync raceId=${raceId} steps=${steps} source=${stepSource ?? "unknown"} seq=${sequenceId ?? "n/a"}`,
+      `sending sync raceId=${raceId} steps=${steps} source=${stepSource ?? "unknown"} seq=${sequenceId ?? "n/a"} session=${trackingSessionId ?? "n/a"} deviceTotal=${deviceTotalSteps ?? "n/a"}`,
     );
 
     const res = await authFetch(`/api/races/${raceId}/progress`, {
@@ -96,7 +148,14 @@ export async function postRaceProgress(
       `sync response HTTP ${res.status} progress:${parsed.acceptedSteps} skipped=${parsed.skipped}`,
     );
     if (!res.ok) {
-      return { ok: false, acceptedSteps: 0, skipped: false };
+      const code =
+        typeof json.code === "string" ? json.code : undefined;
+      return {
+        ok: false,
+        acceptedSteps: 0,
+        skipped: false,
+        ...(code ? { code } : {}),
+      };
     }
     return { ok: true, ...parsed };
   } catch (err) {

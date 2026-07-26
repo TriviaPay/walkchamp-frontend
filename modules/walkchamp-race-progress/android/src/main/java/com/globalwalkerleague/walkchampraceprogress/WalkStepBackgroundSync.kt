@@ -35,6 +35,12 @@ object WalkStepBackgroundSync {
     }
     if (todaySteps <= 0) return WalkSyncResult(ok = false)
 
+    // Guard: provisional / sensor sources must never hit verified daily endpoint.
+    if (!RaceNotificationState.isVerifiedStepSource(stepSource)) {
+      Log.w(TAG, "[StepFGS] backendSync walk rejected provisional source=$stepSource")
+      return WalkSyncResult(ok = false)
+    }
+
     val base = apiBaseUrl.trim().removeSuffix("/")
     val conn = (URL("$base/api/walk/steps").openConnection() as HttpURLConnection).apply {
       requestMethod = "POST"

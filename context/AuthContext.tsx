@@ -115,6 +115,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (profile: UserProfile, sessionJwt: string, refreshJwt: string) => {
       if (authTimerRef.current) clearTimeout(authTimerRef.current);
       setIsAuthenticating(true);
+      const { beginSessionLoginGrace } = await import(
+        "@/services/sessionInvalidation"
+      );
+      beginSessionLoginGrace(15_000);
       await saveSession(sessionJwt, refreshJwt);
       // Persist profile so restoreSession can use it as an offline fallback on
       // next cold start (prevents logout when the API is unreachable at launch).
@@ -129,15 +133,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (profile.id && profile.profileImageUrl) {
         prefetchProfileAvatar(profile.id, profile.avatarVersion ?? 0);
       }
-      await bindStepSessionToUser(profile.id);
-      // Register this installation as the active session (backend revokes siblings when ready).
+      // Don't block the login UI on step bind / session register — grace window
+      // already protects against self-kick until meta is written.
+      void bindStepSessionToUser(profile.id);
       void registerActiveSession({
         accessToken: sessionJwt,
         userId: profile.id,
-      }).catch(() => {});
-      // Give the caller's router.replace() time to be queued before
-      // releasing the gate — prevents index.tsx from racing ahead.
-      authTimerRef.current = setTimeout(() => setIsAuthenticating(false), 500);
+      }).catch(() => {
+        /* soft-fail — provisional meta stored inside register */
+      });
+      // Brief gate so router.replace() can queue before index evaluates auth.
+      authTimerRef.current = setTimeout(() => setIsAuthenticating(false), 100);
       void waitForAppStartupReady().then(() => {
         dynamicIconService
           .checkAndUpdate({
@@ -159,6 +165,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     raceStepSyncService.cancelPending();
     // Clear in-memory screen cache so the next user never sees stale data.
     screenCache.clearAll();
+    try {
+      const { resetHomePermissionFlow } = require(
+        "@/services/permissions/homePermissionFlow",
+      ) as typeof import("@/services/permissions/homePermissionFlow");
+      resetHomePermissionFlow();
+    } catch {
+      /* optional */
+    }
     try {
       unsubscribeAll();
       disconnectPusher();
@@ -266,6 +280,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!token) return;
         const status = await validateActiveSession(token);
         if (status.active === false) {
+          const { isSessionLoginGraceActive } = await import(
+            "@/services/sessionInvalidation"
+          );
+          if (isSessionLoginGraceActive()) return;
           await handleSessionInvalidation({
             reason: status.reason,
             sessionId: status.sessionId,

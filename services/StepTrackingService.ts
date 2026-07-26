@@ -1,9 +1,8 @@
 /**
  * StepTrackingService — iOS HealthKit step tracking via expo-sensors Pedometer.
  *
- * This service is iOS-only.  Android step tracking is handled by
- * services/steps/androidStepService.ts which covers Health Connect and the
- * native step counter sensor fallback.
+ * This service is iOS-only. Android step tracking uses Health Connect only
+ * (`androidHealthConnectProvider` / `androidHealthConnectService`).
  *
  * The module is loaded lazily so a missing or incompatible native module
  * never crashes the app.

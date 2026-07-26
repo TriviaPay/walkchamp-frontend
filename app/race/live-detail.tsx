@@ -50,8 +50,14 @@ import { updateRankFromBackend, ensureActiveRaceInStore, clearActiveRaceProgress
 import { findEligibleLiveRaceParticipant } from "@/utils/raceNotificationEligibility";
 import { stepEngineLog } from "@/utils/stepAccuracy";
 import { store } from "@/store";
+import { raceProgressActions } from "@/store/slices/raceProgressSlice";
+import {
+  resolveFinalRaceAuthority,
+  resolveFinishedRaceDisplaySteps,
+} from "@/services/steps/finalRaceAuthority";
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import { FEATURE_FLAGS } from "@/config/featureFlags";
 import {
   liveRaceFetchAllowed,
   markLiveRaceFetched,
@@ -1460,7 +1466,7 @@ function LiveRaceDetailScreenContent() {
   );
 
   const { user, sessionToken }                     = useAuth();
-  const { setRaceTargetSteps, resumeLiveRace, setActiveRace, catchUpLiveRaceSteps, recordFinishedRaceStepsForWalk, userRaceSteps, stopRaceStepTracking } = useRace();
+  const { setRaceTargetSteps, resumeLiveRace, setActiveRace, catchUpLiveRaceSteps, recordFinishedRaceStepsForWalk, userRaceSteps, stopRaceStepTracking, raceVerification } = useRace();
   const { resumeStepWatching, refreshTodaySteps } = useWalkContext();
   const raceProgress = useRaceProgress();
   const canonicalRaceSteps = raceProgress.raceSteps;
@@ -1483,10 +1489,44 @@ function LiveRaceDetailScreenContent() {
     const local = Math.max(0, Math.floor(localStepsRef.current));
     const backend =
       backendSteps !== undefined ? Math.max(0, Math.floor(backendSteps)) : undefined;
-    const reconciled = Math.min(
-      target,
-      backend !== undefined ? Math.max(local, backend) : local,
+    // Backend-status authority — never max(local, verified, reconciled).
+    const rp = store.getState().raceProgress;
+    const authority = resolveFinalRaceAuthority({
+      targetSteps: target,
+      backendAcceptedLiveSteps:
+        backend ?? rp.backendAcceptedLiveSteps ?? null,
+      backendReconciledSteps: rp.backendReconciledSteps,
+      reconciliationStatus: rp.reconciliationStatus,
+      localLiveSteps: local,
+    });
+    // If backend sent completion steps but status not yet finalized, treat
+    // completion payload as accepted live (provisional result UI).
+    const displaySteps = resolveFinishedRaceDisplaySteps(
+      authority.kind === "provisional" && backend !== undefined
+        ? resolveFinalRaceAuthority({
+            targetSteps: target,
+            backendAcceptedLiveSteps: backend,
+            backendReconciledSteps: rp.backendReconciledSteps,
+            reconciliationStatus:
+              rp.reconciliationStatus === "finalized"
+                ? "finalized"
+                : rp.reconciliationStatus === "review_required"
+                  ? "review_required"
+                  : "pending",
+            localLiveSteps: local,
+          })
+        : authority,
     );
+    const reconciled = displaySteps;
+    if (authority.kind === "finalized" && authority.finalAuthoritativeSteps != null) {
+      store.dispatch(
+        raceProgressActions.setBackendReconciliation({
+          status: "finalized",
+          backendReconciledSteps: authority.finalAuthoritativeSteps,
+          finalAuthoritativeSteps: authority.finalAuthoritativeSteps,
+        }),
+      );
+    }
     setFinalRaceSteps(reconciled);
     stepEngineLog(
       "RaceComplete",
@@ -3288,6 +3328,24 @@ function LiveRaceDetailScreenContent() {
                 ? `Rank #${myPlayer.rank} · ${formatSteps(Math.max(0, race.targetSteps - mySteps))} steps to goal`
                 : "Waiting for live race data"}
             </Text>
+            {isActive ? (
+              <Text style={[st.progSub, { fontSize: Math.max(8, rs(9)), marginTop: 2, opacity: 0.85 }]}>
+                {FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR
+                  ? `Live tracking · ${formatSteps(mySteps)} race steps`
+                  : "Live tracking"}
+                {raceVerification
+                  ? raceVerification.status === "verification_delayed" ||
+                    raceVerification.status === "provider_unavailable"
+                    ? " · Health verification pending"
+                    : raceVerification.status === "matched" ||
+                        raceVerification.status === "within_tolerance"
+                      ? ` · Verified ${formatSteps(raceVerification.verifiedRaceSteps)}`
+                      : " · Health verification pending"
+                  : FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR
+                    ? " · Health verification pending"
+                    : ""}
+              </Text>
+            ) : null}
           </View>
           {race.entryType === "coins_battle" ? (
             <LivePrizeStrip race={race} colors={colors} />

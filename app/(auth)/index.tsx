@@ -23,7 +23,7 @@ import { rf, rs, rv, MAX_CONTENT_WIDTH } from "@/utils/responsive";
 import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
 
 const EMAIL_DOMAINS = ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com"];
-const APP_LOGO = require("@/assets/icons/WalkChampProgress0.png");
+const APP_LOGO = require("@/assets/icons/WalkChampProgress100.png");
 const LEGAL_CONFIRM_MSG =
   "Please confirm that you are 18 or older and agree to the Terms and Privacy Policy.";
 
@@ -92,7 +92,7 @@ export default function LoginScreen() {
       const authData = await signInWithEmail(e, password);
       const userId = getUserIdFromJwt(authData.sessionJwt);
 
-      const profile = await fetchMe(authData.sessionJwt);
+      const profile = await fetchMe(authData.sessionJwt, { includeSessionHeaders: false });
 
       if (!profile) {
         router.replace({
@@ -190,7 +190,7 @@ export default function LoginScreen() {
         (authData.user as { email?: string } | undefined)?.email ??
         "";
 
-      const profile = await fetchMe(authData.sessionJwt);
+      const profile = await fetchMe(authData.sessionJwt, { includeSessionHeaders: false });
       if (!profile) {
         router.replace({
           pathname: "/(auth)/complete-profile",

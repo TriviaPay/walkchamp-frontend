@@ -55,10 +55,9 @@ export function scheduleAppStartupReady(): void {
       resolveReady = null;
     };
 
-    // Release APK / EAS cold install: short gate so Walk/Live can hydrate faster
-    // while still avoiding bridgeless JavaScriptContextHolder NPEs on first frame.
+    // Release cold install quickly once first interactions settle.
     if (Platform.OS === "android") {
-      setTimeout(markReady, __DEV__ ? 400 : 800);
+      setTimeout(markReady, __DEV__ ? 200 : 350);
     } else {
       requestAnimationFrame(markReady);
     }

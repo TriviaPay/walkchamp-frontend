@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   AppState,
@@ -27,11 +27,15 @@ import {
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { androidLegacySensorProvider } from "@/services/steps/providers/androidLegacySensorProvider";
 import { useWalkContext } from "@/context/WalkContext";
+import { FEATURE_FLAGS } from "@/config/featureFlags";
 
 const isIOS = Platform.OS === "ios";
 const TOTAL_IOS = 5;
 const TOTAL_ANDROID = 4;
 const ONBOARDING_BTN = [ONBOARDING_COLORS.cyan, ONBOARDING_COLORS.primary] as const;
+/** Hybrid: daily requires Health Connect — never offer phone-sensor daily fallback in setup. */
+const hybridDailyHcOnly = () =>
+  FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR === true;
 
 type AndroidPhase =
   | "checking"
@@ -47,12 +51,12 @@ interface Props {
   last7Days?: { date: string; steps: number }[];
   onRefreshSteps?: () => Promise<void>;
   onComplete?: (platform: string, permissionStatus: string) => void;
-  /** Match premium onboarding primary button (cyan → blue). */
+  /** Match premium onboarding primary button (cyan → blue). Default matches onboarding. */
   accent?: "default" | "onboarding";
 }
 
 export default function WearableSetupModal({
-  visible, onClose, onComplete, accent = "default",
+  visible, onClose, onComplete, accent = "onboarding",
 }: Props) {
   const colors = useColors();
   const { safeTop, safeBottom } = useSafeLayout();
@@ -69,6 +73,61 @@ export default function WearableSetupModal({
   const [hcAvailability, setHcAvailability] = useState<HCAvailability | null>(null);
   const [installLoading, setInstallLoading] = useState(false);
   const [limitedLoading, setLimitedLoading] = useState(false);
+  /** True after Enable Step Tracking succeeded this open — survives stale HC "unknown" cache. */
+  const stepsGrantedThisSessionRef = useRef(false);
+  const useOnboardingAccent = accent === "onboarding";
+  const actionIconColor = useOnboardingAccent ? "#FFF" : "#000";
+  const actionTextColor = useOnboardingAccent ? "#FFF" : "#000";
+
+  const PrimaryAction = ({
+    onPress,
+    disabled,
+    loading,
+    icon,
+    label,
+    solidColor,
+  }: {
+    onPress: () => void;
+    disabled?: boolean;
+    loading?: boolean;
+    icon: React.ComponentProps<typeof Feather>["name"];
+    label: string;
+    /** Non-onboarding solid fill (e.g. amber fallback). Ignored when onboarding accent. */
+    solidColor?: string;
+  }) => (
+    <TouchableOpacity
+      style={[
+        ws.actionBtn,
+        !useOnboardingAccent && { backgroundColor: solidColor ?? "#00E676" },
+        useOnboardingAccent && { backgroundColor: "transparent", paddingVertical: 0 },
+        { opacity: disabled || loading ? 0.6 : 1 },
+      ]}
+      onPress={onPress}
+      disabled={disabled || loading}
+      activeOpacity={0.88}
+    >
+      {useOnboardingAccent ? (
+        <LinearGradient
+          colors={[...ONBOARDING_BTN]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={ws.actionBtnGrad}
+        >
+          {loading
+            ? <ActivityIndicator size="small" color={actionIconColor} />
+            : <Feather name={icon} size={16} color={actionIconColor} />}
+          <Text style={[ws.actionBtnText, { color: actionTextColor }]}>{label}</Text>
+        </LinearGradient>
+      ) : (
+        <>
+          {loading
+            ? <ActivityIndicator size="small" color={actionIconColor} />
+            : <Feather name={icon} size={16} color={actionIconColor} />}
+          <Text style={[ws.actionBtnText, { color: actionTextColor }]}>{label}</Text>
+        </>
+      )}
+    </TouchableOpacity>
+  );
 
   const checkHCAvailability = useCallback(async () => {
     if (isIOS) return;
@@ -103,25 +162,34 @@ export default function WearableSetupModal({
         return;
       }
 
-      // HC not usable — prefer Android Steps when the device sensor is available.
-      if (legacyOk) {
-        setAndroidPhase("legacy_ready");
+      // Guide install / update first — same as previous HC setup flow.
+      if (
+        result.availability === "not_installed" ||
+        result.availability === "needs_update"
+      ) {
+        setAndroidPhase("install");
         return;
       }
 
       if (result.availability === "not_supported") {
         setAndroidPhase("not_supported");
-      } else if (
-        result.availability === "not_installed" ||
-        result.availability === "needs_update"
-      ) {
-        setAndroidPhase("install");
-      } else {
-        setAndroidPhase("not_supported");
+        return;
       }
+
+      // Non-hybrid only: phone sensor daily fallback when HC is unusable.
+      if (!hybridDailyHcOnly() && legacyOk) {
+        setAndroidPhase("legacy_ready");
+        return;
+      }
+
+      setAndroidPhase("not_supported");
     } catch {
       const legacyOk = await androidLegacySensorProvider.isAvailable().catch(() => false);
-      setAndroidPhase(legacyOk ? "legacy_ready" : "not_supported");
+      if (!hybridDailyHcOnly() && legacyOk) {
+        setAndroidPhase("legacy_ready");
+        return;
+      }
+      setAndroidPhase("not_supported");
     }
   }, []);
 
@@ -131,6 +199,7 @@ export default function WearableSetupModal({
       setSaving(false);
       setPermLoading(false);
       setInstallLoading(false);
+      stepsGrantedThisSessionRef.current = false;
       if (isIOS) {
         void checkPerm();
       } else {
@@ -172,15 +241,30 @@ export default function WearableSetupModal({
   const grantAndroidSteps = async (): Promise<boolean> => {
     try {
       const result = await stepProviderManager.requestStepPermission();
-      const granted = result.status === "granted";
+      // Prefer the request result — do not invalidate HC cache here (that wiped
+      // the fresh "granted" write and left Done reading stale "unknown").
+      let live: "unknown" | "granted" | "denied" | "unavailable" = "unknown";
+      if (result.status === "granted") {
+        live = "granted";
+      } else {
+        live = await resolveLivePermStatus();
+      }
+      const granted = live === "granted" || result.status === "granted";
       if (granted) {
+        stepsGrantedThisSessionRef.current = true;
         setPermStatus("granted");
         setAndroidPhase("setup");
-        setStep(TOTAL_ANDROID - 1);
-      } else if (__DEV__) {
-        console.log(
-          `[WearableSetup] grantAndroidSteps status=${result.status} provider=${result.providerId ?? "none"} msg=${result.message ?? ""}`,
+        // Advance past Allow Steps so Next/Done do not bounce back to step 1.
+        setStep(Math.max(2, TOTAL_ANDROID - 2));
+      } else {
+        setPermStatus(
+          live === "denied" || result.status === "denied" ? "denied" : live,
         );
+        if (__DEV__) {
+          console.log(
+            `[WearableSetup] grantAndroidSteps status=${result.status} live=${live} provider=${result.providerId ?? "none"} msg=${result.message ?? ""}`,
+          );
+        }
       }
       return granted;
     } catch (e) {
@@ -209,15 +293,21 @@ export default function WearableSetupModal({
         // Use the same provider path as WalkContext so HealthKit grant
         // activates tracking consistently after first install.
         const result = await stepProviderManager.requestStepPermission();
+        const live = await resolveLivePermStatus();
+        const granted = live === "granted" || result.status === "granted";
         setPermStatus(
-          result.status === "granted"
+          granted
             ? "granted"
-            : result.status === "denied"
+            : live === "denied" || result.status === "denied"
               ? "denied"
-              : result.status === "unavailable"
+              : live === "unavailable" || result.status === "unavailable"
                 ? "unavailable"
                 : "unknown",
         );
+        if (granted) {
+          stepsGrantedThisSessionRef.current = true;
+          setStep(Math.max(2, TOTAL_IOS - 2));
+        }
       } else {
         await grantAndroidSteps();
       }
@@ -244,15 +334,72 @@ export default function WearableSetupModal({
   const handleDone = async () => {
     setSaving(true);
     try {
-      // Re-check the OS permission now — users can reach "You're set!" via Next
-      // without granting, which previously saved not_requested and left Profile
-      // stuck on "Tap to connect Health Connect".
-      const live = await resolveLivePermStatus();
+      // If Enable already succeeded this session, finish as connected even when
+      // HC/provider caches still briefly report "unknown".
+      if (stepsGrantedThisSessionRef.current || permStatus === "granted") {
+        const resolvedStatus = "connected";
+        try {
+          await authFetch("/api/me/step-source", {
+            method: "POST",
+            body: JSON.stringify({
+              platform,
+              permission_status: resolvedStatus,
+              source_name: healthName,
+              setup_completed: true,
+            }),
+          });
+        } catch { /* ignore network — still update local UI */ }
+
+        if (!isIOS && Platform.OS === "android") {
+          try {
+            const { hasActivityRecognitionPermission } = await import(
+              "@/services/permissions/activityRecognitionPermissionService"
+            );
+            const arOk = await hasActivityRecognitionPermission();
+            if (__DEV__) {
+              console.log(
+                `[WearableSetup] Done — activityRecognition alreadyGranted=${arOk} (no re-prompt)`,
+              );
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+
+        onComplete?.(platform, resolvedStatus);
+        onClose();
+        return;
+      }
+
+      // No in-session grant — re-check OS permission (user may have skipped Enable).
+      if (!isIOS) {
+        try {
+          androidHCService.invalidateCachesForForeground();
+        } catch {
+          /* ignore */
+        }
+      }
+
+      let live = await resolveLivePermStatus();
       setPermStatus(live);
 
       if (live !== "granted" && live !== "denied") {
+        for (const waitMs of [400, 800]) {
+          await new Promise((r) => setTimeout(r, waitMs));
+          try {
+            androidHCService.invalidateCachesForForeground();
+          } catch {
+            /* ignore */
+          }
+          live = await resolveLivePermStatus();
+          if (live === "granted" || live === "denied") break;
+        }
+        setPermStatus(live);
+      }
+
+      if (live !== "granted" && live !== "denied") {
         setSaving(false);
-        setStep(1); // Allow Steps screen
+        setStep(1); // Allow Steps screen — ask them to Enable again
         return;
       }
 
@@ -281,16 +428,38 @@ export default function WearableSetupModal({
     // cannot mark setup complete while Profile still shows "Tap to connect".
     const allowStepsIndex = 1;
     if (step === allowStepsIndex) {
-      const live = await resolveLivePermStatus();
+      let live = await resolveLivePermStatus();
       setPermStatus(live);
       if (live !== "granted") {
-        return;
+        // Don't silently no-op (feels like Next is broken / looping).
+        // Kick Enable once; if still not granted, stay here with clear CTA.
+        if (!permLoading) {
+          await requestPerm();
+          live = await resolveLivePermStatus();
+          setPermStatus(live);
+        }
+        if (live !== "granted") return;
       }
     }
     setStep(s => Math.min(s + 1, (isIOS ? TOTAL_IOS : TOTAL_ANDROID) - 1));
   };
   const goBack = () => setStep(s => Math.max(s - 1, 0));
   const isLast = step === (isIOS ? TOTAL_IOS : TOTAL_ANDROID) - 1;
+
+  const tryLimitedSensor = async (): Promise<boolean> => {
+    setLimitedLoading(true);
+    try {
+      const ok = await enableLimitedSensorTracking();
+      if (!ok) return false;
+      stepsGrantedThisSessionRef.current = true;
+      setPermStatus("granted");
+      setAndroidPhase("setup");
+      setStep(TOTAL_ANDROID - 1);
+      return true;
+    } finally {
+      setLimitedLoading(false);
+    }
+  };
 
   const HCCheckingScreen = () => <SkeletonWearableCheck />;
 
@@ -315,26 +484,13 @@ export default function WearableSetupModal({
       <Text style={[ws.desc, { color: colors.mutedForeground }]}>
         This device will use Android Steps (phone sensor). Tap Enable — no Health Connect required.
       </Text>
-      <TouchableOpacity
-        style={[ws.actionBtn, { opacity: limitedLoading ? 0.6 : 1 }]}
-        onPress={async () => {
-          setLimitedLoading(true);
-          try {
-            await enableLimitedSensorTracking();
-            setPermStatus("granted");
-            setAndroidPhase("setup");
-            setStep(TOTAL_ANDROID - 1);
-          } finally {
-            setLimitedLoading(false);
-          }
-        }}
+      <PrimaryAction
+        onPress={() => void tryLimitedSensor()}
         disabled={limitedLoading}
-      >
-        {limitedLoading
-          ? <ActivityIndicator size="small" color="#000" />
-          : <Feather name="check-circle" size={16} color="#000" />}
-        <Text style={ws.actionBtnText}>Enable Step Tracking</Text>
-      </TouchableOpacity>
+        loading={limitedLoading}
+        icon="check-circle"
+        label="Enable Step Tracking"
+      />
     </View>
   );
 
@@ -345,28 +501,20 @@ export default function WearableSetupModal({
       </View>
       <Text style={[ws.title, { color: colors.foreground }]}>Step Tracking Unavailable</Text>
       <Text style={[ws.desc, { color: colors.mutedForeground }]}>
-        Step tracking is not available on this device.
+        {hybridDailyHcOnly()
+          ? "Health Connect is required for verified step tracking on this device."
+          : "Step tracking is not available on this device."}
       </Text>
-      <TouchableOpacity
-        style={[ws.actionBtn, { opacity: limitedLoading ? 0.6 : 1, backgroundColor: "#F59E0B" }]}
-        onPress={async () => {
-          setLimitedLoading(true);
-          try {
-            await enableLimitedSensorTracking();
-            setPermStatus("granted");
-            setAndroidPhase("setup");
-            setStep(TOTAL_ANDROID - 1);
-          } finally {
-            setLimitedLoading(false);
-          }
-        }}
-        disabled={limitedLoading}
-      >
-        {limitedLoading
-          ? <ActivityIndicator size="small" color="#000" />
-          : <Feather name="activity" size={16} color="#000" />}
-        <Text style={ws.actionBtnText}>Use Android Steps</Text>
-      </TouchableOpacity>
+      {!hybridDailyHcOnly() ? (
+        <PrimaryAction
+          onPress={() => void tryLimitedSensor()}
+          disabled={limitedLoading}
+          loading={limitedLoading}
+          icon="activity"
+          label="Use Android Steps"
+          solidColor="#F59E0B"
+        />
+      ) : null}
       <TouchableOpacity
         style={[ws.actionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border }]}
         onPress={() => void checkHCAvailability()}
@@ -390,42 +538,30 @@ export default function WearableSetupModal({
             ? "Walk Champ requires an updated version of Health Connect to read your verified steps."
             : "Walk Champ uses Health Connect to read your verified steps for challenges, races, and leaderboards."}
         </Text>
-        <TouchableOpacity
-          style={[ws.actionBtn, { opacity: installLoading ? 0.6 : 1 }]}
-          onPress={async () => {
-            setInstallLoading(true);
-            await androidHCService.openInstallPage();
-            setInstallLoading(false);
+        <PrimaryAction
+          onPress={() => {
+            void (async () => {
+              setInstallLoading(true);
+              await androidHCService.openInstallPage();
+              setInstallLoading(false);
+            })();
           }}
           disabled={installLoading}
-        >
-          {installLoading
-            ? <ActivityIndicator size="small" color="#000" />
-            : <Feather name="download" size={16} color="#000" />}
-          <Text style={ws.actionBtnText}>
-            {isUpdate ? "Update Health Connect" : "Install Health Connect"}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[ws.actionBtn, { opacity: limitedLoading ? 0.6 : 1, backgroundColor: "#00E676", marginTop: 8 }]}
-          onPress={async () => {
-            setLimitedLoading(true);
-            try {
-              await enableLimitedSensorTracking();
-              setPermStatus("granted");
-              setAndroidPhase("setup");
-              setStep(TOTAL_ANDROID - 1);
-            } finally {
-              setLimitedLoading(false);
-            }
-          }}
-          disabled={limitedLoading}
-        >
-          {limitedLoading
-            ? <ActivityIndicator size="small" color="#000" />
-            : <Feather name="activity" size={16} color="#000" />}
-          <Text style={ws.actionBtnText}>Use Android Steps Instead</Text>
-        </TouchableOpacity>
+          loading={installLoading}
+          icon="download"
+          label={isUpdate ? "Update Health Connect" : "Install Health Connect"}
+        />
+        {!hybridDailyHcOnly() ? (
+          <View style={{ marginTop: 8 }}>
+            <PrimaryAction
+              onPress={() => void tryLimitedSensor()}
+              disabled={limitedLoading}
+              loading={limitedLoading}
+              icon="activity"
+              label="Use Android Steps Instead"
+            />
+          </View>
+        ) : null}
         <TouchableOpacity
           style={[ws.actionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border }]}
           onPress={() => void checkHCAvailability()}
@@ -452,7 +588,7 @@ export default function WearableSetupModal({
           ? "Make sure Steps is on. WalkChamp uses this to track your race progress accurately."
           : permStatus === "denied"
             ? "Tap Enable Step Tracking again, or open Health Connect settings and allow Steps."
-            : "Tap Enable Step Tracking. A permission sheet should appear inside Walk Champ."}
+            : "Tap Enable Step Tracking to allow Health Connect Steps. Physical activity and notifications are asked once when you tap Done."}
       </Text>
       {permStatus === "granted" ? (
         <View style={[ws.badge, { backgroundColor: "#00E67618", borderColor: "#00E67640", alignSelf: "center" }]}>
@@ -460,20 +596,17 @@ export default function WearableSetupModal({
           <Text style={[ws.badgeText, { color: "#00E676" }]}>Steps permission granted ✓</Text>
         </View>
       ) : (
-        <TouchableOpacity
-          style={[ws.actionBtn, { opacity: permLoading ? 0.6 : 1 }]}
+        <PrimaryAction
           onPress={requestPerm}
           disabled={permLoading}
-        >
-          {permLoading
-            ? <ActivityIndicator size="small" color="#000" />
-            : <Feather name={permStatus === "denied" ? "settings" : "shield"} size={16} color="#000" />}
-          <Text style={ws.actionBtnText}>
-            {permStatus === "denied"
+          loading={permLoading}
+          icon={permStatus === "denied" ? "settings" : "shield"}
+          label={
+            permStatus === "denied"
               ? (isIOS ? "Open Settings" : "Enable Step Tracking")
-              : (isIOS ? "Request Permission" : "Enable Step Tracking")}
-          </Text>
-        </TouchableOpacity>
+              : (isIOS ? "Request Permission" : "Enable Step Tracking")
+          }
+        />
       )}
       {!isIOS && (
         <View style={[ws.infoCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -492,7 +625,7 @@ export default function WearableSetupModal({
       </View>
       <Text style={[ws.title, { color: colors.foreground, textAlign: "center" }]}>You're set!</Text>
       <Text style={[ws.desc, { color: colors.mutedForeground, textAlign: "center" }]}>
-        Your steps now count toward WalkChamp.
+        Your steps now count toward WalkChamp. Tap Done to finish — notifications can be changed anytime in Profile.
       </Text>
     </View>
   );
@@ -507,13 +640,11 @@ export default function WearableSetupModal({
         <Text style={[ws.desc, { color: colors.mutedForeground }]}>
           Tap Apple Health, then turn on Steps access.
         </Text>
-        <TouchableOpacity
-          style={ws.actionBtn}
+        <PrimaryAction
           onPress={() => Linking.openURL("x-apple-health://").catch(() => Linking.openSettings())}
-        >
-          <Feather name="external-link" size={16} color="#000" />
-          <Text style={ws.actionBtnText}>Open Apple Health</Text>
-        </TouchableOpacity>
+          icon="external-link"
+          label="Open Apple Health"
+        />
       </View>
     ),
     AllowStepsScreen,
@@ -526,13 +657,11 @@ export default function WearableSetupModal({
         <Text style={[ws.desc, { color: colors.mutedForeground }]}>
           Health › Steps › Data Sources & Access.
         </Text>
-        <TouchableOpacity
-          style={ws.actionBtn}
+        <PrimaryAction
           onPress={() => Linking.openURL("x-apple-health://").catch(() => Linking.openSettings())}
-        >
-          <Feather name="external-link" size={16} color="#000" />
-          <Text style={ws.actionBtnText}>Open Apple Health</Text>
-        </TouchableOpacity>
+          icon="external-link"
+          label="Open Apple Health"
+        />
       </View>
     ),
     () => (
@@ -605,7 +734,6 @@ export default function WearableSetupModal({
   const footerAction = isAndroidPreCheck ? onClose : isLast ? handleDone : goNext;
   const showFooter = androidPhase !== "checking";
   const showBackBtn = !isAndroidPreCheck && step > 0;
-  const useOnboardingAccent = accent === "onboarding";
   const activeDot = useOnboardingAccent ? ONBOARDING_COLORS.lime : "#00E676";
   const doneDot = useOnboardingAccent ? ONBOARDING_COLORS.cyan + "80" : "#00E67650";
 
@@ -702,6 +830,17 @@ const ws = StyleSheet.create({
   actionBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center",
     gap: 8, paddingVertical: rs(14), borderRadius: rs(14), backgroundColor: "#00E676",
+    overflow: "hidden",
+  },
+  actionBtnGrad: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    width: "100%",
+    paddingVertical: rs(14),
+    paddingHorizontal: rs(16),
+    borderRadius: rs(14),
   },
   actionBtnText: { fontSize: rf(16), fontWeight: "700", color: "#000" },
   infoCard: { borderRadius: rs(14), borderWidth: 1, padding: rs(16), gap: 6 },

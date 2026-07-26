@@ -18,6 +18,10 @@ import { useAuth } from "@/context/AuthContext";
 import { createProfile, checkUsernameAvailable, fetchMe, getStoredSession, getValidSession } from "@/services/authService";
 import { dbProfileToUserProfile } from "@/utils/profileMapper";
 import { beginPostSignupOnboarding, getPostSignupHomeHref } from "@/utils/onboardingStorage";
+import {
+  applyReferralCode,
+  validateReferralCode,
+} from "@/utils/referral";
 import { COUNTRIES } from "@/constants/countries";
 import { DateOfBirthInput } from "@/components/DateOfBirthInput";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
@@ -55,6 +59,12 @@ export default function CompleteProfileScreen() {
   const [dob, setDob] = useState("");
   const [selectedCountry, setSelectedCountry] = useState<typeof COUNTRIES[0] | null>(null);
   const [avatarColor, setAvatarColor] = useState(AVATAR_COLORS[0]);
+  const [referralCode, setReferralCode] = useState("");
+  const [referralStatus, setReferralStatus] = useState<
+    "idle" | "checking" | "valid" | "invalid"
+  >("idle");
+  const [referralHint, setReferralHint] = useState("");
+  const referralTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
   const [countrySearch, setCountrySearch] = useState("");
   const [usernameStatus, setUsernameStatus] = useState<"idle"|"checking"|"available"|"taken"|"invalid">("idle");
@@ -79,6 +89,45 @@ export default function CompleteProfileScreen() {
     }, 600);
   }, [username]);
 
+  // Validate referral with JWT from social/email signup session.
+  useEffect(() => {
+    const code = referralCode.trim();
+    if (!code) {
+      setReferralStatus("idle");
+      setReferralHint("");
+      return;
+    }
+    setReferralStatus("checking");
+    setReferralHint("Checking code…");
+    if (referralTimer.current) clearTimeout(referralTimer.current);
+    referralTimer.current = setTimeout(async () => {
+      let jwt = params.sessionToken ?? "";
+      if (!jwt) {
+        const stored = await getStoredSession();
+        jwt = (await getValidSession()) ?? stored.session ?? "";
+      }
+      if (!jwt) {
+        setReferralStatus("idle");
+        setReferralHint("Sign-in session needed to verify this code.");
+        return;
+      }
+      const result = await validateReferralCode(code, jwt);
+      if (result.valid) {
+        setReferralStatus("valid");
+        setReferralHint(`Valid — invited by @${result.referrer.username}`);
+      } else if (result.reason === "network_error") {
+        setReferralStatus("idle");
+        setReferralHint("Could not verify right now — you can continue.");
+      } else {
+        setReferralStatus("invalid");
+        setReferralHint("This referral code is not valid.");
+      }
+    }, 500);
+    return () => {
+      if (referralTimer.current) clearTimeout(referralTimer.current);
+    };
+  }, [referralCode, params.sessionToken]);
+
   const usernameColor = usernameStatus === "available" ? "#00E676" : usernameStatus === "taken" || usernameStatus === "invalid" ? "#FF4444" : colors.mutedForeground;
 
   async function handleSubmit() {
@@ -89,6 +138,15 @@ export default function CompleteProfileScreen() {
     if (calcAge(dob) < 13) { setError("You must be at least 13 years old."); return; }
     if (!selectedCountry) { setError("Please select your country."); return; }
     if (!termsAccepted || !privacyAccepted || !ageAccepted || !rewardAccepted) { setError("Please accept all required agreements, including confirming you are 18 or older."); return; }
+
+    const code = referralCode.trim();
+    // Optional: blank is fine. Only block when a code was entered and failed validation.
+    if (!code) {
+      // proceed without referral
+    } else if (referralStatus === "invalid") {
+      setError("Please enter a valid referral code, or clear the field to continue without one.");
+      return;
+    }
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSubmitting(true);
@@ -110,6 +168,16 @@ export default function CompleteProfileScreen() {
         return;
       }
 
+      if (code) {
+        const result = await validateReferralCode(code, sessionJwt);
+        if (!result.valid && result.reason !== "network_error") {
+          setError("Please enter a valid referral code, or clear the field to continue without one.");
+          setReferralStatus("invalid");
+          setSubmitting(false);
+          return;
+        }
+      }
+
       await createProfile(
         {
           descopeUserId: params.userId,
@@ -120,6 +188,7 @@ export default function CompleteProfileScreen() {
           country: selectedCountry.name,
           countryCode: selectedCountry.code,
           countryFlag: selectedCountry.flag,
+          referredBy: code || undefined,
           authProvider: params.authProvider ?? "email",
           avatarColor,
           termsAccepted,
@@ -132,10 +201,18 @@ export default function CompleteProfileScreen() {
 
       // Always update Redux with the freshly-created profile so that
       // app/index.tsx sees profileComplete: true and stops redirecting here.
-      const profile = await fetchMe(sessionJwt);
+      const profile = await fetchMe(sessionJwt, { includeSessionHeaders: false });
       if (profile) {
         const userProfile = dbProfileToUserProfile(profile);
         await login(userProfile, sessionJwt, refreshJwt);
+
+        if (code) {
+          try {
+            await applyReferralCode(code);
+          } catch {
+            /* non-blocking */
+          }
+        }
 
         // Route based on actual email-verified status, not a fixed destination.
         // Email-login users are already verified; OTP users still need to verify.
@@ -236,6 +313,49 @@ export default function CompleteProfileScreen() {
                 )}
                 <Feather name="chevron-down" size={18} color={colors.mutedForeground} />
               </TouchableOpacity>
+            </View>
+
+              <View>
+                <Text style={[styles.label, { color: colors.mutedForeground }]}>
+                  Referral code (optional)
+                </Text>
+              <View style={[styles.inputContainer, {
+                backgroundColor: colors.card,
+                borderColor:
+                  referralStatus === "valid"
+                    ? "#00E67660"
+                    : referralStatus === "invalid"
+                      ? "#FF444460"
+                      : colors.border,
+              }]}>
+                <Feather name="gift" size={18} color={colors.mutedForeground} />
+                <TextInput
+                  style={[styles.input, { color: colors.foreground }]}
+                  placeholder="Enter referral code"
+                  placeholderTextColor={colors.mutedForeground}
+                  value={referralCode}
+                  onChangeText={(t) => setReferralCode(t.replace(/\s/g, "").toUpperCase())}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                />
+                {referralStatus === "checking" && <ActivityIndicator size="small" color={colors.primary} />}
+                {referralStatus === "valid" && <Feather name="check-circle" size={18} color="#00E676" />}
+                {referralStatus === "invalid" && <Feather name="x-circle" size={18} color="#FF4444" />}
+              </View>
+              {!!referralHint && (
+                <Text style={{
+                  marginTop: 6,
+                  fontSize: rf(12),
+                  color:
+                    referralStatus === "valid"
+                      ? "#00E676"
+                      : referralStatus === "invalid"
+                        ? "#FF4444"
+                        : colors.mutedForeground,
+                }}>
+                  {referralHint}
+                </Text>
+              )}
             </View>
 
             <View>

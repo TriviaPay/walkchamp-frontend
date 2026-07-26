@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { STEP_SYNC_CONFIG } from "./stepSyncConfig";
 
 assert.equal(STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MS, 3_000);
-assert.equal(STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_POLL_MS, 3_000);
+assert.equal(STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_POLL_MS, 1_000);
 assert.equal(STEP_SYNC_CONFIG.RACE_LOCAL_POLL_MS, 1_000);
 assert.equal(STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_MS, 3_000);
 assert.equal(STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_MIN_DELTA, 1);

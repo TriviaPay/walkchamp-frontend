@@ -26,6 +26,7 @@ import {
 } from "@/components/RaceStartingSoonCard";
 import { LiveClockText } from "@/components/perf/LiveClockText";
 import { ensureMatchStepPermissionsReady } from "@/services/permissions/matchPermissionGate";
+import { requestHomeStepSetup } from "@/services/permissions/homePermissionFlow";
 import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DateTimePicker, { type DateTimePickerEvent } from "@react-native-community/datetimepicker";
@@ -981,10 +982,18 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
         await setNotificationPreferences(true);
         await registerDeviceWithBackend();
         setPushEnabled(true);
+        const { applyOngoingNotificationPreference } = await import(
+          "@/services/ongoingNotificationPreference"
+        );
+        await applyOngoingNotificationPreference(true);
       } else {
         await optOutNotifications();
         await setNotificationPreferences(false);
         setPushEnabled(false);
+        const { applyOngoingNotificationPreference } = await import(
+          "@/services/ongoingNotificationPreference"
+        );
+        await applyOngoingNotificationPreference(false);
       }
     } catch {
       // ignore
@@ -1618,7 +1627,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
         onComplete={(platform, permissionStatus) => {
           setStepSourceInfo({ platform, permissionStatus, setupCompleted: permissionStatus === "connected" });
           if (permissionStatus === "connected") {
-            void completeStepSetup();
+            void completeStepSetup({ allowAll: true });
           }
         }}
       />
@@ -1756,7 +1765,6 @@ function WalkScreenContent() {
     stepsSourceReady,
     authReady,
   } = useWalkContext();
-  const { guardRewardAction, canJoinRewardRaces, verificationLevel } = useStepSourceGuard();
   const { userRank, walletBalance, totalEarned, walletCurrency } = useApp();
   const { user, logout, loading: authLoading, sessionToken } = useAuth();
   const navToMatchmaking = useCallback(
@@ -1792,7 +1800,9 @@ function WalkScreenContent() {
   const [showCoinStore, setShowCoinStore] = useState(false);
   const showCoinStoreRef = useRef(showCoinStore);
   showCoinStoreRef.current = showCoinStore;
-  const [showStepSetup, setShowStepSetup] = useState(false);
+  const { guardRewardAction, verificationLevel } = useStepSourceGuard({
+    onSetupRequired: () => requestHomeStepSetup(),
+  });
   const [walkFocused, setWalkFocused] = useState(true);
 
   const handleCloseCoinStore = useCallback(() => {
@@ -3050,13 +3060,14 @@ function WalkScreenContent() {
       return;
     }
 
-    // Permission gate — before any host/join API call (preserves HC / sensor / iOS logic)
+    // Permission gate — verified Health Connect / HealthKit required for ALL challenges (incl. free)
     if (user?.id) {
       const gate = await ensureMatchStepPermissionsReady({
         userId: user.id,
         username: user.username ?? null,
-        requireVerified: setupModal.fee !== 0 && setupModal.fee !== -1,
+        requireVerified: true,
         actionLabel: setupModal.fee === 0 ? "host or join this free challenge" : "join this challenge",
+        onSetupRequired: () => requestHomeStepSetup(),
       });
       if (!gate.allowed) return;
     }
@@ -3155,13 +3166,14 @@ function WalkScreenContent() {
   // Direct join: skips the player-count modal and immediately joins the existing open room
   const doDirectJoin = useCallback(async (raceId: string, fee: number, maxPlayers: number, entryKey: string) => {
     if (freeJoining || joiningEntryKey) return;
-    // Permission gate — before join API (no charge / no join until steps ready)
+    // Permission gate — verified tracking required for ALL joins (incl. free)
     if (user?.id) {
       const gate = await ensureMatchStepPermissionsReady({
         userId: user.id,
         username: user.username ?? null,
-        requireVerified: fee > 0 || entryKey === "coins_battle" || entryKey.startsWith("paid_"),
+        requireVerified: true,
         actionLabel: "join this challenge",
+        onSetupRequired: () => requestHomeStepSetup(),
       });
       if (!gate.allowed) return;
     }
@@ -3215,41 +3227,42 @@ function WalkScreenContent() {
   }, [doDirectJoin]);
 
   const handleCoinsBattleJoin = useCallback(async (raceId: string) => {
-    // Coins battles require verified tracking
-    if (!canJoinRewardRaces) {
-      guardRewardAction(() => { /* guarded */ });
-      return;
-    }
-    setJoiningEntryKey("coins_battle");
-    try {
-      const res = await authFetch(`/api/coins-battle/${raceId}/join`, { method: "POST" });
-      const data = await res.json() as { raceId?: string; error?: string; code?: string; currentPlayers?: number };
-      if (!res.ok) {
-        if (data.code === "ACTIVE_RACE_EXISTS") {
-          const ar = (data as { active_race?: Record<string, unknown> }).active_race;
-          if (ar) {
-            pendingRaceActionRef.current = () => handleCoinsBattleJoin(raceId);
-            setActiveRaceModal(normalizeActiveRaceInfo(ar));
-          } else {
-            AppAlert.alert("Already In A Race", "You are already in an active race.");
+    guardRewardAction(() => {
+      void (async () => {
+        setJoiningEntryKey("coins_battle");
+        try {
+          const res = await authFetch(`/api/coins-battle/${raceId}/join`, { method: "POST" });
+          const data = await res.json() as { raceId?: string; error?: string; code?: string; currentPlayers?: number };
+          if (!res.ok) {
+            if (data.code === "ACTIVE_RACE_EXISTS") {
+              const ar = (data as { active_race?: Record<string, unknown> }).active_race;
+              if (ar) {
+                pendingRaceActionRef.current = () => handleCoinsBattleJoin(raceId);
+                setActiveRaceModal(normalizeActiveRaceInfo(ar));
+              } else {
+                AppAlert.alert("Already In A Race", "You are already in an active race.");
+              }
+            } else if (data.code === "INSUFFICIENT_COINS") {
+              AppAlert.alert("Not Enough Coins", "You don't have enough coins to join this battle.");
+            } else if (data.code === "ROOM_NOT_OPEN") {
+              AppAlert.alert("Room Closed", "This room is no longer open.");
+            } else if (data.code === "VERIFIED_STEP_SOURCE_REQUIRED") {
+              requestHomeStepSetup();
+            } else {
+              AppAlert.alert("Join Failed", data.error ?? "Could not join the Coins Battle.");
+            }
+            return;
           }
-        } else if (data.code === "INSUFFICIENT_COINS") {
-          AppAlert.alert("Not Enough Coins", "You don't have enough coins to join this battle.");
-        } else if (data.code === "ROOM_NOT_OPEN") {
-          AppAlert.alert("Room Closed", "This room is no longer open.");
-        } else {
-          AppAlert.alert("Join Failed", data.error ?? "Could not join the Coins Battle.");
+          dispatch(fetchCoinBalance());
+          navToMatchmaking({ raceId, isHost: false });
+        } catch {
+          AppAlert.alert("Error", "Network error. Please try again.");
+        } finally {
+          setJoiningEntryKey(null);
         }
-        return;
-      }
-      dispatch(fetchCoinBalance());
-      navToMatchmaking({ raceId, isHost: false });
-    } catch {
-      AppAlert.alert("Error", "Network error. Please try again.");
-    } finally {
-      setJoiningEntryKey(null);
-    }
-  }, [dispatch, canJoinRewardRaces, guardRewardAction]);
+      })();
+    });
+  }, [dispatch, guardRewardAction]);
 
   const handleStayInActiveRace = () => {
     const ar = activeRaceModal;
@@ -3303,6 +3316,21 @@ function WalkScreenContent() {
     let navigating = false;
     setChallengeCreating(true);
     try {
+      // Verified tracking required for create (free + paid + coins)
+      if (user?.id) {
+        const gate = await ensureMatchStepPermissionsReady({
+          userId: user.id,
+          username: user.username ?? null,
+          requireVerified: true,
+          actionLabel: "create this challenge",
+          onSetupRequired: () => requestHomeStepSetup(),
+        });
+        if (!gate.allowed) {
+          setChallengeCreating(false);
+          return;
+        }
+      }
+
       const entryType = challengeEntryMode === "free" ? "free"
         : challengeEntryMode === "coins" ? "coins_battle"
         : "paid_usd";
@@ -3668,7 +3696,7 @@ function WalkScreenContent() {
                     e.stopPropagation();
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                     if (Platform.OS === "android") {
-                      setShowStepSetup(true);
+                      requestHomeStepSetup();
                       return;
                     }
                     requestStepPermission();
@@ -3679,7 +3707,7 @@ function WalkScreenContent() {
                       Platform.OS === "android" && stepPermissionStatus === "unavailable" &&
                       (hcAvailability === "needs_update" || hcAvailability === "not_installed")
                         ? "download"
-                        : "unlock"
+                        : "activity"
                     }
                     size={18}
                     color={colors.primary}
@@ -4562,7 +4590,7 @@ function WalkScreenContent() {
               activeOpacity={0.85}
             >
               <LinearGradient
-                colors={setupModal?.gradients ?? [colors.primary, colors.accent]}
+                colors={(setupModal?.gradients ?? [colors.primary, colors.accent]) as [string, string, ...string[]]}
                 style={styles.joinGradient}
                 start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
               >
@@ -4764,7 +4792,7 @@ function WalkScreenContent() {
               activeOpacity={0.85}
             >
               <LinearGradient
-                colors={confirmEntry?.gradients ?? [colors.primary, colors.accent]}
+                colors={(confirmEntry?.gradients ?? [colors.primary, colors.accent]) as [string, string, ...string[]]}
                 style={styles.joinGradient}
                 start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
               >
@@ -5728,17 +5756,6 @@ function WalkScreenContent() {
         visible={showCoinStore}
         onClose={handleCloseCoinStore}
         onCoinsAdded={handleCoinStorePurchase}
-      />
-
-      <WearableSetupModal
-        visible={showStepSetup}
-        onClose={() => setShowStepSetup(false)}
-        onComplete={(_platform, permissionStatus) => {
-          setShowStepSetup(false);
-          if (permissionStatus === "connected") {
-            void completeStepSetup();
-          }
-        }}
       />
 
       {/* Active Race Conflict Modal */}

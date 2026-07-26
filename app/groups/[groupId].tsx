@@ -22,6 +22,7 @@ import { subscribeToChannel } from "@/services/realtimeService";
 import { SkeletonGroupDetailScreen } from "@/components/SkeletonRows";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useWalkContext } from "@/context/WalkContext";
+import { store } from "@/store";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
@@ -452,17 +453,21 @@ export default function GroupDetailScreen() {
     };
   }, [groupId, fetchData]);
 
-  // Backfill: if user's live steps exceed what's recorded in this group, sync once so the DB catches up
+  // Backfill: sync verified daily steps only (never provisional display inflation).
   useEffect(() => {
-    if (!group || hasSyncedRef.current || liveSteps <= 0 || todayLB.length === 0) return;
+    const verifiedSteps = Math.max(
+      0,
+      store.getState().raceProgress.verifiedTodaySteps ?? 0,
+    );
+    if (!group || hasSyncedRef.current || verifiedSteps <= 0 || todayLB.length === 0) return;
     const myEntry = todayLB.find((e) => e.isCurrentUser);
-    if (!myEntry || myEntry.steps >= liveSteps) return;
+    if (!myEntry || myEntry.steps >= verifiedSteps) return;
     hasSyncedRef.current = true;
     const today = getLocalDateStr();
     authFetch("/api/groups/steps/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dailySteps: liveSteps, stepDate: today }),
+      body: JSON.stringify({ dailySteps: verifiedSteps, stepDate: today }),
     }).then(() => fetchData(true)).catch(() => {});
   }, [group?.id, todayLB]); // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -12,6 +12,11 @@ import {
   isPushNotificationAccessGranted,
 } from "@/services/permissions/notificationGate";
 import { pushLog, notificationLog } from "@/services/pushLog";
+import {
+  notificationVisualDrawableName,
+  resolveNotificationVisualType,
+  type NotificationVisualType,
+} from "@/constants/notificationVisuals";
 
 /**
  * In Expo Go, TurboModuleRegistry.getEnforcing() throws an Invariant Violation
@@ -21,6 +26,21 @@ import { pushLog, notificationLog } from "@/services/pushLog";
 const IS_EXPO_GO = (Constants.executionEnvironment as string) === "storeClient";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
+
+/** Display-only visual metadata for OneSignal additionalData (does not change routes). */
+export function resolvePushVisualMeta(data: Record<string, unknown>): {
+  visualType: NotificationVisualType;
+  androidDrawable: string;
+} {
+  const type = String(data.type ?? data.notificationType ?? "");
+  const visualType = resolveNotificationVisualType(
+    data.visualType != null ? String(data.visualType) : type,
+  );
+  return {
+    visualType,
+    androidDrawable: notificationVisualDrawableName(visualType),
+  };
+}
 
 // ── OneSignal v5 type interface ───────────────────────────────────────────────
 interface PushSubscription {
@@ -634,6 +654,12 @@ export async function setupNotificationClickHandler(
     const launchUrl = notif.launchURL ?? notif.launchUrl;
     const type = String(data.type ?? "unknown");
     const eventType = String(data.eventType ?? data.event_type ?? "");
+    const visualMeta = resolvePushVisualMeta(data);
+    if (__DEV__) {
+      pushLog(
+        `notification visualType=${visualMeta.visualType} androidDrawable=${visualMeta.androidDrawable}`,
+      );
+    }
     if (type === "race_starting_soon") {
       // Sanitize: never JSON.stringify full push payloads (may include PII).
       notificationLog(
@@ -687,7 +713,14 @@ export async function setupForegroundHandler(): Promise<() => void> {
       notificationLog(`received type=race_starting_soon`);
       notificationLog(`eventType=${eventType}`);
     }
+    const visualMeta = resolvePushVisualMeta(data);
+    if (__DEV__) {
+      pushLog(
+        `foreground visualType=${visualMeta.visualType} androidDrawable=${visualMeta.androidDrawable}`,
+      );
+    }
     // OneSignal v5: preventDefault + display() required to show system banner while app is open.
+    // Android large/type icons are applied natively by WalkChampNotificationServiceExtension.
     fgEvent.preventDefault();
     fgEvent.notification.display();
   };

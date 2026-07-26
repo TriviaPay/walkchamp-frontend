@@ -96,6 +96,15 @@ export function resolveTodayDisplayStepsCore(params: {
   }
 
   if (verified) {
+    // Empty HC/HK read is not an authoritative zero — keep backend/previous floor
+    // so Samsung lag does not wipe Walk UI / sync to 0.
+    if (provider <= 0) {
+      const floor = Math.max(
+        backend,
+        Math.max(0, Math.floor(params.previousProviderSteps ?? 0)),
+      );
+      return floor;
+    }
     return provider;
   }
 
@@ -130,6 +139,12 @@ export function capWalkStepsForSyncCore(
   const ui = Math.max(0, Math.floor(uiSteps));
   if (verifiedSource && providerSteps != null) {
     const provider = Math.max(0, Math.floor(providerSteps));
+    const backend = Math.max(0, Math.floor(backendSteps ?? 0));
+    if (provider <= 0) {
+      // HC/HK empty — never upload sensor/provisional UI as verified daily.
+      // Keep last backend floor so Samsung lag cannot zero the account.
+      return backend;
+    }
     return Math.min(ui, provider);
   }
   if (!verifiedSource && backendSteps != null) {

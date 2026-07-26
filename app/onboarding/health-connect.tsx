@@ -11,6 +11,7 @@ import {
 import { ONBOARDING_ASSETS, ONBOARDING_COLORS, ONBOARDING_ROUTES } from "@/constants/onboarding";
 import { setHealthOnboardingChoice } from "@/utils/onboardingStorage";
 import WearableSetupModal from "@/components/WearableSetupModal";
+import { useWalk } from "@/context/WalkContext";
 import { rf } from "@/utils/responsive";
 
 const C = ONBOARDING_COLORS;
@@ -19,6 +20,7 @@ const isIOS = Platform.OS === "ios";
 export default function HealthConnectOnboardingScreen() {
   const [showSetup, setShowSetup] = useState(false);
   const completedRef = useRef(false);
+  const { completeStepSetup } = useWalk();
 
   const continueNext = async (choice: "accepted" | "skipped" | "denied") => {
     await setHealthOnboardingChoice(choice);
@@ -73,7 +75,14 @@ export default function HealthConnectOnboardingScreen() {
           if (completedRef.current) return;
           completedRef.current = true;
           setShowSetup(false);
-          void continueNext(permissionStatus === "connected" ? "accepted" : "denied");
+          if (permissionStatus === "connected") {
+            // Allow all: HC already granted; request notifications + activity.
+            void completeStepSetup({ allowAll: true }).finally(() => {
+              void continueNext("accepted");
+            });
+            return;
+          }
+          void continueNext("denied");
         }}
       />
     </>

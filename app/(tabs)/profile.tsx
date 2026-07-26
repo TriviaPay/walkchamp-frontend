@@ -127,18 +127,45 @@ const PROFILE_ME_TTL_MS = 90_000;
 const PROFILE_TITLES_EVAL_TTL_MS = 5 * 60_000;
 
 /** Prefer a freshly completed local "connected" state over stale cache/API nulls. */
+function isLegacyStepPlatform(platform: string | null | undefined): boolean {
+  if (!platform) return false;
+  const key = platform.toLowerCase();
+  return (
+    key === "android_legacy_sensor" ||
+    key === "android_device_step_counter" ||
+    key === "android_step_counter" ||
+    key === "sensor" ||
+    key === "legacy"
+  );
+}
+
 function mergeStepSource(
   incoming: StepSourceInfo | null | undefined,
   current: StepSourceInfo | null,
 ): StepSourceInfo | null {
   if (incoming === undefined) return current;
   if (incoming === null) {
-    if (current?.setupCompleted && current.permissionStatus === "connected") return current;
+    if (
+      current?.setupCompleted &&
+      current.permissionStatus === "connected" &&
+      !isLegacyStepPlatform(current.platform)
+    ) {
+      return current;
+    }
     return null;
+  }
+  // Force reconnect when backend still reports a legacy sensor source.
+  if (isLegacyStepPlatform(incoming.platform)) {
+    return {
+      platform: "android_health_connect",
+      permissionStatus: "not_connected",
+      setupCompleted: false,
+    };
   }
   if (
     current?.permissionStatus === "connected" &&
     current.setupCompleted &&
+    !isLegacyStepPlatform(current.platform) &&
     incoming.permissionStatus !== "connected" &&
     incoming.permissionStatus !== "denied"
   ) {
@@ -245,11 +272,15 @@ function WearableStatusCard({
   onSetupPress: () => void;
   colors: ReturnType<typeof useColors>;
 }) {
-  const isConnected = stepSource?.permissionStatus === "connected";
+  const isLegacyPlatform =
+    stepSource?.platform === "android_legacy_sensor" ||
+    stepSource?.platform === "android_device_step_counter" ||
+    stepSource?.platform === "android_step_counter";
+  const isConnected =
+    stepSource?.permissionStatus === "connected" && !isLegacyPlatform;
   const isDenied    = stepSource?.permissionStatus === "denied";
   const sourceName  =
     stepSource?.platform === "ios_healthkit"          ? "Apple Health"    :
-    stepSource?.platform === "android_legacy_sensor"  ? "Android Steps"   :
     stepSource?.platform === "android_health_connect" ? "Health Connect"  :
     Platform.OS === "ios"                             ? "Apple Health"    : "Health Connect";
 
@@ -269,9 +300,9 @@ function WearableStatusCard({
         </Text>
         <Text style={[wsCard.sub, { color: c.mutedForeground }]}>
           {isConnected
-            ? `${sourceName} is connected and counting your steps.`
+            ? `${sourceName} is connected. Tap to manage access or reopen setup.`
             : isDenied
-            ? "Tap to restore permissions."
+            ? "Tap to restore Health Connect / Apple Health, or open Android Settings → Apps → Walk Champ → Permissions."
             : `Tap to connect ${sourceName}`}
         </Text>
       </View>
@@ -363,7 +394,7 @@ function ProfileScreenContent() {
     ? searchParams.openTitles[0]
     : searchParams.openTitles;
   const { user, logout, refreshUserProfile, updateUser } = useAuth();
-  const { allTimeSteps, currentStreak, weeklySteps, requestStepPermission } = useWalk();
+  const { allTimeSteps, currentStreak, weeklySteps, requestStepPermission, completeStepSetup } = useWalk();
   const { userRank, totalEarned, walletCurrency, refreshWallet } = useApp();
 
   // Profile view state — seed from cache for instant paint
@@ -430,10 +461,18 @@ function ProfileScreenContent() {
         await setNotificationPreferences(true);
         await ensurePushRegistration();
         setPushEnabled(true);
+        const { applyOngoingNotificationPreference } = await import(
+          "@/services/ongoingNotificationPreference"
+        );
+        await applyOngoingNotificationPreference(true, user?.id);
       } else {
         await optOutNotifications();
         await setNotificationPreferences(false);
         setPushEnabled(false);
+        const { applyOngoingNotificationPreference } = await import(
+          "@/services/ongoingNotificationPreference"
+        );
+        await applyOngoingNotificationPreference(false, user?.id);
       }
     } catch {
       // Best-effort
@@ -671,16 +710,31 @@ function ProfileScreenContent() {
             return;
           }
           const { stepProviderManager } = await import("@/services/steps/stepProviderManager");
+          const { isLegacyStepSourceId } = await import("@/services/steps/verifiedStepSources");
           const status = await stepProviderManager.refreshStatus();
-          if (status.permission !== "granted") return;
-          const platform =
-            status.providerId === "android_legacy_sensor"
-              ? "android_legacy_sensor"
-              : "android_health_connect";
-          const sourceName =
-            platform === "android_legacy_sensor" ? "Android Steps" : "Health Connect";
+          if (status.permission !== "granted" || !stepProviderManager.usesVerifiedStepSource()) {
+            if (isLegacyStepSourceId(status.providerId)) {
+              setStepSourceInfo((prev) =>
+                prev
+                  ? { ...prev, permissionStatus: "not_connected", setupCompleted: false, platform: "android_health_connect" }
+                  : null,
+              );
+              void authFetch("/api/me/step-source", {
+                method: "POST",
+                body: JSON.stringify({
+                  platform: "android_health_connect",
+                  permission_status: "not_connected",
+                  source_name: "Health Connect",
+                  setup_completed: false,
+                }),
+              }).catch(() => {});
+            }
+            return;
+          }
+          const platform = "android_health_connect";
+          const sourceName = "Health Connect";
           setStepSourceInfo((prev) => {
-            if (prev?.permissionStatus === "connected") return prev;
+            if (prev?.permissionStatus === "connected" && prev.platform === platform) return prev;
             return { platform, permissionStatus: "connected", setupCompleted: true };
           });
           void authFetch("/api/me/step-source", {
@@ -1277,7 +1331,7 @@ function ProfileScreenContent() {
             }
           })();
           if (permissionStatus === "connected") {
-            void requestStepPermission();
+            void completeStepSetup({ allowAll: true });
           }
         }}
       />

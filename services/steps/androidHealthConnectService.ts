@@ -484,19 +484,10 @@ export const androidHCService = {
 
     hcLog(`requestPermission start — package: ${getPackageName()}`);
 
-    // Physical activity permission is required before step reads on Android 10+.
-    try {
-      const sensors =
-        require("expo-sensors") as typeof import("expo-sensors");
-      const { status: actBefore } = await sensors.Pedometer.getPermissionsAsync();
-      if (actBefore !== "granted") {
-        const { status: actAfter } =
-          await sensors.Pedometer.requestPermissionsAsync();
-        hcLog(`ACTIVITY_RECOGNITION: ${actBefore} → ${actAfter}`);
-      }
-    } catch (e) {
-      hcLog("ACTIVITY_RECOGNITION request error", e);
-    }
+    // Do NOT request ACTIVITY_RECOGNITION / Pedometer here.
+    // Enable Step Tracking must only show the Health Connect READ_STEPS sheet.
+    // Physical activity + notifications are requested once after Done via
+    // completeStepSetup({ allowAll: true }) → activateStepTracking(firstSetupAllowAll).
 
     if (!_initialized) {
       const initResult = await this.initialize();
@@ -518,6 +509,9 @@ export const androidHCService = {
 
       if (hasStepsRead(before)) {
         hcLog("Steps read already granted — skipping request sheet");
+        _permissionRequested = true;
+        _permCache = { status: "granted", at: Date.now() };
+        _permBackoffUntil = 0;
         return "granted";
       }
 
@@ -547,6 +541,10 @@ export const androidHCService = {
 
       if (granted) {
         _permissionRequested = true;
+        // Must update cache immediately — otherwise Done re-reads a stale
+        // "unknown" for up to HC_PERM_CACHE_MS and bounces back to Enable.
+        _permCache = { status: "granted", at: Date.now() };
+        _permBackoffUntil = 0;
         try {
           const read = await this.readTodaySteps();
           hcLog(
@@ -562,10 +560,12 @@ export const androidHCService = {
         hcLog(
           "empty permission result — dialog may not have shown; caller should use Android Steps fallback",
         );
+        // Do not cache as denied — dialog may not have shown.
         return "unknown";
       }
 
       _permissionRequested = true;
+      _permCache = { status: "denied", at: Date.now() };
       hcLog("READ_STEPS not granted — user can retry Enable Step Tracking");
       return "denied";
     } catch (e) {
@@ -761,6 +761,59 @@ export const androidHCService = {
   resetTodayStepCache(): void {
     _cachedTodaySteps = 0;
     hcLog("today cache reset for user/date scope change");
+  },
+
+  /**
+   * Compatibility helpers used by newer setup/diagnostic modules.
+   * Kept lightweight so feature/priya step core stays intact.
+   */
+  invalidateCachesForForeground(): void {
+    this.resetTodayStepCache();
+    _permCache = null;
+  },
+
+  async openHealthConnectManagement(opts?: {
+    preferredPackageName?: string;
+  }): Promise<void> {
+    void opts;
+    await this.openDataManagement();
+  },
+
+  async probeTodayStepFeed(): Promise<{
+    readable: boolean;
+    steps: number;
+    recordHint: string;
+    recordCount: number;
+    dataOrigins: string[];
+    hasHistoricalStepRecords: boolean;
+    latestRecordEndTime?: string;
+  }> {
+    try {
+      const today = await this.readTodaySteps();
+      const steps = Math.max(0, today?.steps ?? this.getCachedTodaySteps());
+      const readable = (await this.getPermissionStatus()) === "granted";
+      return {
+        readable,
+        steps,
+        recordHint: readable
+          ? steps > 0
+            ? `Receiving steps (${steps.toLocaleString()} today)`
+            : "Health Connect readable"
+          : "Allow Walk Champ Read Steps",
+        recordCount: steps > 0 ? 1 : 0,
+        dataOrigins: [],
+        hasHistoricalStepRecords: steps > 0,
+      };
+    } catch {
+      return {
+        readable: false,
+        steps: 0,
+        recordHint: "Could not verify Health Connect yet",
+        recordCount: 0,
+        dataOrigins: [],
+        hasHistoricalStepRecords: false,
+      };
+    }
   },
 
   reset(): void {

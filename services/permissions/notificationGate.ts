@@ -12,7 +12,6 @@ import {
   openAppNotificationSettings,
 } from "@/services/permissions/androidNotificationAccess";
 import {
-  ensureActivityRecognitionPermission,
   hasActivityRecognitionPermission,
 } from "@/services/permissions/activityRecognitionPermissionService";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
@@ -291,7 +290,7 @@ export async function handleAppResumeNotificationRecheck(): Promise<void> {
   }
 
   if (Platform.OS === "android") {
-    await ensureActivityRecognitionPermission().catch(() => false);
+    // Do not prompt Physical activity here — only refresh HC after notifications enabled.
     await stepProviderManager.initialize(true).catch(() => null);
   }
 

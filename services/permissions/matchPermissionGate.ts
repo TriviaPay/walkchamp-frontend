@@ -1,17 +1,18 @@
 /**
  * Match join/host permission gate.
  *
- * Reuses activateStepTracking + stepProviderManager — no new provider logic.
- * Blocks only the match action when steps are not ready; does not navigate away.
- *
- * requireVerified=true for cash/coins/sponsored reward races (existing product rule).
- * Free challenges only need a working step source (verified OR limited sensor).
+ * All challenges (free + reward) require verified Health Connect / HealthKit.
+ * Prefer opening the existing WearableSetupModal via onSetupRequired.
  */
 
 import { Alert, Linking, Platform } from "react-native";
 import { activateStepTracking } from "@/services/stepTrackingStartup";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { openNotificationSettings } from "@/services/permissions/notificationGate";
+import {
+  requireVerifiedStepTracking,
+  type VerifiedStepProviderResult,
+} from "@/services/steps/verifiedStepCapability";
 
 export type MatchPermissionGateResult = {
   allowed: boolean;
@@ -30,21 +31,25 @@ function openAppSettings(): void {
 }
 
 /**
- * Ensure step-tracking permissions are ready before join/host.
- * Shows a clear alert when missing; optionally requests permissions once.
+ * Ensure verified step tracking is ready before join/host (including free).
+ * Calls onSetupRequired (open WearableSetupModal) when unverified.
  */
 export async function ensureMatchStepPermissionsReady(options: {
   userId: string;
   username?: string | null;
-  /** Reward races need Health Connect / Apple Health (verified). */
+  /**
+   * @deprecated Always verified for all races. Kept for call-site compatibility.
+   */
   requireVerified?: boolean;
   actionLabel?: string;
+  /** Open existing WearableSetupModal — preferred over Alert-only UX. */
+  onSetupRequired?: (result?: VerifiedStepProviderResult) => void;
 }): Promise<MatchPermissionGateResult> {
   const {
     userId,
     username,
-    requireVerified = false,
     actionLabel = "join this challenge",
+    onSetupRequired,
   } = options;
 
   if (!userId?.trim()) {
@@ -56,26 +61,8 @@ export async function ensureMatchStepPermissionsReady(options: {
     let ready = await stepProviderManager.isTrackingReady().catch(() => false);
     let verified = stepProviderManager.usesVerifiedStepSource();
 
-    if (!ready) {
-      const proceed = await new Promise<boolean>((resolve) => {
-        Alert.alert(
-          "Permissions Required",
-          `WalkChamp needs motion and step-tracking access to measure your race progress accurately before you can ${actionLabel}.`,
-          [
-            { text: "Not Now", style: "cancel", onPress: () => resolve(false) },
-            {
-              text: "Allow Permissions",
-              onPress: () => resolve(true),
-            },
-          ],
-        );
-      });
-
-      if (!proceed) {
-        if (__DEV__) console.log(`[Permission] matchGate action=${actionLabel} allowed=false reason=user_declined_prompt`);
-        return { allowed: false, blocked: true };
-      }
-
+    if (!ready || !verified) {
+      // Soft-retry activation once (Health Connect / HealthKit only — no sensor).
       if (__DEV__) console.log(`[Permission] requestStarted name=step_tracking source=match_gate`);
       const result = await activateStepTracking({
         userId,
@@ -91,13 +78,13 @@ export async function ensureMatchStepPermissionsReady(options: {
       ready = result.success || (await stepProviderManager.isTrackingReady().catch(() => false));
       verified = stepProviderManager.usesVerifiedStepSource();
 
-      if (!ready) {
+      if (!ready || !verified) {
         const blocked =
           !!result.notificationBlocked ||
           !!result.activityRecognitionBlocked ||
           result.permission === "denied";
 
-        if (blocked) {
+        if (blocked && !onSetupRequired) {
           Alert.alert(
             "Permission Disabled",
             "Permission is disabled in your device settings. Open Settings and enable it to continue.",
@@ -106,32 +93,73 @@ export async function ensureMatchStepPermissionsReady(options: {
               { text: "Open Settings", onPress: () => openAppSettings() },
             ],
           );
-        } else {
-          Alert.alert(
-            "Permissions Required",
-            result.message ??
-              "Step tracking is not available yet. Complete wearable setup from the Walk or Profile screen, then try again.",
-          );
+          if (__DEV__) console.log(`[Permission] matchGate action=${actionLabel} allowed=false`);
+          return { allowed: false, blocked: true };
         }
-        if (__DEV__) console.log(`[Permission] matchGate action=${actionLabel} allowed=false`);
+
+        // Prefer WearableSetupModal for reconnect / install / grant flows.
+        let setupHandled = false;
+        await requireVerifiedStepTracking({
+          action: actionLabel,
+          onAllowed: () => {
+            setupHandled = true;
+          },
+          onSetupRequired: (capability) => {
+            if (onSetupRequired) {
+              onSetupRequired(capability);
+            } else {
+              Alert.alert(
+                "Verified Step Tracking Required",
+                Platform.OS === "ios"
+                  ? "Connect Apple Health to join or create challenges."
+                  : "Connect Health Connect to join or create challenges.",
+              );
+            }
+          },
+        });
+        if (setupHandled) {
+          if (__DEV__) console.log(`[Permission] matchGate action=${actionLabel} allowed=true`);
+          return { allowed: true, blocked: false };
+        }
+        if (__DEV__) console.log(`[Permission] matchGate action=${actionLabel} allowed=false reason=not_verified`);
         return { allowed: false, blocked: true };
       }
     }
 
-    if (requireVerified && !verified) {
-      Alert.alert(
-        "Verified Step Tracking Required",
-        "Limited tracking (phone sensor) cannot be used for cash, coins battles, sponsored rewards, or prize races.\n\nPlease connect Health Connect or Apple Health to continue.",
-      );
-      if (__DEV__) console.log(`[Permission] matchGate action=${actionLabel} allowed=false reason=not_verified`);
-      return { allowed: false, blocked: true };
-    }
+    // Final verified gate (covers free + paid).
+    let allowed = false;
+    await requireVerifiedStepTracking({
+      action: actionLabel,
+      onAllowed: () => {
+        allowed = true;
+      },
+      onSetupRequired: (capability) => {
+        if (onSetupRequired) {
+          onSetupRequired(capability);
+        } else {
+          Alert.alert(
+            "Verified Step Tracking Required",
+            Platform.OS === "ios"
+              ? "Connect Apple Health to join or create challenges."
+              : "Connect Health Connect to join or create challenges.",
+          );
+        }
+      },
+    });
 
-    if (__DEV__) console.log(`[Permission] matchGate action=${actionLabel} allowed=true`);
-    return { allowed: true, blocked: false };
+    if (__DEV__) {
+      console.log(
+        `[Permission] matchGate action=${actionLabel} allowed=${allowed}`,
+      );
+    }
+    return { allowed, blocked: !allowed };
   } catch (e) {
     if (__DEV__) console.log("[Permission] matchGate error", e);
-    Alert.alert("Permissions Required", "Unable to verify step tracking. Please try again.");
+    if (onSetupRequired) {
+      onSetupRequired();
+    } else {
+      Alert.alert("Permissions Required", "Unable to verify step tracking. Please try again.");
+    }
     return { allowed: false, blocked: true };
   }
 }

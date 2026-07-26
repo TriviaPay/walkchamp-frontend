@@ -51,8 +51,6 @@ import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { dynamicIconService } from "@/services/dynamicIconService";
 import {
-  getOngoingNotificationDeniedMessage,
-  shouldShowOngoingNotificationDeniedMessage,
   stepTrackingNotificationService,
 } from "@/services/stepTrackingNotificationService";
 import {
@@ -99,6 +97,14 @@ import {
   markFreshLocalDay,
   isFreshLocalDay,
 } from "@/utils/stepAccuracy";
+import {
+  assertVerifiedDailySyncSource,
+  decideVerifiedDailySync,
+  isProvisionalDailyStepSource,
+  selectVerifiedTodayStepsForSync,
+  STEP_SOURCES,
+  type VerifiedDailyProviderQueryStatus,
+} from "@/services/steps/hybridStepState";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -170,10 +176,11 @@ interface WalkContextType {
   clearMilestone: () => void;
   /** Request pedometer / Health Connect permission from the user. */
   requestStepPermission: () => Promise<void>;
-  /** Activate tracking after wearable setup when permission may already be granted. */
-  completeStepSetup: () => Promise<void>;
+  /** Activate tracking after wearable setup when permission may already be granted.
+   *  allowAll: first HC setup — request notifications + activity (then Profile toggle later). */
+  completeStepSetup: (opts?: { allowAll?: boolean }) => Promise<void>;
   /** Enable limited device sensor tracking (TYPE_STEP_COUNTER). Sets verificationLevel = limited. */
-  enableLimitedSensorTracking: () => Promise<void>;
+  enableLimitedSensorTracking: () => Promise<boolean>;
   /** Re-fetch today's rank + active minutes from the backend. Safe to call at any time. */
   refreshTodayRank: () => Promise<void>;
   /**
@@ -213,7 +220,11 @@ function providerToActiveSource(
   if (!id) return null;
   if (id === "ios_healthkit") return "ios_healthkit";
   if (id === "android_health_connect") return "android_health_connect";
-  if (id === "android_legacy_sensor") return "android_device_step_counter";
+  // Hybrid: TYPE_STEP_COUNTER is live-race only — never a daily Walk source.
+  if (id === "android_legacy_sensor") {
+    if (FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR) return null;
+    return "android_device_step_counter";
+  }
   return null;
 }
 
@@ -417,11 +428,15 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     store.dispatch(raceProgressActions.setDailyGoal(todayDailyGoal));
   }, [todayDailyGoal]);
 
-  // Sync launcher icon whenever displayed steps or daily goal change (after hydration).
+  // Launcher icon milestones use verified steps only (not provisional display).
   useEffect(() => {
     if (!iconSyncReadyRef.current) return;
     const goal = todayDailyGoal > 0 ? todayDailyGoal : 10_000;
-    dynamicIconService.notifyStepsChanged(todaySteps, goal, user?.id);
+    const verified = Math.max(
+      0,
+      store.getState().raceProgress.verifiedTodaySteps ?? 0,
+    );
+    dynamicIconService.notifyStepsChanged(verified, goal, user?.id);
   }, [todaySteps, todayDailyGoal, user?.id]);
 
   useEffect(() => {
@@ -503,6 +518,12 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       backendSyncRef.current = null;
     }
     stepProviderManager.stopWatchingSteps?.();
+    try {
+      const { stopHybridLiveDailyDisplay } = require("@/services/steps/hybridLiveDailyDisplay") as typeof import("@/services/steps/hybridLiveDailyDisplay");
+      stopHybridLiveDailyDisplay();
+    } catch {
+      /* optional */
+    }
     void stepTrackingNotificationService.stop();
     stopWalkBackgroundStepPoll();
     setUsingRealTracking(false);
@@ -1176,52 +1197,98 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     try {
     const rawCurrent = todayStepsRef.current;
     const providerSteps = await readProviderTodaySteps();
+    const verifiedLane = Math.max(
+      0,
+      store.getState().raceProgress.verifiedTodaySteps ?? 0,
+    );
+    // Never fall back to display/provisional when verified lane is 0.
+    const selectedVerified = selectVerifiedTodayStepsForSync({
+      verifiedTodaySteps: verifiedLane,
+      displayTodaySteps: rawCurrent,
+      lastHcProviderSteps: providerSteps,
+    });
     const syncTotal = capWalkStepsForSync(
-      rawCurrent,
+      selectedVerified,
       providerSteps,
-      undefined,
+      true,
       backendTodayStepsRef.current,
     );
-    // Cap applies to backend sync only — never regress on-screen step count.
-    const current = syncTotal;
     if (syncTotal < rawCurrent) {
       stepEngineLog(
         "StepSync",
         `capped syncTotal=${syncTotal} ui=${rawCurrent} provider=${providerSteps ?? "n/a"} backend=${backendTodayStepsRef.current}`,
       );
     }
-    const lastSynced = lastSyncedStepsRef.current;
-    const delta = current - lastSynced;
-    if (delta <= 0) {
+
+    const usesVerified = stepProviderManager.usesVerifiedStepSource();
+    const minDelta = opts?.force
+      ? 1
+      : usesVerified
+        ? STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MIN_DELTA_VERIFIED
+        : STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MIN_DELTA_LEGACY;
+
+    let providerQueryStatus: VerifiedDailyProviderQueryStatus = "unknown";
+    if (providerSteps == null) {
+      providerQueryStatus = "temporary_error";
+    } else if (providerSteps <= 0) {
+      providerQueryStatus = "empty";
+    } else {
+      providerQueryStatus = "ok";
+    }
+
+    const decision = decideVerifiedDailySync({
+      authenticated: Boolean(user?.id),
+      localDateValid: Boolean(getTodayKey()),
+      trackingComplete: usesVerified || selectedVerified > 0,
+      verifiedTodaySteps: verifiedLane,
+      displayTodaySteps: rawCurrent,
+      lastHcProviderSteps: providerSteps,
+      providerQueryStatus,
+      backendTodaySteps: backendTodayStepsRef.current,
+      lastSyncedSteps: lastSyncedStepsRef.current,
+      syncTotalAfterCap: syncTotal,
+      platform: Platform.OS,
+      minDelta,
+    });
+
+    if (decision.action === "preserve_backend") {
+      stepEngineLog(
+        "StepSync",
+        `preserve_backend reason=${decision.reason} verified=${verifiedLane} ui=${rawCurrent}`,
+      );
+      return;
+    }
+    if (decision.action === "skip") {
       if (__DEV__ && opts?.force) {
         console.log(
-          `[StepSync] force skipped delta=${delta} current=${current} lastSynced=${lastSynced}`,
+          `[StepSync] force skipped reason=${decision.reason} syncTotal=${syncTotal} lastSynced=${lastSyncedStepsRef.current}`,
         );
       }
       return;
     }
 
-    const verified = stepProviderManager.usesVerifiedStepSource();
-    const minDelta = opts?.force
-      ? 1
-      : verified
-        ? STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MIN_DELTA_VERIFIED
-        : STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MIN_DELTA_LEGACY;
-    if (delta < minDelta) {
-      if (__DEV__) {
-        stepEngineLog(
-          "StepSync",
-          `skipped delta=${delta} below min=${minDelta} verified=${verified}`,
-        );
-      }
-      return;
-    }
+    const current = decision.steps;
+    const lastSynced = lastSyncedStepsRef.current;
+    const delta = current - lastSynced;
+    if (delta <= 0) return;
 
     const distanceMeters = Math.round(stepsToDistance(delta));
     const calories = Math.round(stepsToCalories(delta));
     const activeMinutes = Math.ceil(current / 120);
 
-    const source = stepProviderManager.toWalkSyncSource() ?? "unknown";
+    const rawSource = stepProviderManager.toWalkSyncSource();
+    if (isProvisionalDailyStepSource(rawSource)) {
+      stepEngineLog(
+        "StepSync",
+        `blocked provisional walk sync source=${rawSource}`,
+      );
+      return;
+    }
+    const source =
+      decision.source === "healthkit"
+        ? STEP_SOURCES.verifiedDailyIOS
+        : STEP_SOURCES.verifiedDailyAndroid;
+    assertVerifiedDailySyncSource(source);
 
     stepEngineLog(
       "StepSync",
@@ -1386,13 +1453,17 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
       const displaySteps = fromWatch
         ? stepProviderManager.usesVerifiedStepSource()
-          ? safeReal
+          ? // HC can lag/return 0 — never regress a higher live display count.
+            Math.max(safeReal, current)
           : sanitizeLegacyProviderSteps(
               mergeLegacyStepUpdate(current, safeReal),
               backendFloor,
               current,
             )
-        : safeReal;
+        : stepProviderManager.usesVerifiedStepSource()
+          ? // Poll/hydrate must not wipe live/backend progress when HC returns 0.
+            Math.max(safeReal, current)
+          : safeReal;
       if (displaySteps === current) return;
 
       if (!fromWatch) {
@@ -1451,8 +1522,10 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         "WalkScreen",
         `canonicalMirror reason=${reason} coordinator=${coordinatorSteps} display=${display}`,
       );
-      const fromWatch = !stepProviderManager.usesVerifiedStepSource();
-      await applyTodayStepCount(display, fromWatch);
+      // Redux/FGS advances are live display ticks (same feed as the ongoing
+      // notification). Always treat as fromWatch so HC poll phantom guards do
+      // not drop single-step updates while the notification keeps moving.
+      await applyTodayStepCount(display, true);
     },
     [applyTodayStepCount, user?.id],
   );
@@ -1486,7 +1559,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     }
 
     suppressStartupStepBumps(mergeNative ? 5_000 : 8_000);
-    if (freshDay) markFreshLocalDay(90_000);
+    // Do NOT renew markFreshLocalDay here — that extended the midnight window forever
+    // on every poll and let HC=0 wipe the Walk UI.
 
     let display: number;
     if (mergeNative && !freshDay) {
@@ -1617,6 +1691,18 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         const display = resolveLiveDisplaySteps(result.steps);
         void applyTodayStepCount(display, true);
       });
+      // Hybrid Android: HC often returns 0 — sensor keeps Walk + Redux moving
+      // (same hardware path the ongoing notification uses).
+      if (
+        Platform.OS === "android" &&
+        FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR &&
+        stepProviderManager.usesVerifiedStepSource()
+      ) {
+        const { startHybridLiveDailyDisplay } = await import(
+          "@/services/steps/hybridLiveDailyDisplay"
+        );
+        await startHybridLiveDailyDisplay();
+      }
     } catch (e) {
       if (__DEV__) console.log("[WalkContext] startProviderWatching error", e);
     }
@@ -1638,6 +1724,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
       try {
         suppressStartupStepBumps();
+        // Physical activity + notification OS sheets are requested once during
+        // activateStepTracking / setup — do not re-prompt on every Walk activation.
         await hydrateTodayStepsFromBackend();
         await refreshRealSteps({ rehydrateBackend: false });
         await startProviderWatching();
@@ -1659,6 +1747,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         startupSyncFiredRef.current = false;
         void syncDeltaToBackend({ force: true });
         void tickWalkBackgroundStepPoll("resume");
+        // Start ongoing notification only when OS access is on AND user preference allows.
+        // Do not re-prompt or force-enable if the user turned notifications off.
         if (ongoingNotificationEnabled && user?.id) {
           try {
             setStepProgressUser(user.id, user.username ?? null);
@@ -1676,11 +1766,10 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           } catch (notifErr) {
             console.warn("[OngoingNotification] notification start error", notifErr);
           }
-        } else if (
-          Platform.OS === "android" &&
-          shouldShowOngoingNotificationDeniedMessage()
-        ) {
-          Alert.alert("Notifications Disabled", getOngoingNotificationDeniedMessage());
+        } else if (__DEV__ && Platform.OS === "android") {
+          console.log(
+            "[Steps] ongoing notification left off — OS denied or Profile preference off",
+          );
         }
       } catch (e) {
         console.warn("[WalkContext] applyTrackingActivation error", e);
@@ -1742,6 +1831,26 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
         const providerStatus = await stepProviderManager.initialize();
         if (!mounted) return;
+
+        // Hybrid: daily Walk is Health Connect only — never activate sensor as todaySteps.
+        if (
+          FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR &&
+          !stepProviderManager.usesVerifiedStepSource()
+        ) {
+          setActiveStepSource(null);
+          setVerificationLevel("unsupported");
+          setStepPermissionStatus(
+            (providerStatus.permission === "granted"
+              ? "unknown"
+              : providerStatus.permission) as PermissionStatus,
+          );
+          if (__DEV__) {
+            console.log(
+              "[WalkContext] hybrid cold start — waiting for Health Connect (sensor is live-race only)",
+            );
+          }
+          return;
+        }
 
         setStepPermissionStatus(providerStatus.permission as PermissionStatus);
         setActiveStepSource(providerToActiveSource(providerStatus.providerId));
@@ -1825,12 +1934,38 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         if (usingRealRef.current || stepPermissionStatus === "granted") {
           syncDeltaToBackend().catch(() => {});
         }
+        // Ensure native FGS + sensor on inactive (Android start window) AND background.
+        // Hybrid Pedometer only lives in the foreground; tray must match open-app live updates.
         if (
-          nextState === "background" &&
           user?.id &&
           (usingRealRef.current || stepPermissionStatus === "granted")
         ) {
-          void tickWalkBackgroundStepPoll("background");
+          if (nextState === "background") {
+            void tickWalkBackgroundStepPoll("background");
+          }
+          void (async () => {
+            try {
+              setStepProgressUser(user.id, user.username ?? null);
+              const started = await stepTrackingNotificationService.start(
+                {
+                  userId: user.id,
+                  todaySteps: todayStepsRef.current,
+                  dailyGoal:
+                    todayDailyGoalRef.current > 0
+                      ? todayDailyGoalRef.current
+                      : 10_000,
+                },
+                { forceRestart: true },
+              );
+              if (started) {
+                void pushWalkNotificationFromCanonicalStore(true, user.id);
+              }
+            } catch (err) {
+              if (__DEV__) {
+                console.warn("[OngoingNotification] background FGS ensure failed", err);
+              }
+            }
+          })();
         }
         if (nextState === "background") {
           const goal =
@@ -1867,6 +2002,9 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             setUsingRealTracking(true);
             usingRealRef.current = true;
             setTrackingStatusState("walking");
+          } else if (usingRealRef.current) {
+            // Re-arm HC watch + hybrid sensor display after resume.
+            await startProviderWatching();
           }
           await flushWalkStepsOutbox();
           syncDeltaToBackend().catch(() => {});
@@ -1927,12 +2065,17 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
   // ── Limited sensor tracking enable ───────────────────────────────────────────
 
-  const enableLimitedSensorTracking = useCallback(async () => {
-    if (Platform.OS !== "android") return;
-    if (verificationLevel === "verified") return;
+  const enableLimitedSensorTracking = useCallback(async (): Promise<boolean> => {
+    if (Platform.OS !== "android") return false;
+    // Hybrid: daily Walk requires Health Connect — do not show a new Alert or
+    // silent-bypass; WearableSetupModal guides install/setup instead.
+    if (FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR) {
+      return false;
+    }
+    if (verificationLevel === "verified") return true;
     if (!user?.id) {
       Alert.alert("Sign In Required", "Please sign in to enable step tracking.");
-      return;
+      return false;
     }
 
     try {
@@ -1947,28 +2090,30 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             "Notifications Required",
             result.message ?? NOTIFICATION_STILL_DISABLED_MESSAGE,
           );
-          return;
+          return false;
         }
         if (result.activityRecognitionBlocked) {
           Alert.alert(
             "Permission Required",
             result.message ?? "Physical activity permission is required to track steps.",
           );
-          return;
+          return false;
         }
         Alert.alert(
           "Step Tracking Unavailable",
           result.message ?? "Could not enable limited step tracking on this device.",
         );
-        return;
+        return false;
       }
 
       setActiveStepSource("android_device_step_counter");
       setVerificationLevel("limited");
       setStepPermissionStatus("granted");
       await applyTrackingActivation(result.ongoingNotificationEnabled);
+      return true;
     } catch (e) {
       if (__DEV__) console.log("[WalkContext] enableLimitedSensorTracking error", e);
+      return false;
     }
   }, [verificationLevel, user?.id, user?.username, applyTrackingActivation]);
 
@@ -1989,25 +2134,15 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
       if (result.success) {
         await applyTrackingActivation(result.ongoingNotificationEnabled);
-        // Soft reminder only — steps already tracking via poll/watch.
-        if (
-          result.notificationBlocked &&
-          Platform.OS === "android" &&
-          shouldShowOngoingNotificationDeniedMessage()
-        ) {
-          Alert.alert(
-            "Notifications Disabled",
-            result.message ?? getOngoingNotificationDeniedMessage(),
-          );
-        }
+        // Respect user choice: no "Enable Notifications" nag when preference/OS is off.
         return;
       }
 
       if (result.notificationBlocked) {
-        Alert.alert(
-          "Notifications Required",
-          result.message ?? NOTIFICATION_STILL_DISABLED_MESSAGE,
-        );
+        // Preference/OS off — steps still track; Profile toggle can re-enable later.
+        if (__DEV__) {
+          console.log("[Steps] activation continued without notifications");
+        }
       } else if (result.activityRecognitionBlocked) {
         Alert.alert(
           "Permission Required",
@@ -2080,9 +2215,11 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     handleStepActivationResult,
   ]);
 
-  const completeStepSetup = useCallback(async () => {
+  const completeStepSetup = useCallback(async (opts?: { allowAll?: boolean }) => {
     if (!user?.id) return;
     if (permissionRequestInFlightRef.current) return;
+
+    const allowAll = opts?.allowAll !== false;
 
     permissionRequestInFlightRef.current = true;
     try {
@@ -2096,14 +2233,19 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       }
 
       const isLegacy =
-        providerStatus.providerId === "android_legacy_sensor" ||
-        providerStatus.verificationLevel === "legacy";
+        !FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR &&
+        (providerStatus.providerId === "android_legacy_sensor" ||
+          providerStatus.verificationLevel === "legacy");
 
+      // Initial HC setup: ask notifications + physical activity together ("allow all").
+      // Later on/off is Profile → Push Notifications only.
       const result = await activateStepTracking({
         userId: user.id,
         username: user.username,
         requestPermission: false,
         limitedSensorOnly: isLegacy && Platform.OS === "android",
+        skipOngoingNotificationPermission: false,
+        firstSetupAllowAll: allowAll,
       });
       await handleStepActivationResult(result);
     } catch (e) {
@@ -2250,15 +2392,15 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   // fetchTodayFromBackend runs inside load() and refreshRealSteps — no duplicate hydrate on mount.
 
   // ── Startup catch-up sync ─────────────────────────────────────────────────────
-  // If the app was killed between 30 s sync intervals, unsaved steps remain in
-  // AsyncStorage but were never POSTed to the backend. On next launch, once
-  // todaySteps is hydrated from storage and is above the last-synced count,
-  // push the outstanding delta immediately (before the regular interval fires).
-  // The backend uses GREATEST so there is no risk of double-counting.
+  // Gate on verifiedTodaySteps only — never force-sync provisional display inflation.
   useEffect(() => {
     if (startupSyncFiredRef.current) return;
-    if (todaySteps <= 0) return;
-    if (todaySteps <= lastSyncedStepsRef.current) return;
+    const verified = Math.max(
+      0,
+      store.getState().raceProgress.verifiedTodaySteps ?? 0,
+    );
+    if (verified <= 0) return;
+    if (verified <= lastSyncedStepsRef.current) return;
     startupSyncFiredRef.current = true;
     syncDeltaToBackend({ force: true }).catch(() => {});
   }, [todaySteps, syncDeltaToBackend]);

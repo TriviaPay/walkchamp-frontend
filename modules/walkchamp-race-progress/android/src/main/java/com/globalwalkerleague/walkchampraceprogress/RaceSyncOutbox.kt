@@ -35,8 +35,21 @@ data class RaceSyncOutboxItem(
 
     fun save(ctx: Context, item: RaceSyncOutboxItem) {
       if (item.userId.isBlank() || item.raceId.isBlank()) return
+      // Latest-value compaction: never let a lower cumulative total overwrite a higher one.
+      val existing = load(ctx, item.userId, item.raceId)
+      val merged = if (existing != null && existing.raceSteps > item.raceSteps) {
+        existing.copy(
+          todaySteps = maxOf(existing.todaySteps, item.todaySteps),
+          retryCount = item.retryCount,
+          nextRetryAt = item.nextRetryAt,
+          clientTimestamp = maxOf(existing.clientTimestamp, item.clientTimestamp),
+          stepSource = if (item.stepSource.isNotBlank()) item.stepSource else existing.stepSource,
+        )
+      } else {
+        item
+      }
       ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-        .putString(key(item.userId, item.raceId), item.toJson().toString())
+        .putString(key(merged.userId, merged.raceId), merged.toJson().toString())
         .apply()
     }
 

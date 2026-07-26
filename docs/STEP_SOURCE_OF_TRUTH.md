@@ -9,15 +9,20 @@
 | Pedometer lifecycle / permissions / HC | `WalkContext` | session |
 | Race phase / UI machine | `RaceContext` | race session |
 
-## Display merge (intentional, temporary)
+## Hybrid lanes (required)
 
-Some screens still take `Math.max(contextSteps, raceProgressSteps)` so a
-briefly-ahead context value is not dropped during migration. This **must not**
-invent steps from unrelated users/dates/races.
+| Lane | Field | Used for |
+|------|-------|----------|
+| Verified daily | `verifiedTodaySteps` | `/api/walk/steps`, rewards authority |
+| Provisional daily | `provisionalSensorTodaySteps` | Walk UI + 91002 only |
+| Display alias | `todaySteps` = max(verified, provisional) | Compatibility UI only |
+| Live race | `raceSteps` + `liveRaceSessionId` | Provisional race upload |
+| Verified race | `verifiedRaceSteps` | HC/HK race-window query |
+| Backend accepted | `backendAcceptedLiveSteps` | Server-acked live total |
+| Backend reconciled | `backendReconciledSteps` / `finalAuthoritativeSteps` | Final result only when `reconciliationStatus === "finalized"` |
 
-- Prefer `raceProgress` when `userId` matches the signed-in user.
-- Walk total steps and race steps remain separate fields — never mix them.
-- Do not reintroduce dead `walkSlice` as a third reader.
+**Forbidden:** `max(local, verified, reconciled)` as final race authority.
+
 
 ## Dead / legacy
 

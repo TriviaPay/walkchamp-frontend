@@ -1,8 +1,7 @@
 import { Redirect } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { useAuth } from "@/context/AuthContext";
-import { useColors } from "@/hooks/useColors";
 import { perf } from "@/utils/perfLogger";
 import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
 import { ONBOARDING_ROUTES } from "@/constants/onboarding";
@@ -10,7 +9,6 @@ import { getOnboardingStatus } from "@/utils/onboardingStorage";
 
 export default function RootIndex() {
   const { user, loading, isAuthenticating } = useAuth();
-  const colors = useColors();
   const routeReadyLogged = useRef(false);
   const [onboardingChecked, setOnboardingChecked] = useState(!ENABLE_PREMIUM_ONBOARDING);
   const [onboardingInProgress, setOnboardingInProgress] = useState(false);
@@ -48,12 +46,9 @@ export default function RootIndex() {
   // Block only when there is no cached user to route with.
   // Logged-in users with a hydrated profile proceed immediately while
   // restoreSession validates the token in the background.
+  // Splash already waits for auth/onboarding settle — keep a quiet fallback.
   if ((loading && !user) || isAuthenticating || (user && !onboardingChecked)) {
-    return (
-      <View style={[styles.loading, { backgroundColor: colors.background }]}>
-        <ActivityIndicator color={colors.primary} size="large" />
-      </View>
-    );
+    return <View style={[styles.loading, { backgroundColor: "#EAF6E8" }]} />;
   }
 
   if (!user) {

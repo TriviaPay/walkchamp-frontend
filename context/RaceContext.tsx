@@ -1,19 +1,14 @@
 /**
- * RaceContext — manages race lifecycle with real step tracking + simulation fallback.
+ * RaceContext — manages race lifecycle with hybrid live + verified step tracking.
  *
- * Real step tracking (when enabled & permission granted):
- *   iOS     — getStepsForTimeRange(raceStart, now) via HealthKit.
- *   Android — readStepsForRange(raceStart, now) via Health Connect (same model as iOS).
- *             Baseline = androidHCService.getCachedTodaySteps() at race start.
- *             Race steps = HC range query result (no delta math needed).
- *
- * The simulation is retained for smooth UI animation.
- * Backend receives REAL steps (when available) so results are accurate.
+ * Hybrid (ENABLE_LIVE_RACE_DEVICE_SENSOR):
+ *   Live race UI/uploads — TYPE_STEP_COUNTER (Android) / CMPedometer (iOS)
+ *   Daily Walk — Health Connect / HealthKit only (never sensor todaySteps)
+ *   Periodic HC/HK verification during race — does not replace live UI
  *
  * Race recovery across app close/kill:
  *   On join/start: persist { raceId, raceStartTimeUTC } to AsyncStorage.
- *   On mount: detect pending race, fetch real historical steps, reconcile.
- *   Both iOS and Android now use authoritative range queries for recovery.
+ *   On mount: detect pending race, fetch historical steps, reconcile baselines.
  */
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +34,7 @@ import {
 import { mergeRaceStepsWithNative } from "@/services/stepDisplayMerge";
 import { sanitizeLegacyProviderSteps } from "@/utils/stepAccuracy";
 import type { StepProgressSource } from "@/store/slices/raceProgressSlice";
+import { raceProgressActions } from "@/store/slices/raceProgressSlice";
 import { store } from "@/store";
 import { setWalkBackendSyncPaused } from "@/services/walkSyncCoordinator";
 import {
@@ -48,6 +44,11 @@ import {
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { waitForAppStartupReady } from "@/services/appStartup";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import {
+  startRaceHealthVerification,
+  stopRaceHealthVerification,
+  type RaceVerificationResult,
+} from "@/services/steps/raceHealthVerification";
 import { STORAGE_KEYS, storageGet, storageSet, storageRemove } from "@/utils/storage";
 import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
 import { subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
@@ -185,6 +186,8 @@ interface RaceContextType {
   platformFee: number;
   prizeTiers: number[];
   isSuspicious: boolean;
+  /** Latest HC/HK verification snapshot during hybrid live race (null if not running). */
+  raceVerification: RaceVerificationResult | null;
   raceId: string | null;
   isHost: boolean;
   /** Server-authoritative race start time (UTC). Used for step reconciliation. */
@@ -257,6 +260,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
   const [results, setResults] = useState<RaceResult[]>([]);
   const [userFinishRank, setUserFinishRank] = useState<number | null>(null);
   const [isSuspicious, setIsSuspicious] = useState(false);
+  const [raceVerification, setRaceVerification] = useState<RaceVerificationResult | null>(null);
   const [prizeState, setPrizeState] = useState(() => calculatePrizes(1, 10));
   const [raceId, setRaceId] = useState<string | null>(null);
   const [isHost, setIsHost] = useState(false);
@@ -366,6 +370,8 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     subscriptionGenRef.current++;
     stepTracker.stopLiveTracking();
     stepProviderManager.stopWatchingSteps();
+    stepProviderManager.stopLiveRaceWatching();
+    stopRaceHealthVerification();
     stepPollingService.stopPolling("race_ended");
     raceStepSyncService.cancelPending();
     racePollingConfigRef.current = null;
@@ -388,6 +394,8 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     }
     stepTracker.stopLiveTracking();
     stepProviderManager.stopWatchingSteps();
+    stepProviderManager.stopLiveRaceWatching();
+    stopRaceHealthVerification();
     stepPollingService.stopPolling(reason);
     if (raceIdRef.current && userStepsRef.current > 0) {
       void raceStepSyncService.flush(
@@ -1114,6 +1122,29 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         userId: string,
         baseline: number,
       ) => {
+        const hybridLive = FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR === true;
+
+        if (hybridLive) {
+          const sensorReady = await stepProviderManager.ensureLiveRaceSensorReady();
+          if (
+            !sensorReady ||
+            subscriptionGenRef.current !== myGen ||
+            raceEndedRef.current
+          ) {
+            if (__DEV__) {
+              console.log(
+                `[RaceSteps] hybrid live sensor not ready — ${
+                  Platform.OS === "android"
+                    ? "ACTIVITY_RECOGNITION / TYPE_STEP_COUNTER"
+                    : "Motion & Fitness / CMPedometer"
+                } required`,
+              );
+            }
+            usingRealStepsRef.current = false;
+            return;
+          }
+        }
+
         const config: RacePollingConfig = {
           raceId: raceIdRef.current ?? "",
           raceStartTime: raceStart ?? new Date(),
@@ -1124,6 +1155,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           onUpdate: (raceSteps, deviceTotal) => applyRealSteps(raceSteps, deviceTotal),
           onReadBlocked: () => {
             void (async () => {
+              // Hybrid: re-arm live sensor only — never swap daily HC/HK provider.
               const ok = await stepProviderManager.switchToLegacyFallback(
                 "read_blocked",
               );
@@ -1132,8 +1164,21 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
                 subscriptionGenRef.current !== myGen ||
                 raceEndedRef.current
               ) {
-                usingRealStepsRef.current = false;
-                return;
+                // iOS hybrid: Motion permission may still be OK via ensureLiveRaceSensorReady.
+                if (hybridLive && Platform.OS === "ios") {
+                  const iosOk = await stepProviderManager.ensureLiveRaceSensorReady();
+                  if (
+                    !iosOk ||
+                    subscriptionGenRef.current !== myGen ||
+                    raceEndedRef.current
+                  ) {
+                    usingRealStepsRef.current = false;
+                    return;
+                  }
+                } else {
+                  usingRealStepsRef.current = false;
+                  return;
+                }
               }
               const newBaseline = raceIdRef.current
                 ? await stepProviderManager.ensureRaceBaseline(
@@ -1148,7 +1193,54 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         };
         racePollingConfigRef.current = config;
         raceDeviceBaselineRef.current = baseline;
-        stepPollingService.startPolling("race", config);
+
+        if (hybridLive) {
+          stepPollingService.stopPolling("hybrid_live_sensor");
+          await stepProviderManager.startLiveRaceWatching(async () => {
+            if (subscriptionGenRef.current !== myGen || raceEndedRef.current) {
+              return;
+            }
+            const rid = raceIdRef.current;
+            if (!rid || !raceStart) return;
+            const snap = await stepProviderManager.getRaceSteps(
+              rid,
+              raceStart,
+              userId,
+              raceEndTimeRef.current ?? undefined,
+            );
+            if (!snap) return;
+            applyRealSteps(snap.steps, snap.steps + baseline);
+          });
+          // Backup poll for missed ticks / outbox alignment + HC/HK recovery.
+          stepPollingService.startPolling("race", config);
+          if (raceStart) {
+            startRaceHealthVerification({
+              raceId: raceIdRef.current ?? "",
+              startAtUtc: raceStart.toISOString(),
+              endAtUtc: raceEndTimeRef.current?.toISOString() ?? null,
+              getLiveRaceSteps: () => userStepsRef.current,
+              onResult: (result) => {
+                if (subscriptionGenRef.current !== myGen || raceEndedRef.current) {
+                  return;
+                }
+                setRaceVerification(result);
+                if (
+                  typeof result.verifiedRaceSteps === "number" &&
+                  result.verifiedRaceSteps >= 0
+                ) {
+                  store.dispatch(
+                    raceProgressActions.setVerifiedRaceSteps({
+                      steps: result.verifiedRaceSteps,
+                      verifiedAt: result.verifiedAtUtc ?? new Date().toISOString(),
+                    }),
+                  );
+                }
+              },
+            });
+          }
+        } else {
+          stepPollingService.startPolling("race", config);
+        }
       };
 
       void (async () => {
@@ -1820,6 +1912,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       platformFee: prizeState.platformFee,
       prizeTiers: prizeState.prizes,
       isSuspicious,
+      raceVerification,
       raceId, isHost, raceStartTimeUTC,
       raceTargetSteps, setRaceTargetSteps,
       joinRace, startRaceManually, notifyRaceStarted, resumeLiveRace, cancelRace, resetRace, setActiveRace,
@@ -1830,7 +1923,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       racePhase, raceEntryFee, raceMaxPlayers, playersJoined, participants, countdown,
       raceTimerSeconds, userRaceSteps, walkRaceStepsDisplay, results, userFinishRank,
       prizeState.totalPool, prizeState.winnersPool, prizeState.platformFee, prizeState.prizes,
-      isSuspicious, raceId, isHost, raceStartTimeUTC, raceTargetSteps, setRaceTargetSteps,
+      isSuspicious, raceVerification, raceId, isHost, raceStartTimeUTC, raceTargetSteps, setRaceTargetSteps,
       joinRace, startRaceManually, notifyRaceStarted, resumeLiveRace, cancelRace, resetRace, setActiveRace,
       stopRaceStepTracking, pauseRaceStepTracking, resumeRaceStepTracking, catchUpLiveRaceSteps,
       recordFinishedRaceStepsForWalk,

@@ -1,8 +1,11 @@
 /**
- * Unified step provider manager — single entry point for Walk + Live Race.
+ * Unified step provider manager — Walk + Live Race.
  *
- * iOS: HealthKit only (unchanged).
- * Android: Health Connect first, legacy TYPE_STEP_COUNTER fallback.
+ * Hybrid (ENABLE_LIVE_RACE_DEVICE_SENSOR):
+ *   Daily: Health Connect (Android) / HealthKit (iOS) only — never TYPE_STEP_COUNTER
+ *   Live race: TYPE_STEP_COUNTER / Core Motion path — never HC as low-latency feed
+ *
+ * When hybrid is off, legacy single-provider fallback remains for older builds.
  */
 
 import { AppState, Platform } from "react-native";
@@ -29,6 +32,9 @@ import type {
 import type { StepProgressSource } from "@/store/slices/raceProgressSlice";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { stepAudit } from "@/utils/stepAudit";
+import { canonicalLiveRaceStepSource } from "./liveRaceSources";
+
+export { isLegacyStepSourceId } from "./verifiedStepSources";
 
 const PROVIDER_LABELS: Record<StepProviderId, string> = {
   ios_healthkit: "HealthKit",
@@ -36,8 +42,12 @@ const PROVIDER_LABELS: Record<StepProviderId, string> = {
   android_legacy_sensor: "Android Steps",
 };
 
+/** Daily verified provider (HC / HK). */
 let _activeProvider: StepProvider | null = null;
+/** Live race provider (TYPE_STEP_COUNTER). Parallel to daily — never swaps daily. */
+let _liveRaceProvider: StepProvider | null = null;
 let _watchStop: (() => void) | null = null;
+let _liveRaceWatchStop: (() => void) | null = null;
 let _initializing: Promise<void> | null = null;
 let _diagnosticsLogged = false;
 let _lastHcProbeAt = 0;
@@ -45,6 +55,15 @@ let _statusCache: { perm: StepPermissionState; at: number } | null = null;
 
 const HC_PROBE_MS = 5 * 60_000;
 const STATUS_CACHE_MS = 15_000;
+
+function liveRaceSensorEnabled(): boolean {
+  return FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR === true;
+}
+
+function raceProvider(): StepProvider | null {
+  if (liveRaceSensorEnabled() && _liveRaceProvider) return _liveRaceProvider;
+  return _activeProvider;
+}
 
 function devLog(msg: string, ...args: unknown[]): void {
   if (__DEV__ && STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) {
@@ -69,6 +88,27 @@ async function ensureActivityRecognitionPermission(): Promise<boolean> {
   return ensureActivity();
 }
 
+/** Resolve Android live-race sensor without prompting (silent AR check). */
+async function resolveAndroidLiveRaceProvider(): Promise<StepProvider | null> {
+  if (!liveRaceSensorEnabled()) return null;
+  if (isExpoGo()) return null;
+  const available = await androidLegacySensorProvider.isAvailable();
+  if (!available) return null;
+  const { hasActivityRecognitionPermission } = await import(
+    "@/services/permissions/activityRecognitionPermissionService"
+  );
+  const arOk = await hasActivityRecognitionPermission();
+  if (!arOk) return null;
+  const perm = await androidLegacySensorProvider.getPermissionStatus();
+  if (perm === "denied") return null;
+  return androidLegacySensorProvider;
+}
+
+/**
+ * Daily Android selection.
+ * Hybrid: Health Connect only (never TYPE_STEP_COUNTER for todaySteps).
+ * Legacy mode: HC preferred, sensor fallback.
+ */
 async function trySelectAndroidProvider(
   preferHc = true,
   forceReselect = false,
@@ -76,14 +116,21 @@ async function trySelectAndroidProvider(
   if (
     !forceReselect &&
     _activeProvider &&
-    (_activeProvider.providerId === "android_legacy_sensor" ||
-      _activeProvider.providerId === "android_health_connect" ||
-      _activeProvider.providerId === "ios_healthkit")
+    (_activeProvider.providerId === "android_health_connect" ||
+      _activeProvider.providerId === "ios_healthkit" ||
+      (!liveRaceSensorEnabled() &&
+        _activeProvider.providerId === "android_legacy_sensor"))
   ) {
     return _activeProvider;
   }
 
-  devLog("platform android");
+  // Hybrid: drop legacy if it somehow became daily.
+  if (
+    liveRaceSensorEnabled() &&
+    _activeProvider?.providerId === "android_legacy_sensor"
+  ) {
+    _activeProvider = null;
+  }
 
   const legacyAvailable = await androidLegacySensorProvider.isAvailable();
   const now = Date.now();
@@ -96,7 +143,7 @@ async function trySelectAndroidProvider(
     try {
       const init = await androidHCService.initialize();
       const hcBlocked = await probeHcManifestBlocked();
-      let hcUsable =
+      const hcUsable =
         init.initialized &&
         init.availability === "available" &&
         !hcBlocked;
@@ -105,53 +152,75 @@ async function trySelectAndroidProvider(
         const hcPerm = await androidHealthConnectProvider.getPermissionStatus();
         devLog(`Health Connect status: usable=true permission=${hcPerm}`);
         if (hcPerm === "granted") {
-          devLog("selected android_health_connect");
-          sourceLog("[StepSource] selected=health_connect healthConnectAvailable=true");
+          sourceLog(
+            "[StepSource] selected=health_connect healthConnectAvailable=true",
+          );
           return androidHealthConnectProvider;
         }
-        // HC not granted — use legacy when available (unsupported / no manifest).
+        if (liveRaceSensorEnabled()) {
+          // Hybrid: keep HC as daily candidate even if not granted yet (setup UI).
+          if (hcPerm !== "denied") {
+            return androidHealthConnectProvider;
+          }
+          devLog("HC denied — hybrid daily has no sensor fallback");
+          return null;
+        }
         if (legacyAvailable) {
           devLog("HC not granted — preferring android_legacy_sensor");
           return androidLegacySensorProvider;
         }
         if (hcPerm !== "denied") {
-          devLog("Health Connect available, awaiting permission");
           return androidHealthConnectProvider;
         }
-        devLog("Health Connect permission denied — trying legacy");
       } else {
         devLog(
           `Health Connect not usable: availability=${init.availability} blocked=${hcBlocked}`,
         );
+        if (liveRaceSensorEnabled()) {
+          return null;
+        }
       }
     } catch (e) {
-      devLog("Health Connect selection error — trying legacy", e);
+      devLog("Health Connect selection error", e);
+      if (liveRaceSensorEnabled()) return null;
     }
-  } else if (preferHc && legacyAvailable) {
-    devLog("skipped HC probe — legacy sensor active");
+  }
+
+  if (liveRaceSensorEnabled()) {
+    return null;
   }
 
   if (legacyAvailable) {
     devLog("selected android_legacy_sensor");
-    sourceLog("[StepSource] selected=sensor healthConnectAvailable=false sensorAvailable=true");
+    sourceLog(
+      "[StepSource] selected=sensor healthConnectAvailable=false sensorAvailable=true",
+    );
     return androidLegacySensorProvider;
   }
 
-  devLog("no Android provider available");
   return null;
 }
 
 async function selectProvider(forceReselect = false): Promise<StepProvider | null> {
   if (!FEATURE_FLAGS.REAL_STEP_TRACKING_ENABLED) return null;
-  if (_activeProvider && !forceReselect) return _activeProvider;
+  if (_activeProvider && !forceReselect) {
+    if (Platform.OS === "android" && liveRaceSensorEnabled()) {
+      _liveRaceProvider = await resolveAndroidLiveRaceProvider();
+    }
+    return _activeProvider;
+  }
 
   const previousId = _activeProvider?.providerId ?? null;
 
   if (Platform.OS === "ios") {
     const ok = await iosHealthKitProvider.isAvailable();
     _activeProvider = ok ? iosHealthKitProvider : null;
-    if (_activeProvider) devLog("selected ios_healthkit");
-    if (_activeProvider) sourceLog("[StepSource] selected=healthkit");
+    // Hybrid: daily stays HealthKit-labeled provider; live race also uses CMPedometer
+    // via the same Pedometer bridge but never swaps daily scope.
+    _liveRaceProvider = liveRaceSensorEnabled() && ok ? iosHealthKitProvider : _activeProvider;
+    if (_activeProvider) {
+      sourceLog("[StepSource] selected=healthkit");
+    }
     if (previousId !== (_activeProvider?.providerId ?? null)) {
       stepAudit.noteSourceSwitch(previousId, _activeProvider?.providerId ?? null);
     }
@@ -162,20 +231,29 @@ async function selectProvider(forceReselect = false): Promise<StepProvider | nul
 
   _activeProvider = await trySelectAndroidProvider(true, forceReselect);
 
-  // HC unavailable — force legacy
-  if (
-    !_activeProvider ||
-    ((await _activeProvider.getPermissionStatus()) === "denied" &&
-      (await androidLegacySensorProvider.isAvailable()))
-  ) {
-    const legacy = await trySelectAndroidProvider(false, forceReselect);
-    if (legacy?.providerId === "android_legacy_sensor") {
-      _activeProvider = legacy;
+  if (!liveRaceSensorEnabled()) {
+    if (
+      !_activeProvider ||
+      ((await _activeProvider.getPermissionStatus()) === "denied" &&
+        (await androidLegacySensorProvider.isAvailable()))
+    ) {
+      const legacy = await trySelectAndroidProvider(false, forceReselect);
+      if (legacy?.providerId === "android_legacy_sensor") {
+        _activeProvider = legacy;
+      }
     }
   }
 
+  _liveRaceProvider = await resolveAndroidLiveRaceProvider();
+
   if (previousId !== (_activeProvider?.providerId ?? null)) {
     stepAudit.noteSourceSwitch(previousId, _activeProvider?.providerId ?? null);
+  }
+
+  if (__DEV__ && STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) {
+    console.log(
+      `[StepProvider] daily=${_activeProvider?.providerId ?? "none"} liveRace=${_liveRaceProvider?.providerId ?? "none"} hybrid=${liveRaceSensorEnabled()}`,
+    );
   }
 
   return _activeProvider;
@@ -336,54 +414,61 @@ export const stepProviderManager = {
     raceEndAt?: Date,
   ): Promise<StepReadResult | null> {
     await this.initialize();
-    if (!_activeProvider) return null;
-    return _activeProvider.getRaceSteps(raceId, raceStartAt, userId, raceEndAt);
+    const provider = raceProvider();
+    if (!provider) return null;
+    return provider.getRaceSteps(raceId, raceStartAt, userId, raceEndAt);
   },
 
   async createRaceBaseline(raceId: string, userId: string): Promise<number> {
     await this.initialize();
-    if (!_activeProvider?.createRaceBaseline) return 0;
-    return _activeProvider.createRaceBaseline(raceId, userId);
+    const provider = raceProvider();
+    if (!provider?.createRaceBaseline) return 0;
+    return provider.createRaceBaseline(raceId, userId);
   },
 
   async clearRaceBaseline(raceId: string, userId: string): Promise<void> {
-    if (_activeProvider?.clearRaceBaseline) {
-      await _activeProvider.clearRaceBaseline(raceId, userId);
+    const provider = raceProvider();
+    if (provider?.clearRaceBaseline) {
+      await provider.clearRaceBaseline(raceId, userId);
     }
   },
 
   /**
-   * True if the active provider relies on a stored delta baseline for race steps
-   * (Android legacy sensor only). HC / HealthKit use time-range queries and never
-   * need a baseline.
+   * True when live race uses device-sensor baseline math (Android TYPE_STEP_COUNTER).
    */
   usesRaceBaseline(): boolean {
-    return _activeProvider?.providerId === "android_legacy_sensor";
+    return raceProvider()?.providerId === "android_legacy_sensor";
   },
 
-  /** True when the active provider is Health Connect or HealthKit (verified, not sensor-only). */
+  /** True when the daily provider is Health Connect or HealthKit. */
   usesVerifiedStepSource(): boolean {
     const id = _activeProvider?.providerId;
     return id === "android_health_connect" || id === "ios_healthkit";
   },
 
+  getDailyProviderId(): StepProviderId | null {
+    return _activeProvider?.providerId ?? null;
+  },
+
+  getLiveRaceProviderId(): StepProviderId | null {
+    return raceProvider()?.providerId ?? null;
+  },
+
+  isLiveRaceWatchActive(): boolean {
+    return _liveRaceWatchStop != null;
+  },
+
   /**
-   * Ensure a race step baseline exists for the active provider.
-   * Returns the existing baseline if already stored, otherwise creates a fresh one.
-   * For HC / HealthKit (range-based) this always returns 0 — no baseline needed.
-   *
-   * @param seedSteps Known race progress (e.g. server currentSteps on rejoin).
-   *   When provided (including 0), baseline is derived as todaySteps - seedSteps so
-   *   getRaceSteps() returns ~seedSteps. NEVER persist baseline while todaySteps is
-   *   still 0 after account switch — that makes the later daily total look like race steps.
+   * Ensure a race step baseline exists for the live-race sensor provider.
    */
   async ensureRaceBaseline(
     raceId: string,
     userId: string,
     seedSteps?: number,
   ): Promise<number> {
-    if (!_activeProvider) return 0;
-    if (_activeProvider.providerId !== "android_legacy_sensor") return 0;
+    const provider = raceProvider();
+    if (!provider) return 0;
+    if (provider.providerId !== "android_legacy_sensor") return 0;
 
     if (typeof seedSteps === "number" && Number.isFinite(seedSteps)) {
       await setRaceStepSeed(raceId, userId, seedSteps);
@@ -397,9 +482,8 @@ export const stepProviderManager = {
 
     if (existing !== null) {
       try {
-        const today = await _activeProvider.getTodaySteps();
+        const today = await provider.getTodaySteps();
         const implied = Math.max(0, today.steps - existing);
-        // baseline=0 with mid-day today steps is almost always corrupt after re-login.
         const seedVal = seed ?? 0;
         if (
           today.steps > 0 &&
@@ -408,67 +492,41 @@ export const stepProviderManager = {
         ) {
           const fixed = Math.max(0, today.steps - seedVal);
           await setRaceBaseline(raceId, userId, "android_legacy_sensor", fixed);
-          devLog(
-            `ensureRaceBaseline repaired raceId=${raceId} was=0 now=${fixed} seed=${seedVal} today=${today.steps}`,
-          );
           return fixed;
         }
       } catch (e) {
         devLog("ensureRaceBaseline realign check failed", e);
       }
-      devLog(`ensureRaceBaseline raceId=${raceId} existing=${existing}`);
       return existing;
     }
 
     if (seed != null) {
-      const today = await _activeProvider.getTodaySteps();
-      if (today.steps <= 0) {
-        devLog(
-          `ensureRaceBaseline defer persist raceId=${raceId} today=0 seed=${seed}`,
-        );
-        return 0;
-      }
+      const today = await provider.getTodaySteps();
+      if (today.steps <= 0) return 0;
       const baseline = Math.max(0, today.steps - seed);
       await setRaceBaseline(raceId, userId, "android_legacy_sensor", baseline);
-      devLog(
-        `ensureRaceBaseline raceId=${raceId} created from seed=${seed} today=${today.steps} baseline=${baseline}`,
-      );
       return baseline;
     }
 
     const baseline = await this.createRaceBaseline(raceId, userId);
-    devLog(`ensureRaceBaseline raceId=${raceId} created=${baseline}`);
     return baseline;
   },
 
-  /**
-   * Realign the legacy sensor race baseline so that the next getRaceSteps() call
-   * returns serverConfirmedSteps. Called when the server reports more steps than
-   * the local delta counter — e.g. after the app was backgrounded for a long time.
-   * No-op for HC / HealthKit.
-   */
   async alignRaceBaselineToRaceSteps(
     raceId: string,
     userId: string,
     serverConfirmedSteps: number,
   ): Promise<void> {
     if (!this.usesRaceBaseline()) return;
-    if (!_activeProvider) return;
+    const provider = raceProvider();
+    if (!provider) return;
     try {
       const seed = Math.max(0, Math.floor(serverConfirmedSteps));
       await setRaceStepSeed(raceId, userId, seed);
-      const today = await _activeProvider.getTodaySteps();
-      if (today.steps <= 0) {
-        devLog(
-          `alignRaceBaselineToRaceSteps defer raceId=${raceId} today=0 seed=${seed}`,
-        );
-        return;
-      }
+      const today = await provider.getTodaySteps();
+      if (today.steps <= 0) return;
       const newBaseline = Math.max(0, today.steps - seed);
       await setRaceBaseline(raceId, userId, "android_legacy_sensor", newBaseline);
-      devLog(
-        `alignRaceBaselineToRaceSteps raceId=${raceId} newBaseline=${newBaseline} todaySteps=${today.steps} seed=${seed}`,
-      );
     } catch (e) {
       devLog("alignRaceBaselineToRaceSteps error", e);
     }
@@ -476,30 +534,75 @@ export const stepProviderManager = {
 
   async requestStepPermission(): Promise<StepPermissionResult> {
     if (Platform.OS === "android" && isExpoGo()) {
-      return androidLegacySensorProvider.requestPermission();
+      return {
+        status: "unavailable",
+        providerId: null,
+        message:
+          "Step tracking requires the installed Walk Champ app. It does not work in Expo Go.",
+      };
     }
 
     if (Platform.OS === "android") {
       const hcBlocked = androidHCService.isRangeReadBlocked();
       const legacyAvail = await androidLegacySensorProvider.isAvailable();
 
-      // Prefer Health Connect — OS-aggregated steps match Samsung Health / Google Fit.
+      // Daily: Health Connect only when hybrid is on.
       if (!hcBlocked) {
         try {
           const init = await androidHCService.initialize();
+          if (init.availability === "needs_update") {
+            return {
+              status: "unavailable",
+              providerId: null,
+              message: "Update Health Connect from the Play Store to continue.",
+            };
+          }
+          if (init.availability === "not_installed") {
+            return {
+              status: "unavailable",
+              providerId: null,
+              message: "Install Health Connect to track verified steps.",
+            };
+          }
           const hcUsable =
             init.initialized && init.availability === "available";
           if (hcUsable) {
-            const hcResult = await androidHealthConnectProvider.requestPermission();
+            const hcResult =
+              await androidHealthConnectProvider.requestPermission();
             if (hcResult.status === "granted") {
               _activeProvider = androidHealthConnectProvider;
+              _statusCache = { perm: "granted", at: Date.now() };
+              _liveRaceProvider = await resolveAndroidLiveRaceProvider();
               return { ...hcResult, message: "Step tracking is ready." };
             }
-            devLog("Health Connect permission not granted — trying legacy fallback");
+            if (liveRaceSensorEnabled()) {
+              return {
+                ...hcResult,
+                message:
+                  hcResult.message ??
+                  "Walk Champ needs Health Connect step access for verified daily tracking.",
+              };
+            }
+            devLog("HC not granted — trying legacy fallback (non-hybrid)");
           }
         } catch (e) {
-          devLog("Health Connect permission request failed — using legacy", e);
+          if (liveRaceSensorEnabled()) {
+            return {
+              status: "unavailable",
+              providerId: null,
+              message: "Health Connect is required for verified daily steps.",
+            };
+          }
+          devLog("HC permission request failed — using legacy", e);
         }
+      }
+
+      if (liveRaceSensorEnabled()) {
+        return {
+          status: "unavailable",
+          providerId: null,
+          message: "Health Connect is required for verified daily steps.",
+        };
       }
 
       if (legacyAvail) {
@@ -508,26 +611,15 @@ export const stepProviderManager = {
           return {
             status: "denied",
             providerId: null,
-            message: "Physical activity permission is required to track steps.",
+            message:
+              "Physical activity permission is required to track steps.",
           };
         }
-        const legacyResult = await androidLegacySensorProvider.requestPermission();
+        const legacyResult =
+          await androidLegacySensorProvider.requestPermission();
         if (legacyResult.status === "granted") {
           _activeProvider = androidLegacySensorProvider;
-          return {
-            ...legacyResult,
-            message: "Step tracking is ready using Android Steps.",
-          };
-        }
-        if (hcBlocked) {
-          return legacyResult;
-        }
-      }
-
-      if (legacyAvail) {
-        const legacyResult = await androidLegacySensorProvider.requestPermission();
-        if (legacyResult.status === "granted") {
-          _activeProvider = androidLegacySensorProvider;
+          _liveRaceProvider = androidLegacySensorProvider;
           return {
             ...legacyResult,
             message: "Step tracking is ready using Android Steps.",
@@ -552,15 +644,23 @@ export const stepProviderManager = {
     return result;
   },
 
+  /** Daily Walk watch — HC / HealthKit only under hybrid (never sensor). */
   async startWatchingSteps(
     callback: (result: StepReadResult) => void,
   ): Promise<() => void> {
     await this.initialize();
     this.stopWatchingSteps();
-    if (!_activeProvider?.startWatchingSteps) return () => {};
-    stepAudit.noteProviderStart(_activeProvider.providerId);
-    stepAudit.noteWatchListenerDelta(1, _activeProvider.providerId);
-    _watchStop = await _activeProvider.startWatchingSteps(callback);
+    const provider = _activeProvider;
+    if (!provider?.startWatchingSteps) return () => {};
+    if (
+      liveRaceSensorEnabled() &&
+      provider.providerId === "android_legacy_sensor"
+    ) {
+      return () => {};
+    }
+    stepAudit.noteProviderStart(provider.providerId);
+    stepAudit.noteWatchListenerDelta(1, provider.providerId);
+    _watchStop = await provider.startWatchingSteps(callback);
     return () => this.stopWatchingSteps();
   },
 
@@ -575,37 +675,117 @@ export const stepProviderManager = {
       stepAudit.noteWatchListenerDelta(-1, _activeProvider?.providerId);
       stepAudit.noteProviderStop(_activeProvider?.providerId);
     }
-    _activeProvider?.stopWatchingSteps?.();
+    if (_activeProvider?.providerId !== "android_legacy_sensor") {
+      _activeProvider?.stopWatchingSteps?.();
+    }
   },
 
-  /** Switch to legacy sensor when HC fails mid-session (Android only). */
+  /** Live race watch — TYPE_STEP_COUNTER. Does not change daily provider. */
+  async startLiveRaceWatching(
+    callback: (result: StepReadResult) => void,
+  ): Promise<() => void> {
+    await this.initialize();
+    this.stopLiveRaceWatching();
+    const ready = await this.ensureLiveRaceSensorReady();
+    if (!ready) return () => {};
+    const provider = _liveRaceProvider;
+    if (!provider?.startWatchingSteps) return () => {};
+    stepAudit.noteProviderStart(provider.providerId);
+    _liveRaceWatchStop = await provider.startWatchingSteps(callback);
+    return () => this.stopLiveRaceWatching();
+  },
+
+  stopLiveRaceWatching(): void {
+    if (_liveRaceWatchStop) {
+      try {
+        _liveRaceWatchStop();
+      } catch {
+        /* ignore */
+      }
+      _liveRaceWatchStop = null;
+      stepAudit.noteProviderStop(_liveRaceProvider?.providerId);
+    }
+    if (_activeProvider?.providerId !== "android_legacy_sensor") {
+      _liveRaceProvider?.stopWatchingSteps?.();
+    }
+  },
+
+  /** Request ACTIVITY_RECOGNITION (Android) / Motion (iOS) + arm live sensor for race (not daily). */
+  async ensureLiveRaceSensorReady(): Promise<boolean> {
+    if (!liveRaceSensorEnabled()) {
+      return this.usesRaceBaseline() || Platform.OS === "ios";
+    }
+    await this.initialize();
+
+    if (Platform.OS === "ios") {
+      const avail = await iosHealthKitProvider.isAvailable();
+      if (!avail) {
+        _liveRaceProvider = null;
+        return false;
+      }
+      const perm = await iosHealthKitProvider.getPermissionStatus();
+      if (perm === "granted") {
+        _liveRaceProvider = iosHealthKitProvider;
+        return true;
+      }
+      const req = await iosHealthKitProvider.requestPermission();
+      if (req.status === "granted") {
+        _liveRaceProvider = iosHealthKitProvider;
+        return true;
+      }
+      _liveRaceProvider = null;
+      return false;
+    }
+
+    if (Platform.OS !== "android") return false;
+    const ok = await ensureActivityRecognitionPermission();
+    if (!ok) {
+      _liveRaceProvider = null;
+      return false;
+    }
+    _liveRaceProvider = await resolveAndroidLiveRaceProvider();
+    if (!_liveRaceProvider) {
+      const avail = await androidLegacySensorProvider.isAvailable();
+      if (!avail) return false;
+      const req = await androidLegacySensorProvider.requestPermission();
+      if (req.status !== "granted") return false;
+      _liveRaceProvider = androidLegacySensorProvider;
+    }
+    const perm = await _liveRaceProvider.getPermissionStatus();
+    if (perm === "granted") return true;
+    const req = await _liveRaceProvider.requestPermission();
+    _liveRaceProvider = await resolveAndroidLiveRaceProvider();
+    return req.status === "granted" || !!_liveRaceProvider;
+  },
+
+  /**
+   * Hybrid: arm live race sensor only — never replaces HC daily provider.
+   * Non-hybrid: promote legacy as daily (legacy behavior).
+   */
   async switchToLegacyFallback(reason: string): Promise<boolean> {
     if (Platform.OS !== "android") return false;
-    devLog(`switching to legacy fallback: ${reason}`);
+    if (liveRaceSensorEnabled()) {
+      devLog(`arming live race sensor: ${reason}`);
+      return this.ensureLiveRaceSensorReady();
+    }
+    devLog(`switching daily to legacy fallback: ${reason}`);
     const previousId = _activeProvider?.providerId ?? null;
     this.stopWatchingSteps();
     const legacyAvail = await androidLegacySensorProvider.isAvailable();
     if (!legacyAvail) return false;
+    const activityGranted = await ensureActivityRecognitionPermission();
+    if (!activityGranted) return false;
     const perm = await androidLegacySensorProvider.getPermissionStatus();
     if (perm !== "granted") {
       const req = await androidLegacySensorProvider.requestPermission();
       if (req.status !== "granted") return false;
     }
     _activeProvider = androidLegacySensorProvider;
+    _liveRaceProvider = androidLegacySensorProvider;
     stepAudit.noteSourceSwitch(previousId, "android_legacy_sensor");
-    stepAudit.log(
-      {
-        provider: "android_counter",
-        eventOrigin: "source_switch",
-        suspiciousIncreaseReason: `fallback:${reason}`,
-      },
-      true,
-    );
-    devLog("selected android_legacy_sensor (fallback)");
     return true;
   },
 
-  /** Map provider to existing walk backend source field. */
   toWalkSyncSource(): string | undefined {
     switch (_activeProvider?.providerId) {
       case "ios_healthkit":
@@ -613,21 +793,35 @@ export const stepProviderManager = {
       case "android_health_connect":
         return "android_health_connect";
       case "android_legacy_sensor":
-        return "android_step_counter";
+        return liveRaceSensorEnabled() ? undefined : "android_step_counter";
       default:
         return undefined;
     }
   },
 
-  /** Map provider to existing race progress source field. */
   toRaceProgressSource(): StepProgressSource {
+    if (liveRaceSensorEnabled()) {
+      if (Platform.OS === "android") {
+        const live = raceProvider();
+        if (live?.providerId === "android_legacy_sensor" || _liveRaceProvider) {
+          return canonicalLiveRaceStepSource("android");
+        }
+      }
+      if (Platform.OS === "ios" && _activeProvider?.providerId === "ios_healthkit") {
+        return canonicalLiveRaceStepSource("ios");
+      }
+    }
+    const live = raceProvider();
+    if (live?.providerId === "android_legacy_sensor") {
+      return canonicalLiveRaceStepSource("android");
+    }
     switch (_activeProvider?.providerId) {
       case "ios_healthkit":
         return "healthkit";
       case "android_health_connect":
         return "health_connect";
       case "android_legacy_sensor":
-        return "android_step_counter";
+        return canonicalLiveRaceStepSource("android");
       default:
         return "unknown";
     }
@@ -635,7 +829,9 @@ export const stepProviderManager = {
 
   reset(): void {
     this.stopWatchingSteps();
+    this.stopLiveRaceWatching();
     _activeProvider = null;
+    _liveRaceProvider = null;
   },
 };
 

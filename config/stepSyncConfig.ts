@@ -8,7 +8,7 @@ export const STEP_SYNC_CONFIG = {
   WALK_BACKEND_SYNC_MS: 3_000,
 
   /** Walk — provider reconciliation poll (backup when watch callbacks are slow) */
-  WALK_LOCAL_RECONCILE_POLL_MS: 3_000,
+  WALK_LOCAL_RECONCILE_POLL_MS: 1_000,
 
   /** Race — read device steps locally for UI (sensor / HealthKit / Health Connect) */
   RACE_LOCAL_POLL_MS: 1_000,
@@ -66,6 +66,12 @@ export const STEP_SYNC_CONFIG = {
 
   /** Legacy sensor — max single poll jump while walking (faster walks still OK) */
   LEGACY_MAX_TICK_JUMP: 8,
+
+  /**
+   * Active-race Health Connect / HealthKit verification interval.
+   * Live UI stays on the device sensor; this only refreshes verified totals.
+   */
+  RACE_HEALTH_VERIFICATION_MS: 180_000,
 
   /** Set true in __DEV__ to log every poll/notification tick (very noisy). */
   STEP_DEBUG_VERBOSE: false,

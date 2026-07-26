@@ -140,11 +140,20 @@ async function logOngoingDiagnostics(phase: string): Promise<void> {
   );
 }
 
-async function toNativePayload(payload: WalkStepNotificationPayload): Promise<Record<string, unknown>> {
+    async function toNativePayload(payload: WalkStepNotificationPayload): Promise<Record<string, unknown>> {
   const goal = Math.max(1, payload.dailyGoal);
   const steps = Math.max(0, Math.floor(payload.todaySteps));
   const pct = Math.min(100, Math.round((steps / goal) * 100));
   const session = await getValidSession();
+  const visualType = pct >= 100 ? "goal_completed" : "daily_walk";
+  let provisional = false;
+  try {
+    const { store } = require("@/store") as typeof import("@/store");
+    provisional =
+      store.getState().raceProgress.dailyDisplaySource === "sensor_estimate";
+  } catch {
+    provisional = false;
+  }
   return {
     userId: payload.userId,
     todaySteps: steps,
@@ -153,9 +162,10 @@ async function toNativePayload(payload: WalkStepNotificationPayload): Promise<Re
     title: "Walk Champ",
     deepLink: "globalwalkerleague://walk",
     stepSource: stepProviderManager.toRaceProgressSource(),
-    body: formatWalkOngoingNotificationBody(steps),
+    body: formatWalkOngoingNotificationBody(steps, { provisional }),
     authToken: session ?? "",
     apiBaseUrl: API_BASE,
+    visualType,
   };
 }
 
@@ -186,9 +196,26 @@ function shouldThrottle(steps: number, force = false): boolean {
 }
 
 class StepTrackingNotificationService {
-  async start(payload: WalkStepNotificationPayload): Promise<boolean> {
+  async start(
+    payload: WalkStepNotificationPayload,
+    opts?: { forceRestart?: boolean },
+  ): Promise<boolean> {
     logOngoing("start requested");
     await logOngoingDiagnostics("start");
+
+    // Never start FGS / Live Activity without verified Health Connect / HealthKit.
+    try {
+      const { stepProviderManager } = await import(
+        "@/services/steps/stepProviderManager"
+      );
+      if (!stepProviderManager.usesVerifiedStepSource()) {
+        logOngoing("abort — verified step source not connected");
+        return false;
+      }
+    } catch {
+      logOngoing("abort — could not verify step source");
+      return false;
+    }
 
     const native = getNativeModule(true);
     if (!native) {
@@ -198,31 +225,35 @@ class StepTrackingNotificationService {
 
     if (Platform.OS === "android") {
       logOngoing("channelEnsure requested");
-      // Fast path: if FGS already running, push correct steps immediately without
-      // re-requesting permissions (avoids open-app notification lag).
-      try {
-        const existing = await this.getNativeStepState(payload.userId);
-        const walkAlready =
-          !!existing &&
-          (existing.walkActive === true ||
-            existing.notificationMode === "daily_steps" ||
-            existing.notificationMode === "total_steps");
-        if (walkAlready) {
-          active = true;
-          lastSteps = -1;
-          const nativePayload = await toNativePayload(payload);
-          if (native.updateWalkStepNotification) {
-            logOngoing(
-              `fastUpdate existing FGS steps=${payload.todaySteps}`,
-            );
-            await native.updateWalkStepNotification(nativePayload);
-            lastUpdateMs = Date.now();
-            lastSteps = payload.todaySteps;
-            return true;
+      // Fast path only while app is active AND not forcing restart. Leaving the
+      // app must always call startForegroundService so native sensor owns the tray.
+      const allowFastUpdate =
+        !opts?.forceRestart && AppState.currentState === "active";
+      if (allowFastUpdate) {
+        try {
+          const existing = await this.getNativeStepState(payload.userId);
+          const walkAlready =
+            !!existing &&
+            (existing.walkActive === true ||
+              existing.notificationMode === "daily_steps" ||
+              existing.notificationMode === "total_steps");
+          if (walkAlready) {
+            active = true;
+            lastSteps = -1;
+            const nativePayload = await toNativePayload(payload);
+            if (native.updateWalkStepNotification) {
+              logOngoing(
+                `fastUpdate existing FGS steps=${payload.todaySteps}`,
+              );
+              await native.updateWalkStepNotification(nativePayload);
+              lastUpdateMs = Date.now();
+              lastSteps = payload.todaySteps;
+              return true;
+            }
           }
+        } catch {
+          // fall through to full start
         }
-      } catch {
-        // fall through to full start
       }
       const granted = await hasOngoingNotificationAccess();
       logOngoing(`notificationPermission result granted=${granted}`);
@@ -230,16 +261,16 @@ class StepTrackingNotificationService {
         logOngoing("abort app notifications disabled — foreground service not started");
         return false;
       }
-      // Android 15 (targetSdk 35) health FGS requires ACTIVITY_RECOGNITION at promote time.
-      const { ensureActivityRecognitionPermission } = await import(
+      // Health Connect owns steps — do NOT prompt the system "Physical activity?"
+      // dialog here (that feels unlike HC). Native FGS falls back when AR is
+      // missing; JS keeps pushing HC step counts into the ongoing notification.
+      const { hasActivityRecognitionPermission } = await import(
         "@/services/permissions/activityRecognitionPermissionService"
       );
-      const arGranted = await ensureActivityRecognitionPermission();
-      logOngoing(`activityRecognitionPermission result granted=${arGranted}`);
-      if (!arGranted) {
-        logOngoing("abort ACTIVITY_RECOGNITION denied — health FGS not started");
-        return false;
-      }
+      const arGranted = await hasActivityRecognitionPermission();
+      logOngoing(
+        `activityRecognitionPermission alreadyGranted=${arGranted} (no auto-prompt; HC path)`,
+      );
     }
 
     active = true;
@@ -247,10 +278,18 @@ class StepTrackingNotificationService {
     const nativePayload = await toNativePayload(payload);
 
     try {
-      if (Platform.OS === "android" && native.startWalkStepNotification) {
-        logOngoing("foregroundServiceStart requested");
-        await native.startWalkStepNotification(nativePayload);
-        logOngoing(`foregroundServiceStart complete steps=${payload.todaySteps}`);
+      if (Platform.OS === "android") {
+        // Background keep-alive: prefer UPDATE (no cancel flicker) which now also
+        // goes through startForegroundService so a dead FGS is revived.
+        if (opts?.forceRestart && native.updateWalkStepNotification) {
+          logOngoing("foregroundServiceKeepAlive update (background)");
+          await native.updateWalkStepNotification(nativePayload);
+          logOngoing(`foregroundServiceKeepAlive complete steps=${payload.todaySteps}`);
+        } else if (native.startWalkStepNotification) {
+          logOngoing("foregroundServiceStart requested");
+          await native.startWalkStepNotification(nativePayload);
+          logOngoing(`foregroundServiceStart complete steps=${payload.todaySteps}`);
+        }
       }
       if (Platform.OS === "ios" && native.startWalkLiveActivity) {
         await native.startWalkLiveActivity(nativePayload);

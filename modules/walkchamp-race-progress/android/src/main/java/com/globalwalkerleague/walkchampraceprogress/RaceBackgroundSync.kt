@@ -26,6 +26,13 @@ object RaceBackgroundSync {
   private val syncSeq = AtomicInteger(0)
   private const val TAG = "LiveRaceSync"
 
+  /** Stable-enough tracking session for FGS uploads until JS sessionId is mirrored. */
+  private fun prefsSessionId(state: RaceNotificationState): String {
+    if (state.raceId.isBlank() || state.userId.isBlank()) return ""
+    val start = if (state.raceStartTimeMs > 0L) state.raceStartTimeMs else 0L
+    return "race:${state.userId}:${state.raceId}:$start"
+  }
+
   fun syncProgress(
     state: RaceNotificationState,
     apiBaseUrl: String,
@@ -65,6 +72,12 @@ object RaceBackgroundSync {
       put("clientTimestamp", java.time.Instant.now().toString())
       put("stepSource", stepSource)
       put("sequenceId", seq)
+      // Forward-compatible tracking session (backend may ignore until contract updated).
+      val trackingSession = prefsSessionId(state)
+      if (trackingSession.isNotBlank()) {
+        put("sessionId", trackingSession)
+        put("trackingSessionId", trackingSession)
+      }
       put("platform", "android")
       put("appState", "background_service")
       put(

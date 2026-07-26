@@ -25,10 +25,17 @@ function getNativeModule(): AndroidNotificationNative | null {
   return cachedNative;
 }
 
-export function formatWalkOngoingNotificationBody(steps: number): string {
+export function formatWalkOngoingNotificationBody(
+  steps: number,
+  opts?: { provisional?: boolean },
+): string {
   const safe = Math.max(0, Math.floor(steps));
+  const formatted = safe.toLocaleString("en-US");
   // ASCII separator only — avoids mojibake on some Android OEM notification renderers.
-  return `Tracking your steps - ${safe.toLocaleString("en-US")} steps today`;
+  if (opts?.provisional) {
+    return `Tracking your steps - ${formatted} steps today - Live estimate`;
+  }
+  return `Tracking your steps - ${formatted} steps today`;
 }
 
 /** App-level notification master toggle (Samsung allowNoti, etc.). */

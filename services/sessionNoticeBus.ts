@@ -24,14 +24,11 @@ const COOLDOWN_MS = 8_000;
 
 function kindFromReason(reason: SessionInvalidationReason): SessionNoticeKind {
   const r = String(reason).toUpperCase();
-  if (
-    r === "SESSION_REPLACED" ||
-    r === "LOGIN_ON_NEW_DEVICE" ||
-    r.includes("REPLAC") ||
-    r.includes("INVALIDATED")
-  ) {
+  // Only true other-device kicks — do not map generic INVALIDATED → replaced.
+  if (r === "SESSION_REPLACED" || r === "LOGIN_ON_NEW_DEVICE" || r.includes("LOGIN_ON_NEW")) {
     return "replaced";
   }
+  if (r.includes("REPLAC") && !r.includes("INVALID")) return "replaced";
   if (r === "SESSION_REVOKED" || r.includes("REVOK")) return "revoked";
   return "expired";
 }

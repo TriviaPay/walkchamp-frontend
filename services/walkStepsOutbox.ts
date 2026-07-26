@@ -1,10 +1,15 @@
 /**
  * Latest-value offline outbox for daily walk step sync.
  * Stores only the most recent unsynced total per user/localDate.
+ * Provisional / sensor sources are rejected — verified daily only.
  */
 
 import { storageGet, storageSet, storageRemove } from "@/utils/storage";
 import { stepScopedKeys } from "@/utils/stepScopedStorage";
+import {
+  assertVerifiedDailySyncSource,
+  isProvisionalDailyStepSource,
+} from "@/services/steps/hybridStepState";
 
 export type WalkStepsOutboxEntry = {
   userId: string;
@@ -15,6 +20,15 @@ export type WalkStepsOutboxEntry = {
 };
 
 export async function saveWalkStepsOutbox(entry: WalkStepsOutboxEntry): Promise<void> {
+  if (isProvisionalDailyStepSource(entry.stepSource)) {
+    if (__DEV__) {
+      console.warn(
+        `[BackendSync] walk outbox rejected provisional source=${entry.stepSource}`,
+      );
+    }
+    return;
+  }
+  assertVerifiedDailySyncSource(entry.stepSource);
   await storageSet(stepScopedKeys(entry.userId, entry.localDate).outbox, entry);
   if (__DEV__) {
     console.log(

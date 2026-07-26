@@ -15,7 +15,7 @@ import {
   saveActiveSessionMeta,
   type ActiveSessionMeta,
 } from "@/services/authSessionMetadata";
-import { handleSessionInvalidation, isSessionErrorCode } from "@/services/sessionInvalidation";
+import { beginSessionLoginGrace, isSessionErrorCode } from "@/services/sessionInvalidation";
 import { buildSessionRequestHeaders } from "@/services/sessionRequestHeaders";
 
 function createUuid(): string {
@@ -48,6 +48,7 @@ export async function registerActiveSession(options: {
   sessionIdFromLogin?: string | null;
 }): Promise<ActiveSessionMeta | null> {
   const { accessToken, userId, sessionIdFromLogin } = options;
+  beginSessionLoginGrace(15_000);
   const device = await getDeviceSessionMetadata();
   const existing = await getActiveSessionMeta().catch(() => null);
 
@@ -107,14 +108,13 @@ export async function registerActiveSession(options: {
     const body = (await res.json().catch(() => ({}))) as RegisterResponse;
 
     if (!res.ok) {
-      if (isSessionErrorCode(body.code ?? body.error)) {
-        await handleSessionInvalidation({
-          reason: (body.code ?? body.error ?? "SESSION_INVALID") as string,
-          message: body.message,
-        });
-        return null;
+      // Do NOT call handleSessionInvalidation on the registering device —
+      // that caused first-login self-logout + "other device" modal.
+      if (__DEV__) {
+        console.log(
+          `[AuthSession] register HTTP ${res.status} code=${body.code ?? body.error ?? "n/a"} — soft-fail provisional`,
+        );
       }
-      // Soft-fail: still store provisional so local invalidation can match later.
       const meta: ActiveSessionMeta = {
         sessionId: provisionalId,
         userId,

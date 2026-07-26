@@ -6,6 +6,7 @@ import { getValidSession } from "@/services/authService";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { store } from "@/store";
 import { getNotificationPermissionStatus } from "@/services/permissions/notificationPermissionService";
+import { resolveNotificationVisualType } from "@/constants/notificationVisuals";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -109,6 +110,9 @@ async function toNativePayload(
   if (payload.isSponsored === true) {
     out.isSponsored = true;
   }
+  out.visualType = payload.isSponsored
+    ? "sponsored_event"
+    : resolveNotificationVisualType("live_activity_race_update");
   return out;
 }
 
@@ -236,6 +240,21 @@ class RaceProgressNotificationService {
       }
       return;
     }
+    try {
+      const { stepProviderManager } = await import(
+        "@/services/steps/stepProviderManager"
+      );
+      if (!stepProviderManager.usesVerifiedStepSource()) {
+        if (__DEV__) {
+          console.warn(
+            "[RaceProgressNotif] start blocked — verified step source required",
+          );
+        }
+        return;
+      }
+    } catch {
+      return;
+    }
     const native = getNativeModule();
     if (!native) return;
 
@@ -259,15 +278,15 @@ class RaceProgressNotificationService {
             "[RaceProgressNotif] POST_NOTIFICATIONS denied — FGS still starting",
           );
         }
-        const { ensureActivityRecognitionPermission } = await import(
+        const { hasActivityRecognitionPermission } = await import(
           "@/services/permissions/activityRecognitionPermissionService"
         );
-        const arGranted = await ensureActivityRecognitionPermission();
+        const arGranted = await hasActivityRecognitionPermission();
         if (!arGranted) {
+          // Do not prompt — race UI continues; native may still start a non-health FGS.
           console.warn(
-            "[RaceProgressNotif] ACTIVITY_RECOGNITION denied — health FGS not started",
+            "[RaceProgressNotif] ACTIVITY_RECOGNITION missing — starting without auto-prompt",
           );
-          return;
         }
         const startFn =
           native.startRaceBackgroundService ?? native.startRaceProgressNotification;

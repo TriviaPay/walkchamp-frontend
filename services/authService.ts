@@ -823,13 +823,20 @@ export async function createProfile(
 
 // GET /api/me — returns profile for the JWT owner, or null if no profile.
 // When X-Session-Id is present, backend may report session.active=false without 401.
-export async function fetchMe(sessionJwt: string): Promise<DbProfile | null> {
-  const { buildSessionRequestHeaders } = await import(
-    "@/services/sessionRequestHeaders"
-  );
-  const sessionHeaders = await buildSessionRequestHeaders().catch(
-    () => ({} as Record<string, string>),
-  );
+export async function fetchMe(
+  sessionJwt: string,
+  options?: { includeSessionHeaders?: boolean },
+): Promise<DbProfile | null> {
+  const includeSessionHeaders = options?.includeSessionHeaders !== false;
+  let sessionHeaders: Record<string, string> = {};
+  if (includeSessionHeaders) {
+    const { buildSessionRequestHeaders } = await import(
+      "@/services/sessionRequestHeaders"
+    );
+    sessionHeaders = await buildSessionRequestHeaders().catch(
+      () => ({} as Record<string, string>),
+    );
+  }
   const res = await fetch(`${API_BASE}/api/me`, {
     signal: timeoutSignal(API_TIMEOUT_MS),
     headers: {
@@ -852,17 +859,33 @@ export async function fetchMe(sessionJwt: string): Promise<DbProfile | null> {
   };
   if (!res.ok) throw new ApiError(data.error ?? "Failed to fetch profile", res.status);
 
-  // Superseded session: /me is JWT-only and returns profile + session.active=false.
+  // Superseded session: only kick when the inactive session is OUR registered one.
+  // Mid-login with a stale X-Session-Id must not force logout / "other device" modal.
   if (data.session && data.session.active === false) {
-    const { handleSessionInvalidation } = await import(
-      "@/services/sessionInvalidation"
+    const { getActiveSessionMeta, clearActiveSessionMeta } = await import(
+      "@/services/authSessionMetadata"
     );
-    await handleSessionInvalidation({
-      reason: data.session.code ?? "SESSION_REPLACED",
-      sessionId: data.session.sessionId,
-      message: data.session.message,
-    });
-    throw new ApiError(data.session.code ?? "SESSION_REPLACED", 401);
+    const {
+      handleSessionInvalidation,
+      isSessionLoginGraceActive,
+    } = await import("@/services/sessionInvalidation");
+    const local = await getActiveSessionMeta().catch(() => null);
+    const remoteId = data.session.sessionId;
+    const targetsLocal =
+      !!local?.sessionId &&
+      (!remoteId || remoteId === local.sessionId);
+
+    if (targetsLocal && !isSessionLoginGraceActive()) {
+      await handleSessionInvalidation({
+        reason: data.session.code ?? "SESSION_REPLACED",
+        sessionId: data.session.sessionId ?? local?.sessionId,
+        message: data.session.message,
+      });
+      throw new ApiError(data.session.code ?? "SESSION_REPLACED", 401);
+    }
+
+    // Stale session header from a previous install/login — drop and continue.
+    await clearActiveSessionMeta().catch(() => {});
   }
 
   if (data.profile_completed === false && !data.profile) return null;

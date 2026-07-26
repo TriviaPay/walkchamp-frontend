@@ -11,7 +11,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, AppState, InteractionManager, LogBox, Platform, Text, TextInput, View } from "react-native";
+import { AppState, InteractionManager, LogBox, Platform, Text, TextInput, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -21,6 +21,7 @@ import { Provider as ReduxProvider } from "react-redux";
 import { store } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AlertHost } from "@/components/AppAlert";
+import { PhysicalActivityPermissionHost } from "@/components/PhysicalActivityPermissionModal";
 import { OfflineBanner } from "@/components/OfflineBanner";
 import { AuthProvider } from "@/context/AuthContext";
 import { AppProvider } from "@/context/AppContext";
@@ -36,6 +37,7 @@ import CoinRewardToast from "@/components/CoinRewardToast";
 import { CoinRealtimeSync } from "@/components/CoinRealtimeSync";
 import { CoinBalanceBootstrap } from "@/components/CoinBalanceBootstrap";
 import { RoomInvitationModal, type RoomInvitation } from "@/components/RoomInvitationModal";
+import { WalkChampSplash } from "@/components/WalkChampSplash";
 import { TitleUnlockProvider } from "@/context/TitleUnlockContext";
 import { TopBannerProvider } from "@/context/TopBannerContext";
 
@@ -56,7 +58,9 @@ import { useAuth } from "@/context/AuthContext";
 import { connectPusher, subscribeToChannel, unsubscribeFromChannel, CHANNELS } from "@/services/realtimeService";
 import { initDynamicIconService } from "@/services/dynamicIconService";
 import { initStepProgressCoordinator } from "@/services/stepProgressCoordinator";
-import { scheduleAppStartupReady, waitForAppStartupReady } from "@/services/appStartup";
+import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
+import { getOnboardingStatus } from "@/utils/onboardingStorage";
+import { scheduleAppStartupReady, waitForAppStartupReady, isAppStartupReady } from "@/services/appStartup";
 import { perf } from "@/utils/perfLogger";
 import { initCrashReporting, setCrashReportingUser } from "@/services/monitoring/sentry";
 import { loadRemoteFeatureFlags } from "@/services/remoteFeatureFlags";
@@ -73,6 +77,8 @@ import * as Linking from "expo-linking";
 import { queryClient } from "@/services/queryClient";
 import { PushPermissionPrompt } from "@/components/PushPermissionPrompt";
 import { FirstLaunchPermissionBootstrap } from "@/components/FirstLaunchPermissionBootstrap";
+import { HomeWearableSetupHost } from "@/components/HomeWearableSetupHost";
+import { setHomeStepSetupShellReady } from "@/services/permissions/homePermissionFlow";
 import { SessionRealtimeGuard } from "@/components/SessionRealtimeGuard";
 import { SessionNoticeHost } from "@/components/SessionNoticeHost";
 import { StepTrackingNotificationPrompt } from "@/components/StepTrackingNotificationPrompt";
@@ -175,12 +181,87 @@ LogBox.ignoreLogs([
   "Unable to activate keep awake",
 ]);
 
-const BG = "#0A0B14";
-const ACCENT = "#00E676";
-
 function ThemedStatusBar() {
   const { isDark } = useTheme();
   return <StatusBar style={isDark ? "light" : "dark"} translucent />;
+}
+
+/** Keeps themed splash up until startup gate + auth session restore are done. */
+function AppSplashGate({ onFinish }: { onFinish: () => void }) {
+  const { user, loading, isAuthenticating } = useAuth();
+  const [startupReady, setStartupReady] = useState(isAppStartupReady());
+  const [onboardingReady, setOnboardingReady] = useState(
+    !ENABLE_PREMIUM_ONBOARDING,
+  );
+  const [uiSettled, setUiSettled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void waitForAppStartupReady().then(() => {
+      if (!cancelled) setStartupReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!ENABLE_PREMIUM_ONBOARDING) {
+      setOnboardingReady(true);
+      return;
+    }
+    // Auth still restoring — keep waiting.
+    if (loading || isAuthenticating) {
+      setOnboardingReady(false);
+      return;
+    }
+    // Logged out — no onboarding resume needed.
+    if (!user) {
+      setOnboardingReady(true);
+      return;
+    }
+
+    let cancelled = false;
+    setOnboardingReady(false);
+    void getOnboardingStatus()
+      .then(() => {
+        if (!cancelled) setOnboardingReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) setOnboardingReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, loading, isAuthenticating]);
+
+  // After auth/startup settle, wait for nav tree + interactions so we don't
+  // dismiss splash into an unfinished first paint.
+  useEffect(() => {
+    const coreReady = startupReady && !loading && !isAuthenticating && onboardingReady;
+    if (!coreReady) {
+      setUiSettled(false);
+      return;
+    }
+
+    let cancelled = false;
+    const task = InteractionManager.runAfterInteractions(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!cancelled) setUiSettled(true);
+        });
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      task.cancel?.();
+    };
+  }, [startupReady, loading, isAuthenticating, onboardingReady]);
+
+  const isReady = startupReady && !loading && !isAuthenticating && onboardingReady && uiSettled;
+
+  return <WalkChampSplash isReady={isReady} onFinish={onFinish} />;
 }
 
 function RootLayoutNav() {
@@ -335,6 +416,7 @@ function PushNotificationSetup() {
     <>
       <PushPermissionPrompt />
       <FirstLaunchPermissionBootstrap />
+      <HomeWearableSetupHost />
       <SessionRealtimeGuard />
       <SessionNoticeHost />
       <StepTrackingNotificationPrompt />
@@ -400,6 +482,12 @@ export default function RootLayout() {
   );
 
   const [fontTimedOut, setFontTimedOut] = useState(isWeb);
+  const [showAnimatedSplash, setShowAnimatedSplash] = useState(!isWeb);
+
+  useEffect(() => {
+    // Web has no animated splash — allow HC setup as soon as the shell mounts.
+    if (isWeb) setHomeStepSetupShellReady(true);
+  }, [isWeb]);
 
   useEffect(() => {
     if (isWeb) return;
@@ -409,6 +497,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (fontsLoaded || fontError || fontTimedOut) {
+      // Hide native splash once fonts are ready — custom Lottie splash takes over.
       SplashScreen.hideAsync().catch(() => undefined);
       scheduleAppStartupReady();
     }
@@ -423,11 +512,8 @@ export default function RootLayout() {
   }, []);
 
   if (!fontsLoaded && !fontError && !fontTimedOut) {
-    return (
-      <View style={{ flex: 1, backgroundColor: BG, alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator color={ACCENT} size="large" />
-      </View>
-    );
+    // Match custom splash color while fonts load (no dark flash / blank root).
+    return <View style={{ flex: 1, backgroundColor: "#EAF6E8" }} />;
   }
 
   return (
@@ -452,12 +538,21 @@ export default function RootLayout() {
                                 <RootLayoutNav />
                                 <OfflineBanner />
                                 <AlertHost />
+                                <PhysicalActivityPermissionHost />
                                 <CoinBalanceBootstrap />
                                 <CoinRealtimeSync />
                                 <CoinRewardToast />
                                 <RoomInvitationOverlay />
                                 <PushNotificationSetup />
                                 <TitleUnlockModal />
+                                {showAnimatedSplash ? (
+                                  <AppSplashGate
+                                    onFinish={() => {
+                                      setShowAnimatedSplash(false);
+                                      setHomeStepSetupShellReady(true);
+                                    }}
+                                  />
+                                ) : null}
                               </TitleUnlockProvider>
                               </TopBannerProvider>
                             </KeyboardProvider>

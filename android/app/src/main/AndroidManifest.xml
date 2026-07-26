@@ -64,6 +64,9 @@
     <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-3940256099942544~3347511713" tools:replace="android:value"/>
     <meta-data android:name="com.google.android.gms.ads.flag.OPTIMIZE_AD_LOADING" android:value="true" tools:replace="android:value"/>
     <meta-data android:name="com.google.android.gms.ads.flag.OPTIMIZE_INITIALIZATION" android:value="true" tools:replace="android:value"/>
+    <meta-data android:name="com.onesignal.messaging.default_notification_icon" android:resource="@drawable/ic_stat_onesignal_default"/>
+    <meta-data android:name="com.onesignal.NotificationAccentColor.DEFAULT" android:value="FF00B4FF"/>
+    <meta-data android:name="com.onesignal.NotificationServiceExtension" android:value="com.globalwalkerleague.app.WalkChampNotificationServiceExtension"/>
     <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>

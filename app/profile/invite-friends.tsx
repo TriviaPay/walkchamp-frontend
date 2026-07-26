@@ -80,7 +80,7 @@ function StatCard({
 export default function InviteFriendsScreen() {
   const colors = useColors();
   const { safeTop, safeBottom } = useSafeLayout();
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
 
   const [details, setDetails] = useState<ReferralDetails | null>(null);
   const [loading, setLoading] = useState(true);
@@ -94,25 +94,56 @@ export default function InviteFriendsScreen() {
     setLoading(true);
     setError(null);
     try {
-      if (!fallbackCode) {
-        setError("Unable to load referral details.");
-        setDetails(null);
-        return;
-      }
+      // Authoritative source: GET /api/referral → referralCode for this user.
       const data = await fetchReferralDetails(fallbackCode);
-      if (!data.code) {
+      const code = (data.code || fallbackCode).trim().toUpperCase();
+      if (!code) {
         setError("Unable to load referral details.");
         setDetails(null);
         return;
       }
-      setDetails(data);
+      const next: ReferralDetails = {
+        ...data,
+        code,
+        inviteUrl: data.inviteUrl?.includes(code)
+          ? data.inviteUrl
+          : `https://walkchamp.app/invite/${encodeURIComponent(code)}`,
+      };
+      setDetails(next);
+      // Keep profile in sync so Profile / Wallet show the same code.
+      if (user?.referralCode !== code) {
+        void updateUser({ referralCode: code });
+      }
     } catch {
-      setError("Unable to load referral details.");
-      setDetails(null);
+      if (fallbackCode) {
+        setDetails({
+          code: fallbackCode,
+          inviteUrl: `https://walkchamp.app/invite/${encodeURIComponent(fallbackCode)}`,
+          stats: {
+            invitesSent: null,
+            friendsJoined: null,
+            qualifiedReferrals: null,
+            pendingReferrals: null,
+            rewardsEarned: null,
+          },
+          config: {
+            rewardAmount: 3,
+            friendRewardAmount: 3,
+            currency: "USD",
+            requirementLabel: "Your friend joins an eligible Cash Challenge",
+            rules: [],
+          },
+          referrals: [],
+        });
+        setError(null);
+      } else {
+        setError("Unable to load referral details.");
+        setDetails(null);
+      }
     } finally {
       setLoading(false);
     }
-  }, [fallbackCode]);
+  }, [fallbackCode, updateUser, user?.referralCode]);
 
   useEffect(() => {
     void load();
@@ -127,24 +158,31 @@ export default function InviteFriendsScreen() {
   const summaryCards = useMemo(() => {
     if (!details) return [];
     const cards: Array<{ label: string; value: string; icon: React.ComponentProps<typeof Feather>["name"] }> = [];
-    if (details.stats.invitesSent != null) {
-      cards.push({
-        label: "Invites Sent",
-        value: String(details.stats.invitesSent),
-        icon: "send",
-      });
-    }
     if (details.stats.friendsJoined != null) {
       cards.push({
         label: "Friends Joined",
         value: String(details.stats.friendsJoined),
         icon: "users",
       });
-    } else if (details.stats.qualifiedReferrals != null) {
+    } else if (details.stats.invitesSent != null) {
       cards.push({
-        label: "Qualified",
+        label: "Invites Sent",
+        value: String(details.stats.invitesSent),
+        icon: "send",
+      });
+    }
+    if (details.stats.qualifiedReferrals != null) {
+      cards.push({
+        label: "Credited",
         value: String(details.stats.qualifiedReferrals),
         icon: "check-circle",
+      });
+    }
+    if (details.stats.pendingReferrals != null) {
+      cards.push({
+        label: "Pending",
+        value: String(details.stats.pendingReferrals),
+        icon: "clock",
       });
     }
     if (details.stats.rewardsEarned != null) {
@@ -155,7 +193,7 @@ export default function InviteFriendsScreen() {
       });
     }
     // Only show metrics the referral system actually returns — never invent placeholders.
-    return cards.slice(0, 3);
+    return cards.slice(0, 4);
   }, [details]);
 
   const handleCopyCode = useCallback(async () => {
@@ -354,6 +392,64 @@ export default function InviteFriendsScreen() {
                     colors={colors}
                   />
                 ))}
+              </View>
+            </>
+          )}
+
+          {/* Referral list from GET /api/referral */}
+          {details.referrals.length > 0 && (
+            <>
+              <Text style={[st.sectionTitle, { color: colors.foreground }]}>Your Referrals</Text>
+              <View style={[st.stepsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                {details.referrals.map((row, index) => {
+                  const credited = row.status.toLowerCase() === "credited";
+                  return (
+                    <View
+                      key={`${row.userId}-${index}`}
+                      style={[
+                        st.referralRow,
+                        index < details.referrals.length - 1 && {
+                          borderBottomWidth: StyleSheet.hairlineWidth,
+                          borderBottomColor: colors.border,
+                        },
+                      ]}
+                    >
+                      <View style={[st.referralAvatar, { backgroundColor: ACCENT + "22" }]}>
+                        <Text style={[st.referralAvatarText, { color: ACCENT }]}>
+                          {(row.username[0] ?? "?").toUpperCase()}
+                        </Text>
+                      </View>
+                      <View style={st.referralCopy}>
+                        <Text style={[st.stepTitle, { color: colors.foreground }]} numberOfLines={1}>
+                          @{row.username}
+                        </Text>
+                        <Text style={[st.stepBody, { color: colors.mutedForeground }]}>
+                          {row.joinedAt
+                            ? `Joined ${new Date(row.joinedAt).toLocaleDateString()}`
+                            : "Joined"}
+                        </Text>
+                      </View>
+                      <View
+                        style={[
+                          st.statusPill,
+                          {
+                            backgroundColor: credited ? ACCENT_2 + "22" : "#F59E0B22",
+                            borderColor: credited ? ACCENT_2 + "55" : "#F59E0B55",
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            st.statusPillText,
+                            { color: credited ? ACCENT_2 : "#F59E0B" },
+                          ]}
+                        >
+                          {credited ? "Credited" : "Pending"}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
               </View>
             </>
           )}
@@ -589,6 +685,29 @@ const st = StyleSheet.create({
   ruleRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   ruleDot: { width: 6, height: 6, borderRadius: 3, marginTop: 6 },
   ruleText: { flex: 1, fontSize: rf(12.5), lineHeight: rf(17) },
+  referralRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: rs(14),
+    paddingVertical: rs(12),
+  },
+  referralAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  referralAvatarText: { fontSize: rf(14), fontWeight: "800" },
+  referralCopy: { flex: 1, gap: 2 },
+  statusPill: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  statusPillText: { fontSize: rf(11), fontWeight: "800" },
   errorBox: {
     flex: 1,
     alignItems: "center",

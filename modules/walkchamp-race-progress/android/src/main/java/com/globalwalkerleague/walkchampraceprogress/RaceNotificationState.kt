@@ -155,8 +155,33 @@ data class RaceNotificationState(
     private const val KEY_STATE_JSON = "race_state_json"
     private const val KEY_RACE_ACTIVE = "race_active"
     private const val KEY_ACTIVE_USER_ID = "race_active_user_id"
+    private const val KEY_PARALLEL_ACTIVE = "parallel_race_active"
+    private const val KEY_PARALLEL_STATE_JSON = "parallel_state_json"
 
     fun stateKey(userId: String) = "$KEY_STATE_JSON:$userId"
+
+    private fun fromJsonObject(json: JSONObject): RaceNotificationState? {
+      return RaceNotificationState(
+        raceId = json.optString("raceId"),
+        userId = json.optString("userId"),
+        username = json.optString("username", "Runner"),
+        raceSteps = json.optInt("raceSteps", 0),
+        rank = json.optInt("rank", 1),
+        totalParticipants = json.optInt("totalParticipants", 1),
+        goalSteps = json.optInt("goalSteps", 0),
+        timeLeftSeconds = json.optInt("timeLeftSeconds", 0),
+        raceStatus = json.optString("raceStatus", "in_progress"),
+        raceStartTimeMs = json.optLong("raceStartTimeMs", 0L),
+        challengeEndAtMs = json.optLong("challengeEndAtMs", 0L),
+        lastUpdatedAt = json.optLong("lastUpdatedAt", System.currentTimeMillis()),
+        apiBaseUrl = json.optString("apiBaseUrl", ""),
+        authToken = json.optString("authToken", ""),
+        stepSource = json.optString("stepSource", "health_connect"),
+        sensorCounterBaseline = json.optLong("sensorCounterBaseline", 0L),
+        raceStepsAtSensorBaseline = json.optInt("raceStepsAtSensorBaseline", 0),
+        isSponsored = json.optBoolean("isSponsored", false),
+      ).takeIf { it.raceId.isNotBlank() }
+    }
 
     fun formatCompactRaceBody(
       raceSteps: Int,
@@ -262,34 +287,41 @@ data class RaceNotificationState(
         else -> null
       } ?: prefs.getString(KEY_STATE_JSON, null)
       return try {
-        val json = JSONObject(raw ?: return null)
-        RaceNotificationState(
-          raceId = json.optString("raceId"),
-          userId = json.optString("userId"),
-          username = json.optString("username", "Runner"),
-          raceSteps = json.optInt("raceSteps", 0),
-          rank = json.optInt("rank", 1),
-          totalParticipants = json.optInt("totalParticipants", 1),
-          goalSteps = json.optInt("goalSteps", 0),
-          timeLeftSeconds = json.optInt("timeLeftSeconds", 0),
-          raceStatus = json.optString("raceStatus", "in_progress"),
-          raceStartTimeMs = json.optLong("raceStartTimeMs", 0L),
-          challengeEndAtMs = json.optLong("challengeEndAtMs", 0L),
-          lastUpdatedAt = json.optLong("lastUpdatedAt", System.currentTimeMillis()),
-          apiBaseUrl = json.optString("apiBaseUrl", ""),
-          authToken = json.optString("authToken", ""),
-          stepSource = json.optString("stepSource", "health_connect"),
-          sensorCounterBaseline = json.optLong("sensorCounterBaseline", 0L),
-          raceStepsAtSensorBaseline = json.optInt("raceStepsAtSensorBaseline", 0),
-          isSponsored = json.optBoolean("isSponsored", false),
-        ).takeIf { it.raceId.isNotBlank() }?.also { state ->
-          if (uid == null && state.userId.isNotBlank()) {
-            save(ctx, state)
-          }
+        val state = fromJsonObject(JSONObject(raw ?: return null)) ?: return null
+        if (uid == null && state.userId.isNotBlank()) {
+          save(ctx, state)
         }
+        state
       } catch (_: Exception) {
         null
       }
+    }
+
+    /** Companion (sponsored/live) tray race — survives process death with the FGS. */
+    fun loadParallel(ctx: Context): RaceNotificationState? {
+      val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      if (!prefs.getBoolean(KEY_PARALLEL_ACTIVE, false)) return null
+      val raw = prefs.getString(KEY_PARALLEL_STATE_JSON, null) ?: return null
+      return try {
+        fromJsonObject(JSONObject(raw))
+      } catch (_: Exception) {
+        null
+      }
+    }
+
+    fun saveParallel(ctx: Context, state: RaceNotificationState?) {
+      val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      if (state == null) {
+        prefs.edit()
+          .putBoolean(KEY_PARALLEL_ACTIVE, false)
+          .remove(KEY_PARALLEL_STATE_JSON)
+          .apply()
+        return
+      }
+      prefs.edit()
+        .putBoolean(KEY_PARALLEL_ACTIVE, true)
+        .putString(KEY_PARALLEL_STATE_JSON, state.toJson().toString())
+        .apply()
     }
 
     fun save(ctx: Context, state: RaceNotificationState?) {
@@ -322,6 +354,21 @@ data class RaceNotificationState(
           .putBoolean(KEY_RACE_ACTIVE, false)
           .remove(KEY_ACTIVE_USER_ID)
           .remove(KEY_STATE_JSON)
+      }
+      val parallelRaw = prefs.getString(KEY_PARALLEL_STATE_JSON, null)
+      if (parallelRaw != null) {
+        try {
+          val parallelUser = JSONObject(parallelRaw).optString("userId")
+          if (parallelUser.isBlank() || parallelUser == userId) {
+            editor
+              .putBoolean(KEY_PARALLEL_ACTIVE, false)
+              .remove(KEY_PARALLEL_STATE_JSON)
+          }
+        } catch (_: Exception) {
+          editor
+            .putBoolean(KEY_PARALLEL_ACTIVE, false)
+            .remove(KEY_PARALLEL_STATE_JSON)
+        }
       }
       editor.apply()
     }

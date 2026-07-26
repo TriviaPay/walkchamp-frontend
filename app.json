@@ -4,14 +4,14 @@
     "slug": "walkchamp",
     "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/icons/ios/WalkChampProgress0.png",
+    "icon": "./assets/icons/ios/WalkChampProgress100.png",
     "scheme": ["globalwalkerleague", "walkchamp"],
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/icons/WalkChampProgress0.png",
+      "image": "./assets/icons/WalkChampProgress100.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0A0B14"
+      "backgroundColor": "#EAF6E8"
     },
     "ios": {
       "supportsTablet": false,
@@ -57,19 +57,27 @@
         "barStyle": "light-content"
       },
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icons/adaptive/WalkChampProgress0.png",
+        "foregroundImage": "./assets/icons/adaptive/WalkChampProgress100.png",
         "backgroundColor": "#0A0B14"
       }
     },
     "web": {
-      "favicon": "./assets/icons/WalkChampProgress0.png"
+      "favicon": "./assets/icons/WalkChampProgress100.png"
     },
     "plugins": [
       "expo-dev-client",
       [
         "onesignal-expo-plugin",
         {
-          "mode": "production"
+          "mode": "production",
+          "iosNSEFilePath": "./native/onesignal/NotificationService.swift",
+          "smallIcons": [
+            "./assets/notifications/ic_stat_onesignal_default.png"
+          ],
+          "largeIcons": [
+            "./assets/icons/WalkChampProgress100.png"
+          ],
+          "smallIconAccentColor": "#00B4FF"
         }
       ],
       [
@@ -79,7 +87,7 @@
             "minSdkVersion": 26,
             "compileSdkVersion": 35,
             "targetSdkVersion": 35,
-            "extraProguardRules": "-keep class com.globalwalkerleague.walkchampraceprogress.** { *; }\n-keep class expo.modules.** { *; }\n-keep class expo.modules.ExpoModulesPackageList { *; }\n-keep class com.facebook.react.** { *; }\n-keep @expo.modules.core.interfaces.DoNotStrip class *"
+            "extraProguardRules": "-keep class com.globalwalkerleague.walkchampraceprogress.** { *; }\n-keep class com.globalwalkerleague.app.WalkChampNotificationServiceExtension { *; }\n-keep class expo.modules.** { *; }\n-keep class expo.modules.ExpoModulesPackageList { *; }\n-keep class com.facebook.react.** { *; }\n-keep @expo.modules.core.interfaces.DoNotStrip class *"
           }
         }
       ],

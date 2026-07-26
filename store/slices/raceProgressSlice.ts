@@ -16,14 +16,40 @@ export type StepProgressSource =
   | "unknown"
   | "android_step_counter"
   | "android_health_connect"
-  | "ios_healthkit";
+  | "ios_healthkit"
+  | "device_sensor";
+
+export type DailyDisplaySource =
+  | "health_connect"
+  | "healthkit"
+  | "sensor_estimate";
+
+export type DailyVerificationStatus =
+  | "verified"
+  | "pending"
+  | "delayed"
+  | "temporarily_unavailable"
+  | "unavailable";
 
 export interface RaceProgressState {
   userId: string | null;
   username: string | null;
 
+  /**
+   * Display total = max(verifiedTodaySteps, provisionalSensorTodaySteps ?? 0).
+   * Kept for backward-compatible UI; never treat as verified sync authority alone.
+   */
   todaySteps: number;
   todayStepsLastUpdatedAt: string | null;
+
+  /** Health Connect / HealthKit verified daily total (backend sync authority). */
+  verifiedTodaySteps: number;
+  verifiedTodayStepsAt: string | null;
+  /** TYPE_STEP_COUNTER / CMPedometer estimate for responsive UI + tray only. */
+  provisionalSensorTodaySteps: number | null;
+  provisionalSensorTodayStepsAt: string | null;
+  dailyDisplaySource: DailyDisplaySource;
+  dailyVerificationStatus: DailyVerificationStatus;
 
   activeRaceId: string | null;
   /**
@@ -38,8 +64,33 @@ export interface RaceProgressState {
   raceStartTime: string | null;
   raceStatus: RaceProgressStatus;
 
+  /** Live race steps (sensor / pedometer) — provisional uploads. */
   raceSteps: number;
   raceStepsLastUpdatedAt: string | null;
+  /** Last Health Connect / HealthKit race-window verification (null = not yet). */
+  verifiedRaceSteps: number | null;
+  verifiedRaceStepsAt: string | null;
+  /**
+   * @deprecated Local merge candidate only — NOT final authority.
+   * Prefer backendReconciledSteps / finalAuthoritativeSteps.
+   */
+  reconciledRaceSteps: number;
+
+  /** Backend-accepted provisional live race total. */
+  backendAcceptedLiveSteps: number;
+  /** Backend settlement/reconcile total when available. */
+  backendReconciledSteps: number | null;
+  reconciliationStatus:
+    | "not_started"
+    | "pending"
+    | "verification_delayed"
+    | "review_required"
+    | "finalized";
+  finalAuthoritativeSteps: number | null;
+
+  /** Live race tracking session — distinguishes restart/reboot/resume. */
+  liveRaceSessionId: string | null;
+  liveRaceSequence: number;
 
   rank: number | null;
   totalParticipants: number | null;
@@ -59,11 +110,38 @@ export interface RaceProgressState {
   dailyGoal: number;
 }
 
+function recomputeDisplayToday(state: RaceProgressState): void {
+  const verified = Math.max(0, Math.floor(state.verifiedTodaySteps));
+  const provisional =
+    state.provisionalSensorTodaySteps == null
+      ? 0
+      : Math.max(0, Math.floor(state.provisionalSensorTodaySteps));
+  state.todaySteps = Math.max(verified, provisional);
+  if (provisional > verified) {
+    state.dailyDisplaySource = "sensor_estimate";
+    if (state.dailyVerificationStatus === "verified") {
+      state.dailyVerificationStatus = "delayed";
+    }
+  } else if (verified > 0) {
+    state.dailyDisplaySource =
+      state.stepSource === "healthkit" || state.stepSource === "ios_healthkit"
+        ? "healthkit"
+        : "health_connect";
+    state.dailyVerificationStatus = "verified";
+  }
+}
+
 const initialState: RaceProgressState = {
   userId: null,
   username: null,
   todaySteps: 0,
   todayStepsLastUpdatedAt: null,
+  verifiedTodaySteps: 0,
+  verifiedTodayStepsAt: null,
+  provisionalSensorTodaySteps: null,
+  provisionalSensorTodayStepsAt: null,
+  dailyDisplaySource: "health_connect",
+  dailyVerificationStatus: "pending",
   activeRaceId: null,
   companionRaceId: null,
   activeRaceIsSponsored: false,
@@ -72,6 +150,15 @@ const initialState: RaceProgressState = {
   raceStatus: "idle",
   raceSteps: 0,
   raceStepsLastUpdatedAt: null,
+  verifiedRaceSteps: null,
+  verifiedRaceStepsAt: null,
+  reconciledRaceSteps: 0,
+  backendAcceptedLiveSteps: 0,
+  backendReconciledSteps: null,
+  reconciliationStatus: "not_started",
+  finalAuthoritativeSteps: null,
+  liveRaceSessionId: null,
+  liveRaceSequence: 0,
   rank: null,
   totalParticipants: null,
   goalSteps: null,
@@ -89,6 +176,15 @@ function isStale(incoming: string | undefined, current: string | null): boolean 
   if (!incoming) return false;
   if (!current) return false;
   return new Date(incoming).getTime() < new Date(current).getTime();
+}
+
+/** Sensor/pedometer sources must not overwrite the verified daily stepSource label. */
+function treatStepSourceAsProvisionalOnly(source: StepProgressSource): boolean {
+  return (
+    source === "android_step_counter" ||
+    source === "sensor" ||
+    source === "device_sensor"
+  );
 }
 
 const raceProgressSlice = createSlice({
@@ -143,6 +239,20 @@ const raceProgressSlice = createSlice({
       state.totalParticipants = action.payload.totalParticipants ?? state.totalParticipants;
       state.raceSteps = boot;
       state.raceStepsLastUpdatedAt = new Date().toISOString();
+      state.verifiedRaceSteps = null;
+      state.verifiedRaceStepsAt = null;
+      state.reconciledRaceSteps = boot;
+      state.backendAcceptedLiveSteps = boot;
+      state.backendReconciledSteps = null;
+      state.reconciliationStatus = "not_started";
+      state.finalAuthoritativeSteps = null;
+      // New tracking session per race activation (restart/reboot/resume replace).
+      const reuseSession =
+        prevActive === action.payload.raceId && state.liveRaceSessionId;
+      state.liveRaceSessionId =
+        reuseSession ||
+        `race:${action.payload.userId}:${action.payload.raceId}:${Date.now()}`;
+      state.liveRaceSequence = reuseSession ? state.liveRaceSequence : 0;
       state.rank = state.rank ?? 1;
       state.timeLeftSeconds = state.timeLeftSeconds ?? 0;
       // Sticky sponsored: once true for this race, don't wipe to Live Race title on rejoin.
@@ -193,6 +303,15 @@ const raceProgressSlice = createSlice({
       state.raceStatus = action.payload.status;
       state.raceSteps = 0;
       state.raceStepsLastUpdatedAt = null;
+      state.verifiedRaceSteps = null;
+      state.verifiedRaceStepsAt = null;
+      state.reconciledRaceSteps = 0;
+      state.backendAcceptedLiveSteps = 0;
+      state.backendReconciledSteps = null;
+      state.reconciliationStatus = "not_started";
+      state.finalAuthoritativeSteps = null;
+      state.liveRaceSessionId = null;
+      state.liveRaceSequence = 0;
       state.rank = null;
       state.totalParticipants = null;
       state.goalSteps = null;
@@ -210,16 +329,64 @@ const raceProgressSlice = createSlice({
         raceSteps?: number;
         stepSource?: StepProgressSource;
         updatedAt?: string;
+        /**
+         * verified = Health Connect / HealthKit daily sync authority
+         * provisional = sensor/pedometer display-only
+         * auto = infer from stepSource (default)
+         */
+        dailyLane?: "verified" | "provisional" | "auto";
       }>,
     ) {
       const { todaySteps, raceSteps, stepSource, updatedAt } = action.payload;
       const ts = updatedAt ?? new Date().toISOString();
+      const lane =
+        action.payload.dailyLane ??
+        (stepSource === "android_step_counter" ||
+        stepSource === "sensor" ||
+        stepSource === "device_sensor"
+          ? "provisional"
+          : "auto");
 
       if (todaySteps !== undefined) {
         if (!isStale(ts, state.todayStepsLastUpdatedAt)) {
           const next = Math.max(0, Math.floor(todaySteps));
-          if (next >= state.todaySteps) {
+          const treatProvisional =
+            lane === "provisional" ||
+            (lane === "auto" &&
+              (stepSource === "android_step_counter" ||
+                stepSource === "sensor" ||
+                stepSource === "device_sensor"));
+          const treatVerified =
+            lane === "verified" ||
+            (lane === "auto" &&
+              (stepSource === "health_connect" ||
+                stepSource === "android_health_connect" ||
+                stepSource === "healthkit" ||
+                stepSource === "ios_healthkit"));
+
+          if (treatProvisional) {
+            const prev =
+              state.provisionalSensorTodaySteps == null
+                ? 0
+                : state.provisionalSensorTodaySteps;
+            if (next >= prev) {
+              state.provisionalSensorTodaySteps = next;
+              state.provisionalSensorTodayStepsAt = ts;
+              state.todayStepsLastUpdatedAt = ts;
+              recomputeDisplayToday(state);
+            }
+          } else if (treatVerified) {
+            if (next >= state.verifiedTodaySteps) {
+              state.verifiedTodaySteps = next;
+              state.verifiedTodayStepsAt = ts;
+              state.todayStepsLastUpdatedAt = ts;
+              if (stepSource) state.stepSource = stepSource;
+              recomputeDisplayToday(state);
+            }
+          } else if (next >= state.todaySteps) {
+            // Legacy / unknown — keep prior monotonic todaySteps behavior.
             state.todaySteps = next;
+            state.verifiedTodaySteps = Math.max(state.verifiedTodaySteps, next);
             state.todayStepsLastUpdatedAt = ts;
           }
         }
@@ -235,6 +402,8 @@ const raceProgressSlice = createSlice({
           if (next >= state.raceSteps) {
             state.raceSteps = next;
             state.raceStepsLastUpdatedAt = ts;
+            // Local live candidate only — verification/finalize stay separate.
+            state.reconciledRaceSteps = Math.max(state.reconciledRaceSteps, next);
             if (__DEV__) {
               console.log(
                 `[StepStore] update source=${stepSource ?? state.stepSource} todaySteps=${state.todaySteps} raceSteps=${next} raceId=${state.activeRaceId} updatedAt=${ts}`,
@@ -244,7 +413,80 @@ const raceProgressSlice = createSlice({
         }
       }
 
-      if (stepSource) state.stepSource = stepSource;
+      if (stepSource && !treatStepSourceAsProvisionalOnly(stepSource)) {
+        state.stepSource = stepSource;
+      }
+    },
+
+    setVerifiedRaceSteps(
+      state,
+      action: PayloadAction<{ steps: number; verifiedAt?: string }>,
+    ) {
+      const next = Math.max(0, Math.floor(action.payload.steps));
+      state.verifiedRaceSteps = next;
+      state.verifiedRaceStepsAt =
+        action.payload.verifiedAt ?? new Date().toISOString();
+      // Verification is independent — do NOT promote to final authority via max().
+      if (state.reconciliationStatus === "not_started") {
+        state.reconciliationStatus = "pending";
+      }
+    },
+
+    setBackendReconciliation(
+      state,
+      action: PayloadAction<{
+        status:
+          | "not_started"
+          | "pending"
+          | "verification_delayed"
+          | "review_required"
+          | "finalized";
+        backendAcceptedLiveSteps?: number;
+        backendReconciledSteps?: number | null;
+        finalAuthoritativeSteps?: number | null;
+      }>,
+    ) {
+      state.reconciliationStatus = action.payload.status;
+      if (action.payload.backendAcceptedLiveSteps !== undefined) {
+        state.backendAcceptedLiveSteps = Math.max(
+          0,
+          Math.floor(action.payload.backendAcceptedLiveSteps),
+        );
+      }
+      if (action.payload.backendReconciledSteps !== undefined) {
+        state.backendReconciledSteps =
+          action.payload.backendReconciledSteps == null
+            ? null
+            : Math.max(0, Math.floor(action.payload.backendReconciledSteps));
+      }
+      if (action.payload.finalAuthoritativeSteps !== undefined) {
+        state.finalAuthoritativeSteps =
+          action.payload.finalAuthoritativeSteps == null
+            ? null
+            : Math.max(0, Math.floor(action.payload.finalAuthoritativeSteps));
+      } else if (
+        action.payload.status === "finalized" &&
+        state.backendReconciledSteps != null
+      ) {
+        state.finalAuthoritativeSteps = state.backendReconciledSteps;
+      }
+    },
+
+    bumpLiveRaceSequence(state) {
+      state.liveRaceSequence = Math.max(0, state.liveRaceSequence) + 1;
+    },
+
+    replaceLiveRaceSession(
+      state,
+      action: PayloadAction<{ sessionId: string; reason?: string }>,
+    ) {
+      state.liveRaceSessionId = action.payload.sessionId;
+      state.liveRaceSequence = 0;
+      if (__DEV__) {
+        console.log(
+          `[StepStore] replaceLiveRaceSession id=${action.payload.sessionId} reason=${action.payload.reason ?? "n/a"}`,
+        );
+      }
     },
 
     updateFromBackend(
@@ -262,9 +504,16 @@ const raceProgressSlice = createSlice({
     ) {
       const syncedAt = action.payload.syncedAt ?? new Date().toISOString();
       if (action.payload.raceSteps !== undefined) {
-        state.raceSteps = Math.max(
-          state.raceSteps,
-          Math.max(0, Math.floor(action.payload.raceSteps)),
+        const accepted = Math.max(0, Math.floor(action.payload.raceSteps));
+        state.raceSteps = Math.max(state.raceSteps, accepted);
+        state.backendAcceptedLiveSteps = Math.max(
+          state.backendAcceptedLiveSteps,
+          accepted,
+        );
+        // Local merge candidate only — never treat as finalized authority.
+        state.reconciledRaceSteps = Math.max(
+          state.reconciledRaceSteps,
+          state.backendAcceptedLiveSteps,
         );
       }
       if (action.payload.rank !== undefined) state.rank = action.payload.rank;
@@ -317,6 +566,15 @@ const raceProgressSlice = createSlice({
     resetRaceStepBuffer(state) {
       state.raceSteps = 0;
       state.raceStepsLastUpdatedAt = null;
+      state.verifiedRaceSteps = null;
+      state.verifiedRaceStepsAt = null;
+      state.reconciledRaceSteps = 0;
+      state.backendAcceptedLiveSteps = 0;
+      state.backendReconciledSteps = null;
+      state.reconciliationStatus = "not_started";
+      state.finalAuthoritativeSteps = null;
+      state.liveRaceSessionId = null;
+      state.liveRaceSequence = 0;
       state.walkRaceStepsDisplay = 0;
     },
 
@@ -337,9 +595,19 @@ const raceProgressSlice = createSlice({
       state,
       action: PayloadAction<{ todaySteps?: number; updatedAt?: string }>,
     ) {
-      state.todaySteps = Math.max(0, Math.floor(action.payload.todaySteps ?? 0));
-      state.todayStepsLastUpdatedAt =
-        action.payload.updatedAt ?? new Date().toISOString();
+      const next = Math.max(0, Math.floor(action.payload.todaySteps ?? 0));
+      const ts = action.payload.updatedAt ?? new Date().toISOString();
+      state.verifiedTodaySteps = next;
+      state.verifiedTodayStepsAt = ts;
+      state.provisionalSensorTodaySteps = null;
+      state.provisionalSensorTodayStepsAt = null;
+      state.todaySteps = next;
+      state.todayStepsLastUpdatedAt = ts;
+      state.dailyDisplaySource =
+        state.stepSource === "healthkit" || state.stepSource === "ios_healthkit"
+          ? "healthkit"
+          : "health_connect";
+      state.dailyVerificationStatus = next > 0 ? "verified" : "pending";
       if (__DEV__) {
         console.log(`[StepStore] resetDailyStepsForNewDay todaySteps=${state.todaySteps}`);
       }
@@ -363,7 +631,9 @@ const raceProgressSlice = createSlice({
         state.username = action.payload.username;
       }
       const boot = Math.max(0, Math.floor(action.payload.bootTodaySteps ?? 0));
-      state.todaySteps = Math.max(state.todaySteps, boot);
+      state.verifiedTodaySteps = Math.max(state.verifiedTodaySteps, boot);
+      state.verifiedTodayStepsAt = new Date().toISOString();
+      recomputeDisplayToday(state);
       state.todayStepsLastUpdatedAt = new Date().toISOString();
       if (__DEV__) {
         console.log(
@@ -392,6 +662,15 @@ const raceProgressSlice = createSlice({
       state.raceStatus = "idle";
       state.raceSteps = 0;
       state.raceStepsLastUpdatedAt = null;
+      state.verifiedRaceSteps = null;
+      state.verifiedRaceStepsAt = null;
+      state.reconciledRaceSteps = 0;
+      state.backendAcceptedLiveSteps = 0;
+      state.backendReconciledSteps = null;
+      state.reconciliationStatus = "not_started";
+      state.finalAuthoritativeSteps = null;
+      state.liveRaceSessionId = null;
+      state.liveRaceSequence = 0;
       state.rank = null;
       state.totalParticipants = null;
       state.goalSteps = null;

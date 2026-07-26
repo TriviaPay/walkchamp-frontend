@@ -33,6 +33,67 @@ function copyNotificationIcons(projectRoot) {
   fs.mkdirSync(destDir, { recursive: true });
   fs.copyFileSync(src, path.join(destDir, "ic_walkchamp_notification.xml"));
   fs.copyFileSync(src, path.join(destDir, "ic_notification.xml"));
+  // OneSignal looks up this name when push payloads omit small_icon.
+  fs.copyFileSync(src, path.join(destDir, "ic_stat_onesignal_default.xml"));
+
+  const nodpiDir = path.join(
+    projectRoot,
+    "android/app/src/main/res/drawable-nodpi",
+  );
+  const xxxhdpiDir = path.join(
+    projectRoot,
+    "android/app/src/main/res/drawable-xxxhdpi",
+  );
+  fs.mkdirSync(nodpiDir, { recursive: true });
+  fs.mkdirSync(xxxhdpiDir, { recursive: true });
+
+  // Per-type colorful icons used by WalkChampNotificationServiceExtension + FGS RemoteViews.
+  const assetNotifDir = path.join(projectRoot, "assets/notifications");
+  const moduleNotifDir = path.join(
+    projectRoot,
+    "modules/walkchamp-race-progress/android/src/main/res/drawable-nodpi",
+  );
+  const copyPngNamed = (fileName) => {
+    const fromAsset = path.join(assetNotifDir, fileName);
+    const fromModule = path.join(moduleNotifDir, fileName);
+    const from = fs.existsSync(fromAsset)
+      ? fromAsset
+      : fs.existsSync(fromModule)
+        ? fromModule
+        : null;
+    if (!from) return;
+    fs.copyFileSync(from, path.join(nodpiDir, fileName));
+    fs.copyFileSync(from, path.join(moduleNotifDir, fileName));
+  };
+
+  if (fs.existsSync(assetNotifDir)) {
+    for (const entry of fs.readdirSync(assetNotifDir)) {
+      if (!/^notification_.+\.png$/i.test(entry)) continue;
+      copyPngNamed(entry);
+    }
+  } else if (fs.existsSync(moduleNotifDir)) {
+    for (const entry of fs.readdirSync(moduleNotifDir)) {
+      if (!/^notification_.+\.png$/i.test(entry)) continue;
+      copyPngNamed(entry);
+    }
+  }
+
+  const brandSrcCandidates = [
+    path.join(assetNotifDir, "ic_onesignal_large_icon_default.png"),
+    path.join(assetNotifDir, "notification_default.png"),
+    path.join(moduleNotifDir, "notification_walkchamp_brand.png"),
+  ];
+  const brandSrc = brandSrcCandidates.find((p) => fs.existsSync(p));
+  if (brandSrc) {
+    fs.copyFileSync(
+      brandSrc,
+      path.join(nodpiDir, "ic_onesignal_large_icon_default.png"),
+    );
+    fs.copyFileSync(
+      brandSrc,
+      path.join(xxxhdpiDir, "ic_onesignal_large_icon_default.png"),
+    );
+  }
 }
 
 function widgetSourceDir(projectRoot) {
@@ -275,6 +336,45 @@ ${settingsProjectDir}
   ]);
 }
 
+function withOneSignalNseNotificationAssets(config) {
+  return withDangerousMod(config, [
+    "ios",
+    async (cfg) => {
+      const projectRoot = cfg.modRequest.projectRoot;
+      const nseDir = path.join(
+        projectRoot,
+        "ios",
+        "OneSignalNotificationServiceExtension",
+      );
+      if (!fs.existsSync(nseDir)) return cfg;
+
+      const assetDir = path.join(projectRoot, "assets/notifications");
+      if (!fs.existsSync(assetDir)) return cfg;
+
+      for (const entry of fs.readdirSync(assetDir)) {
+        if (!/^notification_.+\.png$/i.test(entry)) continue;
+        fs.copyFileSync(
+          path.join(assetDir, entry),
+          path.join(nseDir, entry),
+        );
+      }
+
+      // Ensure brand matches WalkChampProgress100 for NSE / rich media fallbacks.
+      const brandSrc = path.join(
+        projectRoot,
+        "assets/icons/WalkChampProgress100.png",
+      );
+      if (fs.existsSync(brandSrc)) {
+        fs.copyFileSync(
+          brandSrc,
+          path.join(nseDir, "notification_walkchamp_brand.png"),
+        );
+      }
+      return cfg;
+    },
+  ]);
+}
+
 /**
  * Registers Walk Champ foreground service (Android) and Live Activities (iOS)
  * for persistent walk-step and live-race progress notifications.
@@ -328,6 +428,30 @@ function withWalkChampRaceProgress(config) {
           svc.$["android:foregroundServiceType"] = "health";
         }
       }
+
+      application["meta-data"] = ensureArray(application["meta-data"]);
+      const ensureMeta = (name, attrs) => {
+        const existing = application["meta-data"].find(
+          (m) => m.$?.["android:name"] === name,
+        );
+        if (existing) {
+          existing.$ = { ...existing.$, ...attrs, "android:name": name };
+        } else {
+          application["meta-data"].push({
+            $: { "android:name": name, ...attrs },
+          });
+        }
+      };
+      ensureMeta("com.onesignal.messaging.default_notification_icon", {
+        "android:resource": "@drawable/ic_stat_onesignal_default",
+      });
+      ensureMeta("com.onesignal.NotificationAccentColor.DEFAULT", {
+        "android:value": "FF00B4FF",
+      });
+      ensureMeta("com.onesignal.NotificationServiceExtension", {
+        "android:value":
+          "com.globalwalkerleague.app.WalkChampNotificationServiceExtension",
+      });
     }
 
     return cfg;
@@ -352,6 +476,7 @@ function withWalkChampRaceProgress(config) {
   config = withWalkChampWidgetPodfile(config);
   config = withWalkChampWidgetFiles(config);
   config = withWalkChampWidgetXcodeProject(config);
+  config = withOneSignalNseNotificationAssets(config);
 
   return config;
 }

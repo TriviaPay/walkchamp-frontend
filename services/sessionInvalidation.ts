@@ -31,21 +31,47 @@ type InvalidationListener = (payload: SessionInvalidationPayload) => void;
 const listeners = new Set<InvalidationListener>();
 let inFlight = false;
 
+/** Ignore self-kicks while this device is finishing login / session register. */
+let loginGraceUntil = 0;
+
 const REPLACED_REASONS = new Set([
   "SESSION_REPLACED",
   "login_on_new_device",
+  "LOGIN_ON_NEW_DEVICE",
   "session_replaced",
-  "session_invalidated",
 ]);
+
+export function beginSessionLoginGrace(ms = 15_000): void {
+  loginGraceUntil = Date.now() + ms;
+  if (__DEV__) console.log(`[AuthSession] login grace started ms=${ms}`);
+}
+
+export function endSessionLoginGrace(): void {
+  loginGraceUntil = 0;
+}
+
+export function isSessionLoginGraceActive(): boolean {
+  return Date.now() < loginGraceUntil;
+}
 
 export function onSessionInvalidation(cb: InvalidationListener): () => void {
   listeners.add(cb);
   return () => listeners.delete(cb);
 }
 
+function isReplacedReason(reason: SessionInvalidationReason): boolean {
+  const r = String(reason);
+  const upper = r.toUpperCase();
+  return (
+    REPLACED_REASONS.has(r) ||
+    REPLACED_REASONS.has(upper) ||
+    upper === "SESSION_REPLACED" ||
+    upper === "LOGIN_ON_NEW_DEVICE"
+  );
+}
+
 function userMessageFor(reason: SessionInvalidationReason, custom?: string | null): string {
-  // Product copy for replaced sessions (ignore shorter backend variants).
-  if (REPLACED_REASONS.has(reason) || String(reason).toUpperCase() === "SESSION_REPLACED") {
+  if (isReplacedReason(reason)) {
     return "Your account was signed in on another device. Please sign in again.";
   }
   if (custom?.trim()) return custom.trim();
@@ -67,10 +93,40 @@ export async function handleSessionInvalidation(
     return false;
   }
 
+  // First sign-in / re-register race: never kick the device that just logged in.
+  if (isSessionLoginGraceActive() && isReplacedReason(payload.reason)) {
+    if (__DEV__) {
+      console.log(
+        `[AuthSession] invalidation ignored — login grace reason=${payload.reason}`,
+      );
+    }
+    return false;
+  }
+
   const local = await getActiveSessionMeta();
-  if (payload.sessionId && local?.sessionId && payload.sessionId !== local.sessionId) {
+
+  // No local session yet (still registering) — do not treat as other-device kick.
+  if (!local?.sessionId) {
+    if (__DEV__) {
+      console.log("[AuthSession] invalidation ignored — no local session meta");
+    }
+    return false;
+  }
+
+  // Only invalidate when the event targets OUR session id.
+  if (payload.sessionId && payload.sessionId !== local.sessionId) {
     if (__DEV__) {
       console.log("[AuthSession] invalidation ignored — sessionId mismatch (other session)");
+    }
+    return false;
+  }
+
+  // Ambiguous replaced kick without sessionId — require an explicit session id.
+  if (isReplacedReason(payload.reason) && !payload.sessionId) {
+    if (__DEV__) {
+      console.log(
+        "[AuthSession] invalidation ignored — replaced reason without sessionId",
+      );
     }
     return false;
   }
@@ -111,7 +167,6 @@ export async function handleSessionInvalidation(
       }
     });
 
-    // Professional modal (not native Alert).
     showSessionNotice(enriched);
 
     return true;

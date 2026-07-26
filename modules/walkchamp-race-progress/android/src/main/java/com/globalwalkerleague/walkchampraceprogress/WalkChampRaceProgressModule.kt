@@ -268,6 +268,21 @@ class WalkChampRaceProgressModule : Module() {
       val ctx = appContext.reactContext ?: return@AsyncFunction false
       setLauncherIcon(ctx, iconName)
     }
+
+    /** Package visibility requires matching `<queries>` entries in the app manifest. */
+    AsyncFunction("isPackageInstalled") { packageName: String ->
+      val ctx = appContext.reactContext ?: return@AsyncFunction false
+      val pkg = packageName.trim()
+      if (pkg.isEmpty()) return@AsyncFunction false
+      try {
+        ctx.packageManager.getPackageInfo(pkg, 0)
+        true
+      } catch (_: PackageManager.NameNotFoundException) {
+        false
+      } catch (_: Exception) {
+        false
+      }
+    }
   }
 
   private val launcherIconNames = listOf(
@@ -350,7 +365,19 @@ class WalkChampRaceProgressModule : Module() {
       val pm = ctx.packageManager
       val target = launcherAliasComponent(ctx, resolved)
 
+      // Already on the requested launcher alias — avoid redundant PackageManager churn
+      // (some OEMs restart the process when launcher components flip unnecessarily).
+      val current = getEnabledLauncherIconName(ctx)
+      if (current == resolved && isLauncherComponentEnabled(pm, target)) {
+        android.util.Log.i(
+          "DynamicIcon",
+          "[LauncherIcon] already active=$resolved — no-op",
+        )
+        return true
+      }
+
       // Enable the target first so a launcher entry always remains available.
+      // Only toggle activity-aliases — never MainActivity itself.
       pm.setComponentEnabledSetting(
         target,
         PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
@@ -359,8 +386,11 @@ class WalkChampRaceProgressModule : Module() {
 
       for (name in launcherIconNames) {
         if (name == resolved) continue
+        val component = launcherAliasComponent(ctx, name)
+        // Skip components that are already disabled to minimize OEM side-effects.
+        if (!isLauncherComponentEnabled(pm, component)) continue
         pm.setComponentEnabledSetting(
-          launcherAliasComponent(ctx, name),
+          component,
           PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
           PackageManager.DONT_KILL_APP,
         )
@@ -432,11 +462,13 @@ class WalkChampRaceProgressModule : Module() {
       putExtra(WalkChampRaceForegroundService.EXTRA_DEEP_LINK, deepLink)
       putExtra(WalkChampRaceForegroundService.EXTRA_STATE_JSON, state.toJson().toString())
     }
-    if (action == WalkChampRaceForegroundService.ACTION_START) {
-      // START must be called from the foreground — use startForegroundService.
+    if (action == WalkChampRaceForegroundService.ACTION_START ||
+      action == WalkChampRaceForegroundService.ACTION_UPDATE
+    ) {
+      // UPDATE uses startForegroundService so race tray keeps a live FGS after
+      // process gaps — same keep-alive contract as daily walk.
       startServiceForeground(ctx, intent)
     } else {
-      // UPDATE / parallel upsert deliver to an already-running service.
       deliverToService(ctx, intent)
     }
   }
@@ -468,12 +500,20 @@ class WalkChampRaceProgressModule : Module() {
         WalkChampRaceForegroundService.EXTRA_TODAY_STEPS,
         (payload["todaySteps"] as? Number)?.toInt() ?: 0,
       )
+      putExtra(
+        WalkChampRaceForegroundService.EXTRA_DAILY_GOAL,
+        (payload["dailyGoal"] as? Number)?.toInt() ?: 0,
+      )
       // Credentials allow the native background sync loop to POST daily steps to the backend.
       putExtra("userId", payload["userId"] as? String ?: "")
       putExtra("apiBaseUrl", payload["apiBaseUrl"] as? String ?: "")
       putExtra("authToken", payload["authToken"] as? String ?: "")
     }
-    if (action == WalkChampRaceForegroundService.ACTION_START_WALK) {
+    if (action == WalkChampRaceForegroundService.ACTION_START_WALK ||
+      action == WalkChampRaceForegroundService.ACTION_UPDATE_WALK
+    ) {
+      // UPDATE must also use startForegroundService so a dead FGS can be revived
+      // while the app is still in the brief background-start window.
       startServiceForeground(ctx, intent)
     } else {
       deliverToService(ctx, intent)

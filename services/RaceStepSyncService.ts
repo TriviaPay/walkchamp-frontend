@@ -14,6 +14,7 @@ export interface RaceSyncOptions {
   force?: boolean;
   atTarget?: boolean;
   deviceTotalSteps?: number;
+  trackingSessionId?: string;
 }
 
 class RaceStepSyncService {
