@@ -26,6 +26,6 @@ assert.equal(isAcceptedRaceProgressSource("pedometer"), false);
 
 assert.equal(isAcceptedVerifiedSource("android_step_counter"), false);
 assert.equal(canonicalLiveRaceStepSource("android"), "android_step_counter");
-assert.equal(canonicalLiveRaceStepSource("ios"), "device_sensor");
+assert.equal(canonicalLiveRaceStepSource("ios"), "ios_pedometer");
 
 console.log("liveRaceSources.test.ts — passed");

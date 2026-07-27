@@ -58,9 +58,20 @@ export async function writeDailyStepsForUserDate(
   userId: string,
   localDate: string,
   steps: number,
+  opts?: { forceZero?: boolean },
 ): Promise<void> {
   const key = stepScopedKeys(userId, localDate).steps;
   const value = Math.max(0, Math.floor(steps));
+  // Never clobber a real daily total with 0 (logout race / empty hydrate).
+  // Midnight rollover must pass forceZero.
+  if (value === 0 && opts?.forceZero !== true) {
+    const existing = pendingDailyWrites.get(key);
+    if (existing) {
+      clearTimeout(existing);
+      pendingDailyWrites.delete(key);
+    }
+    return;
+  }
   const existing = pendingDailyWrites.get(key);
   if (existing) clearTimeout(existing);
   pendingDailyWrites.set(
@@ -98,18 +109,48 @@ export async function deleteLegacyUnscopedStepKeys(): Promise<void> {
   );
 }
 
-export async function clearScopedStepStateForUser(userId: string): Promise<void> {
+export async function clearScopedStepStateForUser(
+  userId: string,
+  opts?: { preserveDailyProgress?: boolean },
+): Promise<void> {
   const allKeys = await AsyncStorage.getAllKeys();
-  const prefixes = [
-    `steps:${userId}:`,
-    `baseline:${userId}:`,
-    `raceSteps:${userId}:`,
-    `stepSnapshot:${userId}:`,
-    `stepProgress:${userId}:`,
-  ];
-  const keysToDelete = allKeys.filter((key) =>
+  const preserveDaily = opts?.preserveDailyProgress === true;
+  // On same-user logout keep today's step totals so re-login can restore Walk UI.
+  // Still wipe race baselines / snapshots / outbox (session-bound).
+  const prefixes = preserveDaily
+    ? [
+        `baseline:${userId}:`,
+        `raceSteps:${userId}:`,
+        `stepSnapshot:${userId}:`,
+        `stepProgress:${userId}:`,
+      ]
+    : [
+        `steps:${userId}:`,
+        `baseline:${userId}:`,
+        `raceSteps:${userId}:`,
+        `stepSnapshot:${userId}:`,
+        `stepProgress:${userId}:`,
+      ];
+  let keysToDelete = allKeys.filter((key) =>
     prefixes.some((prefix) => key.startsWith(prefix)),
   );
+  if (preserveDaily) {
+    // Keep durable daily progress + sync watermark + lifetime stats.
+    const keepSuffixes = [
+      `:lastSyncedStepsCount`,
+      `:totalSteps`,
+      `:streak`,
+      `:currentLocalDate`,
+    ];
+    keysToDelete = keysToDelete.filter((key) => {
+      if (key.startsWith(`steps:${userId}:`)) return false;
+      if (keepSuffixes.some((s) => key.endsWith(s))) return false;
+      if (key === `stepProgress:${userId}:currentLocalDate`) return false;
+      if (key === `stepProgress:${userId}:totalSteps`) return false;
+      if (key === `stepProgress:${userId}:streak`) return false;
+      return true;
+    });
+  }
   if (keysToDelete.length > 0) {
     await AsyncStorage.multiRemove(keysToDelete);
   }

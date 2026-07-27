@@ -8,7 +8,7 @@ import { isAcceptedVerifiedSource, isLegacyStepSourceId } from "./verifiedStepSo
 /** Backend/API sources accepted for live race progress (device sensor path). */
 const ACCEPTED_LIVE_RACE_SOURCES = new Set([
   "android_step_counter",
-  "device_sensor",
+  "device_sensor", // legacy alias — prefer android_step_counter / ios_pedometer on wire
   "ios_pedometer",
   "ios_core_motion",
   "sensor",
@@ -34,14 +34,14 @@ export function isAcceptedRaceProgressSource(
 
 /**
  * Canonical live race stepSource for the platform.
- * Android: android_step_counter (existing FGS + API contract).
- * iOS: device_sensor (backend-compatible); ios_pedometer is also accepted as alias.
+ * Android: android_step_counter (TYPE_STEP_COUNTER).
+ * iOS: ios_pedometer (CMPedometer) — checklist contract.
  */
 export function canonicalLiveRaceStepSource(
   platform: "android" | "ios" | string,
-): "android_step_counter" | "device_sensor" {
+): "android_step_counter" | "ios_pedometer" {
   if (platform === "android") return "android_step_counter";
-  return "device_sensor";
+  return "ios_pedometer";
 }
 
 export { isLegacyStepSourceId, isAcceptedVerifiedSource };

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * WalkContext — step tracking with real health data.
  *
  * Both platforms now use range-based cumulative queries (no delta baseline math):
@@ -251,7 +251,12 @@ async function submitStepsToBackend(
   totalSteps?: number,
   source?: string,
   userId?: string,
-): Promise<{ activeMinutes?: number; dailyRank?: number | null } | null> {
+): Promise<{
+  activeMinutes?: number;
+  dailyRank?: number | null;
+  ignored?: boolean;
+  unchanged?: boolean;
+} | null> {
   if (steps <= 0) return null;
   const session = await getValidSession();
   if (!session) return null;
@@ -314,6 +319,20 @@ async function submitStepsToBackend(
     }
     if (!res.ok) return null;
     const data = await res.json();
+    // Soft-handle unknown/fake sources and unchanged totals — not errors.
+    if (data?.ignored === true || data?.unchanged === true) {
+      if (__DEV__) {
+        console.log(
+          `[API] /api/walk/steps ${data.ignored ? "ignored" : "unchanged"} submitted=${data.submitted ?? "n/a"}`,
+        );
+      }
+      return {
+        activeMinutes: data.today?.activeMinutes,
+        dailyRank: data.today?.dailyRank,
+        ignored: data.ignored === true,
+        unchanged: data.unchanged === true,
+      };
+    }
     return {
       activeMinutes: data.today?.activeMinutes,
       dailyRank: data.today?.dailyRank,
@@ -710,7 +729,17 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         const streak = await storageGet<number>(keys.streak);
 
         // Show scoped local cache immediately — do not wait for backend/API.
-        let displaySteps = rolled ? 0 : await readDailyStepsForUserDate(user.id, today);
+        // Also fold in Redux boot from bindStepSessionToUser (native + cache).
+        const reduxBoot =
+          store.getState().raceProgress.userId === user.id
+            ? Math.max(0, store.getState().raceProgress.todaySteps)
+            : 0;
+        let displaySteps = rolled
+          ? 0
+          : Math.max(
+              await readDailyStepsForUserDate(user.id, today),
+              reduxBoot,
+            );
         if (rolled) {
           markFreshLocalDay(90_000);
           setTodaySteps(0);
@@ -857,7 +886,15 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         setTodaySteps(displaySteps);
         todayStepsRef.current = displaySteps;
         savedDailyStepsRef.current = displaySteps;
-        await writeDailyStepsForUserDate(user.id, today, displaySteps);
+        // Never persist 0 over a real cached total (logout/hydrate race).
+        if (displaySteps > 0 || rolled) {
+          await writeDailyStepsForUserDate(
+            user.id,
+            today,
+            displaySteps,
+            rolled ? { forceZero: true } : undefined,
+          );
+        }
         setWeeklySteps(await readWeeklyStepsForUser(user.id));
         await captureProviderBindSnapshot();
 
@@ -1667,15 +1704,18 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user?.id) return;
     let lastReduxSteps = store.getState().raceProgress.todaySteps;
-    return store.subscribe(() => {
+    const pullFromRedux = (reason: string) => {
       if (syncingFromReduxRef.current) return;
       const rp = store.getState().raceProgress;
       if (rp.userId !== user.id) return;
-      if (rp.todaySteps === lastReduxSteps) return;
+      if (rp.todaySteps === lastReduxSteps && reason === "redux") return;
       lastReduxSteps = rp.todaySteps;
       if (rp.todaySteps <= todayStepsRef.current) return;
-      void mirrorCanonicalStepsToWalkUi(rp.todaySteps, "redux");
-    });
+      void mirrorCanonicalStepsToWalkUi(rp.todaySteps, reason);
+    };
+    // Immediate catch-up after bind/re-login (don't wait for the next FGS tick).
+    pullFromRedux("redux-bind");
+    return store.subscribe(() => pullFromRedux("redux"));
   }, [user?.id, mirrorCanonicalStepsToWalkUi]);
 
   const startProviderWatching = useCallback(async () => {

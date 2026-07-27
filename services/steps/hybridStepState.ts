@@ -112,6 +112,7 @@ export type HybridRaceState = {
     | "pending"
     | "verification_delayed"
     | "review_required"
+    | "verification_rejected"
     | "finalized";
 
   finalAuthoritativeSteps: number | null;

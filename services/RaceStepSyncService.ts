@@ -9,6 +9,9 @@ import {
   postRaceReconcile,
   type RaceProgressSource,
 } from "@/services/raceProgressApi";
+import { submitRaceVerifiedTotal } from "@/services/steps/raceVerificationSubmit";
+import { verifyRaceProgress } from "@/services/steps/raceHealthVerification";
+import { store } from "@/store";
 
 export interface RaceSyncOptions {
   force?: boolean;
@@ -77,6 +80,30 @@ class RaceStepSyncService {
       await new Promise((r) => setTimeout(r, LIVE_RACE_SYNC_CONFIG.backendSyncMs));
     }
     await postRaceReconcile(raceId, steps, source);
+    // Best-effort end-of-race verify submit (404 soft-skips).
+    try {
+      const rp = store.getState().raceProgress;
+      const startAt = rp.raceStartTime
+        ? new Date(rp.raceStartTime).toISOString()
+        : new Date().toISOString();
+      const local = await verifyRaceProgress({
+        raceId,
+        startAtUtc: startAt,
+        liveRaceSteps: steps,
+      });
+      if (local.verifiedRaceSteps > 0) {
+        await submitRaceVerifiedTotal({
+          raceId,
+          verifiedCumulativeSteps: local.verifiedRaceSteps,
+          measuredAtUtc: local.verifiedAtUtc,
+          intervalStartUtc: startAt,
+          clientLiveCumulativeSteps: steps,
+          verificationSessionId: rp.liveRaceSessionId,
+        });
+      }
+    } catch {
+      /* never block goal flush */
+    }
   }
 }
 

@@ -48,12 +48,12 @@ export function FirstLaunchPermissionBootstrap() {
     void (async () => {
       await waitForAppStartupReady();
       if (cancelled) return;
-      // Wait until splash has marked the shell ready (or already ready).
+      // Wait until splash has marked the shell ready. Do NOT proceed on timeout —
+      // opening HC while splash is still visible is the bug we must avoid.
       if (!isHomeStepSetupShellReady()) {
         await new Promise<void>((resolve) => {
-          const started = Date.now();
           const id = setInterval(() => {
-            if (isHomeStepSetupShellReady() || Date.now() - started > 15_000) {
+            if (cancelled || isHomeStepSetupShellReady()) {
               clearInterval(id);
               resolve();
             }
@@ -61,6 +61,7 @@ export function FirstLaunchPermissionBootstrap() {
         });
       }
       if (cancelled) return;
+      if (!isHomeStepSetupShellReady()) return;
       if (handledUserRef.current === user.id) return;
       handledUserRef.current = user.id;
       await runFirstLaunchPermissionFlow({

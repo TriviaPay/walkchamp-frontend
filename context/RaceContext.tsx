@@ -664,7 +664,14 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
             const data = await stepTracker.getStepsForTimeRange(raceStart, queryEnd).catch(() => null);
             if (__DEV__) console.log(`[RaceSteps] iOS recovery: device latest steps=${data?.steps ?? 0} raceStartedAt=${raceStart}`);
             if (data && data.steps > 0) {
-              await postRaceProgress(pendingRaceId, data.steps, undefined, undefined, "healthkit");
+              // Live progress lane — never label recovery ticks as healthkit.
+              await postRaceProgress(
+                pendingRaceId,
+                data.steps,
+                undefined,
+                undefined,
+                "ios_pedometer",
+              );
             }
           } else {
             const uid = userProfileRef.current.userId;

@@ -85,6 +85,7 @@ export interface RaceProgressState {
     | "pending"
     | "verification_delayed"
     | "review_required"
+    | "verification_rejected"
     | "finalized";
   finalAuthoritativeSteps: number | null;
 
@@ -246,13 +247,29 @@ const raceProgressSlice = createSlice({
       state.backendReconciledSteps = null;
       state.reconciliationStatus = "not_started";
       state.finalAuthoritativeSteps = null;
-      // New tracking session per race activation (restart/reboot/resume replace).
+      // New tracking session per race activation (≤64 chars; restart/reboot rotates).
       const reuseSession =
-        prevActive === action.payload.raceId && state.liveRaceSessionId;
-      state.liveRaceSessionId =
-        reuseSession ||
-        `race:${action.payload.userId}:${action.payload.raceId}:${Date.now()}`;
-      state.liveRaceSequence = reuseSession ? state.liveRaceSequence : 0;
+        prevActive === action.payload.raceId && state.liveRaceSessionId
+          ? state.liveRaceSessionId.slice(0, 64)
+          : null;
+      if (reuseSession) {
+        state.liveRaceSessionId = reuseSession;
+        state.liveRaceSequence = state.liveRaceSequence;
+      } else {
+        // Inline mint — keep slice free of circular imports.
+        const u = String(action.payload.userId ?? "u")
+          .replace(/[^a-zA-Z0-9]/g, "")
+          .slice(0, 8);
+        const r = String(action.payload.raceId ?? "r")
+          .replace(/[^a-zA-Z0-9]/g, "")
+          .slice(0, 8);
+        state.liveRaceSessionId =
+          `s${u}${r}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.slice(
+            0,
+            64,
+          );
+        state.liveRaceSequence = 0;
+      }
       state.rank = state.rank ?? 1;
       state.timeLeftSeconds = state.timeLeftSeconds ?? 0;
       // Sticky sponsored: once true for this race, don't wipe to Live Race title on rejoin.
@@ -440,6 +457,7 @@ const raceProgressSlice = createSlice({
           | "pending"
           | "verification_delayed"
           | "review_required"
+          | "verification_rejected"
           | "finalized";
         backendAcceptedLiveSteps?: number;
         backendReconciledSteps?: number | null;
@@ -480,7 +498,7 @@ const raceProgressSlice = createSlice({
       state,
       action: PayloadAction<{ sessionId: string; reason?: string }>,
     ) {
-      state.liveRaceSessionId = action.payload.sessionId;
+      state.liveRaceSessionId = String(action.payload.sessionId).slice(0, 64);
       state.liveRaceSequence = 0;
       if (__DEV__) {
         console.log(

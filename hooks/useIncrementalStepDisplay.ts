@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const TICK_MS = 75;
+const TICK_MS = 50;
 const INSTANT_CATCH_UP_MAX = 20;
 
 export function useIncrementalStepDisplay(confirmedSteps: number): number {
@@ -21,8 +21,9 @@ export function useIncrementalStepDisplay(confirmedSteps: number): number {
     confirmedRef.current = next;
 
     const gap = next - displayRef.current;
-    // Tab open / refresh catch-up — show immediately; only animate small live +1/+2 ticks.
-    if (gap > 3 || (prevConfirmed === 0 && next > INSTANT_CATCH_UP_MAX)) {
+    // Tab open / refresh / re-login catch-up — show immediately.
+    // Only animate tiny live +1 ticks so Walk doesn't lag the notification.
+    if (gap > 1 || (prevConfirmed === 0 && next > 0)) {
       displayRef.current = next;
       setDisplay(next);
       return;
@@ -43,7 +44,7 @@ export function useIncrementalStepDisplay(confirmedSteps: number): number {
       const target = confirmedRef.current;
       if (displayRef.current >= target) return;
       const gap = target - displayRef.current;
-      const increment = Math.max(1, Math.ceil(gap / 8));
+      const increment = Math.max(1, Math.ceil(gap / 4));
       const next = Math.min(target, displayRef.current + increment);
       displayRef.current = next;
       setDisplay(next);

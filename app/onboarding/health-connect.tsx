@@ -12,6 +12,9 @@ import { ONBOARDING_ASSETS, ONBOARDING_COLORS, ONBOARDING_ROUTES } from "@/const
 import { setHealthOnboardingChoice } from "@/utils/onboardingStorage";
 import WearableSetupModal from "@/components/WearableSetupModal";
 import { useWalk } from "@/context/WalkContext";
+import { useAuth } from "@/context/AuthContext";
+import { markPermissionEducationShown } from "@/services/permissions/permissionCoordinator";
+import { markHomeStepSetupPhaseDone } from "@/services/permissions/homePermissionFlow";
 import { rf } from "@/utils/responsive";
 
 const C = ONBOARDING_COLORS;
@@ -21,9 +24,15 @@ export default function HealthConnectOnboardingScreen() {
   const [showSetup, setShowSetup] = useState(false);
   const completedRef = useRef(false);
   const { completeStepSetup } = useWalk();
+  const { user } = useAuth();
 
   const continueNext = async (choice: "accepted" | "skipped" | "denied") => {
     await setHealthOnboardingChoice(choice);
+    // Prevent HomeWearableSetupHost from opening the same wizard again after Enter.
+    if (user?.id) {
+      await markPermissionEducationShown(user.id);
+    }
+    markHomeStepSetupPhaseDone();
     router.push(ONBOARDING_ROUTES.notifications);
   };
 

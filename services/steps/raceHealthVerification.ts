@@ -6,7 +6,9 @@
 
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import { submitRaceVerifiedTotal } from "@/services/steps/raceVerificationSubmit";
 import { logger } from "@/utils/logger";
+import { store } from "@/store";
 
 export type RaceVerificationStatus =
   | "matched"
@@ -147,7 +149,28 @@ export function startRaceHealthVerification(args: {
       endAtUtc: args.endAtUtc ?? undefined,
       liveRaceSteps: args.getLiveRaceSteps(),
     })
-      .then((result) => args.onResult?.(result))
+      .then(async (result) => {
+        args.onResult?.(result);
+        // Push verified race-window total to backend (404 → soft-skip).
+        if (
+          result.verifiedRaceSteps > 0 &&
+          (result.status === "matched" ||
+            result.status === "within_tolerance" ||
+            result.status === "verification_delayed" ||
+            result.status === "mismatch")
+        ) {
+          const sessionId = store.getState().raceProgress.liveRaceSessionId;
+          await submitRaceVerifiedTotal({
+            raceId: args.raceId,
+            verifiedCumulativeSteps: result.verifiedRaceSteps,
+            measuredAtUtc: result.verifiedAtUtc,
+            intervalStartUtc: args.startAtUtc,
+            intervalEndUtc: args.endAtUtc ?? result.verifiedAtUtc,
+            clientLiveCumulativeSteps: result.liveRaceSteps,
+            verificationSessionId: sessionId,
+          });
+        }
+      })
       .finally(() => {
         _inFlight = false;
       });

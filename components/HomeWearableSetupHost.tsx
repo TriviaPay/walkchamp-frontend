@@ -26,8 +26,13 @@ export function HomeWearableSetupHost() {
       // Never show over splash/login — opener only runs after shell ready flush.
       if (!isHomeStepSetupShellReady()) return;
       if (!user?.id) return;
+      // Extra guard: modal must not mount while splash overlay could still be up.
       setHomeStepSetupInProgress(true);
-      setVisible(true);
+      // Defer one frame so splash unmount paint commits first.
+      requestAnimationFrame(() => {
+        if (!isHomeStepSetupShellReady() || !user?.id) return;
+        setVisible(true);
+      });
     });
     registerHomeStepSetupCloser(() => {
       setVisible(false);

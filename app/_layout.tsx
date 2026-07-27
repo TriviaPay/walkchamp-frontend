@@ -10,6 +10,7 @@ import { ThemeProvider as NavThemeProvider, DarkTheme, DefaultTheme } from "@rea
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
+import Constants from "expo-constants";
 import React, { useEffect, useRef, useState } from "react";
 import { AppState, InteractionManager, LogBox, Platform, Text, TextInput, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -90,7 +91,13 @@ perf.appStartStart();
 logger.debug("AppStart", `platform: ${Platform.OS}`);
 logger.debug(
   "AppStart",
-  `env loaded: API_URL=${process.env.EXPO_PUBLIC_API_URL ? "set" : "(unset)"} DESCOPE=${process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID ? "set" : "(unset)"} PUSHER_KEY=${process.env.EXPO_PUBLIC_PUSHER_KEY ? "set" : "(unset)"}`,
+  (() => {
+    const extraId = (Constants.expoConfig?.extra as { descopeProjectId?: string } | undefined)
+      ?.descopeProjectId;
+    const descope =
+      process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID || extraId ? "set" : "(unset)";
+    return `env loaded: API_URL=${process.env.EXPO_PUBLIC_API_URL ? "set" : "(unset)"} DESCOPE=${descope} PUSHER_KEY=${process.env.EXPO_PUBLIC_PUSHER_KEY ? "set" : "(unset)"}`;
+  })(),
 );
 
 // ── Suppress fontfaceobserver timeout crash on web ─────────────────────────
@@ -487,7 +494,16 @@ export default function RootLayout() {
   useEffect(() => {
     // Web has no animated splash — allow HC setup as soon as the shell mounts.
     if (isWeb) setHomeStepSetupShellReady(true);
+    else {
+      // Cold start / remount: never leave shell "ready" while splash is showing.
+      setHomeStepSetupShellReady(false);
+    }
   }, [isWeb]);
+
+  useEffect(() => {
+    if (isWeb) return;
+    if (showAnimatedSplash) setHomeStepSetupShellReady(false);
+  }, [isWeb, showAnimatedSplash]);
 
   useEffect(() => {
     if (isWeb) return;

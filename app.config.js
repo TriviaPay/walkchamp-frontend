@@ -47,12 +47,20 @@ module.exports = () => {
   const { androidAppId, iosAppId } = resolveAdMobAppIds();
   const expo = { ...appJson.expo };
   expo.plugins = patchAdMobPlugin(expo.plugins, androidAppId, iosAppId);
+  const descopeProjectId = (
+    process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID || ""
+  )
+    .trim()
+    .replace(/^["']|["']$/g, "");
+
   expo.extra = {
     ...(expo.extra || {}),
     // Node evaluates this file during Gradle — `__DEV__` is not defined there.
     appEnv:
       process.env.EXPO_PUBLIC_APP_ENV ||
       (process.env.NODE_ENV === "production" ? "production" : "development"),
+    // Embedded fallback when a device is not on Metro (second phone / offline APK).
+    descopeProjectId: descopeProjectId || undefined,
   };
   return { expo };
 };

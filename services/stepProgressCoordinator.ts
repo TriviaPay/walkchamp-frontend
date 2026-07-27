@@ -377,7 +377,7 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   lastWalkNotificationSteps = -1;
   markFreshLocalDay(90_000);
 
-  await writeDailyStepsForUserDate(activeUserId, today, 0);
+  await writeDailyStepsForUserDate(activeUserId, today, 0, { forceZero: true });
   await storageSet(stepScopedKeys(activeUserId, today).lastSyncedStepsCount, 0);
   await storageSet(stepScopedKeys(activeUserId, today).currentLocalDate, today);
   await deleteLegacyUnscopedStepKeys();
@@ -1835,8 +1835,30 @@ export function handleBackendProgressSynced(result: {
   });
 }
 
+/**
+ * Session epoch — login bumps this so an in-flight logout clear cannot wipe
+ * Redux / LAST_STEP_USER_ID after the new session has already rebound.
+ */
+let _stepSessionEpoch = 0;
+
+export function bumpStepSessionEpoch(): number {
+  _stepSessionEpoch += 1;
+  return _stepSessionEpoch;
+}
+
+export function getStepSessionEpoch(): number {
+  return _stepSessionEpoch;
+}
+
 /** Wipe step cache so another account cannot inherit counts. */
-export async function clearLocalStepStorageForAccountSwitch(userId?: string): Promise<void> {
+export async function clearLocalStepStorageForAccountSwitch(
+  userId?: string,
+  opts?: { reason?: "logout" | "account_switch"; epoch?: number },
+): Promise<void> {
+  const epoch = opts?.epoch;
+  const stillCurrent = () =>
+    epoch == null || epoch === getStepSessionEpoch();
+
   stopWalkBackgroundStepPoll();
   nativeWalkRefreshUnsubscribe?.();
   nativeWalkRefreshUnsubscribe = null;
@@ -1844,16 +1866,40 @@ export async function clearLocalStepStorageForAccountSwitch(userId?: string): Pr
   lastWalkNotificationSteps = -1;
   lastWalkNotificationPushMs = 0;
 
-  logger.debug("AuthSwitch", `clearing step state userId=${userId ?? "unknown"}`);
+  const reason = opts?.reason ?? "account_switch";
+  // Same-user logout: keep today's scoped daily steps so Walk restores on re-login.
+  // True account switch still wipes everything for that userId.
+  const preserveDailyProgress = reason === "logout" && !!userId;
+
+  logger.debug(
+    "AuthSwitch",
+    `clearing step state userId=${userId ?? "unknown"} reason=${reason} preserveDaily=${preserveDailyProgress}`,
+  );
   stepEngineLog("AuthSwitch", "clearedStepState=true");
 
+  if (!stillCurrent()) {
+    logger.debug("AuthSwitch", "aborted storage clear — newer step session");
+    return;
+  }
+
   await Promise.all([
-    userId ? clearScopedStepStateForUser(userId) : Promise.resolve(),
+    userId
+      ? clearScopedStepStateForUser(userId, { preserveDailyProgress })
+      : Promise.resolve(),
     deleteLegacyUnscopedStepKeys(),
     storageRemove(STORAGE_KEYS.PENDING_RACE),
-    storageRemove(STORAGE_KEYS.LAST_STEP_USER_ID),
+    // Only drop LAST_STEP_USER_ID when this clear is still the latest session op.
+    // Re-login may have already rebound; wiping the id would look like a fresh bind.
+    stillCurrent()
+      ? storageRemove(STORAGE_KEYS.LAST_STEP_USER_ID)
+      : Promise.resolve(),
     clearWalkStepsOutbox(),
   ]);
+
+  if (!stillCurrent()) {
+    logger.debug("AuthSwitch", "aborted redux reset — newer step session");
+    return;
+  }
 
   store.dispatch(raceProgressActions.resetStepStateForLogout());
   store.dispatch(raceProgressActions.clearRaceStepStateForAccountSwitch());
@@ -1868,8 +1914,13 @@ export async function clearLocalStepStorageForAccountSwitch(userId?: string): Pr
         clearAndroidLegacySensorScopedState,
         setAndroidLegacySensorUserContext,
       } = await import("@/services/steps/providers/androidLegacySensorProvider");
-      if (userId) await clearAndroidLegacySensorScopedState(userId);
-      setAndroidLegacySensorUserContext(null);
+      // Don't wipe legacy sensor daily totals on same-user logout — Walk needs them.
+      if (userId && !preserveDailyProgress) {
+        await clearAndroidLegacySensorScopedState(userId);
+      }
+      if (stillCurrent()) {
+        setAndroidLegacySensorUserContext(null);
+      }
     } catch {
       // non-fatal
     }
@@ -1877,7 +1928,10 @@ export async function clearLocalStepStorageForAccountSwitch(userId?: string): Pr
       const { androidHCService } = await import(
         "@/services/steps/androidHealthConnectService"
       );
-      androidHCService.resetTodayStepCache();
+      // Keep HC in-memory cache on logout so re-login doesn't flash 0 while HC reloads.
+      if (!preserveDailyProgress) {
+        androidHCService.resetTodayStepCache();
+      }
     } catch {
       // non-fatal
     }
@@ -1891,7 +1945,12 @@ export async function clearLocalStepStorageForAccountSwitch(userId?: string): Pr
 export async function clearUserSessionStepState(
   oldUserId: string | undefined,
   reason: "logout" | "account_switch" = "account_switch",
+  opts?: { epoch?: number },
 ): Promise<void> {
+  const epoch = opts?.epoch;
+  const stillCurrent = () =>
+    epoch == null || epoch === getStepSessionEpoch();
+
   logger.debug("AuthSwitch", `clearing old step state oldUserId=${oldUserId ?? "unknown"} reason=${reason}`);
 
   try {
@@ -1911,11 +1970,17 @@ export async function clearUserSessionStepState(
   await queryClient.cancelQueries();
   clearUserSessionQueryCache(oldUserId);
 
+  if (!stillCurrent()) {
+    logger.debug("AuthSwitch", "aborted session clear — newer step session");
+    return;
+  }
+
   if (reason === "logout") {
     await raceProgressNotificationService.stopAll(0, "logout");
     if (Platform.OS === "android" && oldUserId) {
       logger.debug("StepService", "stopped for old user");
-      await stepTrackingNotificationService.clearNativeStepStateForUser(oldUserId);
+      // Same-user logout: stop FGS/notif but keep native daily totals so Walk
+      // can restore immediately on re-login (notif already had live counts).
       await stepTrackingNotificationService.stop();
     }
   } else if (oldUserId) {
@@ -1927,7 +1992,12 @@ export async function clearUserSessionStepState(
     }
   }
 
-  await clearLocalStepStorageForAccountSwitch(oldUserId);
+  if (!stillCurrent()) {
+    logger.debug("AuthSwitch", "aborted after native stop — newer step session");
+    return;
+  }
+
+  await clearLocalStepStorageForAccountSwitch(oldUserId, { reason, epoch });
 }
 
 /**
@@ -1935,6 +2005,9 @@ export async function clearUserSessionStepState(
  * account changes (logout/login or direct account switch).
  */
 export async function bindStepSessionToUser(userId: string): Promise<boolean> {
+  // Invalidate any in-flight logout clear so it cannot wipe Redux after hydrate.
+  bumpStepSessionEpoch();
+
   try {
     const {
       clearSignedOutLegacySensorState,
@@ -1959,10 +2032,18 @@ export async function bindStepSessionToUser(userId: string): Promise<boolean> {
   logger.debug("StepService", `started for new user userId=${userId}`);
   const today = getLocalDateStr();
   suppressLegacyStepBumps(12_000);
+  // Prefer durable daily cache first so Walk shows prior steps immediately;
+  // then merge native/provider without waiting on slow HC.
+  const cachedBoot = switched
+    ? 0
+    : await readDailyStepsForUserDate(userId, today).catch(() => 0);
   const bootSteps = switched
     ? 0
-    : await resolveAuthoritativeTodaySteps(userId, { mergeNative: false }).catch(() =>
-        readDailyStepsForUserDate(userId, today),
+    : Math.max(
+        cachedBoot,
+        await resolveAuthoritativeTodaySteps(userId, { mergeNative: true }).catch(
+          () => cachedBoot,
+        ),
       );
   store.dispatch(
     raceProgressActions.initializeStepsForUserDate({
@@ -2298,7 +2379,11 @@ export async function restoreActiveLiveRaceNotificationForUser(
 
 /** Clear native + notification step session on logout so the next user cannot inherit counts. */
 export async function clearStepSessionForLogout(userId: string | undefined): Promise<void> {
-  logger.debug("Logout", `clearing step session userId=${userId ?? "unknown"}`);
-  await clearUserSessionStepState(userId, "logout");
+  const epoch = bumpStepSessionEpoch();
+  logger.debug("Logout", `clearing step session userId=${userId ?? "unknown"} epoch=${epoch}`);
+  await clearUserSessionStepState(userId, "logout", { epoch });
+  if (epoch !== getStepSessionEpoch()) {
+    logger.debug("Logout", `aborted post-clear — newer session epoch=${getStepSessionEpoch()}`);
+  }
 }
 

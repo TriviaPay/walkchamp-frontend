@@ -73,6 +73,12 @@ export async function setHealthOnboardingChoice(choice: Exclude<OnboardingChoice
   await storageSet(ONBOARDING_KEYS.healthChoice, choice);
 }
 
+export async function getHealthOnboardingChoice(): Promise<OnboardingChoice> {
+  const stored = await storageGet<OnboardingChoice>(ONBOARDING_KEYS.healthChoice);
+  if (stored === "accepted" || stored === "skipped" || stored === "denied") return stored;
+  return null;
+}
+
 export async function setNotificationOnboardingChoice(
   choice: Exclude<OnboardingChoice, null>,
 ): Promise<void> {

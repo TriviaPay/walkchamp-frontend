@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   resolveFinalRaceAuthority,
   resolveFinishedRaceDisplaySteps,
+  canShowFinalRaceOutcome,
 } from "./finalRaceAuthority";
 
 // Larger provisional must NOT override finalized downward reconciliation
@@ -55,6 +56,35 @@ import {
   }
 }
 
+// Rejected — provisional display, never final win
+{
+  const r = resolveFinalRaceAuthority({
+    targetSteps: 10_000,
+    backendAcceptedLiveSteps: 1_100,
+    backendReconciledSteps: null,
+    reconciliationStatus: "verification_rejected",
+    localLiveSteps: 3_000,
+  });
+  assert.equal(r.kind, "verification_rejected");
+  assert.equal(r.finalAuthoritativeSteps, null);
+  assert.equal(resolveFinishedRaceDisplaySteps(r), 1_100);
+}
+
+// Delayed messaging
+{
+  const r = resolveFinalRaceAuthority({
+    targetSteps: 10_000,
+    backendAcceptedLiveSteps: 800,
+    backendReconciledSteps: null,
+    reconciliationStatus: "verification_delayed",
+    localLiveSteps: 900,
+  });
+  assert.equal(r.kind, "provisional");
+  if (r.kind === "provisional") {
+    assert.equal(r.displayLabel, "Verification taking longer than expected");
+  }
+}
+
 // No backend yet — may show local provisional for UI only
 {
   const r = resolveFinalRaceAuthority({
@@ -66,5 +96,12 @@ import {
   });
   assert.equal(resolveFinishedRaceDisplaySteps(r), 900);
 }
+
+assert.equal(canShowFinalRaceOutcome("finalized"), true);
+assert.equal(canShowFinalRaceOutcome("pending"), false);
+assert.equal(
+  canShowFinalRaceOutcome("pending", { verificationFeatureEnabled: false }),
+  true,
+);
 
 console.log("finalRaceAuthority.test.ts: all passed");

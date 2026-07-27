@@ -125,8 +125,11 @@ export async function postRaceProgress(
     // Tracking session identity (restart/reboot/resume). Backend may ignore until
     // contract is updated — still send for forward compatibility.
     if (trackingSessionId) {
-      body.sessionId = trackingSessionId;
-      body.trackingSessionId = trackingSessionId;
+      const sessionId = String(trackingSessionId).trim().slice(0, 64);
+      if (sessionId) {
+        body.sessionId = sessionId;
+        body.trackingSessionId = sessionId;
+      }
     }
 
     logger.debug(

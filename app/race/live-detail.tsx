@@ -54,7 +54,13 @@ import { raceProgressActions } from "@/store/slices/raceProgressSlice";
 import {
   resolveFinalRaceAuthority,
   resolveFinishedRaceDisplaySteps,
+  canShowFinalRaceOutcome,
 } from "@/services/steps/finalRaceAuthority";
+import { useRaceResultStatus } from "@/hooks/useRaceResultStatus";
+import {
+  verificationStatusToReconciliation,
+  isRaceVerifyFeatureEnabled,
+} from "@/services/raceVerificationApi";
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
@@ -1479,6 +1485,13 @@ function LiveRaceDetailScreenContent() {
   const [finalRaceSteps, setFinalRaceSteps] = useState<number | null>(null);
   // Declared above finalizeLiveRace so the callback can read race.targetSteps safely.
   const [race, setRace] = useState<RaceData | null>(initialCache?.race ?? null);
+  const { status: resultStatus, refresh: refreshResultStatus } = useRaceResultStatus(
+    typeof raceId === "string" ? raceId : null,
+    {
+      enabled: !!raceId && race?.status === "completed",
+      pollWhilePending: true,
+    },
+  );
   const finalizeLiveRace = useCallback((
     backendSteps?: number,
     allResults?: Array<{ userId?: string; currentSteps?: number }>,
@@ -1605,10 +1618,33 @@ function LiveRaceDetailScreenContent() {
   const [forfeitReason, setForfeitReason] = useState<string | null>(null);
   // Coins Battle win: show a "You won X coins!" banner when race:completed fires
   const [coinWinAmount, setCoinWinAmount] = useState<number | null>(null);
+  const [pendingCoinWinAmount, setPendingCoinWinAmount] = useState<number | null>(null);
   // Map of userId → prizeCoins from race:completed Pusher event (all participants)
   const [pusherPrizeMap, setPusherPrizeMap] = useState<Map<string, number>>(new Map());
   // Queue-based top banner (replaces local finishGoalBanner overlay)
   const { enqueueBanner } = useTopBanner();
+
+  // Promote coins-battle win banner only after verification finalized (or feature off).
+  useEffect(() => {
+    if (pendingCoinWinAmount == null || coinWinAmount != null) return;
+    const feature = resultStatus?.featureEnabled ?? isRaceVerifyFeatureEnabled();
+    const recon = resultStatus
+      ? verificationStatusToReconciliation(resultStatus.verificationStatus)
+      : store.getState().raceProgress.reconciliationStatus;
+    if (
+      canShowFinalRaceOutcome(recon, {
+        verificationFeatureEnabled: feature === false ? false : feature ?? null,
+      })
+    ) {
+      setCoinWinAmount(pendingCoinWinAmount);
+      setPendingCoinWinAmount(null);
+    }
+  }, [
+    pendingCoinWinAmount,
+    coinWinAmount,
+    resultStatus?.featureEnabled,
+    resultStatus?.verificationStatus,
+  ]);
 
   // ── Step-delta animation for other participants ────────────────────────────
   // prevStepsMapRef tracks the last known step count per userId (keyed by userId).
@@ -2583,6 +2619,7 @@ function LiveRaceDetailScreenContent() {
         meResult?.currentSteps ?? localStepsRef.current,
         data?.results,
       );
+      void refreshResultStatus();
       if (data?.endedReason) setForfeitReason(data.endedReason);
       setRace((prev) => prev ? { ...prev, status: "completed", completedAt: prev.completedAt ?? new Date().toISOString() } : prev);
       if (data?.challengeType === "coins_battle" && Array.isArray(data.results)) {
@@ -2595,7 +2632,10 @@ function LiveRaceDetailScreenContent() {
         // Also keep the current-user banner amount for backward compat
         if (currentUserId) {
           const myResult = data.results.find((r) => r.userId === currentUserId);
-          if (myResult && (myResult.prizeCoins ?? 0) > 0) setCoinWinAmount(myResult.prizeCoins!);
+          if (myResult && (myResult.prizeCoins ?? 0) > 0) {
+            // Hold banner until result-status is finalized (or verify feature is off).
+            setPendingCoinWinAmount(myResult.prizeCoins!);
+          }
         }
       }
       refresh(true); };
@@ -2769,6 +2809,14 @@ function LiveRaceDetailScreenContent() {
     channel.bind("race:winners",          refresh);
     channel.bind("race:spectator_count",  onSpectatorCount);
     channel.bind("participant_finished_goal", onFinishedGoal);
+    const onVerificationEvent = () => {
+      void refreshResultStatus();
+    };
+    channel.bind("participant:verification_status_changed", onVerificationEvent);
+    channel.bind("participant:reconciled_progress_changed", onVerificationEvent);
+    channel.bind("race:verification_delayed", onVerificationEvent);
+    channel.bind("race:review_required", onVerificationEvent);
+    channel.bind("race:final_progress_confirmed", onVerificationEvent);
 
     return () => {
       channel.unbind("race:started",          onStarted);
@@ -2783,7 +2831,12 @@ function LiveRaceDetailScreenContent() {
       channel.unbind("race:winners",          refresh);
       channel.unbind("race:spectator_count",  onSpectatorCount);
       channel.unbind("participant_finished_goal", onFinishedGoal);
-      unsubscribeFromChannel(channelName); }; }, [raceId]);
+      channel.unbind("participant:verification_status_changed", onVerificationEvent);
+      channel.unbind("participant:reconciled_progress_changed", onVerificationEvent);
+      channel.unbind("race:verification_delayed", onVerificationEvent);
+      channel.unbind("race:review_required", onVerificationEvent);
+      channel.unbind("race:final_progress_confirmed", onVerificationEvent);
+      unsubscribeFromChannel(channelName); }; }, [raceId, refreshResultStatus]);
 
   // ── Cheer send ────────────────────────────────────────────────────────────
   const sendMessage = useCallback((text: string, isQuickReaction = false) => {

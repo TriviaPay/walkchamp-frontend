@@ -17,8 +17,8 @@ function run() {
   assert.equal(FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR, true);
   assert.equal(LIVE_RACE_SYNC_CONFIG.backendSyncMs, 3_000);
 
-  assert.equal(canonicalLiveRaceStepSource("android"), "android_step_counter");
-  assert.equal(canonicalLiveRaceStepSource("ios"), "device_sensor");
+assert.equal(canonicalLiveRaceStepSource("android"), "android_step_counter");
+assert.equal(canonicalLiveRaceStepSource("ios"), "ios_pedometer");
 
   assert.equal(isAcceptedLiveRaceSource("android_step_counter"), true);
   assert.equal(isAcceptedLiveRaceSource("ios_pedometer"), true);

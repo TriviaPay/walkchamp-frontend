@@ -1,9 +1,32 @@
 import { decode } from "base-64";
+import Constants from "expo-constants";
 
-const PROJECT_ID = process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID ?? "";
+/**
+ * Descope public auth uses `Authorization: Bearer {projectId}`.
+ * Resolve at call-time (not only module load) so we pick up:
+ * - Metro-inlined EXPO_PUBLIC_* (dev)
+ * - app.config.js `extra.descopeProjectId` (native / embedded bundles)
+ * Trim + strip accidental quotes from .env (`"P3…"`).
+ */
+function resolveDescopeProjectId(): string {
+  const fromEnv = process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID ?? "";
+  const fromExtra =
+    (Constants.expoConfig?.extra as { descopeProjectId?: string } | undefined)
+      ?.descopeProjectId ??
+    (Constants.manifest as { extra?: { descopeProjectId?: string } } | null)?.extra
+      ?.descopeProjectId ??
+    "";
+  const raw = (fromEnv || fromExtra || "").trim();
+  return raw.replace(/^["']|["']$/g, "").trim();
+}
+
+const PROJECT_ID = resolveDescopeProjectId();
 
 if (!PROJECT_ID) {
-  console.warn("[Descope] EXPO_PUBLIC_DESCOPE_PROJECT_ID is not set — auth will not work");
+  console.warn(
+    "[Descope] EXPO_PUBLIC_DESCOPE_PROJECT_ID is not set — auth will not work. " +
+      "Reconnect to Metro or rebuild with .env / EAS env.",
+  );
 }
 
 export interface JwtResponse {
@@ -39,22 +62,41 @@ async function descopePost<T>(
   body: unknown,
   sessionJwt?: string,
 ): Promise<T> {
+  // Re-resolve each call — embedded/release bundles may differ from module-load cache.
+  const projectId = resolveDescopeProjectId() || PROJECT_ID;
+  if (!projectId) {
+    throw new DescopeRestError(
+      "Auth is not configured on this install (missing Descope project ID). " +
+        "On a second phone: open the app while Metro is running on the same Wi‑Fi, " +
+        "or reinstall with `npx expo run:android` so env is baked in.",
+      "MISSING_PROJECT_ID",
+      0,
+    );
+  }
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${PROJECT_ID}`,
+    Authorization: `Bearer ${projectId}`,
   };
 
   // Descope's API requires: Bearer {projectId}{jwt} — the project ID is always
   // prepended to the token (no separator). Without it, Descope cannot route the
   // request to the correct project and returns E011002 "missing required arguments".
   if (sessionJwt) {
-    headers["Authorization"] = `Bearer ${PROJECT_ID}${sessionJwt}`;
+    headers["Authorization"] = `Bearer ${projectId}${sessionJwt}`;
   }
 
   const ctrl = new AbortController();
   const timeoutId = setTimeout(() => ctrl.abort(), DESCOPE_TIMEOUT_MS);
 
-  if (__DEV__) console.log("[Descope] →", path, sessionJwt ? "(authed)" : "(public)");
+  if (__DEV__) {
+    console.log(
+      "[Descope] →",
+      path,
+      sessionJwt ? "(authed)" : "(public)",
+      `projectId=${projectId.slice(0, 6)}…`,
+    );
+  }
 
   let res: Response;
   try {

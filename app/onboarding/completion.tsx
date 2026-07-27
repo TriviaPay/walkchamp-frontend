@@ -9,13 +9,23 @@ import {
 } from "@/components/onboarding/OnboardingUI";
 import { ONBOARDING_ASSETS, ONBOARDING_COLORS, ONBOARDING_ROUTES } from "@/constants/onboarding";
 import { markOnboardingCompleted } from "@/utils/onboardingStorage";
+import { useAuth } from "@/context/AuthContext";
+import { markPermissionEducationShown } from "@/services/permissions/permissionCoordinator";
+import { markHomeStepSetupPhaseDone } from "@/services/permissions/homePermissionFlow";
 import { rf } from "@/utils/responsive";
 
 const C = ONBOARDING_COLORS;
 
 export default function CompletionOnboardingScreen() {
+  const { user } = useAuth();
+
   const enterApp = async () => {
     await markOnboardingCompleted();
+    // Belt-and-suspenders: onboarding already handled HC — never auto-open on home.
+    if (user?.id) {
+      await markPermissionEducationShown(user.id);
+    }
+    markHomeStepSetupPhaseDone();
     router.replace(ONBOARDING_ROUTES.home);
   };
 

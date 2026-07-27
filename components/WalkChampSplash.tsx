@@ -24,23 +24,48 @@ const BAR_FILL = "#3D8B40";
 
 const CLOUD_IMG = require("@/assets/images/cloud.png");
 const APP_ICON_IMG = require("@/assets/icons/WalkChampProgress100.png");
-const RACE_TRACK_LOTTIE = require("@/assets/lottie/raceTrack.json");
-const WALKING_LOTTIE = require("@/assets/lottie/walking.json");
-const SPLASH_APP_ICON_LOTTIE = require("@/assets/lottie/Splash App Icon.json");
+/** Lazy — never parse 1.6–3MB JSON at module import (freezes first paint). */
+let _raceTrackLottie: unknown;
+let _walkingLottie: unknown;
+let _splashAppIconLottie: unknown;
+function raceTrackSource() {
+  if (_raceTrackLottie === undefined) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _raceTrackLottie = require("@/assets/lottie/raceTrack.json");
+  }
+  return _raceTrackLottie;
+}
+function walkingSource() {
+  if (_walkingLottie === undefined) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _walkingLottie = require("@/assets/lottie/walking.json");
+  }
+  return _walkingLottie;
+}
+function splashAppIconSource() {
+  if (_splashAppIconLottie === undefined) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _splashAppIconLottie = require("@/assets/lottie/splash-app-icon.json");
+  }
+  return _splashAppIconLottie;
+}
 
 const EXIT_MS = 520;
 const HARD_TIMEOUT_MS = 30_000;
-/** Splash App Icon.json = 90f @ 30fps → exactly 3000ms. */
+/** Splash App Icon = 90f @ 30fps → exactly 3000ms. */
 const INTRO_DURATION_MS = 3000;
-/** Tiny hold on last intro frame before crossfade. */
+/** Tiny hold on last intro frame before crossfade (previous). */
 const INTRO_END_BUFFER_MS = 80;
+/** Intro → splash crossfade (previous). */
 const INTRO_FADE_MS = 420;
-/** Hills + title + race card slide up (progress/walker stay fixed). */
+/** Hills + title + race card slide up (previous). */
 const SLIDE_UP_MS = 720;
 /** raceTrack.json = 328f @ 60fps → ~5467ms. */
 const RACE_TRACK_DURATION_MS = 5470;
-/** Progress fills in parallel with race — keeps total splash ~10s. */
+/** Progress fills in parallel with race — linear from 0 → 100. */
 const PROGRESS_DURATION_MS = 5500;
+/** Warm race JSON late in intro — never during first icon frames / fade edge. */
+const RACE_JSON_WARM_MS = 2200;
 const LOTTIE_ASPECT = 1280 / 1080;
 /** Static app icon nudge. */
 const APP_ICON_NUDGE_X = -6;
@@ -61,22 +86,39 @@ class SplashErrorBoundary extends Component<
   static getDerivedStateFromError() {
     return { hasError: true };
   }
+  componentDidCatch(error: unknown) {
+    if (__DEV__) {
+      console.warn("[Splash] Lottie boundary caught", error);
+    }
+  }
   render() {
     if (this.state.hasError) return this.props.fallback;
     return this.props.children;
   }
 }
 
+/** Resolve once — avoid per-render require + null flicker that shows gray boxes. */
+let _cachedLottieView: typeof import("lottie-react-native").default | null | undefined;
+
 function getLottieView(): typeof import("lottie-react-native").default | null {
+  if (_cachedLottieView !== undefined) return _cachedLottieView;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require("lottie-react-native").default;
+    const mod = require("lottie-react-native") as {
+      default?: typeof import("lottie-react-native").default;
+    };
+    _cachedLottieView = mod.default ?? null;
   } catch {
-    return null;
+    _cachedLottieView = null;
   }
+  return _cachedLottieView;
 }
 
-function RaceTrackLottie({
+/**
+ * Visible race track — frame 0 while sliding, autoPlay after settle.
+ * HostFunction-safe (no ref.play).
+ */
+const RaceTrackLottie = React.memo(function RaceTrackLottie({
   style,
   playing,
   onComplete,
@@ -86,10 +128,16 @@ function RaceTrackLottie({
   onComplete?: () => void;
 }) {
   const LottieView = getLottieView();
-  const ref = useRef<import("lottie-react-native").default | null>(null);
   const doneRef = useRef(false);
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
+  const source = useMemo(() => {
+    try {
+      return raceTrackSource();
+    } catch {
+      return null;
+    }
+  }, []);
 
   const markDone = useCallback(() => {
     if (doneRef.current) return;
@@ -98,73 +146,81 @@ function RaceTrackLottie({
   }, []);
 
   useEffect(() => {
-    if (!playing) return;
-    doneRef.current = false;
-
-    if (!LottieView) {
-      const t = setTimeout(markDone, 400);
-      return () => clearTimeout(t);
+    if (!playing) {
+      doneRef.current = false;
+      return;
     }
+    doneRef.current = false;
+    const safety = setTimeout(markDone, RACE_TRACK_DURATION_MS + 800);
+    return () => clearTimeout(safety);
+  }, [playing, markDone]);
 
-    const play = () => {
-      try {
-        ref.current?.reset?.();
-        ref.current?.play?.();
-      } catch {
-        /* ignore */
-      }
-    };
-
-    const t0 = setTimeout(play, 16);
-    const t1 = setTimeout(play, 100);
-    const safety = setTimeout(markDone, RACE_TRACK_DURATION_MS + 250);
-    return () => {
-      clearTimeout(t0);
-      clearTimeout(t1);
-      clearTimeout(safety);
-    };
-  }, [playing, LottieView, markDone]);
-
-  if (!LottieView) {
-    return <View style={[style, styles.lottieFallback]} />;
+  if (!LottieView || !source) {
+    return (
+      <View style={[style, styles.lottieFallback]}>
+        <Text style={styles.fallbackStart}>START</Text>
+      </View>
+    );
   }
+
+  if (!playing) {
+    return (
+      <LottieView
+        source={source as object}
+        autoPlay={false}
+        loop={false}
+        progress={0}
+        style={style}
+        resizeMode="contain"
+        renderMode="AUTOMATIC"
+        cacheComposition
+      />
+    );
+  }
+
   return (
     <LottieView
-      ref={ref}
-      source={RACE_TRACK_LOTTIE}
-      autoPlay={false}
+      key="race-play"
+      source={source as object}
+      autoPlay
       loop={false}
       style={style}
       resizeMode="contain"
       renderMode="AUTOMATIC"
-      hardwareAccelerationAndroid
       cacheComposition
-      onAnimationFinish={markDone}
+      onAnimationFinish={(cancelled?: boolean) => {
+        if (cancelled) return;
+        markDone();
+      }}
     />
   );
-}
+});
 
-function WalkingLottie({ style }: { style: object }) {
+const WalkingLottie = React.memo(function WalkingLottie({ style }: { style: object }) {
   const LottieView = getLottieView();
+  const source = useMemo(() => walkingSource(), []);
   if (!LottieView) return null;
   return (
     <LottieView
-      source={WALKING_LOTTIE}
+      source={source as object}
       autoPlay
       loop
       style={style}
       resizeMode="contain"
       renderMode="AUTOMATIC"
-      hardwareAccelerationAndroid
       cacheComposition
     />
   );
-}
+});
 
-/** Intro icon — reports finish so we never cut the animation short. */
+/**
+ * Intro icon — play the full composition without mid-animation JS/native work.
+ * HostFunction-safe: autoPlay only, never ref.play() / duration override.
+ */
 function SplashAppIconIntroLottie({ onFinished }: { onFinished: () => void }) {
   const LottieView = getLottieView();
   const doneRef = useRef(false);
+  const [source, setSource] = useState<unknown>(null);
 
   const markDone = useCallback(() => {
     if (doneRef.current) return;
@@ -172,25 +228,47 @@ function SplashAppIconIntroLottie({ onFinished }: { onFinished: () => void }) {
     onFinished();
   }, [onFinished]);
 
+  // Paint solid BG first, then mount Lottie next frame (avoids sync JSON freeze).
   useEffect(() => {
-    // Safety if onAnimationFinish never fires.
-    const t = setTimeout(markDone, INTRO_DURATION_MS + 200);
-    return () => clearTimeout(t);
+    let cancelled = false;
+    const id = requestAnimationFrame(() => {
+      try {
+        if (!cancelled) setSource(splashAppIconSource());
+      } catch {
+        if (!cancelled) markDone();
+      }
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
   }, [markDone]);
 
-  if (!LottieView) {
-    return <View style={styles.introLottie} onLayout={markDone} />;
+  // Handoff only after the full intro duration — never cut mid-play.
+  useEffect(() => {
+    if (!source) return;
+    const t = setTimeout(markDone, INTRO_DURATION_MS);
+    return () => clearTimeout(t);
+  }, [markDone, source]);
+
+  useEffect(() => {
+    if (!LottieView) markDone();
+  }, [LottieView, markDone]);
+
+  if (!LottieView || !source) {
+    return <View style={styles.introLottie} />;
   }
+
   return (
     <LottieView
-      source={SPLASH_APP_ICON_LOTTIE}
+      source={source as object}
       autoPlay
       loop={false}
       style={styles.introLottie}
       resizeMode="cover"
       renderMode="AUTOMATIC"
-      hardwareAccelerationAndroid
-      onAnimationFinish={markDone}
+      cacheComposition
+      onAnimationFailure={() => markDone()}
     />
   );
 }
@@ -265,12 +343,13 @@ function FloatingCloud({
 }
 
 /**
- * Sequence (~10s):
- * 1) Intro icon Lottie fully (+ clouds); race preloads off-screen
- * 2) Fade → static icon
- * 3) Slide up (race already warm)
- * 4) Race plays + progress/walker fill in parallel
- * 5) Exit when both done and app ready
+ * Sequence (~10s) — previous visuals, staggered heavy work:
+ * 1) Intro icon Lottie + clouds (always on, like before)
+ * 2) Late silent race JSON warm (no Lottie mount)
+ * 3) Crossfade → fixed icon; mount race frame 0 off-screen
+ * 4) Full slide up
+ * 5) Race + progress/walker from 0
+ * 6) Exit fade when ready
  */
 export function WalkChampSplash({ isReady, onFinish }: Props) {
   const finishedRef = useRef(false);
@@ -293,13 +372,13 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
 
   const [phase, setPhase] = useState<SplashPhase>("intro");
   const [showIntroOverlay, setShowIntroOverlay] = useState(true);
-  /** Mounted from t=0 off-screen so race composition preloads during intro. */
+  /** Hills/title always mounted off-screen (previous) — race Lottie mounts later. */
   const [showSlideContent] = useState(true);
+  const [mountRace, setMountRace] = useState(false);
   const [showLoading, setShowLoading] = useState(false);
   const [progressLabel, setProgressLabel] = useState(0);
   const [raceComplete, setRaceComplete] = useState(false);
   const [progressComplete, setProgressComplete] = useState(false);
-  const [trackWidth, setTrackWidth] = useState(0);
 
   const { width: winW, height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -332,6 +411,18 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     contentSlideY.setValue(layout.slideDistance);
   }, [contentSlideY, layout.slideDistance]);
 
+  // Silent race JSON warm late in intro — no Lottie mount (avoids freeze at fade).
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        raceTrackSource();
+      } catch {
+        /* ignore */
+      }
+    }, RACE_JSON_WARM_MS);
+    return () => clearTimeout(t);
+  }, []);
+
   const finish = useCallback(() => {
     if (finishedRef.current) return;
     finishedRef.current = true;
@@ -355,56 +446,64 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     });
   }, [onFinish, rootOpacity, rootScale]);
 
-  /** Race + progress/walker run together after slide settles. */
+  /** Race + progress/walker after slide fully settles — always from 0. */
   const startPlayingPass = useCallback(() => {
     if (loadingStartedRef.current) return;
     loadingStartedRef.current = true;
     setPhase("playing");
-    setShowLoading(true);
 
     barProgress.stopAnimation();
     walkerProgress.stopAnimation();
     barProgress.setValue(0);
     walkerProgress.setValue(0);
+    loadingOpacity.setValue(0);
     setProgressLabel(0);
+    setShowLoading(true);
 
-    Animated.timing(loadingOpacity, {
-      toValue: 1,
-      duration: 280,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
+    // Show bar/walker at 0% for a beat, then linear fill from 0 → 100.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        Animated.timing(loadingOpacity, {
+          toValue: 1,
+          duration: 220,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }).start();
 
-    let lastLabel = -1;
-    const listener = barProgress.addListener(({ value }) => {
-      const next = Math.round(value * 100);
-      if (next !== lastLabel && (next === 100 || next - lastLabel >= 2)) {
-        lastLabel = next;
-        setProgressLabel(next);
-      }
-    });
+        let lastLabel = 0;
+        setProgressLabel(0);
+        const listener = barProgress.addListener(({ value }) => {
+          const next = Math.round(value * 100);
+          if (next !== lastLabel && (next === 0 || next === 100 || next - lastLabel >= 1)) {
+            lastLabel = next;
+            setProgressLabel(next);
+          }
+        });
 
-    const easing = Easing.out(Easing.cubic);
-    creepRef.current = Animated.parallel([
-      Animated.timing(barProgress, {
-        toValue: 1,
-        duration: PROGRESS_DURATION_MS,
-        easing,
-        useNativeDriver: false,
-      }),
-      Animated.timing(walkerProgress, {
-        toValue: 1,
-        duration: PROGRESS_DURATION_MS,
-        easing,
-        useNativeDriver: true,
-      }),
-    ]);
-    creepRef.current.start(({ finished }) => {
-      barProgress.removeListener(listener);
-      if (!finished || progressDoneRef.current) return;
-      progressDoneRef.current = true;
-      setProgressLabel(100);
-      setProgressComplete(true);
+        // Linear — must visibly start at 0 (Easing.out looked mid-filled).
+        const easing = Easing.linear;
+        creepRef.current = Animated.parallel([
+          Animated.timing(barProgress, {
+            toValue: 1,
+            duration: PROGRESS_DURATION_MS,
+            easing,
+            useNativeDriver: false,
+          }),
+          Animated.timing(walkerProgress, {
+            toValue: 1,
+            duration: PROGRESS_DURATION_MS,
+            easing,
+            useNativeDriver: true,
+          }),
+        ]);
+        creepRef.current.start(({ finished }) => {
+          barProgress.removeListener(listener);
+          if (!finished || progressDoneRef.current) return;
+          progressDoneRef.current = true;
+          setProgressLabel(100);
+          setProgressComplete(true);
+        });
+      });
     });
   }, [barProgress, loadingOpacity, walkerProgress]);
 
@@ -420,6 +519,7 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     setPhase("sliding");
     contentSlideY.setValue(layout.slideDistance);
 
+    // Double rAF — layout settles, then full slow slide to rest.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         Animated.timing(contentSlideY, {
@@ -429,7 +529,6 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
           useNativeDriver: true,
         }).start(({ finished }) => {
           if (!finished) return;
-          // Preloaded race starts here; progress/walker fill in parallel.
           startPlayingPass();
         });
       });
@@ -440,7 +539,9 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     if (introFadeStartedRef.current) return;
     introFadeStartedRef.current = true;
     setPhase("fading");
+    contentSlideY.setValue(layout.slideDistance);
 
+    // Fade only — do not mount race Lottie here (that froze after clouds).
     Animated.parallel([
       Animated.timing(introOpacity, {
         toValue: 0,
@@ -457,9 +558,13 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     ]).start(({ finished }) => {
       if (!finished) return;
       setShowIntroOverlay(false);
-      requestAnimationFrame(() => beginSlideUp());
+      // JSON warmed mid-intro; mount frame-0 race off-screen, then slide.
+      setMountRace(true);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => beginSlideUp());
+      });
     });
-  }, [beginSlideUp, fixedIconOpacity, introOpacity]);
+  }, [beginSlideUp, contentSlideY, fixedIconOpacity, introOpacity, layout.slideDistance]);
 
   const onIntroLottieFinished = useCallback(() => {
     if (introDoneRef.current) return;
@@ -505,7 +610,8 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     [barProgress],
   );
 
-  const walkerTravel = Math.max(0, (trackWidth || layout.progressWidth) - layout.walker);
+  // Stable travel from layout — avoid mid-run jumps when onLayout fires.
+  const walkerTravel = Math.max(0, layout.progressWidth - layout.walker);
   const walkerTranslateX = useMemo(
     () =>
       walkerProgress.interpolate({
@@ -538,21 +644,7 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     >
       <View style={styles.sky} />
 
-      {/* Tiny on-screen host so Android actually loads race during intro. */}
-      {phase === "intro" || phase === "fading" ? (
-        <View style={styles.racePreloadHost} pointerEvents="none" collapsable={false}>
-          <SplashErrorBoundary fallback={null}>
-            <RaceTrackLottie
-              style={{
-                width: layout.trackWidth,
-                height: Math.round(layout.trackWidth / LOTTIE_ASPECT),
-              }}
-              playing={false}
-            />
-          </SplashErrorBoundary>
-        </View>
-      ) : null}
-
+      {/* Clouds always on — same as previous. */}
       <FloatingCloud
         style={[styles.cloudA, { top: layout.cloudTop + rs(10) }]}
         driftX={10}
@@ -632,14 +724,17 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
 
               <View style={[styles.trackCard, { width: layout.trackWidth }]}>
                 <View style={styles.lottieStage}>
-                  <SplashErrorBoundary fallback={trackFallback}>
-                    {/* Preloaded from intro (off-screen); plays only after slide settles. */}
-                    <RaceTrackLottie
-                      style={styles.lottie}
-                      playing={racePlaying}
-                      onComplete={onRaceTrackComplete}
-                    />
-                  </SplashErrorBoundary>
+                  {mountRace ? (
+                    <SplashErrorBoundary fallback={trackFallback}>
+                      <RaceTrackLottie
+                        style={styles.lottie}
+                        playing={racePlaying}
+                        onComplete={onRaceTrackComplete}
+                      />
+                    </SplashErrorBoundary>
+                  ) : (
+                    trackFallback
+                  )}
                 </View>
               </View>
 
@@ -693,10 +788,6 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
                   height: layout.walker + layout.walkerBarGap + layout.barH,
                 },
               ]}
-              onLayout={(e) => {
-                const w = Math.round(e.nativeEvent.layout.width);
-                if (w > 0 && w !== trackWidth) setTrackWidth(w);
-              }}
             >
               <View
                 style={[
@@ -730,6 +821,7 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
                 <SplashErrorBoundary fallback={null}>
                   {showWalker ? (
                     <WalkingLottie
+                      key="splash-walker"
                       style={{
                         width: layout.walker,
                         height: layout.walker,
@@ -749,7 +841,7 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
           pointerEvents={phase === "intro" ? "auto" : "none"}
           style={[styles.introOverlay, { opacity: introOpacity }]}
         >
-          <SplashErrorBoundary fallback={null}>
+          <SplashErrorBoundary fallback={<View style={[styles.introLottie, { backgroundColor: BG }]} />}>
             <SplashAppIconIntroLottie onFinished={onIntroLottieFinished} />
           </SplashErrorBoundary>
         </Animated.View>
@@ -772,16 +864,6 @@ const styles = StyleSheet.create({
   bottomUnit: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 1,
-  },
-  racePreloadHost: {
-    position: "absolute",
-    left: 0,
-    top: 0,
-    width: 2,
-    height: 2,
-    opacity: 0,
-    overflow: "hidden",
-    zIndex: 0,
   },
   cloudImg: {
     position: "absolute",
@@ -1040,11 +1122,13 @@ const styles = StyleSheet.create({
   },
   introOverlay: {
     ...StyleSheet.absoluteFillObject,
+    // Previous: clouds float above intro (z20); solid BG still covers hills underneath.
     zIndex: 8,
     elevation: 8,
     backgroundColor: BG,
   },
   introLottie: {
     ...StyleSheet.absoluteFillObject,
+    backgroundColor: BG,
   },
 });

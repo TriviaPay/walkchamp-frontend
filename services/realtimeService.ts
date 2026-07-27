@@ -240,6 +240,11 @@ export const EVENTS = {
   SPONSORED_EVENT_CREATED: "sponsored_event.created",
   SPONSORED_EVENT_COMPLETED: "sponsored_event.completed",
   SESSION_INVALIDATED: "session-invalidated",
+  PARTICIPANT_VERIFICATION_STATUS_CHANGED: "participant:verification_status_changed",
+  PARTICIPANT_RECONCILED_PROGRESS_CHANGED: "participant:reconciled_progress_changed",
+  RACE_VERIFICATION_DELAYED: "race:verification_delayed",
+  RACE_REVIEW_REQUIRED: "race:review_required",
+  RACE_FINAL_PROGRESS_CONFIRMED: "race:final_progress_confirmed",
 };
 
 export const SPONSORED_EVENTS_CHANNEL = "public-sponsored-events";

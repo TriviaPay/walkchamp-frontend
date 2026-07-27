@@ -50,9 +50,11 @@ export function registerHomeStepSetupCloser(closer: StepSetupCloser | null): voi
  */
 export function setHomeStepSetupShellReady(ready: boolean): void {
   _shellReady = ready;
-  if (ready) flushPendingOpen();
-  else {
-    // Splash/login again — hide any stray sheet.
+  if (ready) {
+    flushPendingOpen();
+  } else {
+    // Splash/login again — cancel any queued auto-open and hide stray sheets.
+    _pendingOpenStepSetup = false;
     _closeStepSetup?.();
   }
 }

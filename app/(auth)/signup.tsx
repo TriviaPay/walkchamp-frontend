@@ -296,6 +296,16 @@ export default function SignupScreen() {
             "Email OTP is disabled in your Descope project.\n\n" +
             "Fix: Descope Console → Authentication Methods → One-Time Password → Enable.",
           );
+        } else if (
+          msg.includes("bearer") ||
+          msg.includes("missing descope") ||
+          err.code === "MISSING_PROJECT_ID"
+        ) {
+          setStep0Error(
+            "This install is missing auth config.\n\n" +
+            "Fix: keep Metro running, reload this phone on the same Wi‑Fi, " +
+            "or reinstall with npx expo run:android.",
+          );
         } else {
           setStep0Error(err.message);
         }
