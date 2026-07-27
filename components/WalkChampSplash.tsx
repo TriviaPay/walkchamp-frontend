@@ -64,8 +64,15 @@ const SLIDE_UP_MS = 720;
 const RACE_TRACK_DURATION_MS = 5470;
 /** Progress fills in parallel with race — linear from 0 → 100. */
 const PROGRESS_DURATION_MS = 5500;
-/** Warm race JSON late in intro — never during first icon frames / fade edge. */
-const RACE_JSON_WARM_MS = 2200;
+/** Native race composition warm during intro (after icon has a head start). */
+const RACE_PRELOAD_MS = 1600;
+/** Walking JSON warm — before play pass, never at the freeze edge. */
+const WALK_JSON_WARM_MS = 2400;
+/** Let frame-0 race settle before slide starts. */
+const RACE_MOUNT_SETTLE_MS = 120;
+/** Stagger progress/walker after race starts playing. */
+const PROGRESS_START_DELAY_MS = 160;
+const WALKER_START_DELAY_MS = 280;
 const LOTTIE_ASPECT = 1280 / 1080;
 /** Static app icon nudge. */
 const APP_ICON_NUDGE_X = -6;
@@ -115,7 +122,43 @@ function getLottieView(): typeof import("lottie-react-native").default | null {
 }
 
 /**
- * Visible race track — frame 0 while sliding, autoPlay after settle.
+ * Tiny off-screen warm — real native composition cache for raceTrack
+ * (JSON require alone is not enough; without this, first visible mount freezes).
+ * HostFunction-safe (no ref.play).
+ */
+function RaceTrackPreload({ enabled }: { enabled: boolean }) {
+  const LottieView = getLottieView();
+  const [source, setSource] = useState<unknown>(null);
+
+  useEffect(() => {
+    if (!enabled) return;
+    try {
+      setSource(raceTrackSource());
+    } catch {
+      /* ignore */
+    }
+  }, [enabled]);
+
+  if (!enabled || !LottieView || !source) return null;
+  return (
+    <View style={styles.racePreloadHost} pointerEvents="none" collapsable={false}>
+      <LottieView
+        source={source as object}
+        autoPlay={false}
+        loop={false}
+        progress={0}
+        style={styles.racePreloadLottie}
+        resizeMode="contain"
+        renderMode="AUTOMATIC"
+        cacheComposition
+      />
+    </View>
+  );
+}
+
+/**
+ * Visible race track — single mount at frame 0, then autoPlay remount only when
+ * composition is already cached (preload + frame-0 warm).
  * HostFunction-safe (no ref.play).
  */
 const RaceTrackLottie = React.memo(function RaceTrackLottie({
@@ -163,6 +206,7 @@ const RaceTrackLottie = React.memo(function RaceTrackLottie({
     );
   }
 
+  // Keep frame-0 instance until play — remount only once for autoPlay (cached).
   if (!playing) {
     return (
       <LottieView
@@ -196,10 +240,22 @@ const RaceTrackLottie = React.memo(function RaceTrackLottie({
   );
 });
 
-const WalkingLottie = React.memo(function WalkingLottie({ style }: { style: object }) {
+const WalkingLottie = React.memo(function WalkingLottie({
+  style,
+  active,
+}: {
+  style: object;
+  active: boolean;
+}) {
   const LottieView = getLottieView();
-  const source = useMemo(() => walkingSource(), []);
-  if (!LottieView) return null;
+  const source = useMemo(() => {
+    try {
+      return walkingSource();
+    } catch {
+      return null;
+    }
+  }, []);
+  if (!LottieView || !source || !active) return null;
   return (
     <LottieView
       source={source as object}
@@ -343,12 +399,12 @@ function FloatingCloud({
 }
 
 /**
- * Sequence (~10s) — previous visuals, staggered heavy work:
- * 1) Intro icon Lottie + clouds (always on, like before)
- * 2) Late silent race JSON warm (no Lottie mount)
- * 3) Crossfade → fixed icon; mount race frame 0 off-screen
+ * Sequence (~10s) — previous flow, heavy work staggered to avoid freezes:
+ * 1) Intro icon Lottie + clouds
+ * 2) Off-screen race composition preload (+ walking JSON warm)
+ * 3) Crossfade; mount race frame 0 off-screen
  * 4) Full slide up
- * 5) Race + progress/walker from 0
+ * 5) Race plays, then progress/walker from 0 (staggered)
  * 6) Exit fade when ready
  */
 export function WalkChampSplash({ isReady, onFinish }: Props) {
@@ -372,10 +428,12 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
 
   const [phase, setPhase] = useState<SplashPhase>("intro");
   const [showIntroOverlay, setShowIntroOverlay] = useState(true);
-  /** Hills/title always mounted off-screen (previous) — race Lottie mounts later. */
+  /** Hills/title always mounted off-screen (previous) — race Lottie mounts at fade. */
   const [showSlideContent] = useState(true);
+  const [preloadRace, setPreloadRace] = useState(false);
   const [mountRace, setMountRace] = useState(false);
   const [showLoading, setShowLoading] = useState(false);
+  const [showWalker, setShowWalker] = useState(false);
   const [progressLabel, setProgressLabel] = useState(0);
   const [raceComplete, setRaceComplete] = useState(false);
   const [progressComplete, setProgressComplete] = useState(false);
@@ -411,15 +469,21 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     contentSlideY.setValue(layout.slideDistance);
   }, [contentSlideY, layout.slideDistance]);
 
-  // Silent race JSON warm late in intro — no Lottie mount (avoids freeze at fade).
+  // Real native race preload mid-intro (after icon Lottie owns first frames).
+  useEffect(() => {
+    const t = setTimeout(() => setPreloadRace(true), RACE_PRELOAD_MS);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Warm walking JSON before play pass — avoids freeze when walker mounts.
   useEffect(() => {
     const t = setTimeout(() => {
       try {
-        raceTrackSource();
+        walkingSource();
       } catch {
         /* ignore */
       }
-    }, RACE_JSON_WARM_MS);
+    }, WALK_JSON_WARM_MS);
     return () => clearTimeout(t);
   }, []);
 
@@ -446,7 +510,10 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     });
   }, [onFinish, rootOpacity, rootScale]);
 
-  /** Race + progress/walker after slide fully settles — always from 0. */
+  /**
+   * After slide settles: start race first (cached), then show bar at 0,
+   * then walker + linear fill together — never all three in the same frame.
+   */
   const startPlayingPass = useCallback(() => {
     if (loadingStartedRef.current) return;
     loadingStartedRef.current = true;
@@ -458,53 +525,63 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     walkerProgress.setValue(0);
     loadingOpacity.setValue(0);
     setProgressLabel(0);
-    setShowLoading(true);
+    setShowWalker(false);
+    setShowLoading(false);
 
-    // Show bar/walker at 0% for a beat, then linear fill from 0 → 100.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        Animated.timing(loadingOpacity, {
-          toValue: 1,
-          duration: 220,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }).start();
+    const progressTimer = setTimeout(() => {
+      setShowLoading(true);
+      setProgressLabel(0);
+      Animated.timing(loadingOpacity, {
+        toValue: 1,
+        duration: 220,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    }, PROGRESS_START_DELAY_MS);
 
-        let lastLabel = 0;
-        setProgressLabel(0);
-        const listener = barProgress.addListener(({ value }) => {
-          const next = Math.round(value * 100);
-          if (next !== lastLabel && (next === 0 || next === 100 || next - lastLabel >= 1)) {
-            lastLabel = next;
-            setProgressLabel(next);
-          }
-        });
+    const walkerTimer = setTimeout(() => {
+      setShowWalker(true);
+      barProgress.setValue(0);
+      walkerProgress.setValue(0);
+      setProgressLabel(0);
 
-        // Linear — must visibly start at 0 (Easing.out looked mid-filled).
-        const easing = Easing.linear;
-        creepRef.current = Animated.parallel([
-          Animated.timing(barProgress, {
-            toValue: 1,
-            duration: PROGRESS_DURATION_MS,
-            easing,
-            useNativeDriver: false,
-          }),
-          Animated.timing(walkerProgress, {
-            toValue: 1,
-            duration: PROGRESS_DURATION_MS,
-            easing,
-            useNativeDriver: true,
-          }),
-        ]);
-        creepRef.current.start(({ finished }) => {
-          barProgress.removeListener(listener);
-          if (!finished || progressDoneRef.current) return;
-          progressDoneRef.current = true;
-          setProgressLabel(100);
-          setProgressComplete(true);
-        });
+      let lastLabel = 0;
+      const listener = barProgress.addListener(({ value }) => {
+        const next = Math.round(value * 100);
+        if (next !== lastLabel && (next === 0 || next === 100 || next - lastLabel >= 2)) {
+          lastLabel = next;
+          setProgressLabel(next);
+        }
       });
-    });
+
+      const easing = Easing.linear;
+      creepRef.current = Animated.parallel([
+        Animated.timing(barProgress, {
+          toValue: 1,
+          duration: PROGRESS_DURATION_MS,
+          easing,
+          useNativeDriver: false,
+        }),
+        Animated.timing(walkerProgress, {
+          toValue: 1,
+          duration: PROGRESS_DURATION_MS,
+          easing,
+          useNativeDriver: true,
+        }),
+      ]);
+      creepRef.current.start(({ finished }) => {
+        barProgress.removeListener(listener);
+        if (!finished || progressDoneRef.current) return;
+        progressDoneRef.current = true;
+        setProgressLabel(100);
+        setProgressComplete(true);
+      });
+    }, WALKER_START_DELAY_MS);
+
+    return () => {
+      clearTimeout(progressTimer);
+      clearTimeout(walkerTimer);
+    };
   }, [barProgress, loadingOpacity, walkerProgress]);
 
   const onRaceTrackComplete = useCallback(() => {
@@ -519,7 +596,6 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     setPhase("sliding");
     contentSlideY.setValue(layout.slideDistance);
 
-    // Double rAF — layout settles, then full slow slide to rest.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         Animated.timing(contentSlideY, {
@@ -540,8 +616,9 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     introFadeStartedRef.current = true;
     setPhase("fading");
     contentSlideY.setValue(layout.slideDistance);
+    // Mount frame-0 race off-screen during fade (preload already cached composition).
+    setMountRace(true);
 
-    // Fade only — do not mount race Lottie here (that froze after clouds).
     Animated.parallel([
       Animated.timing(introOpacity, {
         toValue: 0,
@@ -558,11 +635,8 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
     ]).start(({ finished }) => {
       if (!finished) return;
       setShowIntroOverlay(false);
-      // JSON warmed mid-intro; mount frame-0 race off-screen, then slide.
-      setMountRace(true);
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => beginSlideUp());
-      });
+      // Brief settle so frame-0 race finishes native layout before slide.
+      setTimeout(() => beginSlideUp(), RACE_MOUNT_SETTLE_MS);
     });
   }, [beginSlideUp, contentSlideY, fixedIconOpacity, introOpacity, layout.slideDistance]);
 
@@ -629,7 +703,6 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
   );
 
   const racePlaying = phase === "playing" || phase === "exiting";
-  const showWalker = phase === "playing" || phase === "exiting";
 
   return (
     <Animated.View
@@ -643,6 +716,9 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
       pointerEvents="auto"
     >
       <View style={styles.sky} />
+
+      {/* Real native race preload during intro — prevents freeze on first visible mount. */}
+      <RaceTrackPreload enabled={preloadRace} />
 
       {/* Clouds always on — same as previous. */}
       <FloatingCloud
@@ -819,15 +895,13 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
                 ]}
               >
                 <SplashErrorBoundary fallback={null}>
-                  {showWalker ? (
-                    <WalkingLottie
-                      key="splash-walker"
-                      style={{
-                        width: layout.walker,
-                        height: layout.walker,
-                      }}
-                    />
-                  ) : null}
+                  <WalkingLottie
+                    active={showWalker}
+                    style={{
+                      width: layout.walker,
+                      height: layout.walker,
+                    }}
+                  />
                 </SplashErrorBoundary>
               </Animated.View>
             </View>
@@ -864,6 +938,20 @@ const styles = StyleSheet.create({
   bottomUnit: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 1,
+  },
+  racePreloadHost: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: 2,
+    height: 2,
+    opacity: 0,
+    overflow: "hidden",
+    zIndex: 0,
+  },
+  racePreloadLottie: {
+    width: 2,
+    height: 2,
   },
   cloudImg: {
     position: "absolute",
