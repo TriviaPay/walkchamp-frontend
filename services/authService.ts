@@ -906,6 +906,14 @@ export async function checkUsernameAvailable(
 ): Promise<{ available: boolean; reason?: string }> {
   const res = await fetch(
     `${API_BASE}/api/auth/username-check?username=${encodeURIComponent(username)}`,
+    { signal: timeoutSignal(API_TIMEOUT_MS) },
   );
-  return res.json() as Promise<{ available: boolean; reason?: string }>;
+  if (!res.ok) {
+    throw new ApiError("Username check failed", res.status);
+  }
+  const data = (await res.json()) as { available?: boolean; reason?: string };
+  return {
+    available: data.available === true,
+    reason: data.reason,
+  };
 }

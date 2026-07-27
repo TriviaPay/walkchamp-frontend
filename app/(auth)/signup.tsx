@@ -126,9 +126,10 @@ export default function SignupScreen() {
   const referralTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
   const [countrySearch, setCountrySearch] = useState("");
-  const [usernameStatus, setUsernameStatus] = useState<"idle"|"checking"|"available"|"taken"|"invalid">("idle");
+  const [usernameStatus, setUsernameStatus] = useState<"idle"|"checking"|"available"|"taken"|"invalid"|"error">("idle");
   const [step2Error, setStep2Error] = useState("");
   const usernameTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const usernameCheckSeq = useRef(0);
 
   // Step 3 — Terms
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -166,18 +167,41 @@ export default function SignupScreen() {
     }, 1000);
   }
 
-  // Real-time username check
+  // Real-time username check (debounced; never leave UI stuck on "checking").
   useEffect(() => {
-    if (!username) { setUsernameStatus("idle"); return; }
-    if (!USERNAME_RE.test(username) || usernameBlocked(username)) { setUsernameStatus("invalid"); return; }
+    if (usernameTimer.current) {
+      clearTimeout(usernameTimer.current);
+      usernameTimer.current = null;
+    }
+    if (!username) {
+      setUsernameStatus("idle");
+      return;
+    }
+    if (!USERNAME_RE.test(username) || usernameBlocked(username)) {
+      setUsernameStatus("invalid");
+      return;
+    }
+
+    const seq = ++usernameCheckSeq.current;
     setUsernameStatus("checking");
-    if (usernameTimer.current) clearTimeout(usernameTimer.current);
     usernameTimer.current = setTimeout(async () => {
       try {
         const { available } = await checkUsernameAvailable(username);
+        if (seq !== usernameCheckSeq.current) return;
         setUsernameStatus(available ? "available" : "taken");
-      } catch { setUsernameStatus("idle"); }
+      } catch {
+        if (seq !== usernameCheckSeq.current) return;
+        // Network/timeout — clear spinner; user can edit or retry.
+        setUsernameStatus("error");
+      }
     }, 600);
+
+    return () => {
+      if (usernameTimer.current) {
+        clearTimeout(usernameTimer.current);
+        usernameTimer.current = null;
+      }
+    };
   }, [username]);
 
   // Live-validate referral code via GET /api/referral/validate (JWT from OTP step).
@@ -400,7 +424,18 @@ export default function SignupScreen() {
   async function handleStep2Next() {
     setStep2Error("");
     if (!fullName.trim()) { setStep2Error("Full name is required."); return; }
-    if (usernameStatus !== "available") { setStep2Error("Please choose a valid, available username."); return; }
+    if (usernameStatus === "checking") {
+      setStep2Error("Still checking your username…");
+      return;
+    }
+    if (usernameStatus === "error") {
+      setStep2Error("Couldn't verify that username. Please try again.");
+      return;
+    }
+    if (usernameStatus !== "available") {
+      setStep2Error("Please choose an available username.");
+      return;
+    }
     if (!dob) { setStep2Error("Date of birth is required."); return; }
     const age = calcAge(dob);
     if (age < 13) { setStep2Error("You must be at least 13 years old to register."); return; }
@@ -560,14 +595,15 @@ export default function SignupScreen() {
 
   const usernameColor =
     usernameStatus === "available" ? "#00E676" :
-    (usernameStatus === "taken" || usernameStatus === "invalid") ? "#FF4444" :
+    (usernameStatus === "taken" || usernameStatus === "invalid" || usernameStatus === "error") ? "#FF4444" :
     colors.mutedForeground;
 
   const usernameHint =
     usernameStatus === "available" ? "Username is available!" :
     usernameStatus === "taken" ? "This username is already taken." :
     usernameStatus === "invalid" ? "6–14 chars, letters/numbers/underscore, must start with a letter." :
-    usernameStatus === "checking" ? "Checking availability…" : "";
+    usernameStatus === "checking" ? "Checking availability…" :
+    usernameStatus === "error" ? "Couldn't verify username. Edit or try again." : "";
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -785,12 +821,12 @@ export default function SignupScreen() {
 
               <View>
                 <Text style={[styles.label, { color: colors.mutedForeground }]}>Username *</Text>
-                <View style={[styles.inputContainer, { backgroundColor: colors.card, borderColor: usernameStatus === "available" ? "#00E67660" : (usernameStatus === "taken" || usernameStatus === "invalid") ? "#FF444460" : colors.border }]}>
+                <View style={[styles.inputContainer, { backgroundColor: colors.card, borderColor: usernameStatus === "available" ? "#00E67660" : (usernameStatus === "taken" || usernameStatus === "invalid" || usernameStatus === "error") ? "#FF444460" : colors.border }]}>
                   <Feather name="at-sign" size={18} color={colors.mutedForeground} />
                   <TextInput style={[styles.input, { color: colors.foreground }]} placeholder="unique_name (6–14 chars)" placeholderTextColor={colors.mutedForeground} value={username} onChangeText={(t) => setUsername(t.replace(/\s/g, ""))} autoCapitalize="none" autoCorrect={false} maxLength={14} />
                   {usernameStatus === "checking" && <ActivityIndicator size="small" color={colors.primary} />}
                   {usernameStatus === "available" && <Feather name="check-circle" size={18} color="#00E676" />}
-                  {(usernameStatus === "taken" || usernameStatus === "invalid") && <Feather name="x-circle" size={18} color="#FF4444" />}
+                  {(usernameStatus === "taken" || usernameStatus === "invalid" || usernameStatus === "error") && <Feather name="x-circle" size={18} color="#FF4444" />}
                 </View>
                 {!!usernameHint && <Text style={[styles.fieldHint, { color: usernameColor }]}>{usernameHint}</Text>}
               </View>
