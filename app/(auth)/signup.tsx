@@ -292,25 +292,25 @@ export default function SignupScreen() {
       if (err instanceof DescopeError) {
         const msg = err.message.toLowerCase();
         if (msg.includes("disabled") || msg.includes("not enabled")) {
-          setStep0Error(
-            "Email OTP is disabled in your Descope project.\n\n" +
-            "Fix: Descope Console → Authentication Methods → One-Time Password → Enable.",
-          );
+          setStep0Error("Unable to send a code right now. Please try again later.");
         } else if (
           msg.includes("bearer") ||
           msg.includes("missing descope") ||
+          msg.includes("not configured") ||
           err.code === "MISSING_PROJECT_ID"
         ) {
-          setStep0Error(
-            "This install is missing auth config.\n\n" +
-            "Fix: keep Metro running, reload this phone on the same Wi‑Fi, " +
-            "or reinstall with npx expo run:android.",
-          );
+          setStep0Error("Something went wrong. Please try again.");
+        } else if (
+          msg.includes("rate") ||
+          msg.includes("too many") ||
+          msg.includes("limit")
+        ) {
+          setStep0Error("Too many attempts. Please wait a bit and try again.");
         } else {
-          setStep0Error(err.message);
+          setStep0Error("Unable to send a code. Please try again.");
         }
       } else {
-        setStep0Error("Could not send verification code. Please check your connection and try again.");
+        setStep0Error("Unable to send a code. Check your connection and try again.");
       }
     } finally {
       setSendingOtp(false);
@@ -379,20 +379,17 @@ export default function SignupScreen() {
       if (err instanceof DescopeError) {
         const msg = err.message.toLowerCase();
         if (msg.includes("disabled") || msg.includes("not enabled")) {
-          setStep1Error(
-            "Email OTP is disabled in your Descope project.\n" +
-            "Enable: Authentication Methods → One-Time Password.",
-          );
+          setStep1Error("Unable to verify right now. Please try again later.");
         } else if (
           msg.includes("invalid") || msg.includes("expired") ||
           msg.includes("incorrect") || msg.includes("wrong")
         ) {
-          setStep1Error("Invalid or expired verification code. Please try again.");
+          setStep1Error("That code is incorrect or expired. Please try again.");
         } else {
-          setStep1Error(err.message);
+          setStep1Error("Unable to verify. Please try again.");
         }
       } else {
-        setStep1Error("Verification failed. Please check your code and try again.");
+        setStep1Error("Unable to verify. Please try again.");
       }
     } finally {
       setVerifyingOtp(false);

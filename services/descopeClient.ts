@@ -6,26 +6,43 @@ import Constants from "expo-constants";
  * Resolve at call-time (not only module load) so we pick up:
  * - Metro-inlined EXPO_PUBLIC_* (dev)
  * - app.config.js `extra.descopeProjectId` (native / embedded bundles)
+ * - Expo Updates / manifest2 extras (second-device installs)
  * Trim + strip accidental quotes from .env (`"P3…"`).
+ *
+ * Public fallback matches eas.json — Descope project IDs are client identifiers,
+ * not secrets. Needed when a second machine builds without a local `.env`.
  */
+const DESCOPE_PROJECT_ID_FALLBACK = "P3E9mQAxf0N6l75csydDy6kGeOPR";
+
+function cleanProjectId(raw: string | undefined | null): string {
+  return (raw ?? "")
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .trim();
+}
+
 function resolveDescopeProjectId(): string {
-  const fromEnv = process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID ?? "";
-  const fromExtra =
-    (Constants.expoConfig?.extra as { descopeProjectId?: string } | undefined)
-      ?.descopeProjectId ??
-    (Constants.manifest as { extra?: { descopeProjectId?: string } } | null)?.extra
-      ?.descopeProjectId ??
-    "";
-  const raw = (fromEnv || fromExtra || "").trim();
-  return raw.replace(/^["']|["']$/g, "").trim();
+  const fromEnv = cleanProjectId(process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID);
+
+  const extra = (Constants.expoConfig?.extra ??
+    (Constants as { manifest2?: { extra?: Record<string, unknown> } }).manifest2
+      ?.extra ??
+    (Constants.manifest as { extra?: Record<string, unknown> } | null)?.extra ??
+    {}) as { descopeProjectId?: string };
+
+  const fromExtra = cleanProjectId(extra.descopeProjectId);
+
+  return fromEnv || fromExtra || DESCOPE_PROJECT_ID_FALLBACK;
 }
 
 const PROJECT_ID = resolveDescopeProjectId();
 
-if (!PROJECT_ID) {
-  console.warn(
-    "[Descope] EXPO_PUBLIC_DESCOPE_PROJECT_ID is not set — auth will not work. " +
-      "Reconnect to Metro or rebuild with .env / EAS env.",
+if (__DEV__) {
+  const fromEnv = !!cleanProjectId(process.env.EXPO_PUBLIC_DESCOPE_PROJECT_ID);
+  console.log(
+    `[Descope] projectId=${PROJECT_ID.slice(0, 6)}… source=${
+      fromEnv ? "env" : "extra/fallback"
+    }`,
   );
 }
 
@@ -66,9 +83,7 @@ async function descopePost<T>(
   const projectId = resolveDescopeProjectId() || PROJECT_ID;
   if (!projectId) {
     throw new DescopeRestError(
-      "Auth is not configured on this install (missing Descope project ID). " +
-        "On a second phone: open the app while Metro is running on the same Wi‑Fi, " +
-        "or reinstall with `npx expo run:android` so env is baked in.",
+      "Something went wrong. Please try again.",
       "MISSING_PROJECT_ID",
       0,
     );
