@@ -82,6 +82,7 @@ import {
   TrackPositionParticipantList,
   LiveBoardRow,
   BOARD_ROW_HEIGHT,
+  LIVE_BOARD_VISIBLE_ROWS,
   type LiveBoardRowParticipant,
 } from "@/components/race/LiveRaceParticipantList";
 import {
@@ -89,7 +90,7 @@ import {
   createDummyUnlimitedRaceSession,
   startDummyUnlimitedRaceSimulation,
 } from "@/services/dummyUnlimitedRace";
-import { getTopThreeRankAccent, getRankAccessibilityLabel, getLiveRaceTrackAccent, RANK_CURRENT_USER_GREEN } from "@/utils/participantRankUi";
+import { RANK_CURRENT_USER_GREEN } from "@/utils/participantRankUi";
 import {
   liveRaceFetchAllowed,
   markLiveRaceFetched,
@@ -444,15 +445,14 @@ const RunnerMarker = React.memo(function RunnerMarker({ player, index, width, he
   }, [effectiveSteps, targetSteps]);
 
   // Lane index among the visible top-10 leaders (highest steps = lane 0).
-  // Rank badge still shows authoritative race rank; lane placement uses list index.
+  // Name/steps sit above the avatar so clustered runners stay readable.
   const laneIndex = Math.min(Math.max(index, 0), 9);
   const yOffset   = index % 2 === 0 ? -4 : 4;
 
   // Visual sizing from current React state (updates on re-render, not per-frame)
   const currentPoint   = sampleTrack(clampProgress(effectiveSteps), width, height, fzY);
   const size           = (player.isMe ? rs(43) : rs(34)) * currentPoint.depth;
-  const labelLeft      = laneIndex >= 7;
-  const rankBadgeSize  = rs(18);
+  const labelW         = Math.max(rs(78), size + rs(28));
 
   // Speaking ring pulse — fades in when isSpeakingVoice, fades out when not.
   const speakRingPulse = useSharedValue(0);
@@ -536,36 +536,41 @@ const RunnerMarker = React.memo(function RunnerMarker({ player, index, width, he
             {player.initial}
           </Text>
         )}
-        <View
+      </TouchableOpacity>
+      {/* Name + steps centered above the avatar (not left/right) to avoid overlap */}
+      <View
+        pointerEvents="none"
+        style={[
+          st.runnerLabel,
+          player.isMe && { borderColor: `${player.rankColor}88`, backgroundColor: "#050713F0" },
+          {
+            width: labelW,
+            left: size / 2 - labelW / 2,
+            bottom: size + rs(6),
+            alignItems: "center",
+          },
+        ]}
+      >
+        <Text
           style={[
-            st.runnerRank,
+            st.runnerName,
             {
-              backgroundColor: player.isForfeited
-                ? "#FF4444"
-                : getTopThreeRankAccent(player.rank) ?? getLiveRaceTrackAccent(player.rank),
-              width: rankBadgeSize,
-              height: rankBadgeSize,
-              borderRadius: rankBadgeSize / 2,
-              left: -2,
-              bottom: -2,
-              top: undefined,
-              right: undefined,
+              color: player.isMe ? player.rankColor : "#FFFFFF",
+              fontSize: rs(9),
+              textAlign: "center",
             },
           ]}
-          accessibilityLabel={getRankAccessibilityLabel(player.rank, {
-            isCurrentUser: player.isMe,
-          })}
+          numberOfLines={1}
         >
-          <Text style={[st.runnerRankText, { fontSize: rs(9) }]}>{player.rank}</Text>
-        </View>
-      </TouchableOpacity>
-      <View style={[st.runnerLabel, labelLeft ? { right: size + 4 } : { left: size + 4 }]}>
-        <Text style={[st.runnerName, { color: player.isMe ? player.rankColor : "#FFFFFF", fontSize: rs(10) }]} numberOfLines={1}>
-          {player.isMe ? "You" : player.name}{player.country ? ` ${player.country}` : ""}{player.isHost ? <Text style={{ color: "#FFD700" }}> Host</Text> : ""}
+          {player.isMe ? "You" : player.name}
+          {player.country ? ` ${player.country}` : ""}
+          {player.isHost ? <Text style={{ color: "#FFD700" }}> Host</Text> : ""}
         </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
-          <BlueShoe size={rs(9)} />
-          <Text style={[st.runnerSteps, { fontSize: rs(9) }]}>{formatSteps(effectiveSteps)} steps</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 2, justifyContent: "center" }}>
+          <BlueShoe size={rs(8)} />
+          <Text style={[st.runnerSteps, { fontSize: rs(8), textAlign: "center" }]}>
+            {formatSteps(effectiveSteps)} steps
+          </Text>
         </View>
       </View>
     </Animated.View>
@@ -847,8 +852,8 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
   const renderBoardRow = useCallback(
     ({ item, index }: { item: RaceParticipant; index: number }) => {
       const isUser = item.userId === currentUserId;
-      const rank =
-        item.rank && item.rank > 0 ? item.rank : index + 1;
+      // Display rank follows steps sort order (list index), not stale API rank.
+      const rank = index + 1;
       const pAvatarUrl = item.userId
         ? `${getApiBase()}/api/profile/avatar/${item.userId}?v=${getAvatarVersion(item.userId ?? "", item.avatarVersion ?? 0)}`
         : (isUser ? userAvatarUrl : null);
@@ -929,9 +934,12 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
             data={sorted}
             keyExtractor={(p) => p.id}
             renderItem={renderBoardRow}
-            style={{ flex: 1 }}
-            showsVerticalScrollIndicator
-            initialNumToRender={14}
+            style={{
+              flex: 1,
+              minHeight: LIVE_BOARD_VISIBLE_ROWS * BOARD_ROW_HEIGHT,
+            }}
+            showsVerticalScrollIndicator={sorted.length > LIVE_BOARD_VISIBLE_ROWS}
+            initialNumToRender={LIVE_BOARD_VISIBLE_ROWS + 2}
             maxToRenderPerBatch={12}
             windowSize={8}
             removeClippedSubviews
@@ -1014,12 +1022,12 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
   ); }
 
 const lbpStyles = StyleSheet.create({
-  card:      { marginHorizontal: 12, borderRadius: 14, borderWidth: 1, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 6, gap: 8 },
-  header:    { flexDirection: "row", alignItems: "center", gap: 6, paddingBottom: 4 },
+  card:      { marginHorizontal: 12, borderRadius: 14, borderWidth: 1, paddingHorizontal: 10, paddingTop: 8, paddingBottom: 4, gap: 4 },
+  header:    { flexDirection: "row", alignItems: "center", gap: 6, paddingBottom: 2 },
   dot:       { width: 7, height: 7, borderRadius: 3.5 },
-  title:     { flex: 1, fontSize: 15, fontWeight: "800" },
+  title:     { flex: 1, fontSize: 14, fontWeight: "800" },
   infoBtn:   { padding: 2 },
-  count:     { fontSize: 12 },
+  count:     { fontSize: 11 },
   empty:     { fontSize: 13, textAlign: "center", paddingVertical: 8 },
   row:       { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8 },
   medal:     { fontSize: 18, width: 28, textAlign: "center" },
@@ -3238,6 +3246,73 @@ function LiveRaceDetailScreenContent() {
     max: race.maxPlayers,
     isUnlimited: isUnlimitedLive,
   });
+
+  // Info-bar Prize Pool chip — same row as TIME / PARTICIPANTS for every race type.
+  // Plain computation (not useMemo): sits after early returns — do not use hooks here.
+  const prizePoolChip = (() => {
+    const players = Math.max(participants.length, race.currentPlayers, 1);
+    if (isUnlimitedLive) {
+      const cents =
+        typeof race.prizePoolCents === "number" && race.prizePoolCents > 0
+          ? race.prizePoolCents
+          : Math.round((race.prizePool ?? 0) * 100);
+      if (cents > 0) {
+        const dollars = cents / 100;
+        return {
+          value: "$" + (dollars % 1 === 0 ? dollars.toFixed(0) : dollars.toFixed(2)),
+          color: "#FFD700",
+        };
+      }
+      return { value: "equal split", color: "#FFD700" };
+    }
+    if (race.entryType === "coins_battle") {
+      const entryAmt = race.coinEntryAmount ?? 0;
+      const totalPool =
+        race.coinPrizePool && race.coinPrizePool > 0
+          ? race.coinPrizePool
+          : entryAmt * players;
+      return { value: fmtCoins(totalPool), color: "#F59E0B" };
+    }
+    if (race.type === "sponsored") {
+      const cents =
+        typeof race.prizePoolCents === "number" && race.prizePoolCents > 0
+          ? race.prizePoolCents
+          : Math.round((race.prizePool ?? 0) * 100);
+      if (cents > 0) {
+        const dollars = cents / 100;
+        return {
+          value: "$" + (dollars % 1 === 0 ? dollars.toFixed(0) : dollars.toFixed(2)),
+          color: "#FFD700",
+        };
+      }
+      return { value: "Gift cards", color: "#FF9900" };
+    }
+    if (race.entryType === "free") {
+      if ((race.prizePool ?? 0) > 0) {
+        const p = race.prizePool;
+        return {
+          value: "$" + (p % 1 === 0 ? p.toFixed(0) : p.toFixed(2)),
+          color: "#FFD700",
+        };
+      }
+      const slots = getWinnerCount(players);
+      const coinPool = FREE_TIER_COINS.slice(0, slots).reduce((a, b) => a + b, 0);
+      return { value: fmtCoins(coinPool), color: "#F59E0B" };
+    }
+    const cents =
+      typeof race.prizePoolCents === "number" && race.prizePoolCents > 0
+        ? race.prizePoolCents
+        : Math.round((race.prizePool ?? 0) * 100);
+    if (cents > 0) {
+      const dollars = cents / 100;
+      return {
+        value: "$" + (dollars % 1 === 0 ? dollars.toFixed(0) : dollars.toFixed(2)),
+        color: "#FFD700",
+      };
+    }
+    return { value: "$0", color: "#FFD700" };
+  })();
+
   const trackMedia = {
     code: trackLayoutId,
     trackLayout: trackLayoutId,
@@ -3462,6 +3537,8 @@ function LiveRaceDetailScreenContent() {
           completedAtMs={completedAtMs}
           statusLabel={statusLabel}
           participantValue={participantValue}
+          prizePoolValue={prizePoolChip.value}
+          prizePoolColor={prizePoolChip.color}
           styles={{
             infoCard: s.infoCard,
             infoRow: s.infoRow,
@@ -3711,8 +3788,8 @@ function LiveRaceDetailScreenContent() {
         </View>
       </View>}
 
-      {/* ── Live chat + cheers — hidden in fullscreen mode ── */}
-      {isActive && !isTrackFullscreen && (
+      {/* ── Live chat + cheers — hidden in fullscreen; compact on Live Board so 10 rows fit ── */}
+      {isActive && !isTrackFullscreen && selectedView === "race_track" && (
         <>
           {/* Message feed */}
           <View style={[st.liveChatPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -3805,7 +3882,11 @@ function LiveRaceDetailScreenContent() {
                 ); })}
             </View>
           )}
+        </>
+      )}
 
+      {isActive && !isTrackFullscreen && (
+        <>
           {/* Backdrop — closes the audio route capsule when tapping outside */}
           {showMicMenu && (
             <Pressable
@@ -4095,12 +4176,12 @@ const s = StyleSheet.create({
   leaveBtn:    { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 },
   leaveTxt:    { color: "#FFFFFF", fontSize: 13, fontWeight: "800", marginRight: 4 },
   headerSpacer: { width: 68 },
-  infoBar:  { flexDirection: "row", paddingHorizontal: 12, gap: 8, height: 44, alignItems: "center" },
-  infoCard: { flex: 1, backgroundColor: "#111421", borderRadius: 8, borderWidth: 1, borderColor: "#22263A", paddingHorizontal: 10, paddingVertical: 4 },
-  infoRow:  { flexDirection: "row", alignItems: "center", gap: 4 },
-  infoIcon: { fontSize: 11 },
-  infoLbl:  { fontSize: 8, color: "#858A9C", fontWeight: "800", letterSpacing: 0.5 },
-  infoVal:  { fontSize: 17, fontWeight: "900", color: "#FFFFFF", marginTop: 0 },
+  infoBar:  { flexDirection: "row", paddingHorizontal: 12, gap: 6, minHeight: 44, alignItems: "center" },
+  infoCard: { flex: 1, backgroundColor: "#111421", borderRadius: 8, borderWidth: 1, borderColor: "#22263A", paddingHorizontal: 8, paddingVertical: 4, minWidth: 0 },
+  infoRow:  { flexDirection: "row", alignItems: "center", gap: 3 },
+  infoIcon: { fontSize: 10 },
+  infoLbl:  { fontSize: 7, color: "#858A9C", fontWeight: "800", letterSpacing: 0.4 },
+  infoVal:  { fontSize: 14, fontWeight: "900", color: "#FFFFFF", marginTop: 0 },
 
   bannerClose:          { marginLeft: "auto" as unknown as number, padding: 2 },
   finishedBanner:       { marginHorizontal: 12, marginTop: 8, borderRadius: 16, borderWidth: 1.5, padding: 14, gap: 10, backgroundColor: "#FFD70012", borderColor: "#FFD70044" },
@@ -4141,15 +4222,24 @@ const st = StyleSheet.create({
   syncDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: "#00E676" },
   syncText: { color: "#9EA5BC", fontSize: 10, fontWeight: "700", letterSpacing: 0.4 },
 
-  runner:       { position: "absolute", alignItems: "center", justifyContent: "center", zIndex: 8 },
+  runner:       { position: "absolute", alignItems: "center", justifyContent: "center", zIndex: 8, overflow: "visible" },
   runnerTrail:  { position: "absolute", width: 14, height: 46, borderRadius: 10, shadowOpacity: 0.9, shadowRadius: 9 },
   runnerAvatar: { alignItems: "center", justifyContent: "center", shadowOpacity: 0.95, shadowRadius: 11, elevation: 11, overflow: "hidden" },
   runnerInitial: { fontSize: 14, fontWeight: "900" },
   runnerRank:   { position: "absolute", alignItems: "center", justifyContent: "center" },
   runnerRankText: { color: "#050711", fontWeight: "900" },
-  runnerLabel:  { position: "absolute", minWidth: 74, maxWidth: 108, borderRadius: 8, paddingHorizontal: 6, paddingVertical: 3, backgroundColor: "#050713DD", borderWidth: 1, borderColor: "#FFFFFF18" },
+  runnerLabel:  {
+    position: "absolute",
+    borderRadius: 8,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    backgroundColor: "#050713EE",
+    borderWidth: 1,
+    borderColor: "#FFFFFF22",
+    zIndex: 9,
+  },
   runnerName:   { fontWeight: "900" },
-  runnerSteps:  { color: "#B2B8CA", fontWeight: "700", marginTop: 1 },
+  runnerSteps:  { color: "#B2B8CA", fontWeight: "700", marginTop: 0 },
 
   lbOverlay:    { position: "absolute", right: 0, top: 0, backgroundColor: "#0B0D1AF2", borderLeftWidth: 1, borderLeftColor: "#1A1D2E", paddingLeft: 8, paddingRight: 38, paddingTop: 8, paddingBottom: 4, zIndex: 15, overflow: "visible" as const },
   lbHead:       { flexDirection: "row", alignItems: "flex-start", marginBottom: 8, gap: 6 },

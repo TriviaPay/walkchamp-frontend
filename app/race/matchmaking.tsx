@@ -33,6 +33,7 @@ import {
   Easing,
   InteractionManager,
   Modal,
+  Platform,
   ScrollView,
   Share,
   StyleSheet,
@@ -2448,10 +2449,16 @@ function MatchmakingScreenContent() {
   const coinPool = liveRoom?.coinPrizePool ?? (coinEntry * realPlayerCount);
   const cashEntry = liveRoom?.entryAmountCents != null ? liveRoom.entryAmountCents / 100 : raceEntryFee;
 
+  // Same pattern as Live Race: manual bottom inset (SafeAreaView bottom can be 0 on Android).
+  const waitingBottomInset = Math.max(
+    safeBottom,
+    Platform.OS === "android" ? 48 : 20,
+  );
+
   return (
     <SafeAreaView
       style={[styles.container, { backgroundColor: "#050711" }]}
-      edges={["top", "left", "right", "bottom"]}
+      edges={["top", "left", "right"]}
     >
       <LinearGradient
         colors={["#1E1B4B88", "#05071100", "#7C3AED22"]}
@@ -2710,8 +2717,8 @@ function MatchmakingScreenContent() {
         ) : null}
       </ScrollView>
 
-      {/* Sticky actions — same SafeArea bottom pattern as Available Rooms / Walk */}
-      <View style={styles.footerActions}>
+      {/* Sticky actions — pad above Android system nav / iOS home indicator */}
+      <View style={[styles.footerActions, { paddingBottom: waitingBottomInset + rs(8) }]}>
         {showUnlimitedEnterCta ? (
           <>
             <TouchableOpacity
@@ -2760,6 +2767,8 @@ function MatchmakingScreenContent() {
               >
                 {leaving
                   ? "Leaving…"
+                  : useDummyWaitingRoom
+                    ? "Leave Challenge"
                   : isUsdCashPaidRoom
                     ? USD_CASH_LEAVE_ACTION_LABEL
                     : isHostMode

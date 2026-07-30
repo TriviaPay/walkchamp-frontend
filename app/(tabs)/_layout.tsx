@@ -52,6 +52,11 @@ function ClassicTabLayout() {
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
   const tabBarBase = isWeb ? 84 : isIOS ? 49 : 56;
+  // Floor Android system nav (3-button / gesture) so labels never sit under it.
+  const tabBarBottomInset = Math.max(
+    safeBottom,
+    Platform.OS === "android" ? 48 : 0,
+  );
 
   const tabBarStyle = {
     position: "absolute" as const,
@@ -59,8 +64,8 @@ function ClassicTabLayout() {
     borderTopWidth: 1,
     borderTopColor: colors.border,
     elevation: 0,
-    height: tabBarBase + safeBottom,
-    paddingBottom: safeBottom,
+    height: tabBarBase + tabBarBottomInset,
+    paddingBottom: tabBarBottomInset,
   };
 
   const screenOpts = {

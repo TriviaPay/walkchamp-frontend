@@ -7,10 +7,8 @@
 
 import { authFetch } from "@/utils/authFetch";
 import { getDeviceTimezone } from "@/utils/timezone";
-import {
-  getTrendingChallengeMocks,
-  TRENDING_CHALLENGES_USE_MOCK,
-} from "@/constants/trendingChallengeMockData";
+import { isWalkTrendingChallengesMockEnabled } from "@/config/featureFlags";
+import { getTrendingChallengeMocks } from "@/constants/trendingChallengeMockData";
 import { fetchAvailableUnlimitedAsRoomLikes } from "@/services/unlimitedChallengesListApi";
 import {
   assignTrendingArtworkKey,
@@ -65,7 +63,7 @@ export async function fetchAvailableChallengeCount(opts?: {
 export async function fetchTrendingChallenges(opts?: {
   viewerUserId?: string | null;
 }): Promise<TrendingChallenge[]> {
-  if (TRENDING_CHALLENGES_USE_MOCK) {
+  if (isWalkTrendingChallengesMockEnabled()) {
     return getTrendingChallengeMocks(getDeviceTimezone())
       .filter((c) => c.challengeFormat === "unlimited_goal" || c.challengeFormat === "fixed_cash")
       .slice(0, TRENDING_MAX_CARDS);

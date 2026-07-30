@@ -79,7 +79,7 @@ export function isUnlimitedGoalFrontendEnabled(): boolean {
  */
 export const ENABLE_UNLIMITED_RACE_DUMMY_DATA =
   process.env.EXPO_PUBLIC_ENABLE_UNLIMITED_RACE_DUMMY_DATA === "true" &&
-  // Local hard switch — flip to true only when intentionally testing dummy UI.
+  // Local hard switch — flip to true only while testing Unlimited Live Race dummy UI.
   false;
 
 export function isUnlimitedRaceDummyDataEnabled(): boolean {
@@ -99,6 +99,22 @@ export const ENABLE_WALK_TRENDING_CHALLENGES_PREVIEW =
 
 export function isWalkTrendingChallengesPreviewEnabled(): boolean {
   return ENABLE_WALK_TRENDING_CHALLENGES_PREVIEW;
+}
+
+/**
+ * Walk-tab Trending Challenges mock data (10 preview cards).
+ *
+ * Off by default. Enable with:
+ *   EXPO_PUBLIC_ENABLE_WALK_TRENDING_CHALLENGES_MOCK=true
+ * Instant rollback: flip hard switch to `false`.
+ */
+export const ENABLE_WALK_TRENDING_CHALLENGES_MOCK =
+  process.env.EXPO_PUBLIC_ENABLE_WALK_TRENDING_CHALLENGES_MOCK === "true" &&
+  // Local hard switch — flip to true only while testing with 10 mock cards.
+  false;
+
+export function isWalkTrendingChallengesMockEnabled(): boolean {
+  return ENABLE_WALK_TRENDING_CHALLENGES_MOCK;
 }
 
 /**

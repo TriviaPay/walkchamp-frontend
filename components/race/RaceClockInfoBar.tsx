@@ -37,6 +37,9 @@ type Props = {
   statusLabel: string;
   timerColor?: string;
   participantValue: string;
+  /** Third chip — shown for all race types when provided. */
+  prizePoolValue?: string | null;
+  prizePoolColor?: string;
   styles: StyleBag;
 };
 
@@ -50,6 +53,8 @@ export const RaceClockInfoBar = memo(function RaceClockInfoBar({
   statusLabel,
   timerColor,
   participantValue,
+  prizePoolValue,
+  prizePoolColor,
   styles: s,
 }: Props) {
   const now = useTickingNow(enabled && !isCompleted);
@@ -84,7 +89,12 @@ export const RaceClockInfoBar = memo(function RaceClockInfoBar({
           : "#00E676"
       : undefined);
 
-  const cards = [
+  const cards: Array<{
+    icon: string;
+    label: string;
+    value: string;
+    color: string | undefined;
+  }> = [
     {
       icon: isActive ? "⏱" : isCompleted ? "🏁" : "•",
       label: infoTimeLabel,
@@ -95,9 +105,18 @@ export const RaceClockInfoBar = memo(function RaceClockInfoBar({
       icon: "👥",
       label: "PARTICIPANTS",
       value: participantValue,
-      color: undefined as string | undefined,
+      color: undefined,
     },
   ];
+
+  if (prizePoolValue != null && prizePoolValue !== "") {
+    cards.push({
+      icon: "🏆",
+      label: "PRIZE POOL",
+      value: prizePoolValue,
+      color: prizePoolColor ?? "#FFD700",
+    });
+  }
 
   return (
     <>
@@ -110,6 +129,8 @@ export const RaceClockInfoBar = memo(function RaceClockInfoBar({
           <Text
             style={[s.infoVal, card.color ? { color: card.color } : null]}
             numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
           >
             {card.value}
           </Text>

@@ -1,8 +1,9 @@
 /**
- * Frontend mock Trending Challenges for Walk-tab Unlimited Challenge preview.
+ * Frontend mock Trending Challenges for Walk-tab preview.
  * Stable themes/artwork — no Math.random().
  *
- * Flip TRENDING_CHALLENGES_USE_MOCK to false to use live Available Rooms API.
+ * Enable/disable via featureFlags:
+ *   ENABLE_WALK_TRENDING_CHALLENGES_MOCK / EXPO_PUBLIC_ENABLE_WALK_TRENDING_CHALLENGES_MOCK
  */
 
 import type { TrendingChallenge } from "@/utils/trendingChallenges";
@@ -10,10 +11,6 @@ import {
   TRENDING_ARTWORK_KEYS,
   TRENDING_THEME_KEYS,
 } from "@/constants/trendingChallengeThemes";
-
-/** Local UI preview — keep false so live Available / Unlimited APIs feed Trending. */
-export const TRENDING_CHALLENGES_USE_MOCK = false;
-
 type MockSeed = {
   id: string;
   title: string;
@@ -27,97 +24,107 @@ type MockSeed = {
   typeBadge: string;
 };
 
-/** Prefer unlimited_goal + fixed_cash so the Unlimited Challenge carousel has content. */
+/** 10 mock cards — titles match Unlimited Challenge card style on Walk. */
 const MOCK_SEEDS: MockSeed[] = [
   {
     id: "mock-unlimited-01",
-    title: "Unlimited Dawn March",
+    title: "Unlimited • 10,000 steps/day",
     challengeFormat: "unlimited_goal",
-    prizePoolDisplay: "$1,180",
-    participantCount: 742,
-    startsInHours: 4,
-    durationDays: 1,
+    prizePoolDisplay: "$10",
+    participantCount: 1,
+    startsInHours: 2,
+    durationDays: 7,
     typeBadge: "Unlimited",
   },
   {
     id: "mock-unlimited-02",
-    title: "Open Goal Night Walk",
+    title: "Unlimited • 8,000 steps/day",
     challengeFormat: "unlimited_goal",
-    prizePoolDisplay: "$2,040",
-    participantCount: 891,
-    startsInHours: 10,
+    prizePoolDisplay: "$15",
+    participantCount: 24,
+    startsInHours: 5,
     durationDays: 3,
     typeBadge: "Unlimited",
   },
   {
     id: "mock-unlimited-03",
-    title: "No Cap City Steps",
+    title: "Unlimited • 12,000 steps/day",
     challengeFormat: "unlimited_goal",
-    prizePoolDisplay: "$3,600",
-    participantCount: 1204,
-    startsInHours: 18,
-    durationDays: 7,
+    prizePoolDisplay: "$25",
+    participantCount: 86,
+    startsInHours: 8,
+    durationDays: 5,
     typeBadge: "Unlimited",
   },
   {
     id: "mock-unlimited-04",
-    title: "Endless Trail Cash Run",
+    title: "Unlimited • 5,000 steps/day",
     challengeFormat: "unlimited_goal",
-    prizePoolDisplay: "$890",
-    participantCount: 456,
-    startsInHours: 28,
+    prizePoolDisplay: "$8",
+    participantCount: 12,
+    startsInHours: 12,
     durationDays: 1,
     typeBadge: "Unlimited",
   },
   {
     id: "mock-unlimited-05",
-    title: "Skyline Unlimited Goal",
+    title: "Unlimited • 15,000 steps/day",
     challengeFormat: "unlimited_goal",
-    prizePoolDisplay: "$5,250",
-    participantCount: 1688,
-    startsInHours: 36,
-    durationDays: 5,
+    prizePoolDisplay: "$40",
+    participantCount: 210,
+    startsInHours: 18,
+    durationDays: 7,
     typeBadge: "Unlimited",
   },
   {
-    id: "mock-fixed-01",
-    title: "City Steps Showdown",
-    challengeFormat: "fixed_cash",
-    prizePoolDisplay: "$2,500",
-    participantCount: 1240,
-    startsInHours: 6,
-    durationDays: 1,
-    typeBadge: "Fixed Cash",
-  },
-  {
-    id: "mock-fixed-02",
-    title: "Stadium 10K Clash",
-    challengeFormat: "fixed_cash",
-    prizePoolDisplay: "$3,200",
-    participantCount: 1588,
-    startsInHours: 14,
-    durationDays: 1,
-    typeBadge: "Fixed Cash",
-  },
-  {
-    id: "mock-fixed-03",
-    title: "Lightning Path Dash",
-    challengeFormat: "fixed_cash",
-    prizePoolDisplay: "$980",
-    participantCount: 654,
-    startsInHours: 22,
+    id: "mock-unlimited-06",
+    title: "Unlimited • 7,500 steps/day",
+    challengeFormat: "unlimited_goal",
+    prizePoolDisplay: "$12",
+    participantCount: 45,
+    startsInHours: 24,
     durationDays: 2,
-    typeBadge: "Fixed Cash",
+    typeBadge: "Unlimited",
   },
   {
-    id: "mock-fixed-04",
-    title: "Harbor Cash Challenge",
-    challengeFormat: "fixed_cash",
-    prizePoolDisplay: "$1,750",
-    participantCount: 932,
-    startsInHours: 40,
+    id: "mock-unlimited-07",
+    title: "Unlimited • 20,000 steps/day",
+    challengeFormat: "unlimited_goal",
+    prizePoolDisplay: "$50",
+    participantCount: 318,
+    startsInHours: 30,
+    durationDays: 7,
+    typeBadge: "Unlimited",
+  },
+  {
+    id: "mock-unlimited-08",
+    title: "Unlimited • 6,000 steps/day",
+    challengeFormat: "unlimited_goal",
+    prizePoolDisplay: "$6",
+    participantCount: 9,
+    startsInHours: 36,
     durationDays: 1,
-    typeBadge: "Fixed Cash",
+    typeBadge: "Unlimited",
+  },
+  {
+    id: "mock-unlimited-09",
+    title: "Unlimited • 9,000 steps/day",
+    challengeFormat: "unlimited_goal",
+    prizePoolDisplay: "$18",
+    participantCount: 67,
+    startsInHours: 42,
+    durationDays: 4,
+    typeBadge: "Unlimited",
+  },
+  {
+    id: "mock-unlimited-10",
+    title: "Unlimited • 11,000 steps/day",
+    challengeFormat: "unlimited_goal",
+    prizePoolDisplay: "$30",
+    participantCount: 152,
+    startsInHours: 48,
+    durationDays: 5,
+    typeBadge: "Unlimited",
   },
 ];
 
@@ -125,7 +132,7 @@ function startsAtFromHours(hours: number): string {
   return new Date(Date.now() + hours * 3_600_000).toISOString();
 }
 
-/** Returns mock upcoming challenges sorted by soonest start. */
+/** Returns 10 mock upcoming challenges sorted by soonest start. */
 export function getTrendingChallengeMocks(timezone = "UTC"): TrendingChallenge[] {
   return [...MOCK_SEEDS]
     .sort((a, b) => a.startsInHours - b.startsInHours)

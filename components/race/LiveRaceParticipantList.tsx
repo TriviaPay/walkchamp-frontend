@@ -24,7 +24,10 @@ import {
 } from "@/utils/participantRankUi";
 
 const PANEL_ROW_HEIGHT = 52;
-const BOARD_ROW_HEIGHT = 56;
+/** Compact so ~10 Live Board rows fit above progress/chat without scrolling. */
+const BOARD_ROW_HEIGHT = 40;
+/** How many Live Board rows should fit in the first viewport without scrolling. */
+const LIVE_BOARD_VISIBLE_ROWS = 10;
 
 export type TrackPanelPlayer = {
   id: string;
@@ -488,7 +491,7 @@ const LiveBoardRow = memo(function LiveBoardRow({
   );
 });
 
-export { LiveBoardRow, BOARD_ROW_HEIGHT, PANEL_ROW_HEIGHT };
+export { LiveBoardRow, BOARD_ROW_HEIGHT, PANEL_ROW_HEIGHT, LIVE_BOARD_VISIBLE_ROWS };
 
 const styles = StyleSheet.create({
   muteAllRow: {
@@ -587,31 +590,32 @@ const styles = StyleSheet.create({
   boardRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    gap: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
     minHeight: BOARD_ROW_HEIGHT,
+    height: BOARD_ROW_HEIGHT,
   },
-  boardMedal: { fontSize: 18, width: 28, textAlign: "center" },
+  boardMedal: { fontSize: 15, width: 24, textAlign: "center" },
   boardAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     borderWidth: 1.5,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
   },
-  boardAvatarImg: { width: 36, height: 36, borderRadius: 18 },
-  boardAvatarTxt: { fontSize: 14, fontWeight: "800" },
-  boardInfo: { flex: 1, gap: 5, minWidth: 0 },
+  boardAvatarImg: { width: 28, height: 28, borderRadius: 14 },
+  boardAvatarTxt: { fontSize: 12, fontWeight: "800" },
+  boardInfo: { flex: 1, gap: 2, minWidth: 0 },
   nameRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
     flexWrap: "wrap",
   },
-  boardName: { fontSize: 13, fontWeight: "700", flexShrink: 1 },
+  boardName: { fontSize: 12, fontWeight: "700", flexShrink: 1 },
   tag: {
     paddingHorizontal: 5,
     paddingVertical: 1,
@@ -619,10 +623,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   tagTxt: { fontSize: 9, fontWeight: "800" },
-  track: { height: 4, borderRadius: 2, overflow: "hidden" },
-  fill: { height: 4, borderRadius: 2 },
-  boardRight: { alignItems: "flex-end", gap: 2, flexShrink: 0, minWidth: 72 },
-  boardSteps: { fontSize: 12, fontWeight: "700" },
+  track: { height: 2, borderRadius: 1, overflow: "hidden" },
+  fill: { height: 2, borderRadius: 1 },
+  boardRight: { alignItems: "flex-end", gap: 1, flexShrink: 0, minWidth: 64 },
+  boardSteps: { fontSize: 11, fontWeight: "700" },
   stepDelta: { fontSize: 10, fontWeight: "800", color: "#00E676" },
   prize: { fontSize: 12, fontWeight: "800" },
 });
