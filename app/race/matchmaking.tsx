@@ -78,6 +78,13 @@ import {
 } from "@/services/refundApi";
 import { mapUnlimitedDetailToWaitingRoom } from "@/utils/unlimitedWaitingRoom";
 import { UNLIMITED_GOAL_CHALLENGE_TYPE } from "@/utils/unlimitedGoal";
+import { normalizeUnlimitedLiveStatus } from "@/utils/unlimitedLiveRace";
+import { isUnlimitedRaceDummyDataEnabled } from "@/config/featureFlags";
+import {
+  DUMMY_UNLIMITED_RACE_ID,
+  getDummyWaitingRoomParticipants,
+  shouldUseDummyUnlimitedRace,
+} from "@/services/dummyUnlimitedRace";
 import {
   isAlreadyLeftLeaveError,
   isUnlimitedCashChallenge,
@@ -792,9 +799,19 @@ function MatchmakingScreenContent() {
     initialCurrentPlayers?: string;
     initialScheduledStartAt?: string;
     initialDailyGoalSteps?: string;
+    dummyRace?: string;
   }>();
 
   const { user } = useAuth();
+  const useDummyWaitingRoom = shouldUseDummyUnlimitedRace(
+    params.raceId ?? null,
+    params.dummyRace,
+    {
+      unlimitedChallenge:
+        params.initialCapacityMode === "unlimited" ||
+        params.initialEntryType === UNLIMITED_GOAL_CHALLENGE_TYPE,
+    },
+  );
   const { isUserOnline, refreshOnlineIds, setUserStatus } = usePresence();
 
   const {
@@ -863,6 +880,49 @@ function MatchmakingScreenContent() {
   useEffect(() => {
     participantsRef.current = participants;
   }, [participants]);
+
+  // Frontend-only dummy Waiting Room (~100 participants) when flag + params allow.
+  const dummyWaitingSeededRef = useRef(false);
+  useEffect(() => {
+    if (!useDummyWaitingRoom || !user?.id) return;
+    if (dummyWaitingSeededRef.current) return;
+    dummyWaitingSeededRef.current = true;
+    const dummies = getDummyWaitingRoomParticipants(user.id, user.username);
+    const joinedAt = new Date().toISOString();
+    setParticipants(
+      dummies.map((d) => ({
+        userId: d.userId,
+        username: d.username,
+        country: null,
+        countryFlag: d.countryFlag,
+        avatarColor: d.avatarColor,
+        avatarUrl: null,
+        avatarVersion: 0,
+        isHost: !!d.isHost,
+        isCurrentUser: !!d.isCurrentUser,
+        friendStatus: "none",
+        friendRequestId: null,
+        activeTitle: null,
+        currentSteps: 0,
+        status: "active",
+        joinedAt,
+      })),
+    );
+    setParticipantsLoading(false);
+    setParticipantsError(null);
+  }, [useDummyWaitingRoom, user?.id, user?.username]);
+
+  const enterDummyLiveRace = useCallback(() => {
+    router.replace({
+      pathname: "/race/live-detail",
+      params: {
+        id: backendRaceId || DUMMY_UNLIMITED_RACE_ID,
+        dummyRace: "1",
+        challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
+        capacityMode: "unlimited",
+      },
+    });
+  }, [backendRaceId]);
 
   // ── Local start-phase state machine ──────────────────────────────────────
   const [startPhase, setStartPhase] = useState<StartPhase>("idle");
@@ -1005,7 +1065,19 @@ function MatchmakingScreenContent() {
       // Always include self while viewing this room.
       const selfId = normalizeUserId(user?.id);
       if (selfId) next.add(selfId);
-      setRacePresenceIds(next);
+      setRacePresenceIds((prev) => {
+        if (prev.size === next.size) {
+          let same = true;
+          for (const id of next) {
+            if (!prev.has(id)) {
+              same = false;
+              break;
+            }
+          }
+          if (same) return prev;
+        }
+        return next;
+      });
     };
 
     channel.bind("pusher:subscription_succeeded", syncMembers);
@@ -1344,17 +1416,63 @@ function MatchmakingScreenContent() {
   }> => {
     if (!backendRaceId) return { inProgress: false, currentPlayers: 2 };
     try {
+      // Unlimited challenges often keep API status "waiting" after startAt —
+      // check the unlimited endpoint and normalize by schedule window.
+      if (isUnlimitedGoalRoom) {
+        const ulRes = await authFetch(`/api/unlimited-challenges/${backendRaceId}`);
+        if (ulRes.ok) {
+          const mapped = mapUnlimitedDetailToWaitingRoom(await ulRes.json().catch(() => null));
+          if (mapped?.race) {
+            const normalized = normalizeUnlimitedLiveStatus(mapped.race.status, {
+              startAt: mapped.race.scheduledStartAt ?? mapped.race.startedAt,
+              endAt: null,
+            });
+            return {
+              inProgress: normalized === "in_progress",
+              currentPlayers: mapped.race.currentPlayers ?? participantsRef.current.length ?? 1,
+            };
+          }
+        }
+      }
+
       const res = await authFetch(`/api/races/${backendRaceId}`);
-      if (!res.ok) return { inProgress: false, currentPlayers: 2 };
+      if (!res.ok) {
+        // Unlimited id may 404 on /api/races — fall back to schedule window.
+        if (isUnlimitedGoalRoom && scheduledStartAt) {
+          const normalized = normalizeUnlimitedLiveStatus("waiting", {
+            startAt: scheduledStartAt,
+            endAt: null,
+          });
+          return {
+            inProgress: normalized === "in_progress",
+            currentPlayers: participantsRef.current.length || 1,
+          };
+        }
+        return { inProgress: false, currentPlayers: 2 };
+      }
       const data = await res.json();
+      const status = data.race?.status as string | undefined;
+      if (isUnlimitedGoalRoom) {
+        const normalized = normalizeUnlimitedLiveStatus(status, {
+          startAt:
+            data.race?.scheduledStartAt ??
+            data.race?.startedAt ??
+            scheduledStartAt,
+          endAt: data.race?.endsAt ?? data.race?.challengeEndAt ?? null,
+        });
+        return {
+          inProgress: normalized === "in_progress",
+          currentPlayers: data.race?.currentPlayers ?? 2,
+        };
+      }
       return {
-        inProgress: data.race?.status === "in_progress",
+        inProgress: status === "in_progress",
         currentPlayers: data.race?.currentPlayers ?? 2,
       };
     } catch {
       return { inProgress: false, currentPlayers: 2 };
     }
-  }, [backendRaceId]);
+  }, [backendRaceId, isUnlimitedGoalRoom, scheduledStartAt]);
 
   // ── Navigate to race track ────────────────────────────────────────────────
   // Only called from countdown completion after API confirms in_progress.
@@ -1443,6 +1561,7 @@ function MatchmakingScreenContent() {
 
   const pollRoom = useCallback(
     async (force = false) => {
+      if (useDummyWaitingRoom) return;
       if (!backendRaceId || exitingRef.current) return;
       const gateKey = `${backendRaceId}:matchmaking`;
       if (
@@ -1579,14 +1698,14 @@ function MatchmakingScreenContent() {
           dataRace.maxPlayers == null ||
           (typeof dataRace.maxPlayers === "number" && dataRace.maxPlayers <= 0);
 
-        const minParticipants = unlimitedCapacity
-          ? 1
-          : resolveMinimumParticipants(
-              dataRace.minimumParticipants ??
-                dataRace.minParticipants ??
-                dataRace.min_players ??
-                dataRace.minimum_participants,
-            );
+        // Same min-player / canStart rules as Free / Coins / Cash — Unlimited
+        // only differs on capacity (no max), not on who may start the race.
+        const minParticipants = resolveMinimumParticipants(
+          dataRace.minimumParticipants ??
+            dataRace.minParticipants ??
+            dataRace.min_players ??
+            dataRace.minimum_participants,
+        );
         const nextLiveRoom = {
           currentPlayers: dataRace.currentPlayers ?? 1,
           maxPlayers: unlimitedCapacity ? 0 : (dataRace.maxPlayers ?? raceMaxPlayers),
@@ -1605,9 +1724,7 @@ function MatchmakingScreenContent() {
           canStart:
             typeof dataRace.canStart === "boolean"
               ? dataRace.canStart
-              : unlimitedCapacity
-                ? true
-                : (dataRace.currentPlayers ?? 1) >= minParticipants,
+              : (dataRace.currentPlayers ?? 1) >= minParticipants,
           roomExpiresAt:
             dataRace.roomExpiresAt ??
             dataRace.room_expires_at ??
@@ -1640,6 +1757,18 @@ function MatchmakingScreenContent() {
         roomExpiresAtRef.current = expiresAt;
 
         const statusLower = String(dataRace.status ?? "").toLowerCase();
+        const effectiveLiveStatus = unlimitedCapacity
+          ? normalizeUnlimitedLiveStatus(dataRace.status, {
+              startAt:
+                apiSchedule ||
+                dataRace.startedAt ||
+                scheduledStartAt,
+              endAt:
+                dataRace.challengeEndAt ??
+                dataRace.challenge_end_at ??
+                null,
+            })
+          : statusLower;
         if (
           statusLower === "cancelled" ||
           statusLower === "canceled" ||
@@ -1686,7 +1815,7 @@ function MatchmakingScreenContent() {
         persistWaitingRoomCache(nextParticipants, nextLiveRoom);
         void refreshOnlineIds();
         if (
-          dataRace.status === "in_progress" &&
+          (effectiveLiveStatus === "in_progress" || dataRace.status === "in_progress") &&
           startPhaseRef.current === "idle"
         ) {
           beginCountdown(3, dataRace.currentPlayers ?? 2);
@@ -1711,6 +1840,7 @@ function MatchmakingScreenContent() {
       params.initialCapacityMode,
       params.initialEntryType,
       params.initialDailyGoalSteps,
+      useDummyWaitingRoom,
     ],
   );
 
@@ -1731,10 +1861,11 @@ function MatchmakingScreenContent() {
   );
 
   // ── Store race ID in context ──────────────────────────────────────────────
+  const didBindActiveRaceRef = useRef(false);
   useEffect(() => {
-    if (params.raceId && !contextRaceId) {
-      setActiveRace(params.raceId, params.isHost === "true");
-    }
+    if (!params.raceId || contextRaceId || didBindActiveRaceRef.current) return;
+    didBindActiveRaceRef.current = true;
+    setActiveRace(params.raceId, params.isHost === "true");
   }, [params.raceId, params.isHost, contextRaceId, setActiveRace]);
 
   // ── Pusher subscriptions ──────────────────────────────────────────────────
@@ -2007,6 +2138,61 @@ function MatchmakingScreenContent() {
     }
   }, [backendRaceId, setStart, beginCountdown, scheduledStartAt]);
 
+  /** Unlimited Waiting Room → Live Race when the Unlimited frontend flag is on. */
+  const enterUnlimitedLiveRace = useCallback(async () => {
+    if (useDummyWaitingRoom) {
+      enterDummyLiveRace();
+      return;
+    }
+    if (!backendRaceId || startPhaseRef.current === "navigating") return;
+
+    const playerCount = Math.max(participantsRef.current.length, 1);
+    const { inProgress, currentPlayers } = await fetchRaceStartState();
+    if (inProgress) {
+      await navigateToRace(Math.max(currentPlayers, playerCount));
+      return;
+    }
+
+    if (isHostMode && resolveWaitingRoomMode(scheduledStartAt) === "open_window") {
+      await handleStartRace();
+      return;
+    }
+
+    // Flag-on path: leave Waiting Room into Live Race even if API still says waiting
+    // (common for Unlimited after scheduled start). live-detail loads the same race id.
+    setStart("navigating");
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    if (isHostMode) {
+      startRaceManually();
+    } else {
+      notifyRaceStarted(playerCount, raceStartedAtRef.current ?? undefined);
+    }
+    router.replace({
+      pathname: "/race/live-detail",
+      params: {
+        id: backendRaceId,
+        challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
+        capacityMode: "unlimited",
+        ...(isUnlimitedRaceDummyDataEnabled() ? { dummyRace: "1" } : null),
+      },
+    });
+  }, [
+    useDummyWaitingRoom,
+    enterDummyLiveRace,
+    backendRaceId,
+    fetchRaceStartState,
+    navigateToRace,
+    isHostMode,
+    scheduledStartAt,
+    handleStartRace,
+    setStart,
+    startRaceManually,
+    notifyRaceStarted,
+  ]);
+
   // ── Derived values ────────────────────────────────────────────────────────
   const realPlayerCount = Math.max(
     liveRoom?.currentPlayers ?? 0,
@@ -2062,6 +2248,10 @@ function MatchmakingScreenContent() {
     isUnlimitedGoalRoom ||
     liveRoom?.capacityMode === "unlimited" ||
     realMaxPlayers <= 0;
+
+  // Dummy-only shortcut. Real Unlimited uses the same Start / scheduled /
+  // Leave CTAs as other races (min players, canStart, open_window rules).
+  const showUnlimitedEnterCta = useDummyWaitingRoom;
 
   // The normalized occupied list is the only source for grid order and count.
   const sortedParticipants = useMemo(() => {
@@ -2522,7 +2712,63 @@ function MatchmakingScreenContent() {
 
       {/* Sticky actions — same SafeArea bottom pattern as Available Rooms / Walk */}
       <View style={styles.footerActions}>
-        {isHostMode ? (
+        {showUnlimitedEnterCta ? (
+          <>
+            <TouchableOpacity
+              style={styles.startBtn}
+              onPress={() => {
+                void enterUnlimitedLiveRace();
+              }}
+              activeOpacity={0.85}
+              accessibilityLabel="Enter unlimited live race"
+            >
+              <LinearGradient
+                colors={[colors.primary, colors.accent]}
+                style={styles.startBtnGrad}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+              >
+                <Feather name="play" size={18} color="#000" />
+                <Text style={[styles.startBtnText, { color: "#000" }]}>
+                  {useDummyWaitingRoom ? "Join Race" : "Enter Live Race"}
+                </Text>
+              </LinearGradient>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.cancelBtn,
+                {
+                  borderColor: isUsdCashPaidRoom
+                    ? colors.destructive + "40"
+                    : isHostMode
+                      ? colors.destructive + "40"
+                      : colors.border,
+                },
+              ]}
+              onPress={handleCancel}
+              disabled={leaving}
+            >
+              <Text
+                style={[
+                  styles.cancelText,
+                  {
+                    color: isUsdCashPaidRoom || isHostMode
+                      ? colors.destructive
+                      : colors.mutedForeground,
+                  },
+                ]}
+              >
+                {leaving
+                  ? "Leaving…"
+                  : isUsdCashPaidRoom
+                    ? USD_CASH_LEAVE_ACTION_LABEL
+                    : isHostMode
+                      ? "Cancel Room"
+                      : "Leave Room"}
+              </Text>
+            </TouchableOpacity>
+          </>
+        ) : isHostMode ? (
           <>
             {waitingRoomMode === "open_window" ? (
               <TouchableOpacity

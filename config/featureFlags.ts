@@ -69,6 +69,24 @@ export function isUnlimitedGoalFrontendEnabled(): boolean {
 }
 
 /**
+ * Frontend-only Unlimited Race dummy session (Waiting Room → Live Race).
+ *
+ * Default: false (production). Enable with:
+ *   EXPO_PUBLIC_ENABLE_UNLIMITED_RACE_DUMMY_DATA=true
+ * Instant rollback: flip the hard switch below to `false`.
+ *
+ * Does not change backend contracts or production race rules when false.
+ */
+export const ENABLE_UNLIMITED_RACE_DUMMY_DATA =
+  process.env.EXPO_PUBLIC_ENABLE_UNLIMITED_RACE_DUMMY_DATA === "true" &&
+  // Local hard switch — flip to true only when intentionally testing dummy UI.
+  false;
+
+export function isUnlimitedRaceDummyDataEnabled(): boolean {
+  return ENABLE_UNLIMITED_RACE_DUMMY_DATA;
+}
+
+/**
  * Walk-tab Trending Challenges preview (stacked carousel below Create Challenge).
  *
  * Dev default: on. Disable with:

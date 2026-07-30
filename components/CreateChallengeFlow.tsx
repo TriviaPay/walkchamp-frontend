@@ -93,7 +93,8 @@ import {
   CREATE_CHALLENGE_CLOCK_INTERVAL_MS,
   selectEffectiveChallengeSchedule,
 } from "@/utils/createChallengeSchedule";
-import { CC, CREATE_CHALLENGE_TOTAL_STEPS, ROOM_CARD_RADIUS, selectCreateChallengeAccentTheme, type CreateChallengeAccentTheme } from "@/constants/createChallengeTheme";
+import { CREATE_CHALLENGE_TOTAL_STEPS, ROOM_CARD_RADIUS, adaptCreateChallengeAccentForTheme, getCreateChallengeChrome, selectCreateChallengeAccentTheme, type CreateChallengeAccentTheme, type CreateChallengeChrome } from "@/constants/createChallengeTheme";
+import { useTheme } from "@/context/ThemeContext";
 
 type ThemeLike = { code: string; owned?: boolean };
 type Colors = ReturnType<typeof import("@/hooks/useColors").useColors>;
@@ -114,9 +115,11 @@ type Props = {
 function StepProgress({
   step,
   roomTheme,
+  chrome,
 }: {
   step: CreateStep;
   roomTheme: CreateChallengeAccentTheme;
+  chrome: CreateChallengeChrome;
 }) {
   const steps = [1, 2, 3, 4, 5] as CreateStep[];
   return (
@@ -140,7 +143,7 @@ function StepProgress({
                     style={styles.dotLine}
                   />
                 ) : (
-                  <View style={[styles.dotLine, { backgroundColor: CC.connectorInactive }]} />
+                  <View style={[styles.dotLine, { backgroundColor: chrome.connectorInactive }]} />
                 )
               ) : null}
               <View
@@ -156,7 +159,7 @@ function StepProgress({
                       ? current
                         ? roomTheme.progressCurrent
                         : roomTheme.progressDone
-                      : CC.progressUpcoming,
+                      : chrome.progressUpcoming,
                     shadowColor: roomTheme.secondary,
                     shadowOpacity: current ? 0.45 : 0,
                     shadowRadius: 5,
@@ -175,7 +178,7 @@ function StepProgress({
           );
         })}
       </View>
-      <Text style={[styles.stepCount, { color: CC.textSecondary }]}>
+      <Text style={[styles.stepCount, { color: chrome.textSecondary }]}>
         Step {step} of {CREATE_CHALLENGE_TOTAL_STEPS}
       </Text>
     </View>
@@ -209,9 +212,18 @@ export function CreateChallengeFlow({
   const [deviceNow, setDeviceNow] = useState(() => new Date());
   const cashQuoteSeqRef = useRef(0);
 
+  const { isDark } = useTheme();
+  const chrome = useMemo(
+    () => getCreateChallengeChrome(colors, isDark),
+    [colors, isDark],
+  );
   const roomTheme = useMemo(
-    () => selectCreateChallengeAccentTheme(draft.visibility),
-    [draft.visibility],
+    () =>
+      adaptCreateChallengeAccentForTheme(
+        selectCreateChallengeAccentTheme(draft.visibility),
+        isDark,
+      ),
+    [draft.visibility, isDark],
   );
   const accent = roomTheme.primary;
   const format = resolveChallengeFormat(draft);
@@ -530,7 +542,10 @@ export function CreateChallengeFlow({
 
   const roomSeg = (side: "public" | "private") => {
     const selected = draft.visibility === side;
-    const theme = selectCreateChallengeAccentTheme(side);
+    const theme = adaptCreateChallengeAccentForTheme(
+      selectCreateChallengeAccentTheme(side),
+      isDark,
+    );
     return (
       <TouchableOpacity
         key={side}
@@ -555,7 +570,7 @@ export function CreateChallengeFlow({
           style={[
             styles.roomCardShell,
             {
-              borderColor: selected ? theme.border : CC.border,
+              borderColor: selected ? theme.border : chrome.border,
               shadowColor: selected ? theme.secondary : "transparent",
               shadowOpacity: selected ? 0.18 : 0,
               shadowRadius: selected ? 8 : 0,
@@ -571,13 +586,19 @@ export function CreateChallengeFlow({
               style={StyleSheet.absoluteFillObject}
             />
           ) : (
-            <View style={[StyleSheet.absoluteFillObject, styles.roomCardUnselectedBg]} />
+            <View
+              style={[
+                StyleSheet.absoluteFillObject,
+                styles.roomCardUnselectedBg,
+                { backgroundColor: chrome.cardUnselected },
+              ]}
+            />
           )}
 
           <View
             style={[
               styles.roomCardContent,
-              !selected && { opacity: CC.unselectedContentOpacity },
+              !selected && { opacity: chrome.unselectedContentOpacity },
             ]}
           >
             <View
@@ -586,21 +607,21 @@ export function CreateChallengeFlow({
                 {
                   backgroundColor: selected
                     ? theme.iconBackground
-                    : "rgba(255,255,255,0.06)",
+                    : chrome.surfaceSubtle,
                 },
               ]}
             >
               <Feather
                 name={side === "public" ? "globe" : "lock"}
                 size={16}
-                color={selected ? theme.iconColor : CC.textMuted}
+                color={selected ? theme.iconColor : chrome.textMuted}
               />
             </View>
             <Text
               style={{
                 fontSize: rf(13),
                 fontWeight: "800",
-                color: selected ? CC.text : "rgba(255,255,255,0.78)",
+                color: selected ? chrome.text : chrome.unselectedTitle,
               }}
             >
               {side === "public" ? "Public Room" : "Private Room"}
@@ -608,7 +629,7 @@ export function CreateChallengeFlow({
             <Text
               style={{
                 fontSize: rf(10),
-                color: selected ? CC.textSecondary : "rgba(180,187,208,0.62)",
+                color: selected ? chrome.textSecondary : chrome.unselectedDesc,
                 marginTop: 2,
                 lineHeight: 13,
               }}
@@ -652,32 +673,32 @@ export function CreateChallengeFlow({
   const fixedSelected = draft.usdFormat === "fixed";
 
   return (
-    <SafeAreaView edges={["top", "left", "right", "bottom"]} style={[styles.wrap, { backgroundColor: CC.bg }]}>
+    <SafeAreaView edges={["top", "left", "right", "bottom"]} style={[styles.wrap, { backgroundColor: chrome.bg }]}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={goBack}
           accessibilityLabel={step === 1 ? "Close create challenge" : "Back"}
-          style={[styles.iconBtn, { backgroundColor: CC.headerBtn, borderColor: CC.borderBtn }]}
+          style={[styles.iconBtn, { backgroundColor: chrome.headerBtn, borderColor: chrome.borderBtn }]}
         >
-          <Feather name="arrow-left" size={18} color={CC.textSecondary} />
+          <Feather name="arrow-left" size={18} color={chrome.textSecondary} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={[styles.title, { color: CC.text }]}>Create Challenge</Text>
-          <Text style={[styles.subtitle, { color: CC.textSubtitle }]}>
+          <Text style={[styles.title, { color: chrome.text }]}>Create Challenge</Text>
+          <Text style={[styles.subtitle, { color: chrome.textSubtitle }]}>
             Set the rules, invite players, and start walking.
           </Text>
         </View>
         <TouchableOpacity
           onPress={onClose}
           accessibilityLabel="Close"
-          style={[styles.iconBtn, { backgroundColor: CC.headerBtn, borderColor: CC.borderBtn }]}
+          style={[styles.iconBtn, { backgroundColor: chrome.headerBtn, borderColor: chrome.borderBtn }]}
         >
-          <Feather name="x" size={18} color={CC.textSecondary} />
+          <Feather name="x" size={18} color={chrome.textSecondary} />
         </TouchableOpacity>
       </View>
 
-      <StepProgress step={step} roomTheme={roomTheme} />
+      <StepProgress step={step} roomTheme={roomTheme} chrome={chrome} />
 
       <ScrollView
         contentContainerStyle={styles.body}
@@ -710,8 +731,8 @@ export function CreateChallengeFlow({
                       style={[
                         styles.entrySeg,
                         {
-                          borderColor: selected ? roomTheme.border : CC.border,
-                          backgroundColor: selected ? roomTheme.softBackground : "rgba(255,255,255,0.04)",
+                          borderColor: selected ? roomTheme.border : chrome.border,
+                          backgroundColor: selected ? roomTheme.softBackground : chrome.surfaceSubtle,
                         },
                       ]}
                     >
@@ -761,11 +782,11 @@ export function CreateChallengeFlow({
           {step === 2 && (
             <View style={styles.stack}>
               {draft.entryType !== "usd" ? (
-                <View style={[styles.glassCard, { borderColor: CC.border, backgroundColor: CC.card }]}>
-                  <Text style={[styles.cardTitle, { color: CC.text }]}>
+                <View style={[styles.glassCard, { borderColor: chrome.border, backgroundColor: chrome.card }]}>
+                  <Text style={[styles.cardTitle, { color: chrome.text }]}>
                     {draft.entryType === "free" ? "Free Challenge" : "Coins Battle"}
                   </Text>
-                  <Text style={[styles.cardHelper, { color: CC.textSecondary }]}>
+                  <Text style={[styles.cardHelper, { color: chrome.textSecondary }]}>
                     {draft.entryType === "free"
                       ? "Fixed players format. 2–10 players compete toward a step goal with no entry fee."
                       : "Fixed players format. 2–10 players enter with coins. Top finishers share the prize pool."}
@@ -786,7 +807,7 @@ export function CreateChallengeFlow({
                 </View>
               ) : (
                 <>
-                  <Text style={[styles.sectionLabel, { color: CC.textSection }]}>
+                  <Text style={[styles.sectionLabel, { color: chrome.textSection }]}>
                     Choose a Cash Challenge Type
                   </Text>
 
@@ -822,7 +843,7 @@ export function CreateChallengeFlow({
                         colors={
                           unlimitedSelected
                             ? [...roomTheme.gradientBorder]
-                            : [CC.border, CC.border]
+                            : [chrome.border, chrome.border]
                         }
                         start={{ x: 0, y: 0 }}
                         end={{ x: 1, y: 1 }}
@@ -841,13 +862,13 @@ export function CreateChallengeFlow({
                           colors={
                             unlimitedSelected
                               ? [...roomTheme.gradientSelected]
-                              : [CC.cardUnselected, CC.cardUnselected]
+                              : [chrome.cardUnselected, chrome.cardUnselected]
                           }
                           start={{ x: 0, y: 0 }}
                           end={{ x: 1, y: 1 }}
                           style={[
                             styles.formatCardInner,
-                            !unlimitedSelected && { opacity: CC.unselectedContentOpacity },
+                            !unlimitedSelected && { opacity: chrome.unselectedContentOpacity },
                           ]}
                         >
                           <View style={styles.formatTop}>
@@ -864,7 +885,7 @@ export function CreateChallengeFlow({
                                 style={{
                                   fontSize: rf(16),
                                   fontWeight: "800",
-                                  color: unlimitedSelected ? "#FFF" : "rgba(255,255,255,0.7)",
+                                  color: unlimitedSelected ? "#FFF" : chrome.unselectedTitle,
                                 }}
                               >
                                 ∞
@@ -876,7 +897,7 @@ export function CreateChallengeFlow({
                                   style={[
                                     styles.cardTitleSm,
                                     {
-                                      color: unlimitedSelected ? CC.text : "rgba(255,255,255,0.78)",
+                                      color: unlimitedSelected ? chrome.text : chrome.unselectedTitle,
                                     },
                                   ]}
                                 >
@@ -891,7 +912,7 @@ export function CreateChallengeFlow({
                                   styles.cardHelperSm,
                                   {
                                     color: unlimitedSelected
-                                      ? CC.textSecondary
+                                      ? chrome.textSecondary
                                       : "rgba(180,187,208,0.62)",
                                   },
                                 ]}
@@ -913,7 +934,7 @@ export function CreateChallengeFlow({
                           <View
                             style={[
                               styles.badgeRow,
-                              { opacity: unlimitedSelected ? 1 : CC.unselectedPillOpacity },
+                              { opacity: unlimitedSelected ? 1 : chrome.unselectedPillOpacity },
                             ]}
                           >
                             {CHALLENGE_TYPE_PILLS.unlimited.map((label) => (
@@ -922,10 +943,10 @@ export function CreateChallengeFlow({
                                 style={[
                                   styles.miniBadge,
                                   {
-                                    borderColor: unlimitedSelected ? roomTheme.pillBorder : CC.border,
+                                    borderColor: unlimitedSelected ? roomTheme.pillBorder : chrome.border,
                                     backgroundColor: unlimitedSelected
                                       ? roomTheme.pillBg
-                                      : "rgba(255,255,255,0.04)",
+                                      : chrome.surfaceSubtle,
                                   },
                                 ]}
                               >
@@ -935,7 +956,7 @@ export function CreateChallengeFlow({
                                     fontWeight: "700",
                                     color: unlimitedSelected
                                       ? roomTheme.pillText
-                                      : CC.textMuted,
+                                      : chrome.textMuted,
                                   }}
                                 >
                                   {label}
@@ -967,7 +988,7 @@ export function CreateChallengeFlow({
                         colors={
                           fixedSelected
                             ? [...roomTheme.gradientBorder]
-                            : [CC.border, CC.border]
+                            : [chrome.border, chrome.border]
                         }
                         start={{ x: 0, y: 0 }}
                         end={{ x: 1, y: 1 }}
@@ -986,13 +1007,13 @@ export function CreateChallengeFlow({
                           colors={
                             fixedSelected
                               ? [...roomTheme.gradientSelected]
-                              : [CC.cardUnselected, CC.cardUnselected]
+                              : [chrome.cardUnselected, chrome.cardUnselected]
                           }
                           start={{ x: 0, y: 0 }}
                           end={{ x: 1, y: 1 }}
                           style={[
                             styles.formatCardInner,
-                            !fixedSelected && { opacity: CC.unselectedContentOpacity },
+                            !fixedSelected && { opacity: chrome.unselectedContentOpacity },
                           ]}
                         >
                           <View style={styles.formatTop}>
@@ -1005,7 +1026,7 @@ export function CreateChallengeFlow({
                               <Feather
                                 name="users"
                                 size={15}
-                                color={fixedSelected ? roomTheme.iconColor : CC.textMuted}
+                                color={fixedSelected ? roomTheme.iconColor : chrome.textMuted}
                               />
                             </LinearGradient>
                             <View style={{ flex: 1, minWidth: 0 }}>
@@ -1013,7 +1034,7 @@ export function CreateChallengeFlow({
                                 style={[
                                   styles.cardTitleSm,
                                   {
-                                    color: fixedSelected ? CC.text : "rgba(255,255,255,0.78)",
+                                    color: fixedSelected ? chrome.text : chrome.unselectedTitle,
                                   },
                                 ]}
                               >
@@ -1024,7 +1045,7 @@ export function CreateChallengeFlow({
                                   styles.cardHelperSm,
                                   {
                                     color: fixedSelected
-                                      ? CC.textSecondary
+                                      ? chrome.textSecondary
                                       : "rgba(180,187,208,0.62)",
                                   },
                                 ]}
@@ -1044,7 +1065,7 @@ export function CreateChallengeFlow({
                           <View
                             style={[
                               styles.badgeRow,
-                              { opacity: fixedSelected ? 1 : CC.unselectedPillOpacity },
+                              { opacity: fixedSelected ? 1 : chrome.unselectedPillOpacity },
                             ]}
                           >
                             {CHALLENGE_TYPE_PILLS.fixed.map((label) => (
@@ -1053,10 +1074,10 @@ export function CreateChallengeFlow({
                                 style={[
                                   styles.miniBadge,
                                   {
-                                    borderColor: fixedSelected ? roomTheme.pillBorder : CC.border,
+                                    borderColor: fixedSelected ? roomTheme.pillBorder : chrome.border,
                                     backgroundColor: fixedSelected
                                       ? roomTheme.pillBg
-                                      : "rgba(255,255,255,0.04)",
+                                      : chrome.surfaceSubtle,
                                   },
                                 ]}
                               >
@@ -1064,7 +1085,7 @@ export function CreateChallengeFlow({
                                   style={{
                                     fontSize: rf(9),
                                     fontWeight: "700",
-                                    color: fixedSelected ? roomTheme.pillText : CC.textMuted,
+                                    color: fixedSelected ? roomTheme.pillText : chrome.textMuted,
                                   }}
                                 >
                                   {label}
@@ -1086,7 +1107,7 @@ export function CreateChallengeFlow({
             <View style={styles.stack}>
               {draft.entryType === "free" && (
                 <View style={styles.fieldBlock}>
-                  <Text style={[styles.sectionLabel, { color: CC.textSection }]}>Target Steps</Text>
+                  <Text style={[styles.sectionLabel, { color: chrome.textSection }]}>Target Steps</Text>
                   <PremiumStepSlider
                     hideLabel
                     helperText="Steps required to complete the challenge"
@@ -1100,10 +1121,11 @@ export function CreateChallengeFlow({
                     )}
                     accessibilityLabel="Target steps"
                     accent={roomTheme.primary}
-                    labelColor={CC.text}
-                    helperColor={CC.textSecondary}
-                    surfaceColor={CC.cardEntry}
-                    borderColor={CC.borderDaily}
+                    labelColor={chrome.text}
+                    helperColor={chrome.textSecondary}
+                    surfaceColor={chrome.cardEntry}
+                    borderColor={chrome.borderDaily}
+                    trackInactive={chrome.trackInactive}
                     trackGradient={roomTheme.gradientTrack}
                   />
                 </View>
@@ -1112,7 +1134,7 @@ export function CreateChallengeFlow({
               {draft.entryType === "coins" && (
                 <>
                   <View style={styles.fieldBlock}>
-                    <Text style={[styles.sectionLabel, { color: CC.textSection }]}>Coin Entry</Text>
+                    <Text style={[styles.sectionLabel, { color: chrome.textSection }]}>Coin Entry</Text>
                     <PremiumStepSlider
                       hideLabel
                       helperText="Coins per player"
@@ -1122,15 +1144,16 @@ export function CreateChallengeFlow({
                       formatValue={(v) => (v >= 1000 ? `${v / 1000}k` : String(v))}
                       accessibilityLabel="Coin entry amount"
                       accent={roomTheme.primary}
-                      labelColor={CC.text}
-                      helperColor={CC.textSecondary}
-                      surfaceColor={CC.cardEntry}
-                      borderColor={CC.borderEntry}
+                      labelColor={chrome.text}
+                      helperColor={chrome.textSecondary}
+                      surfaceColor={chrome.cardEntry}
+                      borderColor={chrome.borderEntry}
+                      trackInactive={chrome.trackInactive}
                       trackGradient={roomTheme.gradientTrack}
                     />
                   </View>
                   <View style={styles.fieldBlock}>
-                    <Text style={[styles.sectionLabel, { color: CC.textSection }]}>Target Steps</Text>
+                    <Text style={[styles.sectionLabel, { color: chrome.textSection }]}>Target Steps</Text>
                     <PremiumStepSlider
                       hideLabel
                       helperText="Steps required to complete the challenge"
@@ -1144,10 +1167,11 @@ export function CreateChallengeFlow({
                       )}
                       accessibilityLabel="Target steps"
                       accent={roomTheme.primary}
-                      labelColor={CC.text}
-                      helperColor={CC.textSecondary}
-                      surfaceColor={CC.cardEntry}
-                      borderColor={CC.borderDaily}
+                      labelColor={chrome.text}
+                      helperColor={chrome.textSecondary}
+                      surfaceColor={chrome.cardEntry}
+                      borderColor={chrome.borderDaily}
+                      trackInactive={chrome.trackInactive}
                       trackGradient={roomTheme.gradientTrack}
                     />
                   </View>
@@ -1157,7 +1181,7 @@ export function CreateChallengeFlow({
               {draft.entryType === "usd" && isUnlimited && (
                 <>
                   <View style={styles.fieldBlock}>
-                    <Text style={[styles.sectionLabel, { color: CC.textSection }]}>Entry Amount</Text>
+                    <Text style={[styles.sectionLabel, { color: chrome.textSection }]}>Entry Amount</Text>
                     <PremiumStepSlider
                       hideLabel
                       helperText="Entry fee per participant"
@@ -1172,10 +1196,11 @@ export function CreateChallengeFlow({
                       maxLabel="$1,000"
                       accessibilityLabel="Unlimited entry amount"
                       accent={roomTheme.primary}
-                      labelColor={CC.text}
-                      helperColor="#AAB0C3"
-                      surfaceColor={CC.cardEntry}
-                      borderColor={CC.borderEntry}
+                      labelColor={chrome.text}
+                      helperColor={chrome.textSecondary}
+                      surfaceColor={chrome.cardEntry}
+                      borderColor={chrome.borderEntry}
+                      trackInactive={chrome.trackInactive}
                       trackGradient={roomTheme.gradientTrack}
                       valuePillBg={roomTheme.valuePillBg}
                       valuePillBorder={roomTheme.valuePillBorder}
@@ -1193,7 +1218,7 @@ export function CreateChallengeFlow({
                     />
                   </View>
                   <View style={styles.fieldBlock}>
-                    <Text style={[styles.sectionLabel, { color: CC.textSection }]}>Daily Step Goal</Text>
+                    <Text style={[styles.sectionLabel, { color: chrome.textSection }]}>Daily Step Goal</Text>
                     <PremiumStepSlider
                       hideLabel
                       helperText="Steps required each challenge day"
@@ -1208,10 +1233,11 @@ export function CreateChallengeFlow({
                       maxLabel="20,000"
                       accessibilityLabel="Daily step goal"
                       accent={roomTheme.primary}
-                      labelColor={CC.text}
-                      helperColor="#AEB4C7"
-                      surfaceColor={CC.cardEntry}
-                      borderColor={CC.borderDaily}
+                      labelColor={chrome.text}
+                      helperColor={chrome.textSecondary}
+                      surfaceColor={chrome.cardEntry}
+                      borderColor={chrome.borderDaily}
+                      trackInactive={chrome.trackInactive}
                       trackGradient={roomTheme.gradientTrack}
                       valuePillBg={roomTheme.valuePillBg}
                       valuePillBorder={roomTheme.valuePillBorder}
@@ -1248,15 +1274,16 @@ export function CreateChallengeFlow({
                       maxLabel="$25"
                       accessibilityLabel="Cash challenge entry fee"
                       accent={roomTheme.primary}
-                      labelColor={CC.text}
-                      helperColor="#AAB0C3"
-                      surfaceColor={CC.cardEntry}
-                      borderColor={CC.borderEntry}
+                      labelColor={chrome.text}
+                      helperColor={chrome.textSecondary}
+                      surfaceColor={chrome.cardEntry}
+                      borderColor={chrome.borderEntry}
+                      trackInactive={chrome.trackInactive}
                       trackGradient={roomTheme.gradientTrack}
                     />
                   </View>
                   <View style={styles.fieldBlock}>
-                    <Text style={[styles.sectionLabel, { color: CC.textSection }]}>Target Steps</Text>
+                    <Text style={[styles.sectionLabel, { color: chrome.textSection }]}>Target Steps</Text>
                     <PremiumStepSlider
                       hideLabel
                       helperText="Steps required to complete the challenge"
@@ -1270,10 +1297,11 @@ export function CreateChallengeFlow({
                       )}
                       accessibilityLabel="Target steps"
                       accent={roomTheme.primary}
-                      labelColor={CC.text}
-                      helperColor="#AEB4C7"
-                      surfaceColor={CC.cardEntry}
-                      borderColor={CC.borderDaily}
+                      labelColor={chrome.text}
+                      helperColor={chrome.textSecondary}
+                      surfaceColor={chrome.cardEntry}
+                      borderColor={chrome.borderDaily}
+                      trackInactive={chrome.trackInactive}
                       trackGradient={roomTheme.gradientTrack}
                     />
                   </View>
@@ -1295,15 +1323,18 @@ export function CreateChallengeFlow({
                   formatValue={(v) => formatPlayerLabel(v)}
                   accessibilityLabel="Player count"
                   accent={roomTheme.primary}
-                  labelColor={colors.foreground}
-                  helperColor={colors.mutedForeground}
+                  labelColor={chrome.text}
+                  helperColor={chrome.textSecondary}
+                  surfaceColor={chrome.card}
+                  borderColor={chrome.border}
+                  trackInactive={chrome.trackInactive}
                   trackGradient={roomTheme.gradientTrack}
                   valuePillBg={roomTheme.valuePillBg}
                   valuePillBorder={roomTheme.valuePillBorder}
                   valuePillText={roomTheme.valuePillText}
                 />
               ) : (
-                <View style={[styles.infoRow, { borderColor: colors.border }]}>
+                <View style={[styles.infoRow, { borderColor: colors.border, backgroundColor: chrome.card }]}>
                   <View style={[styles.formatIconSm, { backgroundColor: roomTheme.iconBackground }]}>
                     <Feather name="users" size={14} color={roomTheme.iconColor} />
                   </View>
@@ -1336,8 +1367,11 @@ export function CreateChallengeFlow({
                   formatValue={(d) => (d === 1 ? "1 Day" : `${d} Days`)}
                   accessibilityLabel="Challenge duration"
                   accent={roomTheme.primary}
-                  labelColor={colors.foreground}
-                  helperColor={colors.mutedForeground}
+                  labelColor={chrome.text}
+                  helperColor={chrome.textSecondary}
+                  surfaceColor={chrome.card}
+                  borderColor={chrome.border}
+                  trackInactive={chrome.trackInactive}
                   trackGradient={roomTheme.gradientTrack}
                   valuePillBg={roomTheme.valuePillBg}
                   valuePillBorder={roomTheme.valuePillBorder}
@@ -1358,8 +1392,11 @@ export function CreateChallengeFlow({
                   maxLabel="90 days"
                   accessibilityLabel="Unlimited duration"
                   accent={roomTheme.primary}
-                  labelColor={colors.foreground}
-                  helperColor={colors.mutedForeground}
+                  labelColor={chrome.text}
+                  helperColor={chrome.textSecondary}
+                  surfaceColor={chrome.card}
+                  borderColor={chrome.border}
+                  trackInactive={chrome.trackInactive}
                   trackGradient={roomTheme.gradientTrack}
                   valuePillBg={roomTheme.valuePillBg}
                   valuePillBorder={roomTheme.valuePillBorder}
@@ -1368,7 +1405,7 @@ export function CreateChallengeFlow({
               )}
 
               <View style={styles.scheduleBlock}>
-              <View style={[styles.schedulePanel, { borderColor: colors.border }]} accessibilityLabel="Schedule">
+              <View style={[styles.schedulePanel, { borderColor: colors.border, backgroundColor: chrome.card }]} accessibilityLabel="Schedule">
                 <View style={styles.scheduleRow}>
                   <View style={[styles.formatIconSm, { backgroundColor: roomTheme.iconBackground }]}>
                     <Feather name="calendar" size={14} color={roomTheme.iconColor} />
@@ -1382,7 +1419,7 @@ export function CreateChallengeFlow({
                   <TouchableOpacity
                     accessibilityLabel={`Start date ${startDateLabel}`}
                     onPress={() => setShowStartDatePicker(true)}
-                    style={[styles.scheduleChip, { borderColor: roomTheme.border }]}
+                    style={[styles.scheduleChip, { borderColor: roomTheme.border, backgroundColor: chrome.chipBg }]}
                   >
                     <Text style={[styles.scheduleChipLabel, { color: colors.mutedForeground }]}>Date</Text>
                     <Text style={[styles.scheduleChipValue, { color: roomTheme.valueText }]}>{startDateLabel}</Text>
@@ -1390,7 +1427,7 @@ export function CreateChallengeFlow({
                   {isUnlimited ? (
                     <View
                       accessibilityLabel="Start time, fixed at 12:00 AM"
-                      style={[styles.scheduleChip, styles.scheduleChipLocked]}
+                      style={[styles.scheduleChip, styles.scheduleChipLocked, { backgroundColor: chrome.chipBg, borderColor: colors.border }]}
                     >
                       <Text style={[styles.scheduleChipLabel, { color: colors.mutedForeground }]}>Time</Text>
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
@@ -1418,7 +1455,7 @@ export function CreateChallengeFlow({
                         }
                         setShowStartTimePicker(true);
                       }}
-                      style={[styles.scheduleChip, { borderColor: roomTheme.border }]}
+                      style={[styles.scheduleChip, { borderColor: roomTheme.border, backgroundColor: chrome.chipBg }]}
                     >
                       <Text style={[styles.scheduleChipLabel, { color: colors.mutedForeground }]}>Time</Text>
                       <Text style={[styles.scheduleChipValue, { color: roomTheme.valueText }]}>{startTimeLabel}</Text>
@@ -1429,7 +1466,7 @@ export function CreateChallengeFlow({
                 <View style={[styles.scheduleDivider, { backgroundColor: colors.border }]} />
 
                 <View style={styles.scheduleEndRow}>
-                  <View style={[styles.formatIconSm, { backgroundColor: "rgba(255,255,255,0.06)" }]}>
+                  <View style={[styles.formatIconSm, { backgroundColor: chrome.surfaceSubtle }]}>
                     <Feather name="lock" size={14} color={colors.mutedForeground} />
                   </View>
                   <View style={styles.scheduleEndCopy}>
@@ -1443,7 +1480,7 @@ export function CreateChallengeFlow({
                   <View style={styles.scheduleEndChipsRight}>
                     <View
                       accessibilityLabel="End date, calculated automatically"
-                      style={[styles.scheduleChip, styles.scheduleChipLocked]}
+                      style={[styles.scheduleChip, styles.scheduleChipLocked, { backgroundColor: chrome.chipBg, borderColor: colors.border }]}
                     >
                       <Text style={[styles.scheduleChipLabel, { color: colors.mutedForeground }]}>End Date</Text>
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
@@ -1457,7 +1494,7 @@ export function CreateChallengeFlow({
                     </View>
                     <View
                       accessibilityLabel="End time, fixed at 12:00 AM"
-                      style={[styles.scheduleChip, styles.scheduleChipLocked]}
+                      style={[styles.scheduleChip, styles.scheduleChipLocked, { backgroundColor: chrome.chipBg, borderColor: colors.border }]}
                     >
                       <Text style={[styles.scheduleChipLabel, { color: colors.mutedForeground }]}>End Time</Text>
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
@@ -1517,7 +1554,7 @@ export function CreateChallengeFlow({
               )}
 
               {isUnlimited && (
-                <View style={[styles.glassCardCompact, { borderColor: colors.border }]}>
+                <View style={[styles.glassCardCompact, { borderColor: colors.border, backgroundColor: chrome.card }]}>
                   <Text style={[styles.cardTitleSm, { color: colors.foreground }]}>Equal Prize Split</Text>
                   <Text style={[styles.cardHelperSm, { color: colors.mutedForeground }]}>
                     Everyone who completes the daily goal on every required day shares the final prize pool equally.
@@ -1579,17 +1616,17 @@ export function CreateChallengeFlow({
       </ScrollView>
 
       {/* Sticky footer */}
-      <View style={[styles.sticky, { borderTopColor: CC.border, backgroundColor: CC.bg }]}>
+      <View style={[styles.sticky, { borderTopColor: chrome.border, backgroundColor: chrome.bg }]}>
         <TouchableOpacity
           style={[
             styles.secondaryBtn,
-            { borderColor: CC.borderBack, backgroundColor: "#070B18" },
+            { borderColor: chrome.borderBack, backgroundColor: chrome.backBtnBg },
           ]}
           onPress={goBack}
           disabled={creating}
           accessibilityLabel="Back"
         >
-          <Text style={{ fontSize: rf(14), fontWeight: "700", color: CC.text }}>Back</Text>
+          <Text style={{ fontSize: rf(14), fontWeight: "700", color: chrome.text }}>Back</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.primaryBtn}
@@ -1617,8 +1654,8 @@ export function CreateChallengeFlow({
               )}
             </LinearGradient>
           ) : (
-            <View style={[styles.primaryGrad, { backgroundColor: CC.disabledBtn }]}>
-              <Text style={[styles.primaryText, { color: CC.disabledText }]} numberOfLines={1}>
+            <View style={[styles.primaryGrad, { backgroundColor: chrome.disabledBtn }]}>
+              <Text style={[styles.primaryText, { color: chrome.disabledText }]} numberOfLines={1}>
                 {primaryLabel}
               </Text>
             </View>
@@ -1706,10 +1743,10 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 4,
+    gap: rs(8),
+    paddingHorizontal: rs(14),
+    paddingTop: rs(10),
+    paddingBottom: rs(4),
   },
   headerCenter: { flex: 1, alignItems: "center", paddingTop: 2 },
   title: {
@@ -1719,27 +1756,25 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   subtitle: {
-    fontSize: rf(11),
-    marginTop: 3,
+    fontSize: rf(12),
+    marginTop: rs(3),
     textAlign: "center",
-    lineHeight: 15,
+    lineHeight: rs(16),
   },
   iconBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
+    width: rs(36),
+    height: rs(36),
+    borderRadius: rs(10),
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: CC.headerBtn,
     borderWidth: 1,
-    borderColor: CC.borderBtn,
   },
   progressBlock: {
     alignItems: "center",
-    paddingHorizontal: 20,
-    paddingTop: 4,
-    paddingBottom: 6,
-    gap: 4,
+    paddingHorizontal: rs(20),
+    paddingTop: rs(4),
+    paddingBottom: rs(6),
+    gap: rs(4),
   },
   dotsCentered: {
     flexDirection: "row",
@@ -1756,24 +1791,23 @@ const styles = StyleSheet.create({
   stepCount: {
     fontSize: rf(11),
     fontWeight: "600",
-    color: CC.textSecondary,
-    textAlign: "center",
+        textAlign: "center",
   },
   body: {
-    paddingHorizontal: 14,
-    paddingBottom: 24,
-    gap: 12,
+    paddingHorizontal: rs(14),
+    paddingBottom: rs(24),
+    gap: rs(12),
   },
   stack: {
-    gap: 14,
-    rowGap: 14,
+    gap: rs(14),
+    rowGap: rs(14),
   },
   typeStack: {
-    gap: 14,
-    rowGap: 14,
+    gap: rs(14),
+    rowGap: rs(14),
   },
   fieldBlock: {
-    gap: 8,
+    gap: rs(8),
   },
   sectionLabel: {
     fontSize: rf(11),
@@ -1793,11 +1827,9 @@ const styles = StyleSheet.create({
     borderRadius: ROOM_CARD_RADIUS,
     borderWidth: 1.5,
     overflow: "hidden",
-    backgroundColor: CC.cardUnselected,
-  },
+      },
   roomCardUnselectedBg: {
-    backgroundColor: CC.cardUnselected,
-  },
+      },
   roomCardContent: {
     paddingHorizontal: 18,
     paddingVertical: 18,
@@ -1837,16 +1869,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 16,
     paddingVertical: 14,
-    backgroundColor: CC.card,
-    gap: 4,
+        gap: 4,
   },
   glassCardCompact: {
     borderRadius: 12,
     borderWidth: 1,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    backgroundColor: CC.card,
-    gap: 4,
+        gap: 4,
   },
   cardTitle: { fontSize: rf(14), fontWeight: "800" },
   cardTitleSm: { fontSize: rf(13), fontWeight: "800" },
@@ -1855,12 +1885,10 @@ const styles = StyleSheet.create({
   formatCard: {
     borderRadius: 14,
     borderWidth: 1.5,
-    borderColor: CC.border,
-    paddingHorizontal: 16,
+        paddingHorizontal: 16,
     paddingVertical: 14,
     overflow: "hidden",
-    backgroundColor: CC.card,
-    gap: 10,
+        gap: 10,
   },
   formatCardOuter: {
     borderRadius: 14,
@@ -1921,8 +1949,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   newBadge: {
-    backgroundColor: CC.cyan,
-    borderRadius: 5,
+        borderRadius: 5,
     paddingHorizontal: 5,
     paddingVertical: 1,
   },
@@ -1942,8 +1969,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 16,
     paddingVertical: 14,
-    backgroundColor: CC.card,
-  },
+      },
   warnLine: { fontSize: rf(10), lineHeight: 13, marginTop: -2, marginBottom: 2 },
   scheduleBlock: {
     gap: 8,
@@ -1951,8 +1977,7 @@ const styles = StyleSheet.create({
   schedulePanel: {
     borderRadius: 12,
     borderWidth: 1,
-    backgroundColor: CC.card,
-    overflow: "hidden",
+        overflow: "hidden",
   },
   scheduleRow: {
     flexDirection: "row",
@@ -2035,7 +2060,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 8,
     paddingVertical: 5,
-    backgroundColor: "rgba(0,0,0,0.22)",
   },
   scheduleChipLocked: {
     borderColor: "rgba(255,255,255,0.08)",
@@ -2063,8 +2087,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     padding: 12,
-    backgroundColor: CC.card,
-  },
+      },
   scheduleLabel: { fontSize: rf(10), fontWeight: "600" },
   scheduleValue: { fontSize: rf(13), fontWeight: "800", marginTop: 4 },
   tzLine: { fontSize: rf(10), paddingHorizontal: 2 },
@@ -2083,7 +2106,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#070B18",
   },
   primaryBtn: {
     flex: 1,

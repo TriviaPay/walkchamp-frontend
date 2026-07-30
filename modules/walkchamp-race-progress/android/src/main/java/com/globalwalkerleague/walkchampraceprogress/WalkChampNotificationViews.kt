@@ -3,6 +3,7 @@ package com.globalwalkerleague.walkchampraceprogress
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Color
+import android.os.Build
 import android.util.Log
 import android.view.View
 import android.widget.RemoteViews
@@ -12,9 +13,10 @@ import androidx.core.app.NotificationCompat
  * Custom RemoteViews for ongoing notifications. Display-only — never reads
  * Health Connect / sensors or recalculates steps.
  *
- * Android 12+ always draws a system header with the app name ("Walk Champ").
- * We therefore hide our in-layout brand title so "Walk Champ" is not repeated;
- * the colorful brand icon stays beside the status line (Daily Walk / Live Race).
+ * Android N+ (`DecoratedCustomViewStyle`) draws a system header with the default
+ * app icon + "Walk Champ". On those devices we hide our in-layout brand mark so
+ * the icon is not duplicated. Older / unsupported surfaces keep the brand icon
+ * beside the status line (same as before).
  *
  * Text colors follow the **device** night mode (white on dark, black on light).
  * Progress bar fill is always Walk Champ green.
@@ -23,6 +25,15 @@ object WalkChampNotificationViews {
   private const val TAG = "WalkChampNotifUI"
   /** Progress fill + percent accent — same green in light and dark. */
   private val PROGRESS_GREEN = Color.parseColor("#22C55E")
+
+  /**
+   * True when the system notification chrome already shows the app / launcher
+   * icon (DecoratedCustomViewStyle header). Callers should skip an extra brand
+   * large-icon in that case.
+   */
+  fun deviceShowsDefaultNotificationAppIcon(): Boolean {
+    return Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+  }
 
   fun applyWalkCustomViews(
     ctx: Context,
@@ -286,14 +297,19 @@ object WalkChampNotificationViews {
   }
 
   /**
-   * Left: Walk Champ brand. Right: type illustration.
-   * Brand title stays visible in the custom layout; DecoratedCustomViewStyle
-   * also shows the system app name on supported OEMs.
+   * Left: Walk Champ brand only when the system will not show the default app
+   * icon. Right: type illustration (always). Brand title stays hidden — the
+   * DecoratedCustomViewStyle header already shows "Walk Champ".
    */
   private fun bindBrandIconOnly(views: RemoteViews, typeIcon: Int) {
-    views.setImageViewResource(R.id.notification_app_icon, R.drawable.notification_walkchamp_brand)
+    if (deviceShowsDefaultNotificationAppIcon()) {
+      // System header already has the app icon — avoid a second brand mark.
+      views.setViewVisibility(R.id.notification_app_icon, View.GONE)
+    } else {
+      views.setViewVisibility(R.id.notification_app_icon, View.VISIBLE)
+      views.setImageViewResource(R.id.notification_app_icon, R.drawable.notification_walkchamp_brand)
+    }
     views.setImageViewResource(R.id.notification_type_icon, typeIcon)
-    // System header already shows "Walk Champ" — hide duplicate in-layout title.
     views.setViewVisibility(R.id.notification_brand_title, View.GONE)
   }
 

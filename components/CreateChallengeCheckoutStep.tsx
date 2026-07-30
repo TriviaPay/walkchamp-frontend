@@ -17,7 +17,7 @@ import type { CashChallengePaymentQuote } from "@/services/cashChallengeApi";
 import { formatUsd } from "@/services/cashChallengeApi";
 import type { UnlimitedGoalPaymentQuote } from "@/services/unlimitedGoalApi";
 import type { CreateChallengeAccentTheme } from "@/constants/createChallengeTheme";
-import { CC } from "@/constants/createChallengeTheme";
+import { useTheme } from "@/context/ThemeContext";
 import type { CreateChallengeDraft } from "@/utils/createChallengeFlow";
 import type { ChallengeReviewSchedule } from "@/utils/createChallengeSchedule";
 import {
@@ -38,12 +38,16 @@ import type { StepBlockReason } from "@/utils/createChallengeFlow";
 import { rf, rs } from "@/utils/responsive";
 import * as Haptics from "@/utils/haptics";
 
+/** Dark-theme gold kept; light uses deeper amber for contrast on pale surfaces. */
+const CHECKOUT_GOLD_LIGHT = "#A16207";
+
 type Colors = {
   foreground: string;
   mutedForeground: string;
   border: string;
   card: string;
   primary: string;
+  muted?: string;
 };
 
 type TrackLayout = {
@@ -99,6 +103,8 @@ function CreateChallengeCheckoutStepInner({
   onPatch,
   onEdit,
 }: Props) {
+  const { isDark } = useTheme();
+  const accentLink = isDark ? CHECKOUT_GOLD : CHECKOUT_GOLD_LIGHT;
   const trackLabel = getTrackDisplayLabel(draft.trackLayout);
   const iconColor = roomTheme.iconColor;
 
@@ -166,7 +172,7 @@ function CreateChallengeCheckoutStepInner({
                 style={[
                   styles.trackCard,
                   {
-                    borderColor: active ? roomTheme.border : "rgba(255,255,255,0.12)",
+                    borderColor: active ? roomTheme.border : colors.border,
                     shadowColor: active ? roomTheme.secondary : "transparent",
                   },
                   active && styles.trackCardActive,
@@ -188,7 +194,7 @@ function CreateChallengeCheckoutStepInner({
 
       {/* Compact challenge summary with neon icons */}
       <View
-        style={[styles.card, { borderColor: colors.border }]}
+        style={[styles.card, { borderColor: colors.border, backgroundColor: colors.card }]}
         accessible
         accessibilityLabel={summary.accessibilityLabel}
       >
@@ -257,30 +263,32 @@ function CreateChallengeCheckoutStepInner({
       {/* Payment */}
       {isUnlimited && payment ? (
         <View
-          style={[styles.card, styles.paymentCard, { borderColor: colors.border }]}
+          style={[styles.card, styles.paymentCard, { borderColor: colors.border, backgroundColor: colors.card }]}
           accessibilityLabel={`Payment Summary. Entry Fee ${payment.entryValue}. Tax ${payment.taxValue}. Platform Service Fee ${payment.platformFeeValue}. Total Payable ${payment.totalValue}.`}
         >
           <Text style={[styles.cardTitle, { color: colors.foreground }]}>Payment Summary</Text>
           <View style={styles.payRow}>
-            <Text style={styles.payLabel}>{payment.entryLabel}</Text>
+            <Text style={[styles.payLabel, { color: colors.mutedForeground }]}>{payment.entryLabel}</Text>
             <Text style={[styles.payValue, { color: colors.foreground }]}>{payment.entryValue}</Text>
           </View>
           <View style={styles.payRow}>
-            <Text style={styles.payLabel}>{payment.taxLabel}</Text>
+            <Text style={[styles.payLabel, { color: colors.mutedForeground }]}>{payment.taxLabel}</Text>
             <Text style={[styles.payValue, { color: colors.foreground }]}>{payment.taxValue}</Text>
           </View>
           <View style={styles.payRow}>
-            <Text style={styles.payLabel}>{payment.platformFeeLabel}</Text>
+            <Text style={[styles.payLabel, { color: colors.mutedForeground }]}>{payment.platformFeeLabel}</Text>
             <Text style={[styles.payValue, { color: colors.foreground }]}>
               {payment.platformFeeValue}
             </Text>
           </View>
           <View style={[styles.payDivider, { backgroundColor: colors.border }]} />
           <View style={styles.payRow}>
-            <Text style={[styles.payLabel, styles.payTotalLabel]}>{payment.totalLabel}</Text>
+            <Text style={[styles.payLabel, styles.payTotalLabel, { color: colors.foreground }]}>
+              {payment.totalLabel}
+            </Text>
             <Text style={[styles.payTotal, { color: accent }]}>{payment.totalValue}</Text>
           </View>
-          <Text style={styles.prizeNote}>{payment.prizePoolNote}</Text>
+          <Text style={[styles.prizeNote, { color: accentLink }]}>{payment.prizePoolNote}</Text>
         </View>
       ) : null}
 
@@ -312,7 +320,7 @@ function CreateChallengeCheckoutStepInner({
           styles.ackCard,
           {
             borderColor: accepted ? accent + "60" : colors.border,
-            backgroundColor: "rgba(255,255,255,0.04)",
+            backgroundColor: colors.muted ?? colors.card,
           },
         ]}
         onPress={toggleAck}
@@ -334,7 +342,7 @@ function CreateChallengeCheckoutStepInner({
         <View style={styles.ackCopy}>
           <Text style={[styles.ackLine, { color: colors.foreground }]}>{ack.line1}</Text>
           <Text style={[styles.ackLine, { color: colors.mutedForeground }]}>{ack.line2}</Text>
-          <Text style={styles.ackTerms}>{ack.terms}</Text>
+          <Text style={[styles.ackTerms, { color: accentLink }]}>{ack.terms}</Text>
         </View>
       </TouchableOpacity>
     </View>
@@ -391,7 +399,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: CHECKOUT_CARD_PAD_H,
     paddingVertical: CHECKOUT_CARD_PAD_V,
-    backgroundColor: CC.card,
     gap: 6,
   },
   paymentCard: {
@@ -486,7 +493,6 @@ const styles = StyleSheet.create({
   payLabel: {
     flex: 1,
     fontSize: rf(12),
-    color: CC.textSecondary,
     fontWeight: "600",
   },
   payValue: {
@@ -499,7 +505,6 @@ const styles = StyleSheet.create({
   },
   payTotalLabel: {
     fontWeight: "800",
-    color: CC.text,
   },
   payTotal: {
     fontSize: rf(16),
@@ -509,7 +514,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontSize: rf(11),
     fontWeight: "700",
-    color: CHECKOUT_GOLD,
   },
   ackCard: {
     borderRadius: CHECKOUT_CARD_RADIUS,
@@ -543,6 +547,5 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: rf(11),
     fontWeight: "800",
-    color: CHECKOUT_GOLD,
   },
 });

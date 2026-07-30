@@ -3,6 +3,7 @@
  */
 
 import { UNLIMITED_GOAL_CHALLENGE_TYPE } from "@/utils/unlimitedGoal";
+import { resolveMinimumParticipants } from "@/utils/waitingRoomTiming";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -131,8 +132,21 @@ export function mapUnlimitedDetailToWaitingRoom(
       coinPrizePool: 0,
       isPrivate: !!isPrivate,
       inviteCode: asString(pick(challenge, "inviteCode", "invite_code")),
-      minimumParticipants: 1,
-      canStart: null,
+      minimumParticipants: resolveMinimumParticipants(
+        asNumber(
+          pick(
+            challenge,
+            "minimumParticipants",
+            "minimum_participants",
+            "minParticipants",
+            "min_players",
+          ),
+        ) ?? undefined,
+      ),
+      canStart:
+        typeof pick(challenge, "canStart", "can_start") === "boolean"
+          ? (pick(challenge, "canStart", "can_start") as boolean)
+          : null,
       roomExpiresAt: asString(
         pick(challenge, "registrationClosesAtUtc", "registration_closes_at_utc"),
       ),

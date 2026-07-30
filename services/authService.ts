@@ -16,10 +16,12 @@ import { Platform } from "react-native";
 import { authEvents } from "@/utils/authEvents";
 import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
 import { logger } from "@/utils/logger";
+import { getApiBase } from "@/utils/apiUrl";
 
 export { getUserIdFromJwt, DescopeRestError as DescopeError };
 
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
+/** Resolved once; falls back to production API when EXPO_PUBLIC_API_URL is unset. */
+const API_BASE = getApiBase();
 
 // ── SecureStore wrapper — falls back to in-memory on web ─────────────────────
 const memStore: Record<string, string> = {};
@@ -773,6 +775,7 @@ export async function completeSignup(
     method: "POST",
     headers: authHeaders(sessionJwt),
     body: JSON.stringify(payload),
+    signal: timeoutSignal(API_TIMEOUT_MS),
   });
   const data = (await res.json()) as { error?: string; profile?: DbProfile };
   if (!res.ok) throw new ApiError(data.error ?? "Failed to complete signup", res.status);
@@ -815,6 +818,7 @@ export async function createProfile(
     method: "POST",
     headers: authHeaders(sessionJwt),
     body: JSON.stringify(payload),
+    signal: timeoutSignal(API_TIMEOUT_MS),
   });
   const data = (await res.json()) as { error?: string; profile?: DbProfile };
   if (!res.ok) throw new ApiError(data.error ?? "Failed to create profile", res.status);

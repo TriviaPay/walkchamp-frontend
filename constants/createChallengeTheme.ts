@@ -112,13 +112,40 @@ export function selectCreateChallengeAccentTheme(
   return ROOM_ACCENT_THEMES[visibility] ?? ROOM_ACCENT_THEMES.public;
 }
 
+/**
+ * Keep neon gradients for CTAs/selected cards; tune soft fills + text for light surfaces
+ * so badges/pills stay readable without changing dark theme.
+ */
+export function adaptCreateChallengeAccentForTheme(
+  theme: CreateChallengeAccentTheme,
+  isDark: boolean,
+): CreateChallengeAccentTheme {
+  if (isDark) return theme;
+  const isPublic = theme.key === "public";
+  const ink = isPublic ? "#0B5FFF" : "#6B21A8";
+  const soft = isPublic ? "rgba(22, 109, 255, 0.12)" : "rgba(134, 66, 255, 0.12)";
+  const iconBg = isPublic ? "rgba(22, 109, 255, 0.16)" : "rgba(134, 66, 255, 0.16)";
+  return {
+    ...theme,
+    softBackground: soft,
+    iconBackground: iconBg,
+    iconColor: ink,
+    valueText: ink,
+    pillText: ink,
+    valuePillBg: soft,
+    valuePillBorder: theme.border,
+    valuePillText: ink,
+    pillBg: soft,
+  };
+}
+
 export function useCreateChallengeRoomTheme(
   visibility: RoomVisibilityTheme,
 ): CreateChallengeAccentTheme {
   return selectCreateChallengeAccentTheme(visibility);
 }
 
-/** Shared neutrals — not room-dependent. */
+/** Shared neutrals — dark defaults (kept for StyleSheet fallbacks / accent-only callers). */
 export const CC = {
   bg: "#050714",
   bgSecondary: "#090D1E",
@@ -127,6 +154,9 @@ export const CC = {
   cardEntry: "#090E21",
   cardUnselected: "#0B1022",
   headerBtn: "#0D1226",
+  backBtnBg: "#070B18",
+  chipBg: "rgba(0,0,0,0.22)",
+  surfaceSubtle: "rgba(255,255,255,0.06)",
 
   cyan: "#14D8FF",
   green: "#25E39A",
@@ -138,6 +168,9 @@ export const CC = {
   textSubtitle: "#A5ACC1",
   textSection: "#A9AFC2",
   textRange: "#C3C7D5",
+  /** Unselected card title/desc — theme-relative translucents */
+  unselectedTitle: "rgba(255,255,255,0.78)",
+  unselectedDesc: "rgba(180,187,208,0.62)",
 
   border: "rgba(117, 130, 173, 0.28)",
   borderBtn: "rgba(121, 145, 205, 0.35)",
@@ -160,5 +193,80 @@ export const CC = {
   /** Fallback when a room theme is unavailable — prefer selectCreateChallengeAccentTheme. */
   gradientCta: ROOM_ACCENT_THEMES.private.gradientCta,
 } as const;
+
+export type CreateChallengeChrome = {
+  -readonly [K in keyof typeof CC]: (typeof CC)[K];
+};
+
+type ThemePalette = {
+  background: string;
+  foreground: string;
+  card: string;
+  muted: string;
+  mutedForeground: string;
+  border: string;
+  warning: string;
+  success: string;
+  neonBlue: string;
+};
+
+/**
+ * Map Create Challenge shell/surfaces to the app light/dark palette
+ * (same source as Profile theme toggle via useColors).
+ * Room neon accents stay in ROOM_ACCENT_THEMES.
+ */
+export function getCreateChallengeChrome(
+  theme: ThemePalette,
+  isDark: boolean,
+): CreateChallengeChrome {
+  if (isDark) {
+    return { ...CC };
+  }
+  return {
+    bg: theme.background,
+    bgSecondary: theme.muted,
+    card: theme.card,
+    cardElevated: theme.card,
+    cardEntry: theme.card,
+    cardUnselected: theme.card,
+    headerBtn: theme.muted,
+    backBtnBg: theme.muted,
+    chipBg: "rgba(10,11,20,0.06)",
+    surfaceSubtle: "rgba(10,11,20,0.05)",
+
+    cyan: theme.neonBlue,
+    green: theme.success,
+    warning: theme.warning,
+
+    text: theme.foreground,
+    textSecondary: theme.mutedForeground,
+    textMuted: theme.mutedForeground,
+    textSubtitle: theme.mutedForeground,
+    textSection: theme.mutedForeground,
+    textRange: theme.mutedForeground,
+    unselectedTitle: "rgba(10,11,20,0.72)",
+    unselectedDesc: "rgba(75,85,99,0.78)",
+
+    border: theme.border,
+    borderBtn: theme.border,
+    borderBack: theme.border,
+    borderEntry: theme.border,
+    borderDaily: theme.border,
+
+    progressUpcoming: "#B8BCC8",
+    connectorInactive: "#C5CAD6",
+    trackInactive: "#D0D4DE",
+
+    disabledBtn: "#D8DCE6",
+    disabledText: "#8B91A3",
+
+    unselectedContentOpacity: 0.92,
+    unselectedTitleOpacity: 0.9,
+    unselectedDescOpacity: 0.78,
+    unselectedPillOpacity: 0.8,
+
+    gradientCta: ROOM_ACCENT_THEMES.private.gradientCta,
+  };
+}
 
 export const CREATE_CHALLENGE_TOTAL_STEPS = 5 as const;

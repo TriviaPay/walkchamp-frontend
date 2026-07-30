@@ -263,6 +263,8 @@ let onActiveSpeakersCb:  ((userIds: string[])                    => void) | null
 let onMuteChangedCb:     ((userId: string, muted: boolean)       => void) | null = null;
 /** Client-side remote volume overrides (0 = locally muted). */
 const localVolumeOverrides = new Map<string, number>();
+/** Session-level local mute-all for remote playback (does not mute self mic). */
+let muteAllRemoteLocal = false;
 
 function findRemoteParticipant(userId: string): any | null {
   if (!activeRoom?.remoteParticipants) return null;
@@ -528,7 +530,14 @@ export const voiceService = {
             }
           }
           if (track.kind === "audio" && participant?.identity) {
-            const vol = localVolumeOverrides.get(participant.identity as string) ?? 1;
+            const id = participant.identity as string;
+            const overridden = localVolumeOverrides.get(id);
+            const vol =
+              overridden !== undefined
+                ? overridden
+                : muteAllRemoteLocal
+                  ? 0
+                  : 1;
             if (typeof track.setVolume === "function") track.setVolume(vol);
           }
         },
@@ -721,6 +730,41 @@ export const voiceService = {
   },
 
   /**
+   * Session-level local mute of all remote audio on this device.
+   * Does not mute the local user's microphone or affect other clients.
+   * New remote tracks inherit mute-all until unmuted or mute-all cleared.
+   */
+  async setMuteAllRemoteLocal(muted: boolean): Promise<void> {
+    muteAllRemoteLocal = muted;
+    if (!activeRoom?.remoteParticipants) return;
+    const map = activeRoom.remoteParticipants as Map<string, any>;
+    for (const [, participant] of map) {
+      const id = participant?.identity as string | undefined;
+      if (!id) continue;
+      if (muted) {
+        localVolumeOverrides.set(id, 0);
+        applyVolumeToParticipant(id, 0);
+      } else {
+        localVolumeOverrides.delete(id);
+        applyVolumeToParticipant(id, 1);
+      }
+    }
+  },
+
+  isMuteAllRemoteLocal(): boolean {
+    return muteAllRemoteLocal;
+  },
+
+  /**
+   * Effective local playback volume for a remote user (0 = silenced on this device).
+   */
+  getEffectiveLocalVolume(userId: string): number {
+    const overridden = localVolumeOverrides.get(userId);
+    if (overridden !== undefined) return overridden;
+    return muteAllRemoteLocal ? 0 : 1;
+  },
+
+  /**
    * Switch audio output route mid-session (phone / speaker / bluetooth).
    *
    * Uses LiveKit AudioSession.selectAudioOutput so the chosen device wins over
@@ -851,6 +895,7 @@ export const voiceService = {
    */
   async disconnectVoice(reason = "user"): Promise<void> {
     if (!activeRoom) return;
+    muteAllRemoteLocal = false;
     localVolumeOverrides.clear();
     try {
       await activeRoom.disconnect();

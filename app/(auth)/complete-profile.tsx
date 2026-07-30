@@ -155,8 +155,31 @@ export default function CompleteProfileScreen() {
     setError("");
     if (!fullName.trim()) { setError("Full name is required."); return; }
     if (usernameStatus === "checking") { setError("Still checking your username…"); return; }
-    if (usernameStatus === "error") { setError("Couldn't verify that username. Please try again."); return; }
-    if (usernameStatus !== "available") { setError("Please choose an available username."); return; }
+    if (usernameStatus === "taken" || usernameStatus === "invalid") {
+      setError(
+        usernameStatus === "taken"
+          ? "Please choose an available username."
+          : "Please enter a valid username.",
+      );
+      return;
+    }
+    // Network blip on username-check must not block profile completion.
+    if (usernameStatus === "error") {
+      try {
+        const { available } = await checkUsernameAvailable(username);
+        if (!available) {
+          setUsernameStatus("taken");
+          setError("This username is already taken.");
+          return;
+        }
+        setUsernameStatus("available");
+      } catch {
+        // Proceed; server uniqueness is enforced on createProfile.
+      }
+    } else if (usernameStatus !== "available") {
+      setError("Please choose an available username.");
+      return;
+    }
     if (!dob) { setError("Date of birth is required."); return; }
     if (calcAge(dob) < 13) { setError("You must be at least 13 years old."); return; }
     if (!selectedCountry) { setError("Please select your country."); return; }
@@ -307,7 +330,7 @@ export default function CompleteProfileScreen() {
               </View>
               {usernameStatus !== "idle" && (
                 <Text style={[styles.fieldHint, { color: usernameColor }]}>
-                  {usernameStatus === "available" ? "Username is available!" : usernameStatus === "taken" ? "This username is already taken." : usernameStatus === "checking" ? "Checking availability…" : usernameStatus === "error" ? "Couldn't verify username. Edit or try again." : "6–14 chars, letters/numbers/underscore, must start with a letter."}
+                  {usernameStatus === "available" ? "Username is available!" : usernameStatus === "taken" ? "This username is already taken." : usernameStatus === "checking" ? "Checking availability…" : usernameStatus === "error" ? "Couldn't verify online — you can continue." : "6–14 chars, letters/numbers/underscore, must start with a letter."}
                 </Text>
               )}
             </View>

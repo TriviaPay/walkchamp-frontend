@@ -8,6 +8,7 @@ import androidx.annotation.Keep
 import androidx.core.app.NotificationCompat
 import com.globalwalkerleague.walkchampraceprogress.NotificationVisualType
 import com.globalwalkerleague.walkchampraceprogress.NotificationVisuals
+import com.globalwalkerleague.walkchampraceprogress.WalkChampNotificationViews
 import com.onesignal.notifications.INotificationReceivedEvent
 import com.onesignal.notifications.INotificationServiceExtension
 import org.json.JSONObject
@@ -15,7 +16,8 @@ import org.json.JSONObject
 /**
  * OneSignal Android presentation only:
  * - Small icon: monochrome walker (status bar)
- * - Large icon: Walk Champ brand (WalkChampProgress100)
+ * - Large icon: Walk Champ brand only when the system does not already show
+ *   the default app icon in the notification header (pre-N / unsupported)
  * - Big picture: notification-type illustration (notification_friend, …)
  */
 @Keep
@@ -26,8 +28,15 @@ class WalkChampNotificationServiceExtension : INotificationServiceExtension {
       val context = event.context
       val visual = resolveVisual(notification.additionalData)
 
-      val brandBitmap = decodeDrawable(context, "notification_walkchamp_brand")
-        ?: decodeDrawable(context, "notification_default")
+      val showBrandLargeIcon =
+        !WalkChampNotificationViews.deviceShowsDefaultNotificationAppIcon()
+      val brandBitmap =
+        if (showBrandLargeIcon) {
+          decodeDrawable(context, "notification_walkchamp_brand")
+            ?: decodeDrawable(context, "notification_default")
+        } else {
+          null
+        }
       val typeBitmap = decodeDrawable(context, drawableName(visual))
         ?: decodeDrawable(context, "notification_default")
 
@@ -46,15 +55,21 @@ class WalkChampNotificationServiceExtension : INotificationServiceExtension {
 
         // Type illustration as expanded rich image when server did not send one.
         if (notification.bigPicture.isNullOrBlank() && typeBitmap != null) {
-          builder.setStyle(
-            NotificationCompat.BigPictureStyle()
-              .bigPicture(typeBitmap)
-              .bigLargeIcon(brandBitmap),
-          )
+          val pictureStyle = NotificationCompat.BigPictureStyle().bigPicture(typeBitmap)
+          // Avoid a second brand mark when the system header already shows the app icon.
+          if (brandBitmap != null) {
+            pictureStyle.bigLargeIcon(brandBitmap)
+          } else {
+            pictureStyle.bigLargeIcon(null as android.graphics.Bitmap?)
+          }
+          builder.setStyle(pictureStyle)
         }
         builder
       }
-      Log.d(TAG, "applied visual=$visual brandLarge=true typePicture=${drawableName(visual)}")
+      Log.d(
+        TAG,
+        "applied visual=$visual brandLarge=$showBrandLargeIcon typePicture=${drawableName(visual)}",
+      )
     } catch (e: Exception) {
       Log.w(TAG, "failed to apply notification visual: ${e.message}")
     }

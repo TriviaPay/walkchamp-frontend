@@ -428,11 +428,29 @@ export default function SignupScreen() {
       setStep2Error("Still checking your username…");
       return;
     }
-    if (usernameStatus === "error") {
-      setStep2Error("Couldn't verify that username. Please try again.");
+    if (usernameStatus === "taken" || usernameStatus === "invalid") {
+      setStep2Error(
+        usernameStatus === "taken"
+          ? "Please choose an available username."
+          : "Please enter a valid username.",
+      );
       return;
     }
-    if (usernameStatus !== "available") {
+    // Network/API blip on username-check must not block account creation —
+    // uniqueness is enforced again in complete-signup.
+    if (usernameStatus === "error") {
+      try {
+        const { available } = await checkUsernameAvailable(username);
+        if (!available) {
+          setUsernameStatus("taken");
+          setStep2Error("This username is already taken.");
+          return;
+        }
+        setUsernameStatus("available");
+      } catch {
+        // Proceed; server will reject if taken.
+      }
+    } else if (usernameStatus !== "available") {
       setStep2Error("Please choose an available username.");
       return;
     }
@@ -548,13 +566,15 @@ export default function SignupScreen() {
           setSubmitError(err.message);
         }
       } else {
-        const e = err as { message?: string };
+        const e = err as { message?: string; status?: number };
         if (e.message === "username_taken") {
           setSubmitError("That username was just taken. Please choose another.");
           setStep(2);
         } else if (e.message === "email_taken") {
           setSubmitError("This email is already registered. Please sign in.");
           setStep(0);
+        } else if (typeof e.message === "string" && e.message.trim() && e.message !== "Failed to complete signup") {
+          setSubmitError(e.message);
         } else {
           setSubmitError("Something went wrong. Please try again.");
         }
@@ -603,7 +623,7 @@ export default function SignupScreen() {
     usernameStatus === "taken" ? "This username is already taken." :
     usernameStatus === "invalid" ? "6–14 chars, letters/numbers/underscore, must start with a letter." :
     usernameStatus === "checking" ? "Checking availability…" :
-    usernameStatus === "error" ? "Couldn't verify username. Edit or try again." : "";
+    usernameStatus === "error" ? "Couldn't verify online — you can continue." : "";
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (

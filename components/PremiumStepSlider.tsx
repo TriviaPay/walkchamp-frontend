@@ -15,7 +15,7 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "@/utils/haptics";
-import { rf } from "@/utils/responsive";
+import { rf, rs } from "@/utils/responsive";
 import {
   indexOfDiscreteValue,
   ratioFromIndex,
@@ -256,8 +256,8 @@ function PremiumStepSliderInner<T>({
       </View>
 
       <View style={styles.rangeRow}>
-        <Text style={[styles.rangeLabel, { color: CC.textRange }]}>{resolvedMin}</Text>
-        <Text style={[styles.rangeLabel, { color: CC.textRange }]}>{resolvedMax}</Text>
+        <Text style={[styles.rangeLabel, { color: helperColor }]}>{resolvedMin}</Text>
+        <Text style={[styles.rangeLabel, { color: helperColor }]}>{resolvedMax}</Text>
       </View>
 
       {footerNote ? (
@@ -295,23 +295,23 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   label: {
-    fontSize: rf(12),
+    fontSize: rf(13),
     fontWeight: "800",
     letterSpacing: -0.2,
   },
   helper: {
-    fontSize: rf(10),
-    lineHeight: 13,
+    fontSize: rf(11),
+    lineHeight: rs(15),
   },
   valuePill: {
     borderRadius: 999,
     borderWidth: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingHorizontal: rs(8),
+    paddingVertical: rs(3),
     alignSelf: "center",
   },
   valueText: {
-    fontSize: rf(11),
+    fontSize: rf(12),
     fontWeight: "800",
   },
   hitArea: {

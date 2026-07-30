@@ -11,8 +11,10 @@ import { Alert,
   Easing as RNEasing,
   Image,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
+  FlatList,
   StyleSheet,
   Text,
   TextInput,
@@ -20,6 +22,7 @@ import { Alert,
   View,
   Animated as RNAnimated,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { SkeletonLiveDetail } from "@/components/SkeletonRows";
 import { MicPassModal } from "@/components/race/MicPassModal";
 import { useMicPass } from "@/hooks/useMicPass";
@@ -41,7 +44,6 @@ import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
 import {
   formatPlayerCountDisplay,
   isUnlimitedGoalChallenge,
-  UNLIMITED_GOAL_DESCRIPTION,
 } from "@/utils/unlimitedGoal";
 import { mapUnlimitedDetailToLiveDetail } from "@/utils/unlimitedLiveRace";
 import { trackEvent } from "@/services/analytics";
@@ -71,6 +73,23 @@ import {
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { FEATURE_FLAGS, isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
+import {
+  filterRaceParticipantsForDisplay,
+  selectTopParticipantsForRaceTrack,
+  LIVE_RACE_TRACK_TOP_N,
+} from "@/utils/liveRaceParticipantList";
+import {
+  TrackPositionParticipantList,
+  LiveBoardRow,
+  BOARD_ROW_HEIGHT,
+  type LiveBoardRowParticipant,
+} from "@/components/race/LiveRaceParticipantList";
+import {
+  shouldUseDummyUnlimitedRace,
+  createDummyUnlimitedRaceSession,
+  startDummyUnlimitedRaceSimulation,
+} from "@/services/dummyUnlimitedRace";
+import { getTopThreeRankAccent, getRankAccessibilityLabel, getLiveRaceTrackAccent, RANK_CURRENT_USER_GREEN } from "@/utils/participantRankUi";
 import {
   liveRaceFetchAllowed,
   markLiveRaceFetched,
@@ -395,7 +414,7 @@ const RunnerMarker = React.memo(function RunnerMarker({ player, index, width, he
   // Animate forward whenever steps or targetSteps change
   useEffect(() => {
     const newProgress = clampProgress(effectiveSteps);
-    const laneIdx = Math.min(Math.max(player.rank - 1, 0), 9);
+    const laneIdx = Math.min(Math.max(index, 0), 9);
     const bottomY = height * 0.87;
     const currentFzY = finishZoneY ?? getFinishZoneY(themeId, height);
 
@@ -424,8 +443,9 @@ const RunnerMarker = React.memo(function RunnerMarker({ player, index, width, he
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveSteps, targetSteps]);
 
-  // Lane index from rank — changes cause instant X-snap (discrete, correct)
-  const laneIndex = Math.min(Math.max(player.rank - 1, 0), 9);
+  // Lane index among the visible top-10 leaders (highest steps = lane 0).
+  // Rank badge still shows authoritative race rank; lane placement uses list index.
+  const laneIndex = Math.min(Math.max(index, 0), 9);
   const yOffset   = index % 2 === 0 ? -4 : 4;
 
   // Visual sizing from current React state (updates on re-render, not per-frame)
@@ -516,7 +536,26 @@ const RunnerMarker = React.memo(function RunnerMarker({ player, index, width, he
             {player.initial}
           </Text>
         )}
-        <View style={[st.runnerRank, { backgroundColor: player.rankColor, width: rankBadgeSize, height: rankBadgeSize, borderRadius: rankBadgeSize / 2, top: -rankBadgeSize / 2, right: -rankBadgeSize / 2 }]}>
+        <View
+          style={[
+            st.runnerRank,
+            {
+              backgroundColor: player.isForfeited
+                ? "#FF4444"
+                : getTopThreeRankAccent(player.rank) ?? getLiveRaceTrackAccent(player.rank),
+              width: rankBadgeSize,
+              height: rankBadgeSize,
+              borderRadius: rankBadgeSize / 2,
+              left: -2,
+              bottom: -2,
+              top: undefined,
+              right: undefined,
+            },
+          ]}
+          accessibilityLabel={getRankAccessibilityLabel(player.rank, {
+            isCurrentUser: player.isMe,
+          })}
+        >
           <Text style={[st.runnerRankText, { fontSize: rs(9) }]}>{player.rank}</Text>
         </View>
       </TouchableOpacity>
@@ -535,50 +574,22 @@ const RunnerMarker = React.memo(function RunnerMarker({ player, index, width, he
 
 // ── Track Position per-participant mute (Race Track panel only) ───────────────
 
-function TrackPositionMuteBtn({
-  userId,
-  participantName,
-  isMuted,
-  onMute,
-  onUnmute,
-}: {
-  userId: string;
-  participantName: string;
-  isMuted: boolean;
-  onMute: (id: string) => void;
-  onUnmute: (id: string) => void;
-}) {
-  return (
-    <TouchableOpacity
-      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-      onPress={() => (isMuted ? onUnmute(userId) : onMute(userId))}
-      style={[st.panelMicBtn, isMuted && st.panelMicBtnMuted]}
-      accessibilityLabel={isMuted ? `Unmute ${participantName}` : `Mute ${participantName}`}
-      accessibilityRole="button"
-    >
-      <Feather
-        name={isMuted ? "mic-off" : "mic"}
-        size={17}
-        color={isMuted ? "#9CA3AF" : "#FFFFFF"}
-      />
-    </TouchableOpacity>
-  );
-}
-
 // ── LeaderboardOverlay ────────────────────────────────────────────────────────
 
-function LeaderboardOverlay({ visible, players, width, height, animatedStyle, positionText, statusText, rsFactor = 1, meAvatarUrl, onLocalMute, onLocalUnmute, locallyMutedUserIds = [], showMuteControls = false, isActiveRace = false }: {
+function LeaderboardOverlay({ visible, players, width, height, animatedStyle, positionText, statusText, rsFactor = 1, meAvatarUrl, onLocalMute, onLocalUnmute, isRemoteLocallyMuted, showMuteControls = false, isActiveRace = false, muteAllActive = false, onMuteAll, onUnmuteAll }: {
   visible: boolean; players: Player[]; width: number; height: number;
   animatedStyle: object; positionText: string; statusText: string; rsFactor?: number;
   meAvatarUrl?: string | null;
-  locallyMutedUserIds?: string[];
+  isRemoteLocallyMuted: (userId: string) => boolean;
   onLocalMute: (userId: string) => void;
   onLocalUnmute: (userId: string) => void;
   showMuteControls?: boolean;
   isActiveRace?: boolean;
+  muteAllActive?: boolean;
+  onMuteAll?: () => void;
+  onUnmuteAll?: () => void;
 }) {
   const rs = (n: number) => Math.round(n * rsFactor);
-  const avatarSize = rs(32), badgeSize = rs(20);
   return (
     <Animated.View pointerEvents={visible ? "auto" : "none"} style={[st.lbOverlay, { width, height }, animatedStyle]}>
       <View style={st.lbHead}>
@@ -591,48 +602,18 @@ function LeaderboardOverlay({ visible, players, width, height, animatedStyle, po
           <Text style={[st.lbStatusText, { fontSize: Math.max(7, rs(8)) }]}>{statusText}</Text>
         </View>
       </View>
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {players.length === 0 ? (
-          <View style={st.lbEmpty}><Text style={[st.lbEmptyText, { fontSize: rs(10) }]}>No live runners yet</Text></View>
-        ) : players.map((p) => (
-          <View key={p.id} style={[st.lbRow, p.isMe && st.lbRowMe]}>
-            <View style={[st.lbBadge, { width: badgeSize, height: badgeSize, borderRadius: badgeSize / 2, backgroundColor: `${p.rankColor}22`, borderColor: p.rankColor }]}>
-              <Text style={[st.lbBadgeN, { color: p.rankColor, fontSize: rs(10) }]}>{p.rank}</Text>
-            </View>
-            <View style={[st.lbAvatar, { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2, borderColor: p.rankColor }]}>
-              {(p.isMe ? meAvatarUrl : p.avatarUrl) ? (
-                <Image
-                  source={{ uri: (p.isMe ? meAvatarUrl : p.avatarUrl)! }}
-                  style={{ width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 }}
-                />
-              ) : (
-                <Text style={[st.lbAvatarI, { color: p.rankColor, fontSize: rs(12) }]}>{p.initial}</Text>
-              )}
-            </View>
-            <View style={st.lbInfo}>
-              <Text style={[st.lbName, { color: p.isMe ? "#00E676" : p.isForfeited ? "#FF4444" : "#fff", fontSize: rs(11) }]} numberOfLines={1}>
-                {p.isMe ? "You" : p.name}
-              </Text>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
-                <BlueShoe size={rs(11)} />
-                <Text style={[st.lbSteps, { fontSize: rs(13), color: p.isForfeited ? "#FF4444" : "#FFFFFF" }]}>{formatSteps(p.steps)}</Text>
-              </View>
-              <Text style={[st.lbUnit, { fontSize: Math.max(7, rs(9)) }]}>steps</Text>
-            </View>
-            {showMuteControls && !p.isMe && !p.isForfeited ? (
-              <TrackPositionMuteBtn
-                userId={p.userId || p.id}
-                participantName={p.name}
-                isMuted={locallyMutedUserIds.includes(p.userId || p.id)}
-                onMute={onLocalMute}
-                onUnmute={onLocalUnmute}
-              />
-            ) : showMuteControls ? (
-              <View style={st.lbMuteColSpacer} />
-            ) : null}
-          </View>
-        ))}
-      </ScrollView>
+      <TrackPositionParticipantList
+        players={players}
+        rsFactor={rsFactor}
+        meAvatarUrl={meAvatarUrl}
+        showMuteControls={!!showMuteControls}
+        isRemoteLocallyMuted={isRemoteLocallyMuted}
+        onLocalMute={onLocalMute}
+        onLocalUnmute={onLocalUnmute}
+        muteAllActive={muteAllActive}
+        onMuteAll={onMuteAll}
+        onUnmuteAll={onUnmuteAll}
+      />
     </Animated.View>
   ); }
 
@@ -816,13 +797,17 @@ const cpStyles = StyleSheet.create({
 
 // ── LiveBoardPanel ────────────────────────────────────────────────────────────
 
-function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAvatarPress, colors, stepDeltas = {} }: {
+function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAvatarPress, colors, stepDeltas = {}, listHeader = null, listFooter = null }: {
   race: RaceData; participants: RaceParticipant[];
   currentUserId: string | null; userAvatarUrl?: string | null;
   onAvatarPress?: (p: RaceParticipant) => void;
   colors: ReturnType<typeof useColors>;
   /** userId → step count gained since last Pusher update; shown as "+N" badge (clears after 2 s) */
-  stepDeltas?: Record<string, number>; }) {
+  stepDeltas?: Record<string, number>;
+  /** Rendered above the leaderboard (e.g. FinishedBanner) — FlatList is the sole vertical scroller. */
+  listHeader?: React.ReactNode;
+  listFooter?: React.ReactNode;
+}) {
   const { getAvatarVersion } = useAvatarVersionContext();
   const isCompleted = race.status === "completed";
   const isSponsored = race.type === "sponsored";
@@ -836,14 +821,20 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
       maxPlayers: race.maxPlayers,
     });
   const [showPrizeInfo, setShowPrizeInfo] = useState(false);
-  const rankColors  = [colors.gold, colors.silver, colors.bronze];
-  const rankMedals  = ["🥇", "🥈", "🥉"];
-  const sorted = useMemo(() => [...participants].sort((a, b) => b.currentSteps - a.currentSteps), [participants]);
+  const sorted = useMemo(() => {
+    const eligible = filterRaceParticipantsForDisplay(participants);
+    const bySteps = [...eligible].sort((a, b) => b.currentSteps - a.currentSteps);
+    // Unlimited may list ~100; every other race type matches prior max of 10.
+    if (isUnlimited) return bySteps;
+    const cap =
+      typeof race.maxPlayers === "number" && race.maxPlayers > 0
+        ? Math.min(race.maxPlayers, LIVE_RACE_TRACK_TOP_N)
+        : LIVE_RACE_TRACK_TOP_N;
+    return bySteps.slice(0, cap);
+  }, [participants, isUnlimited, race.maxPlayers]);
   const { height: winH, width: winW } = useWindowDimensions();
   const prizeModalMaxH = Math.min(winH * 0.78, 560);
   const prizeModalW = Math.min(winW - 32, 420);
-  const playerCount = Math.max(participants.length, race.currentPlayers ?? 0);
-  const winnerCount = getSponsoredWinnerCount(playerCount);
   const prizeUsd = getSponsoredPrizePerWinnerUsd(
     (race as RaceData & { prizePerWinnerCents?: number }).prizePerWinnerCents,
   );
@@ -852,90 +843,107 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
     max: race.maxPlayers,
     isUnlimited,
   });
+
+  const renderBoardRow = useCallback(
+    ({ item, index }: { item: RaceParticipant; index: number }) => {
+      const isUser = item.userId === currentUserId;
+      const rank =
+        item.rank && item.rank > 0 ? item.rank : index + 1;
+      const pAvatarUrl = item.userId
+        ? `${getApiBase()}/api/profile/avatar/${item.userId}?v=${getAvatarVersion(item.userId ?? "", item.avatarVersion ?? 0)}`
+        : (isUser ? userAvatarUrl : null);
+      return (
+        <LiveBoardRow
+          participant={item as LiveBoardRowParticipant}
+          rank={rank}
+          isUser={isUser}
+          isCompleted={isCompleted}
+          targetSteps={race.targetSteps}
+          primary={colors.primary}
+          foreground={colors.foreground}
+          mutedForeground={colors.mutedForeground}
+          border={colors.border}
+          gold={colors.gold}
+          warning={colors.warning}
+          avatarUri={pAvatarUrl ?? null}
+          stepDelta={item.userId ? (stepDeltas[item.userId] ?? 0) : 0}
+          onPress={() => onAvatarPress?.(item)}
+          showDivider={index < sorted.length - 1}
+        />
+      );
+    },
+    [
+      currentUserId,
+      userAvatarUrl,
+      getAvatarVersion,
+      isCompleted,
+      race.targetSteps,
+      colors.primary,
+      colors.foreground,
+      colors.mutedForeground,
+      colors.border,
+      colors.gold,
+      colors.warning,
+      stepDeltas,
+      onAvatarPress,
+      sorted.length,
+    ],
+  );
+
   return (
-    <View style={[lbpStyles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={lbpStyles.header}>
-        <View style={[lbpStyles.dot, { backgroundColor: isCompleted ? colors.gold : colors.destructive }]} />
-        <Text style={[lbpStyles.title, { color: colors.foreground }]}>
-          {isCompleted ? "Final Leaderboard" : "Live Leaderboard"}
-        </Text>
-        {isSponsored ? (
-          <TouchableOpacity
-            onPress={() => setShowPrizeInfo(true)}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            accessibilityLabel="Gift card prizes info"
-            activeOpacity={0.7}
-            style={lbpStyles.infoBtn}
-          >
-            <Feather name="info" size={16} color="#FF9900" />
-          </TouchableOpacity>
-        ) : null}
-        <Text style={[lbpStyles.count, { color: colors.mutedForeground }]}>{countLabel}</Text>
+    <View style={{ flex: 1 }}>
+      {listHeader}
+      <View
+        style={[
+          lbpStyles.card,
+          {
+            flex: 1,
+            backgroundColor: colors.card,
+            borderColor: colors.border,
+            marginBottom: listFooter ? 8 : 12,
+          },
+        ]}
+      >
+        <View style={lbpStyles.header}>
+          <View style={[lbpStyles.dot, { backgroundColor: isCompleted ? colors.gold : colors.destructive }]} />
+          <Text style={[lbpStyles.title, { color: colors.foreground }]}>
+            {isCompleted ? "Final Leaderboard" : "Live Leaderboard"}
+          </Text>
+          {isSponsored ? (
+            <TouchableOpacity
+              onPress={() => setShowPrizeInfo(true)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="Gift card prizes info"
+              activeOpacity={0.7}
+              style={lbpStyles.infoBtn}
+            >
+              <Feather name="info" size={16} color="#FF9900" />
+            </TouchableOpacity>
+          ) : null}
+          <Text style={[lbpStyles.count, { color: colors.mutedForeground }]}>{countLabel}</Text>
+        </View>
+        {sorted.length === 0 ? (
+          <Text style={[lbpStyles.empty, { color: colors.mutedForeground }]}>Waiting for participants...</Text>
+        ) : (
+          <FlatList
+            data={sorted}
+            keyExtractor={(p) => p.id}
+            renderItem={renderBoardRow}
+            style={{ flex: 1 }}
+            showsVerticalScrollIndicator
+            initialNumToRender={14}
+            maxToRenderPerBatch={12}
+            windowSize={8}
+            removeClippedSubviews
+            getItemLayout={(_, index) => ({
+              length: BOARD_ROW_HEIGHT,
+              offset: BOARD_ROW_HEIGHT * index,
+              index,
+            })}
+          />
+        )}
       </View>
-      {isUnlimited ? (
-        <Text style={[lbpStyles.empty, { color: colors.mutedForeground, marginBottom: 8 }]}>
-          Live position is informational. Final prizes are shared equally among all qualified finishers.
-        </Text>
-      ) : null}
-      {sorted.length === 0 ? (
-        <Text style={[lbpStyles.empty, { color: colors.mutedForeground }]}>Waiting for participants...</Text>
-      ) : sorted.map((p, i) => {
-        const isUser = p.userId === currentUserId;
-        const isForfeited = p.status === "forfeited";
-        const ac = isForfeited ? "#FF4444" : (p.avatarColor ?? "#00E676");
-        const nameColor = isForfeited ? "#FF4444" : isUser ? colors.primary : colors.foreground;
-        const pct = race.targetSteps > 0 ? Math.min((p.currentSteps / race.targetSteps) * 100, 100) : 0;
-        const prize = isCompleted && !isForfeited && (p.prizeAmount ?? 0) > 0 ? `$${p.prizeAmount!.toFixed(2)}` : null;
-        const pAvatarUrl = p.userId
-          ? `${getApiBase()}/api/profile/avatar/${p.userId}?v=${getAvatarVersion(p.userId ?? "", p.avatarVersion ?? 0)}`
-          : (isUser ? userAvatarUrl : null);
-        return (
-          <TouchableOpacity
-            key={p.id}
-            activeOpacity={0.75}
-            onPress={() => onAvatarPress?.(p)}
-            style={[lbpStyles.row, isForfeited && { opacity: 0.75 }, isUser && !isForfeited && { backgroundColor: colors.primary + "0F" }, i < sorted.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}
-          >
-            <Text style={[lbpStyles.medal, { color: isForfeited ? "#FF4444" : i < 3 ? rankColors[i] : colors.mutedForeground }]}>
-              {isForfeited ? "✕" : i < 3 ? rankMedals[i] : String(i + 1)}
-            </Text>
-            <View style={[lbpStyles.avatar, { backgroundColor: ac + "22", borderColor: isForfeited ? "#FF4444" : isUser ? colors.primary : ac }]}>
-              {pAvatarUrl ? (
-                <Image source={{ uri: pAvatarUrl }} style={[lbpStyles.avatarImg, isForfeited && { opacity: 0.5 }]} />
-              ) : (
-                <Text style={[lbpStyles.avatarTxt, { color: nameColor }]}>
-                  {isUser ? "Y" : p.username.charAt(0).toUpperCase()}
-                </Text>
-              )}
-            </View>
-            <View style={lbpStyles.info}>
-              <View style={lbpStyles.nameRow}>
-                <Text style={[lbpStyles.name, { color: nameColor }]} numberOfLines={1}>{p.username}</Text>
-                {!!p.countryFlag && <Text style={{ fontSize: 13 }}>{p.countryFlag}</Text>}
-                {!isForfeited && p.isHost && <View style={[lbpStyles.tag, { backgroundColor: colors.gold + "22", borderColor: colors.gold + "55" }]}><Text style={[lbpStyles.tagTxt, { color: colors.gold }]}>Host</Text></View>}
-                {!isForfeited && isUser && <View style={[lbpStyles.tag, { backgroundColor: colors.primary + "22", borderColor: colors.primary + "55" }]}><Text style={[lbpStyles.tagTxt, { color: colors.primary }]}>You</Text></View>}
-                {isForfeited && <View style={[lbpStyles.tag, { backgroundColor: "#FF444422", borderColor: "#FF444455" }]}><Text style={[lbpStyles.tagTxt, { color: "#FF4444" }]}>FORFEITED</Text></View>}
-                {!isForfeited && p.isTied && <View style={[lbpStyles.tag, { backgroundColor: colors.warning + "22", borderColor: colors.warning + "55" }]}><Text style={[lbpStyles.tagTxt, { color: colors.warning }]}>Tied</Text></View>}
-              </View>
-              <View style={[lbpStyles.track, { backgroundColor: colors.border }]}>
-                <View style={[lbpStyles.fill, { width: `${pct}%` as unknown as number, backgroundColor: isForfeited ? "#FF4444" : isUser ? colors.primary : ac }]} />
-              </View>
-            </View>
-            <View style={lbpStyles.right}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
-                <BlueShoe size={13} />
-                <Text style={[lbpStyles.steps, { color: isForfeited ? "#FF4444" : colors.foreground }]}>{p.currentSteps.toLocaleString()}</Text>
-              </View>
-              {!isForfeited && p.userId && (stepDeltas[p.userId] ?? 0) > 0 && (
-                <Text style={lbpStyles.stepDelta}>+{stepDeltas[p.userId]}</Text>
-              )}
-              {prize && <Text style={[lbpStyles.prize, { color: colors.gold }]}>{prize}</Text>}
-              {prize && p.isTied && (p.tieGroupSize ?? 1) > 1 && (
-                <Text style={[lbpStyles.tagTxt, { color: colors.mutedForeground }]}>shared ÷{p.tieGroupSize}</Text>
-              )}
-            </View>
-          </TouchableOpacity>
-        ); })}
+      {listFooter}
 
       {isSponsored ? (
         <Modal
@@ -1265,19 +1273,8 @@ function PrizePanel({ race, participants, colors }: { race: RaceData; participan
   if (isCompleted) return null;
 
   if (isUnlimited) {
-    return (
-      <View style={[pzStyles.card, { backgroundColor: colors.card, borderColor: colors.gold + "44" }]}>
-        <View style={pzStyles.header}>
-          <Text style={{ fontSize: 18 }}>🏆</Text>
-          <Text style={[pzStyles.title, { color: colors.gold }]}>Prize Pool</Text>
-          <PremiumPoolText color={colors.gold}>${(race.prizePool ?? 0).toFixed(2)}</PremiumPoolText>
-        </View>
-        <View style={[pzStyles.divider, { backgroundColor: colors.border }]} />
-        <Text style={[pzStyles.place, { color: colors.mutedForeground, lineHeight: 20 }]}>
-          {UNLIMITED_GOAL_DESCRIPTION}
-        </Text>
-      </View>
-    );
+    // Unlimited Live Board does not show a prize-pool card (same as prior non-tier races).
+    return null;
   }
 
   // ── Coins battle ──────────────────────────────────────────────────────────
@@ -1326,7 +1323,7 @@ function PrizePanel({ race, participants, colors }: { race: RaceData; participan
               <View key={i} style={pzStyles.row}>
                 <Text style={{ fontSize: 15 }}>{rankIcons[i]}</Text>
                 <Text style={[pzStyles.place, { color: rankColors[i] }]}>{rankLabels[i]}</Text>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 0 }}>
                   <Image source={COIN_IMG} style={{ width: 13, height: 13 }} />
                   <Text style={[pzStyles.amount, { color: "#F59E0B" }]}>{fmtCoins(Math.floor(winnersPool * ratio))}</Text>
                 </View>
@@ -1385,9 +1382,10 @@ const pzStyles = StyleSheet.create({
   title:   { flex: 1, fontSize: 16, fontWeight: "700" },
   pool:    { fontSize: 16, fontWeight: "800" },
   divider: { height: StyleSheet.hairlineWidth },
-  row:     { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 3 },
-  place:   { flex: 1, fontSize: 14, fontWeight: "600" },
-  amount:  { fontSize: 14, fontWeight: "700" }, });
+  row:     { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, paddingVertical: 4 },
+  place:   { flex: 1, fontSize: 14, fontWeight: "600", minWidth: 0 },
+  amount:  { fontSize: 14, fontWeight: "700", flexShrink: 0, textAlign: "right" },
+});
 
 // ── LivePrizeStrip ─────────────────────────────────────────────────────────────
 
@@ -1528,19 +1526,31 @@ function LiveRaceDetailScreenContent() {
     trackLayout: initialTrackLayout,
     challengeType: paramChallengeType,
     capacityMode: paramCapacityMode,
+    dummyRace: paramDummyRace,
   } = useLocalSearchParams<{
     id: string;
     trackLayout?: string;
     challengeType?: string;
     capacityMode?: string;
+    dummyRace?: string;
   }>();
-  const preferUnlimitedDetail =
-    isUnlimitedGoalFrontendEnabled() &&
+  const unlimitedHint =
+    paramCapacityMode === "unlimited" ||
+    paramChallengeType === "unlimited_goal" ||
     isUnlimitedGoalChallenge({
       challengeType: paramChallengeType,
       capacityMode: paramCapacityMode,
       entryType: paramChallengeType,
     });
+  const useDummyRace = shouldUseDummyUnlimitedRace(
+    typeof raceId === "string" ? raceId : null,
+    paramDummyRace,
+    { unlimitedChallenge: unlimitedHint && isUnlimitedGoalFrontendEnabled() },
+  );
+  const preferUnlimitedDetail =
+    !useDummyRace &&
+    isUnlimitedGoalFrontendEnabled() &&
+    unlimitedHint;
   const initialCache =
     raceId && typeof raceId === "string"
       ? screenCache.getSync<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId))
@@ -1573,11 +1583,15 @@ function LiveRaceDetailScreenContent() {
     notifyRaceStarted,
     localMuteParticipant,
     localUnmuteParticipant,
+    muteAllRemoteParticipants,
+    unmuteAllRemoteParticipants,
+    isRemoteLocallyMuted,
+    muteAllActive,
   } = useMicPass(raceId);
 
   // Participants who are speaking AND not muted (remote or local) — used by all speaking indicators.
   const visibleSpeakerIds = activeSpeakerIds.filter(
-    (id) => !mutedParticipantIds.includes(id) && !locallyMutedUserIds.includes(id),
+    (id) => !mutedParticipantIds.includes(id) && !isRemoteLocallyMuted(id),
   );
 
   const { user, sessionToken }                     = useAuth();
@@ -1702,6 +1716,11 @@ function LiveRaceDetailScreenContent() {
   const loadedRaceIdRef = useRef<string | null>(null);
   const colors             = useColors();
   const { safeTop, safeBottom } = useSafeLayout();
+  // Floor clears Android 3-button / gesture nav and iOS home indicator on all devices.
+  const liveBottomInset = Math.max(
+    safeBottom,
+    Platform.OS === "android" ? 48 : 20,
+  );
   const { width: screenW } = useWindowDimensions();
   const { getAvatarVersion } = useAvatarVersionContext();
   const isTablet           = screenW >= 768;
@@ -2153,7 +2172,7 @@ function LiveRaceDetailScreenContent() {
     // with two different participant rows if a reconnect creates a duplicate.
     const seenIds = new Set<string>();
     const seenUserIds = new Set<string>();
-    const unique = participants.filter((p) => {
+    const unique = filterRaceParticipantsForDisplay(participants).filter((p) => {
       if (seenIds.has(p.id) || seenUserIds.has(p.userId)) return false;
       seenIds.add(p.id);
       seenUserIds.add(p.userId);
@@ -2170,7 +2189,7 @@ function LiveRaceDetailScreenContent() {
       return { p, isMe, effectiveSteps: displaySteps };
     });
     const sorted = [...withEffective].sort((a, b) => b.effectiveSteps - a.effectiveSteps);
-    return sorted.slice(0, 10).map<Player>(({ p, isMe, effectiveSteps }, index) => {
+    return sorted.map<Player>(({ p, isMe, effectiveSteps }, index) => {
       const rank =
         isMe && isActive && canonicalRank != null && canonicalRank > 0
           ? canonicalRank
@@ -2178,12 +2197,19 @@ function LiveRaceDetailScreenContent() {
             ? p.rank
             : index + 1;
       const username = p.username || "Runner";
+      const avatarAccent =
+        p.avatarColor ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length];
       return {
         id: p.id, userId: p.userId, rank,
         name: isMe ? "You" : username,
         steps: effectiveSteps,
         isMe,
-        rankColor: p.status === "forfeited" ? "#FF4444" : (p.avatarColor ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length]),
+        // Profile ring = user's selected avatar color (You = green). Rank badge uses medal/white separately.
+        rankColor: p.status === "forfeited"
+          ? "#FF4444"
+          : isMe
+            ? RANK_CURRENT_USER_GREEN
+            : avatarAccent,
         initial: username.slice(0, 1).toUpperCase() || "R",
         country: p.countryFlag ?? undefined,
         isHost: p.isHost,
@@ -2194,9 +2220,24 @@ function LiveRaceDetailScreenContent() {
     }).sort((a, b) => a.rank - b.rank);
   }, [participants, user?.id, user?.username, isActive, liveRaceSteps, canonicalRank, getDisplaySteps, resolveParticipantRaceSteps]);
 
+  /** Animated Race Track — only the top 10 by live steps (all race types). */
+  const trackPlayers = useMemo(() => {
+    const byStepsDesc = [...sortedPlayers].sort((a, b) => {
+      if (b.steps !== a.steps) return b.steps - a.steps;
+      return a.id.localeCompare(b.id);
+    });
+    return selectTopParticipantsForRaceTrack(byStepsDesc, LIVE_RACE_TRACK_TOP_N);
+  }, [sortedPlayers]);
+
+  /** Side panel / mute list: Unlimited may list ~100; other races cap at 10. */
+  const panelPlayers = useMemo(() => {
+    if (isUnlimitedHeader) return sortedPlayers;
+    return sortedPlayers.slice(0, LIVE_RACE_TRACK_TOP_N);
+  }, [sortedPlayers, isUnlimitedHeader]);
+
   const myPlayer = useMemo(
-    () => sortedPlayers.find((p) => p.isMe) ?? sortedPlayers[0] ?? null,
-    [sortedPlayers],
+    () => sortedPlayers.find((p) => p.isMe) ?? trackPlayers[0] ?? sortedPlayers[0] ?? null,
+    [sortedPlayers, trackPlayers],
   );
   const currentParticipant = useMemo(
     () => participants.find((p) =>
@@ -2381,6 +2422,7 @@ function LiveRaceDetailScreenContent() {
     force = false,
     options?: { gateKey?: string; minIntervalMs?: number },
   ) => {
+    if (useDummyRace) return;
     if (!raceId || !sessionTokenRef.current || raceDetailFetchInFlightRef.current) return;
     const gateKey = options?.gateKey ?? `${raceId}:detail`;
     const minIntervalMs = options?.minIntervalMs ?? STEP_SYNC_CONFIG.LIVE_RACE_DETAIL_REFRESH_MS;
@@ -2456,7 +2498,7 @@ function LiveRaceDetailScreenContent() {
     } finally {
       raceDetailFetchInFlightRef.current = false;
     }
-  }, [raceId, hydrateInProgressRace, preferUnlimitedDetail]);
+  }, [raceId, hydrateInProgressRace, preferUnlimitedDetail, useDummyRace]);
 
   // Pause step reads when leaving the screen; catch up from device + server on return.
   const catchUpStepsRef = useRef(catchUpLiveRaceSteps);
@@ -2565,6 +2607,7 @@ function LiveRaceDetailScreenContent() {
 
   // ── Full fetch (initial load — race first, comments/reactions in background) ─
   const fetchRace = useCallback(async () => {
+    if (useDummyRace) return;
     if (!raceId || !sessionTokenRef.current || fetchInFlightRef.current) return;
     fetchInFlightRef.current = true;
     try {
@@ -2640,9 +2683,41 @@ function LiveRaceDetailScreenContent() {
     } finally {
       fetchInFlightRef.current = false;
     }
-  }, [raceId, hydrateInProgressRace, preferUnlimitedDetail]);
+  }, [raceId, hydrateInProgressRace, preferUnlimitedDetail, useDummyRace]);
+
+  // Frontend-only dummy Unlimited Race session (Waiting Room → Live Race).
+  useEffect(() => {
+    if (!useDummyRace || !user?.id) return;
+    const session = createDummyUnlimitedRaceSession({
+      currentUserId: user.id,
+      currentUsername: user.username,
+      status: "in_progress",
+    });
+    const racePayload = {
+      ...session.race,
+      id: typeof raceId === "string" && raceId ? raceId : session.race.id,
+    } as RaceData;
+    setRace(racePayload);
+    setParticipants(session.participants as RaceParticipant[]);
+    setLoading(false);
+    raceAlreadyStartedRef.current = true;
+    if (typeof racePayload.targetSteps === "number" && racePayload.targetSteps > 0) {
+      setRaceTargetStepsRef.current(racePayload.targetSteps);
+    }
+    return startDummyUnlimitedRaceSimulation(
+      { ...session, race: { ...session.race, id: racePayload.id } },
+      (next) => {
+        setRace({
+          ...next.race,
+          id: racePayload.id,
+        } as RaceData);
+        setParticipants(next.participants as RaceParticipant[]);
+      },
+    );
+  }, [useDummyRace, user?.id, user?.username, raceId]);
 
   useEffect(() => {
+    if (useDummyRace) return;
     if (!raceId || !sessionToken) return;
     const isNewRace = loadedRaceIdRef.current !== raceId;
     if (isNewRace) {
@@ -2671,7 +2746,7 @@ function LiveRaceDetailScreenContent() {
       }
     }
     fetchRace().finally(() => setLoading(false));
-  }, [raceId, sessionToken, fetchRace, resetForRace]);
+  }, [raceId, sessionToken, fetchRace, resetForRace, useDummyRace]);
 
   useEffect(() => {
     return () => {
@@ -2775,7 +2850,7 @@ function LiveRaceDetailScreenContent() {
 
   // ── Pusher subscription ───────────────────────────────────────────────────
   useEffect(() => {
-    if (!raceId) return;
+    if (!raceId || useDummyRace) return;
     connectPusher();
     const channelName = `public-live-race-${raceId}`;
     const channel = subscribeToChannel(channelName);
@@ -3028,7 +3103,7 @@ function LiveRaceDetailScreenContent() {
       channel.unbind("race:verification_delayed", onVerificationEvent);
       channel.unbind("race:review_required", onVerificationEvent);
       channel.unbind("race:final_progress_confirmed", onVerificationEvent);
-      unsubscribeFromChannel(channelName); }; }, [raceId, refreshResultStatus]);
+      unsubscribeFromChannel(channelName); }; }, [raceId, refreshResultStatus, useDummyRace]);
 
   // ── Cheer send ────────────────────────────────────────────────────────────
   const sendMessage = useCallback((text: string, isQuickReaction = false) => {
@@ -3305,7 +3380,14 @@ function LiveRaceDetailScreenContent() {
   ) : null;
 
   return (
-    <View style={{ flex: 1 }}>
+    <SafeAreaView
+      style={{
+        flex: 1,
+        backgroundColor: "#050711",
+        paddingBottom: liveBottomInset,
+      }}
+      edges={["left", "right"]}
+    >
     <KeyboardAvoidingView
       style={st.screen}
       behavior="padding"
@@ -3431,7 +3513,7 @@ function LiveRaceDetailScreenContent() {
               />
               {/* ── Animated theme overlay — above bg, below avatars ── */}
               <AnimatedTrackOverlay themeCode={trackLayoutId} />
-              {sortedPlayers.map((player, index) => (
+              {trackPlayers.map((player, index) => (
                 <RunnerMarker
                   key={player.id}
                   player={player}
@@ -3473,7 +3555,7 @@ function LiveRaceDetailScreenContent() {
             {selectedView === "race_track" && (
             <LeaderboardOverlay
               visible={isLeaderboardVisible}
-              players={sortedPlayers}
+              players={panelPlayers}
               width={leaderboardW}
               height={heroHeight}
               animatedStyle={leaderboardAnimatedStyle}
@@ -3481,11 +3563,20 @@ function LiveRaceDetailScreenContent() {
               statusText={trackStatusText}
               meAvatarUrl={user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` : null}
               rsFactor={rsFactor}
-              locallyMutedUserIds={locallyMutedUserIds}
+              isRemoteLocallyMuted={isRemoteLocallyMuted}
               onLocalMute={localMuteParticipant}
               onLocalUnmute={localUnmuteParticipant}
-              showMuteControls={sortedPlayers.length > 1}
+              showMuteControls={panelPlayers.length > 1}
               isActiveRace={isActive}
+              muteAllActive={muteAllActive}
+              onMuteAll={() =>
+                muteAllRemoteParticipants(
+                  panelPlayers
+                    .filter((p) => !p.isMe && !p.isForfeited)
+                    .map((p) => p.userId || p.id),
+                )
+              }
+              onUnmuteAll={unmuteAllRemoteParticipants}
             />
             )}
 
@@ -3526,51 +3617,58 @@ function LiveRaceDetailScreenContent() {
         <View
           style={[StyleSheet.absoluteFill, { backgroundColor: "#050711" }]}
         >
-          <ScrollView
-            ref={scrollRef}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: 16, gap: 12, paddingTop: 4 }}
-          >
-            {FinishedBanner}
-            <LiveBoardPanel
-              race={race}
-              participants={participants.map((p) => {
-                const isMe = p.userId === currentUserId;
-                const steps = resolveParticipantRaceSteps(p, isMe);
-                return {
-                  ...p,
-                  currentSteps: getDisplaySteps(p.userId, steps),
-                };
-              })}
-              currentUserId={currentUserId}
-              stepDeltas={stepDeltaFlash}
-              userAvatarUrl={user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` : null}
-              onAvatarPress={(p) => {
-                setProfileInitialData({
-                  username: p.username,
-                  country: null,
-                  countryFlag: p.countryFlag ?? null,
-                  avatarColor: p.avatarColor ?? null,
-                  avatarUrl: p.avatarUrl ?? null,
-                  avatarVersion: p.avatarVersion ?? 0,
-                  isHost: p.isHost,
-                  isCurrentUser: p.userId === currentUserId,
-                  activeTitle: null,
-                  friendStatus: "none",
-                  friendRequestId: null,
-                });
-                setProfileUserId(p.userId);
-              }}
-              colors={colors}
-            />
-            <PrizePanel race={race} participants={participants} colors={colors} />
-          </ScrollView>
+          <LiveBoardPanel
+            race={race}
+            participants={participants.map((p) => {
+              const isMe = p.userId === currentUserId;
+              const steps = resolveParticipantRaceSteps(p, isMe);
+              return {
+                ...p,
+                currentSteps: getDisplaySteps(p.userId, steps),
+              };
+            })}
+            currentUserId={currentUserId}
+            stepDeltas={stepDeltaFlash}
+            userAvatarUrl={user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` : null}
+            onAvatarPress={(p) => {
+              setProfileInitialData({
+                username: p.username,
+                country: null,
+                countryFlag: p.countryFlag ?? null,
+                avatarColor: p.avatarColor ?? null,
+                avatarUrl: p.avatarUrl ?? null,
+                avatarVersion: p.avatarVersion ?? 0,
+                isHost: p.isHost,
+                isCurrentUser: p.userId === currentUserId,
+                activeTitle: null,
+                friendStatus: "none",
+                friendRequestId: null,
+              });
+              setProfileUserId(p.userId);
+            }}
+            colors={colors}
+            listHeader={FinishedBanner}
+            listFooter={
+              race.entryType === "free" ||
+              race.type === "sponsored" ||
+              (isUnlimitedGoalFrontendEnabled() &&
+                isUnlimitedGoalChallenge({
+                  challengeType: race.challengeType,
+                  entryType: race.entryType,
+                  type: race.type,
+                  capacityMode: race.capacityMode,
+                  maxPlayers: race.maxPlayers,
+                }))
+                ? null
+                : <PrizePanel race={race} participants={participants} colors={colors} />
+            }
+          />
         </View>
         )}
       </View>
 
       {/* ── Progress tracker — hidden in fullscreen so track fills more space ── */}
-      {!isTrackFullscreen && <View style={[st.progSection, !isActive && { paddingBottom: safeBottom }]}>
+      {!isTrackFullscreen && <View style={st.progSection}>
         <View style={st.progLeft}>
           <BlueShoe size={rs(24)} />
           <View style={st.progMain}>
@@ -3717,8 +3815,8 @@ function LiveRaceDetailScreenContent() {
             />
           )}
 
-          {/* Text input */}
-          <View style={[st.inputBar, { paddingBottom: Math.max(safeBottom, 12) }]}>
+          {/* Text input — bottom nav inset is on the root SafeAreaView */}
+          <View style={[st.inputBar, { paddingBottom: 12 }]}>
             {/* ── Inline voice mic control ── */}
             <View style={[st.micWrapper, { width: 52, height: 52 }]}>
               {/* ── CONNECTED STATE: vertical capsule panel + big button ── */}
@@ -3937,7 +4035,10 @@ function LiveRaceDetailScreenContent() {
 
     {/* ── Coins Battle win banner ── */}
     {coinWinAmount !== null && (
-      <View pointerEvents="none" style={cwStyles.overlay}>
+      <View
+        pointerEvents="none"
+        style={[cwStyles.overlay, { paddingBottom: Math.max(80, liveBottomInset + 40) }]}
+      >
         <View style={cwStyles.card}>
           <Text style={cwStyles.emoji}>🎉</Text>
           <View>
@@ -3951,7 +4052,7 @@ function LiveRaceDetailScreenContent() {
         </View>
       </View>
     )}
-    </View>
+    </SafeAreaView>
   ); }
 
 const cwStyles = StyleSheet.create({

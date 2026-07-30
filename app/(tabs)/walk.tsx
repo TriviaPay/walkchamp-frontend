@@ -2615,8 +2615,8 @@ function WalkScreenContent() {
   const targetStepsForCreate = isUnlimitedGoalEntry
     ? unlimitedDailyGoalSteps
     : isValidTargetSteps(challengeGoalType, challengeTargetSteps)
-      ? challengeTargetSteps
-      : getDefaultTargetSteps(challengeGoalType);
+    ? challengeTargetSteps
+    : getDefaultTargetSteps(challengeGoalType);
   const durationDays = isUnlimitedGoalEntry
     ? unlimitedDurationDays
     : challengeGoalType === "daily"
@@ -2700,11 +2700,11 @@ function WalkScreenContent() {
     setConfirmPaymentQuoteLoading(true);
     setConfirmPaymentQuoteError(null);
     const timer = setTimeout(() => {
-      void fetchCashChallengePaymentQuote({
+    void fetchCashChallengePaymentQuote({
         entryFeeCents,
-        numberOfPlayers: 10,
-      })
-        .then((q) => {
+      numberOfPlayers: 10,
+    })
+      .then((q) => {
           if (cancelled || seq !== confirmQuoteSeqRef.current) return;
           setConfirmPaymentQuote(q);
           setConfirmPaymentQuoteLoading(false);
@@ -3501,37 +3501,37 @@ function WalkScreenContent() {
   const handleCoinsBattleJoin = useCallback(async (raceId: string) => {
     guardRewardAction(() => {
       void (async () => {
-        setJoiningEntryKey("coins_battle");
-        try {
-          const res = await authFetch(`/api/coins-battle/${raceId}/join`, { method: "POST" });
-          const data = await res.json() as { raceId?: string; error?: string; code?: string; currentPlayers?: number };
-          if (!res.ok) {
-            if (data.code === "ACTIVE_RACE_EXISTS") {
-              const ar = (data as { active_race?: Record<string, unknown> }).active_race;
-              if (ar) {
-                pendingRaceActionRef.current = () => handleCoinsBattleJoin(raceId);
-                setActiveRaceModal(normalizeActiveRaceInfo(ar));
-              } else {
-                AppAlert.alert("Already In A Race", "You are already in an active race.");
-              }
-            } else if (data.code === "INSUFFICIENT_COINS") {
-              AppAlert.alert("Not Enough Coins", "You don't have enough coins to join this battle.");
-            } else if (data.code === "ROOM_NOT_OPEN") {
-              AppAlert.alert("Room Closed", "This room is no longer open.");
+    setJoiningEntryKey("coins_battle");
+    try {
+      const res = await authFetch(`/api/coins-battle/${raceId}/join`, { method: "POST" });
+      const data = await res.json() as { raceId?: string; error?: string; code?: string; currentPlayers?: number };
+      if (!res.ok) {
+        if (data.code === "ACTIVE_RACE_EXISTS") {
+          const ar = (data as { active_race?: Record<string, unknown> }).active_race;
+          if (ar) {
+            pendingRaceActionRef.current = () => handleCoinsBattleJoin(raceId);
+            setActiveRaceModal(normalizeActiveRaceInfo(ar));
+          } else {
+            AppAlert.alert("Already In A Race", "You are already in an active race.");
+          }
+        } else if (data.code === "INSUFFICIENT_COINS") {
+          AppAlert.alert("Not Enough Coins", "You don't have enough coins to join this battle.");
+        } else if (data.code === "ROOM_NOT_OPEN") {
+          AppAlert.alert("Room Closed", "This room is no longer open.");
             } else if (data.code === "VERIFIED_STEP_SOURCE_REQUIRED") {
               requestHomeStepSetup();
-            } else {
-              AppAlert.alert("Join Failed", data.error ?? "Could not join the Coins Battle.");
-            }
-            return;
-          }
-          dispatch(fetchCoinBalance());
-          navToMatchmaking({ raceId, isHost: false });
-        } catch {
-          AppAlert.alert("Error", "Network error. Please try again.");
-        } finally {
-          setJoiningEntryKey(null);
+        } else {
+          AppAlert.alert("Join Failed", data.error ?? "Could not join the Coins Battle.");
         }
+        return;
+      }
+      dispatch(fetchCoinBalance());
+      navToMatchmaking({ raceId, isHost: false });
+    } catch {
+      AppAlert.alert("Error", "Network error. Please try again.");
+    } finally {
+      setJoiningEntryKey(null);
+    }
       })();
     });
   }, [dispatch, guardRewardAction]);
@@ -4292,7 +4292,7 @@ function WalkScreenContent() {
                     <Text style={styles.viewAllCountText}>
                       {availableChallengeCount > 99 ? "99+" : availableChallengeCount}
                     </Text>
-                  </View>
+              </View>
                 </View>
               ) : null}
               <Feather name="chevron-right" size={12} color="#FFFFFF" />
@@ -4495,7 +4495,7 @@ function WalkScreenContent() {
         })}
 
         {/* Cash Prize Challenge — directly under Coins Battle */}
-        {ENABLE_THREE_DOLLAR_CHALLENGE && (() => {
+          {ENABLE_THREE_DOLLAR_CHALLENGE && (() => {
             const premOpt = RACE_OPTIONS.find((o) => o.fee === 3)!;
             const premKey = "paid_3";
             const premCs = challengeStatuses[premKey] ?? challengeStatuses.paid_usd;
@@ -4798,7 +4798,7 @@ function WalkScreenContent() {
 
           <Animated.View style={{ opacity: groupsFadeAnim }}>
             <Pressable
-              onPress={() => {
+            onPress={() => {
                 void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                 router.push("/groups");
               }}
@@ -4832,7 +4832,7 @@ function WalkScreenContent() {
                 <View style={styles.groupsLeft}>
                   <View style={styles.groupsIconWrap}>
                     <Feather name="users" size={20} color="#0369A1" />
-                  </View>
+            </View>
                   <View style={styles.groupsTextBlock}>
                     <Text style={styles.groupsTitle}>Groups</Text>
                     <Text style={styles.groupsSub} numberOfLines={2}>
@@ -4842,7 +4842,7 @@ function WalkScreenContent() {
                       <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Friends</Text></View>
                       <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Family</Text></View>
                       <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Office</Text></View>
-                    </View>
+            </View>
                   </View>
                 </View>
 

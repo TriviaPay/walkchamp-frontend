@@ -4,6 +4,7 @@ import { getValidSession } from "@/services/authService";
 import { getApiBase } from "@/utils/apiUrl";
 import { ENABLE_MIC_PASS, ENABLE_RACE_VOICE_CHAT, ENABLE_VOICE_SDK } from "@/config/featureFlags";
 import { voiceService } from "@/services/voiceService";
+import { isDummyUnlimitedRaceId } from "@/services/dummyUnlimitedRace";
 import { AppAlert } from "@/components/AppAlert";
 import {
   type LiveRaceAudioRoute,
@@ -35,6 +36,8 @@ export interface UseMicPassReturn {
   activeSpeakerIds: string[];
   mutedParticipantIds: string[];
   locallyMutedUserIds: string[];
+  /** True when session-level Mute All (local playback) is active. */
+  muteAllActive: boolean;
   audioRoute: AudioRoute;
   bluetoothAvailable: boolean;
   btDeviceName: string;
@@ -55,6 +58,17 @@ export interface UseMicPassReturn {
   notifyRaceStarted: () => void;
   localMuteParticipant: (userId: string) => void;
   localUnmuteParticipant: (userId: string) => void;
+  /**
+   * Locally mute all remote participants' audio on this device.
+   * Does not mute the current user's microphone.
+   * Pass known remote user IDs so the UI updates immediately; new joiners
+   * inherit mute-all via voiceService session flag.
+   */
+  muteAllRemoteParticipants: (remoteUserIds: string[]) => void;
+  /** Restore local playback for all remotes previously silenced by Mute All / individual mute. */
+  unmuteAllRemoteParticipants: () => void;
+  /** Effective local mute for a remote user (respects Mute All + exceptions). */
+  isRemoteLocallyMuted: (userId: string) => boolean;
 }
 
 export function useMicPass(raceId?: string): UseMicPassReturn {
@@ -65,7 +79,12 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
   const [activeSpeakerIds, setActiveSpeakerIds]    = useState<string[]>([]);
   const [mutedParticipantIds, setMutedParticipantIds] = useState<string[]>([]);
   const [locallyMutedUserIds, setLocallyMutedUserIds] = useState<string[]>([]);
+  const [muteAllActive, setMuteAllActive] = useState(false);
+  const [unmuteExceptions, setUnmuteExceptions] = useState<string[]>([]);
   const [audioRoute, setAudioRoute]                = useState<AudioRoute>("speaker");
+  const muteAllActiveRef = useRef(false);
+  const unmuteExceptionsRef = useRef<string[]>([]);
+  const dummyAudioOnly = isDummyUnlimitedRaceId(raceId);
   const [bluetoothAvailable, setBluetoothAvailable] = useState(false);
   const [btDeviceName, setBtDeviceName]            = useState("Bluetooth");
   const [showMicMenu, setShowMicMenu]              = useState(false);
@@ -78,6 +97,8 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
   const audioRouteRef           = useRef<AudioRoute>("speaker");
 
   useEffect(() => { micStateRef.current  = micState;   }, [micState]);
+  useEffect(() => { muteAllActiveRef.current = muteAllActive; }, [muteAllActive]);
+  useEffect(() => { unmuteExceptionsRef.current = unmuteExceptions; }, [unmuteExceptions]);
   useEffect(() => { hasMicPassRef.current = hasMicPass; }, [hasMicPass]);
   useEffect(() => { audioRouteRef.current = audioRoute; }, [audioRoute]);
 
@@ -501,27 +522,74 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
   }, []);
 
   const disconnectVoice = useCallback(() => {
-    voiceService.disconnectVoice("explicit").catch(() => {});
+    if (!dummyAudioOnly) {
+      voiceService.disconnectVoice("explicit").catch(() => {});
+    }
     setMicState("idle");
     setIsSpeaking(false);
     setActiveSpeakerIds([]);
     setMutedParticipantIds([]);
     setLocallyMutedUserIds([]);
+    setMuteAllActive(false);
+    setUnmuteExceptions([]);
     setAudioRoute("speaker");
     setBluetoothAvailable(false);
     setShowMicMenu(false);
     autoConnectAttemptedRef.current = false;
-  }, []);
+  }, [dummyAudioOnly]);
 
+  const isRemoteLocallyMuted = useCallback((userId: string) => {
+    if (muteAllActiveRef.current) {
+      return !unmuteExceptionsRef.current.includes(userId);
+    }
+    return locallyMutedUserIds.includes(userId);
+  }, [locallyMutedUserIds]);
+
+  /**
+   * Individual local mute. Clears any Mute-All exception for this user.
+   * Does not change the current user's microphone.
+   */
   const localMuteParticipant = useCallback((userId: string) => {
-    setLocallyMutedUserIds((prev) => prev.includes(userId) ? prev : [...prev, userId]);
-    voiceService.setParticipantLocalVolume(userId, 0).catch(() => {});
-  }, []);
+    setUnmuteExceptions((prev) => prev.filter((id) => id !== userId));
+    setLocallyMutedUserIds((prev) => (prev.includes(userId) ? prev : [...prev, userId]));
+    if (!dummyAudioOnly) {
+      voiceService.setParticipantLocalVolume(userId, 0).catch(() => {});
+    }
+  }, [dummyAudioOnly]);
 
+  /**
+   * Individual local unmute.
+   * When Mute All is active, creates an explicit exception for this user only
+   * (Mute All remains on for everyone else). Otherwise removes from mute list.
+   */
   const localUnmuteParticipant = useCallback((userId: string) => {
+    if (muteAllActiveRef.current) {
+      setUnmuteExceptions((prev) => (prev.includes(userId) ? prev : [...prev, userId]));
+    }
     setLocallyMutedUserIds((prev) => prev.filter((id) => id !== userId));
-    voiceService.setParticipantLocalVolume(userId, 1).catch(() => {});
-  }, []);
+    if (!dummyAudioOnly) {
+      voiceService.setParticipantLocalVolume(userId, 1).catch(() => {});
+    }
+  }, [dummyAudioOnly]);
+
+  const muteAllRemoteParticipants = useCallback((remoteUserIds: string[]) => {
+    setMuteAllActive(true);
+    setUnmuteExceptions([]);
+    const unique = [...new Set(remoteUserIds.filter(Boolean))];
+    setLocallyMutedUserIds(unique);
+    if (!dummyAudioOnly) {
+      voiceService.setMuteAllRemoteLocal(true).catch(() => {});
+    }
+  }, [dummyAudioOnly]);
+
+  const unmuteAllRemoteParticipants = useCallback(() => {
+    setMuteAllActive(false);
+    setUnmuteExceptions([]);
+    setLocallyMutedUserIds([]);
+    if (!dummyAudioOnly) {
+      voiceService.setMuteAllRemoteLocal(false).catch(() => {});
+    }
+  }, [dummyAudioOnly]);
 
   return {
     hasMicPass,
@@ -529,6 +597,7 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
     activeSpeakerIds,
     mutedParticipantIds,
     locallyMutedUserIds,
+    muteAllActive,
     audioRoute,
     bluetoothAvailable,
     btDeviceName,
@@ -551,5 +620,8 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
     notifyRaceStarted,
     localMuteParticipant,
     localUnmuteParticipant,
+    muteAllRemoteParticipants,
+    unmuteAllRemoteParticipants,
+    isRemoteLocallyMuted,
   };
 }
