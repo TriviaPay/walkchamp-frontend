@@ -72,6 +72,24 @@ import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf, rs } from "@/utils/responsive";
 import { CashChallengeRefundBreakdown } from "@/components/CashChallengePaymentBreakdown";
 import { fetchCashChallengePaymentQuote, formatUsdFromDollars, refundBreakdownFromQuote, buildOptimisticRefundQuote, type CashChallengePaymentQuote } from "@/services/cashChallengeApi";
+import {
+  formatCashLeaveSuccessMessage,
+  type CashChallengeLeaveResponse,
+} from "@/services/refundApi";
+import { mapUnlimitedDetailToWaitingRoom } from "@/utils/unlimitedWaitingRoom";
+import { UNLIMITED_GOAL_CHALLENGE_TYPE } from "@/utils/unlimitedGoal";
+import {
+  isAlreadyLeftLeaveError,
+  isUnlimitedCashChallenge,
+  isUsdCashChallenge,
+  mapPaidCancelError,
+  previewChallengeHasStarted,
+  shouldReleaseActiveChallengeLock,
+  usdCashLeaveConfirmCopy,
+  usdCashLeaveEndpoint,
+  USD_CASH_LEAVE_ACTION_LABEL,
+  USD_CASH_NO_CANCEL_MESSAGE,
+} from "@/utils/usdCashChallengeLeavePolicy";
 import { useApp } from "@/context/AppContext";
 import {
   buildSelfParticipant,
@@ -768,10 +786,12 @@ function MatchmakingScreenContent() {
     initialTargetSteps?: string;
     initialCoinEntryAmount?: string;
     initialMaxPlayers?: string;
+    initialCapacityMode?: string;
     initialIsPrivate?: string;
     initialInviteCode?: string;
     initialCurrentPlayers?: string;
     initialScheduledStartAt?: string;
+    initialDailyGoalSteps?: string;
   }>();
 
   const { user } = useAuth();
@@ -797,7 +817,9 @@ function MatchmakingScreenContent() {
   const [refundQuote, setRefundQuote] = useState<CashChallengePaymentQuote | null>(null);
   const [refundConfirming, setRefundConfirming] = useState(false);
   /** Inline confirm — opens instantly (no AppAlert dismiss delay, no pre-fetch). */
-  const [confirmModal, setConfirmModal] = useState<"host_cancel" | "leave" | null>(null);
+  const [confirmModal, setConfirmModal] = useState<
+    "host_cancel" | "leave" | "leave_pre_start" | "leave_post_start" | null
+  >(null);
   /** Terminal cancel/expire modal — keeps users off a closed waiting room. */
   const [terminalModal, setTerminalModal] = useState<{
     title: string;
@@ -875,20 +897,37 @@ function MatchmakingScreenContent() {
     roomExpiresAt?: string | null;
     createdAt?: string | null;
     cancellationReason?: string | null;
+    challengeType?: string;
+    capacityMode?: string;
   } | null>(() => {
-    if (!params.initialEntryType && !params.initialCurrentPlayers) return null;
+    if (!params.initialEntryType && !params.initialCurrentPlayers && params.initialCapacityMode !== "unlimited") {
+      return null;
+    }
+    const unlimitedSeed =
+      params.initialCapacityMode === "unlimited" ||
+      params.initialEntryType === UNLIMITED_GOAL_CHALLENGE_TYPE;
     return {
       currentPlayers: params.initialCurrentPlayers
         ? Number(params.initialCurrentPlayers)
         : 1,
-      maxPlayers: params.initialMaxPlayers ? Number(params.initialMaxPlayers) : raceMaxPlayers,
+      maxPlayers: unlimitedSeed
+        ? 0
+        : params.initialMaxPlayers
+          ? Number(params.initialMaxPlayers)
+          : raceMaxPlayers,
       status: "open",
-      targetSteps: params.initialTargetSteps ? Number(params.initialTargetSteps) : undefined,
+      targetSteps: params.initialTargetSteps
+        ? Number(params.initialTargetSteps)
+        : params.initialDailyGoalSteps
+          ? Number(params.initialDailyGoalSteps)
+          : undefined,
       entryType: params.initialEntryType,
       coinEntryAmount: params.initialCoinEntryAmount ? Number(params.initialCoinEntryAmount) : 0,
       coinPrizePool: 0,
       isPrivate: params.initialIsPrivate === "true",
       inviteCode: params.initialInviteCode || null,
+      challengeType: unlimitedSeed ? UNLIMITED_GOAL_CHALLENGE_TYPE : undefined,
+      capacityMode: unlimitedSeed ? "unlimited" : undefined,
     };
   });
   const [scheduledStartAt, setScheduledStartAt] = useState<string | null>(
@@ -1014,10 +1053,42 @@ function MatchmakingScreenContent() {
 
   const entryFeeCents = liveRoom?.entryAmountCents ?? (raceEntryFee > 0 ? Math.round(raceEntryFee * 100) : 0);
   const isCoinsBattleRoom = liveRoom?.entryType === "coins_battle";
+  const isUnlimitedGoalRoom =
+    params.initialCapacityMode === "unlimited" ||
+    params.initialEntryType === UNLIMITED_GOAL_CHALLENGE_TYPE ||
+    isUnlimitedCashChallenge({
+      entryFeeCents,
+      entryType: liveRoom?.entryType ?? params.initialEntryType,
+      challengeType: (liveRoom as { challengeType?: string } | null)?.challengeType,
+      capacityMode:
+        (liveRoom as { capacityMode?: string } | null)?.capacityMode ??
+        (typeof params.initialCapacityMode === "string" ? params.initialCapacityMode : null),
+      maxPlayers: liveRoom?.maxPlayers,
+    });
   const isPaidCashRoom =
     entryFeeCents > 0 &&
     liveRoom?.entryType !== "coins_battle" &&
     liveRoom?.entryType !== "free";
+  const isUsdCashPaidRoom =
+    isUsdCashChallenge({
+      entryFeeCents,
+      entryType: liveRoom?.entryType ?? params.initialEntryType,
+      challengeType: (liveRoom as { challengeType?: string } | null)?.challengeType,
+      capacityMode:
+        (liveRoom as { capacityMode?: string } | null)?.capacityMode ??
+        (typeof params.initialCapacityMode === "string" ? params.initialCapacityMode : null),
+      maxPlayers: liveRoom?.maxPlayers,
+    }) || isUnlimitedGoalRoom || isPaidCashRoom;
+
+  const cashLeaveHasStartedPreview = previewChallengeHasStarted({
+    scheduledStartAt,
+    status: liveRoom?.status,
+    nowMs,
+  });
+  const cashLeaveCopy = usdCashLeaveConfirmCopy({
+    hasStartedPreview: cashLeaveHasStartedPreview,
+    isHost: isHostMode,
+  });
 
   const clearWaitingRoomLocalState = useCallback(() => {
     if (backendRaceId) {
@@ -1050,13 +1121,37 @@ function MatchmakingScreenContent() {
 
   const runRoomExitApi = useCallback(
     async (endpoint: "leave" | "cancel") => {
-      if (!backendRaceId) return { ok: true as const };
+      if (!backendRaceId) {
+        return { ok: true as const, body: null as CashChallengeLeaveResponse | null };
+      }
       try {
         const status = liveRoom?.status ?? "open";
-        // Waiting-room leave must unregister this race registration (same as Available Rooms withdraw).
         if (endpoint === "leave") {
+          let res: Response;
+          let body: CashChallengeLeaveResponse = {};
+
+          if (isUsdCashPaidRoom) {
+            res = await authFetch(usdCashLeaveEndpoint(backendRaceId, isUnlimitedGoalRoom), {
+              method: "POST",
+              body: JSON.stringify({ reason: "cancel_registration" }),
+              timeoutMs: 12_000,
+            });
+            body = (await res.json().catch(() => ({}))) as CashChallengeLeaveResponse;
+            if (!res.ok) {
+              if (isAlreadyLeftLeaveError(res.status, body)) {
+                return { ok: true as const, body: { ...body, success: true, participationStatus: "left" } };
+              }
+              return {
+                ok: false as const,
+                error: body.error ?? "Could not leave this challenge.",
+                body,
+              };
+            }
+            return { ok: true as const, body };
+          }
+
           const useLeave = status === "open" || status === "full";
-          const res = await authFetch(
+          res = await authFetch(
             useLeave
               ? `/api/races/${backendRaceId}/leave`
               : `/api/rooms/${backendRaceId}/cancel-registration`,
@@ -1068,32 +1163,50 @@ function MatchmakingScreenContent() {
               timeoutMs: 12_000,
             },
           );
+          body = (await res.json().catch(() => ({}))) as CashChallengeLeaveResponse;
           if (!res.ok) {
-            const body = (await res.json().catch(() => ({}))) as Record<string, string>;
-            return { ok: false as const, error: body.error ?? "Could not leave this room." };
+            return { ok: false as const, error: body.error ?? "Could not leave this room.", body };
           }
-        } else {
-          const res = await authFetch(`/api/races/${backendRaceId}/cancel`, {
-            method: "POST",
-            timeoutMs: 12_000,
-          });
-          if (!res.ok) {
-            const body = (await res.json().catch(() => ({}))) as Record<string, string>;
-            return { ok: false as const, error: body.error ?? "Could not cancel this room." };
-          }
+          void refreshWallet({ silent: true });
+          return { ok: true as const, body };
+        }
+
+        const res = await authFetch(`/api/races/${backendRaceId}/cancel`, {
+          method: "POST",
+          timeoutMs: 12_000,
+        });
+        const body = (await res.json().catch(() => ({}))) as CashChallengeLeaveResponse & {
+          code?: string;
+          error?: string;
+        };
+        if (!res.ok) {
+          return {
+            ok: false as const,
+            error: mapPaidCancelError(body),
+            body,
+            code: body.code,
+          };
         }
         void refreshWallet({ silent: true });
-        return { ok: true as const };
+        return { ok: true as const, body };
       } catch {
         return {
           ok: false as const,
-          error: endpoint === "leave"
-            ? "Could not leave this room. Check your connection and try again."
-            : "Could not cancel this room. Check your connection and try again.",
+          error:
+            endpoint === "leave"
+              ? "Could not leave this room. Check your connection and try again."
+              : "Could not cancel this room. Check your connection and try again.",
+          body: null,
         };
       }
     },
-    [backendRaceId, liveRoom?.status, refreshWallet],
+    [
+      backendRaceId,
+      liveRoom?.status,
+      refreshWallet,
+      isUsdCashPaidRoom,
+      isUnlimitedGoalRoom,
+    ],
   );
 
   const executeLeave = useCallback(async () => {
@@ -1107,51 +1220,70 @@ function MatchmakingScreenContent() {
     }
     setConfirmModal(null);
     setRefundModalVisible(false);
+
+    if (isUsdCashPaidRoom) {
+      const body = result.body;
+      // Only unlock after backend success — never optimistic unlock on failure.
+      if (body && shouldReleaseActiveChallengeLock(body)) {
+        void refreshWallet({ silent: true });
+      } else {
+        void refreshWallet({ silent: true });
+      }
+      AppAlert.alert("Left Challenge", formatCashLeaveSuccessMessage(body ?? { success: true }));
+    }
+
     navigateToWalkInstant();
-  }, [leaving, runRoomExitApi, navigateToWalkInstant]);
+  }, [leaving, runRoomExitApi, navigateToWalkInstant, isUsdCashPaidRoom, refreshWallet]);
 
   const executeHostCancel = useCallback(async () => {
     if (leaving || exitingRef.current) return;
+    if (isUsdCashPaidRoom) {
+      setConfirmModal(cashLeaveHasStartedPreview ? "leave_post_start" : "leave_pre_start");
+      return;
+    }
     setLeaving(true);
     const result = await runRoomExitApi("cancel");
     if (!result.ok) {
       setLeaving(false);
+      if (result.code === "PAID_CHALLENGE_CANNOT_BE_CANCELLED") {
+        AppAlert.alert("Cannot Cancel", result.error || USD_CASH_NO_CANCEL_MESSAGE);
+        setConfirmModal(cashLeaveHasStartedPreview ? "leave_post_start" : "leave_pre_start");
+        return;
+      }
       AppAlert.alert("Could not cancel", result.error);
       return;
     }
     setConfirmModal(null);
     navigateToWalkInstant();
-  }, [leaving, runRoomExitApi, navigateToWalkInstant]);
+  }, [
+    leaving,
+    runRoomExitApi,
+    navigateToWalkInstant,
+    isUsdCashPaidRoom,
+    cashLeaveHasStartedPreview,
+  ]);
 
   const handleCancel = useCallback(() => {
-    if (isHostMode && backendRaceId) {
+    if (!backendRaceId) {
+      navigateToWalkInstant();
+      return;
+    }
+    // Paid USD: Leave Challenge only — never cancel / never refund sheet.
+    if (isUsdCashPaidRoom) {
+      setRefundModalVisible(false);
+      setConfirmModal(cashLeaveHasStartedPreview ? "leave_post_start" : "leave_pre_start");
+      return;
+    }
+    if (isHostMode) {
       setConfirmModal("host_cancel");
       return;
     }
-    if (!isHostMode && backendRaceId && isPaidCashRoom) {
-      const maxPlayers = liveRoom?.maxPlayers ?? raceMaxPlayers;
-      setRefundQuote(buildOptimisticRefundQuote(entryFeeCents, maxPlayers));
-      setRefundModalVisible(true);
-      void fetchCashChallengePaymentQuote({
-        entryFeeCents,
-        numberOfPlayers: maxPlayers,
-      })
-        .then((q) => setRefundQuote(q))
-        .catch(() => { /* keep optimistic quote */ });
-      return;
-    }
-    if (!isHostMode && backendRaceId) {
-      setConfirmModal("leave");
-      return;
-    }
-    navigateToWalkInstant();
+    setConfirmModal("leave");
   }, [
     isHostMode,
     backendRaceId,
-    isPaidCashRoom,
-    entryFeeCents,
-    liveRoom?.maxPlayers,
-    raceMaxPlayers,
+    isUsdCashPaidRoom,
+    cashLeaveHasStartedPreview,
     navigateToWalkInstant,
   ]);
 
@@ -1245,12 +1377,28 @@ function MatchmakingScreenContent() {
         notifyRaceStarted(playerCount, raceStartedAtRef.current ?? undefined);
       }
       if (backendRaceId) {
-        router.replace({ pathname: "/race/live-detail", params: { id: backendRaceId } });
+        router.replace({
+          pathname: "/race/live-detail",
+          params: {
+            id: backendRaceId,
+            ...(isUnlimitedGoalRoom
+              ? { challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE, capacityMode: "unlimited" }
+              : null),
+          },
+        });
       } else {
         router.replace("/(tabs)/live");
       }
     },
-    [isHostMode, startRaceManually, notifyRaceStarted, backendRaceId, setStart, fetchRaceStartState],
+    [
+      isHostMode,
+      startRaceManually,
+      notifyRaceStarted,
+      backendRaceId,
+      setStart,
+      fetchRaceStartState,
+      isUnlimitedGoalRoom,
+    ],
   );
 
   // ── Begin countdown (3-2-1 → GO → navigate) ──────────────────────────────
@@ -1304,51 +1452,179 @@ function MatchmakingScreenContent() {
         return;
       }
       try {
-        const res = await authFetch(`/api/races/${backendRaceId}`);
-        if (!res.ok) {
+        const preferUnlimited =
+          isUnlimitedGoalRoom ||
+          params.initialCapacityMode === "unlimited" ||
+          params.initialEntryType === UNLIMITED_GOAL_CHALLENGE_TYPE;
+
+        let racePayload: WaitingRoomRacePayload | null = null;
+        let rawParticipantCollections: unknown[] = [];
+        let usedUnlimitedEndpoint = false;
+
+        if (preferUnlimited) {
+          const ulRes = await authFetch(`/api/unlimited-challenges/${backendRaceId}`);
+          if (ulRes.ok) {
+            const mapped = mapUnlimitedDetailToWaitingRoom(await ulRes.json());
+            if (mapped) {
+              usedUnlimitedEndpoint = true;
+              racePayload = mapped.race as WaitingRoomRacePayload;
+              rawParticipantCollections = [mapped.participants];
+            }
+          }
+        }
+
+        if (!racePayload) {
+          const res = await authFetch(`/api/races/${backendRaceId}`);
+          if (res.ok) {
+            const data = await res.json();
+            racePayload = data.race as WaitingRoomRacePayload;
+            rawParticipantCollections = [
+              data.participants,
+              data.registrations,
+              data.registeredParticipants,
+              data.race?.participants,
+              data.race?.registrations,
+              data.race?.registeredParticipants,
+            ];
+          } else if (!preferUnlimited) {
+            // Race id may actually be an Unlimited challenge.
+            const ulRes = await authFetch(`/api/unlimited-challenges/${backendRaceId}`);
+            if (ulRes.ok) {
+              const mapped = mapUnlimitedDetailToWaitingRoom(await ulRes.json());
+              if (mapped) {
+                usedUnlimitedEndpoint = true;
+                racePayload = mapped.race as WaitingRoomRacePayload;
+                rawParticipantCollections = [mapped.participants];
+              }
+            }
+          }
+        }
+
+        if (!racePayload) {
           setParticipantsLoading(false);
           setParticipantsError("Could not refresh registered players.");
           return;
         }
+
         markLiveRaceFetched(gateKey);
-        const data = await res.json();
-        const minParticipants = resolveMinimumParticipants(
-          data.race.minimumParticipants ??
-            data.race.minParticipants ??
-            data.race.min_players ??
-            data.race.minimum_participants,
-        );
+        const dataRace = racePayload as WaitingRoomRacePayload & {
+          id?: string;
+          status?: string;
+          currentPlayers?: number;
+          maxPlayers?: number | null;
+          targetSteps?: number;
+          entryType?: string;
+          entryAmountCents?: number;
+          isPrivate?: boolean;
+          inviteCode?: string | null;
+          minParticipants?: number;
+          min_players?: number;
+          minimum_participants?: number;
+          room_expires_at?: string | null;
+          created_at?: string | null;
+          cancellation_reason?: string | null;
+          cancelReason?: string | null;
+          scheduledStartAt?: string | null;
+          scheduled_start_at?: string | null;
+          startedAt?: string | null;
+          challengeType?: string;
+          capacityMode?: string;
+          dailyGoalSteps?: number;
+          challengeEndAt?: string | null;
+          challenge_end_at?: string | null;
+          challengeDurationDays?: number;
+        };
+
+        if (usedUnlimitedEndpoint && dataRace.id) {
+          void import("@/utils/hostedUnlimitedCache").then(({ saveHostedUnlimitedChallenge }) =>
+            saveHostedUnlimitedChallenge({
+              room_id: dataRace.id!,
+              status: dataRace.status ?? "waiting",
+              challenge_type: UNLIMITED_GOAL_CHALLENGE_TYPE,
+              entry_fee: (dataRace.entryAmountCents ?? 0) / 100,
+              coin_entry_amount: 0,
+              title: `Unlimited · ${(dataRace.targetSteps ?? 0).toLocaleString()} steps/day`,
+              target_steps: dataRace.targetSteps ?? 0,
+              max_players: 0,
+              registered_count: dataRace.currentPlayers ?? 1,
+              scheduled_start_at: dataRace.scheduledStartAt ?? dataRace.scheduled_start_at ?? null,
+              challenge_duration_days: dataRace.challengeDurationDays ?? 0,
+              challenge_end_at: dataRace.challengeEndAt ?? dataRace.challenge_end_at ?? null,
+              selected_track_theme_id: "bg",
+              theme_name: "Unlimited",
+              is_private: !!dataRace.isPrivate,
+              requires_code: !!dataRace.isPrivate,
+              host_user_id:
+                dataRace.hostUserId ??
+                dataRace.host_user_id ??
+                dataRace.creatorId ??
+                user?.id ??
+                "",
+              host_username: user?.username ?? "You",
+              host_avatar_color: "#00E676",
+              host_avatar_url: null,
+              host_country_flag: null,
+              current_user_registered: true,
+              eligible_to_register: false,
+              capacity_mode: "unlimited",
+            }),
+          ).catch(() => {});
+        }
+
+        const unlimitedCapacity =
+          usedUnlimitedEndpoint ||
+          dataRace.capacityMode === "unlimited" ||
+          dataRace.challengeType === UNLIMITED_GOAL_CHALLENGE_TYPE ||
+          dataRace.entryType === UNLIMITED_GOAL_CHALLENGE_TYPE ||
+          dataRace.maxPlayers == null ||
+          (typeof dataRace.maxPlayers === "number" && dataRace.maxPlayers <= 0);
+
+        const minParticipants = unlimitedCapacity
+          ? 1
+          : resolveMinimumParticipants(
+              dataRace.minimumParticipants ??
+                dataRace.minParticipants ??
+                dataRace.min_players ??
+                dataRace.minimum_participants,
+            );
         const nextLiveRoom = {
-          currentPlayers: data.race.currentPlayers ?? 1,
-          maxPlayers: data.race.maxPlayers ?? raceMaxPlayers,
-          status: data.race.status,
-          targetSteps: data.race.targetSteps,
-          entryType: data.race.entryType,
-          entryAmountCents: data.race.entryAmountCents,
-          coinEntryAmount: data.race.coinEntryAmount,
-          coinPrizePool: data.race.coinPrizePool,
-          isPrivate: data.race.isPrivate,
-          inviteCode: data.race.inviteCode ?? null,
+          currentPlayers: dataRace.currentPlayers ?? 1,
+          maxPlayers: unlimitedCapacity ? 0 : (dataRace.maxPlayers ?? raceMaxPlayers),
+          status: dataRace.status,
+          targetSteps:
+            dataRace.targetSteps ??
+            dataRace.dailyGoalSteps ??
+            (params.initialDailyGoalSteps ? Number(params.initialDailyGoalSteps) : undefined),
+          entryType: dataRace.entryType,
+          entryAmountCents: dataRace.entryAmountCents,
+          coinEntryAmount: dataRace.coinEntryAmount,
+          coinPrizePool: dataRace.coinPrizePool,
+          isPrivate: dataRace.isPrivate,
+          inviteCode: dataRace.inviteCode ?? null,
           minimumParticipants: minParticipants,
           canStart:
-            typeof data.race.canStart === "boolean"
-              ? data.race.canStart
-              : (data.race.currentPlayers ?? 1) >= minParticipants,
+            typeof dataRace.canStart === "boolean"
+              ? dataRace.canStart
+              : unlimitedCapacity
+                ? true
+                : (dataRace.currentPlayers ?? 1) >= minParticipants,
           roomExpiresAt:
-            data.race.roomExpiresAt ??
-            data.race.room_expires_at ??
+            dataRace.roomExpiresAt ??
+            dataRace.room_expires_at ??
             null,
-          createdAt: data.race.createdAt ?? data.race.created_at ?? null,
+          createdAt: dataRace.createdAt ?? dataRace.created_at ?? null,
           cancellationReason:
-            data.race.cancellationReason ??
-            data.race.cancellation_reason ??
-            data.race.cancelReason ??
+            dataRace.cancellationReason ??
+            dataRace.cancellation_reason ??
+            dataRace.cancelReason ??
             null,
+          challengeType: dataRace.challengeType,
+          capacityMode: unlimitedCapacity ? "unlimited" : dataRace.capacityMode,
         };
         setLiveRoom(nextLiveRoom);
         const apiSchedule =
-          (typeof data.race.scheduledStartAt === "string" && data.race.scheduledStartAt) ||
-          (typeof data.race.scheduled_start_at === "string" && data.race.scheduled_start_at) ||
+          (typeof dataRace.scheduledStartAt === "string" && dataRace.scheduledStartAt) ||
+          (typeof dataRace.scheduled_start_at === "string" && dataRace.scheduled_start_at) ||
           null;
         if (apiSchedule) {
           setScheduledStartAt(apiSchedule);
@@ -1363,7 +1639,7 @@ function MatchmakingScreenContent() {
         });
         roomExpiresAtRef.current = expiresAt;
 
-        const statusLower = String(data.race.status ?? "").toLowerCase();
+        const statusLower = String(dataRace.status ?? "").toLowerCase();
         if (
           statusLower === "cancelled" ||
           statusLower === "canceled" ||
@@ -1374,42 +1650,46 @@ function MatchmakingScreenContent() {
           return;
         }
 
-        if (data.race.targetSteps) {
-          setRaceTargetSteps(data.race.targetSteps);
+        if (nextLiveRoom.targetSteps) {
+          setRaceTargetSteps(nextLiveRoom.targetSteps);
         }
-        if (data.race.startedAt && !raceStartedAtRef.current) {
-          raceStartedAtRef.current = new Date(data.race.startedAt);
+        if (dataRace.startedAt && !raceStartedAtRef.current) {
+          raceStartedAtRef.current = new Date(dataRace.startedAt);
         }
-        const participantCollections: unknown[] = [
-          data.participants,
-          data.registrations,
-          data.registeredParticipants,
-          data.race?.participants,
-          data.race?.registrations,
-          data.race?.registeredParticipants,
-        ];
-        const hasServerParticipantCollection = participantCollections.some(Array.isArray);
-        const rawParticipants = hasServerParticipantCollection
-          ? participantCollections.flatMap((collection) =>
+        const hasServerParticipantCollection = rawParticipantCollections.some(Array.isArray);
+        const serverParticipants = hasServerParticipantCollection
+          ? rawParticipantCollections.flatMap((collection) =>
               Array.isArray(collection) ? collection : [],
             )
-          : participantsRef.current;
-        const nextParticipants = normalizeWaitingRoomParticipants(
+          : [];
+        // Empty [] from Unlimited detail would wipe the host seed — keep local until API has rows.
+        const rawParticipants =
+          serverParticipants.length > 0
+            ? serverParticipants
+            : participantsRef.current.length > 0
+              ? participantsRef.current
+              : serverParticipants;
+        const normalized = normalizeWaitingRoomParticipants(
           rawParticipants,
-          data.race as WaitingRoomRacePayload,
+          dataRace,
           user,
           isHostMode,
-        ).slice(0, nextLiveRoom.maxPlayers);
+        );
+        // Never slice(0, 0) for unlimited — that wiped the host from the list.
+        const nextParticipants =
+          unlimitedCapacity || nextLiveRoom.maxPlayers <= 0
+            ? normalized
+            : normalized.slice(0, nextLiveRoom.maxPlayers);
         setParticipants(nextParticipants);
         setParticipantsLoading(false);
         setParticipantsError(null);
         persistWaitingRoomCache(nextParticipants, nextLiveRoom);
         void refreshOnlineIds();
         if (
-          data.race.status === "in_progress" &&
+          dataRace.status === "in_progress" &&
           startPhaseRef.current === "idle"
         ) {
-          beginCountdown(3, data.race.currentPlayers ?? 2);
+          beginCountdown(3, dataRace.currentPlayers ?? 2);
         }
       } catch {
         setParticipantsLoading(false);
@@ -1427,6 +1707,10 @@ function MatchmakingScreenContent() {
       refreshOnlineIds,
       scheduledStartAt,
       showTerminalRoomClosed,
+      isUnlimitedGoalRoom,
+      params.initialCapacityMode,
+      params.initialEntryType,
+      params.initialDailyGoalSteps,
     ],
   );
 
@@ -1774,6 +2058,11 @@ function MatchmakingScreenContent() {
   // Fall back to raceEntryFee===0 for the brief moment before the first poll returns.
   const isFreeRace = liveRoom?.entryType === "free" || (!liveRoom && raceEntryFee === 0);
 
+  const isUnlimitedCapacity =
+    isUnlimitedGoalRoom ||
+    liveRoom?.capacityMode === "unlimited" ||
+    realMaxPlayers <= 0;
+
   // The normalized occupied list is the only source for grid order and count.
   const sortedParticipants = useMemo(() => {
     const deduped = new Map<string, RoomParticipant>();
@@ -1783,13 +2072,13 @@ function MatchmakingScreenContent() {
       if (status && NON_ACTIVE_REGISTRATION_STATUSES.has(status)) return;
       deduped.set(participant.userId, participant);
     });
-    return [...deduped.values()]
-      .sort((a, b) => {
-        if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
-        return participantTime(a) - participantTime(b);
-      })
-      .slice(0, realMaxPlayers);
-  }, [participants, realMaxPlayers]);
+    const ordered = [...deduped.values()].sort((a, b) => {
+      if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
+      return participantTime(a) - participantTime(b);
+    });
+    if (isUnlimitedCapacity || realMaxPlayers <= 0) return ordered;
+    return ordered.slice(0, realMaxPlayers);
+  }, [participants, realMaxPlayers, isUnlimitedCapacity]);
   const occupiedPlayerCount = sortedParticipants.length;
   const slots: Array<RoomParticipant | null> = useMemo(() => {
     // A non-host viewer's seed only contains "self", so before the first poll
@@ -1801,11 +2090,24 @@ function MatchmakingScreenContent() {
     const occupied: Array<RoomParticipant | null> = reserveHostSlot
       ? [null, ...sortedParticipants]
       : [...sortedParticipants];
+    if (isUnlimitedCapacity || realMaxPlayers <= 0) {
+      // Unlimited: only real joiners (+ optional host skeleton while loading).
+      if (occupied.length === 0 && participantsLoading) return [null];
+      return occupied;
+    }
     return [
       ...occupied,
       ...Array(Math.max(0, realMaxPlayers - occupied.length)).fill(null),
     ].slice(0, realMaxPlayers);
-  }, [sortedParticipants, realMaxPlayers, isHostMode, participantsLoading]);
+  }, [
+    sortedParticipants,
+    realMaxPlayers,
+    isHostMode,
+    participantsLoading,
+    isUnlimitedCapacity,
+  ]);
+
+  const unlimitedSlotSize = Math.min(72, Math.max(56, Math.floor(layoutWidth * 0.18)));
 
   const showingOverlay = startPhase !== "idle";
 
@@ -2056,24 +2358,52 @@ function MatchmakingScreenContent() {
           <View style={styles.panelHead}>
             <Text style={styles.panelLabel}>PLAYERS JOINED</Text>
             <Text style={styles.panelCount}>
-              {participantsLoading ? "—" : occupiedPlayerCount} / {realMaxPlayers}
+              {participantsLoading
+                ? "—"
+                : isUnlimitedCapacity
+                  ? `${occupiedPlayerCount} joined`
+                  : `${occupiedPlayerCount} / ${realMaxPlayers}`}
             </Text>
           </View>
 
-          <View style={styles.grid}>
-            {slots.map((p, i) => (
-              <View key={p?.userId ? `${p.userId}-${i}` : `empty-${i}`} style={styles.slotCell}>
-                <PlayerSlot
-                  participant={p}
-                  onPress={p ? () => setSelectedParticipant(p) : undefined}
-                  isOnline={isParticipantOnline(p)}
-                  loading={participantsLoading && !p}
-                  colors={colors}
-                  slotSize={slotSize}
-                />
-              </View>
-            ))}
-          </View>
+          {isUnlimitedCapacity ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.unlimitedScroller}
+            >
+              {slots.map((p, i) => (
+                <View
+                  key={p?.userId ? `${p.userId}-${i}` : `empty-${i}`}
+                  style={[styles.unlimitedSlotCell, { width: unlimitedSlotSize }]}
+                >
+                  <PlayerSlot
+                    participant={p}
+                    onPress={p ? () => setSelectedParticipant(p) : undefined}
+                    isOnline={isParticipantOnline(p)}
+                    loading={participantsLoading && !p}
+                    colors={colors}
+                    slotSize={unlimitedSlotSize}
+                  />
+                </View>
+              ))}
+            </ScrollView>
+          ) : (
+            <View style={styles.grid}>
+              {slots.map((p, i) => (
+                <View key={p?.userId ? `${p.userId}-${i}` : `empty-${i}`} style={styles.slotCell}>
+                  <PlayerSlot
+                    participant={p}
+                    onPress={p ? () => setSelectedParticipant(p) : undefined}
+                    isOnline={isParticipantOnline(p)}
+                    loading={participantsLoading && !p}
+                    colors={colors}
+                    slotSize={slotSize}
+                  />
+                </View>
+              ))}
+            </View>
+          )}
 
           {sortedParticipants.length > 0 && (
             <Text style={styles.tapHint}>Tap a player to view their profile</Text>
@@ -2096,14 +2426,24 @@ function MatchmakingScreenContent() {
             </View>
           )}
 
-          <View style={styles.progressTrack}>
-            <LinearGradient
-              colors={["#60A5FA", "#A78BFA"]}
-              style={[styles.progressFill, { width: `${Math.min(100, (occupiedPlayerCount / realMaxPlayers) * 100)}%` }]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-            />
-          </View>
+          {!isUnlimitedCapacity && (
+            <View style={styles.progressTrack}>
+              <LinearGradient
+                colors={["#60A5FA", "#A78BFA"]}
+                style={[
+                  styles.progressFill,
+                  {
+                    width: `${Math.min(
+                      100,
+                      (occupiedPlayerCount / Math.max(1, realMaxPlayers)) * 100,
+                    )}%`,
+                  },
+                ]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+              />
+            </View>
+          )}
         </View>
 
         <View style={styles.statsRow}>
@@ -2215,11 +2555,15 @@ function MatchmakingScreenContent() {
                 >
                   <Feather name="clock" size={18} color={colors.mutedForeground} />
                   <Text style={[styles.startBtnText, { color: colors.mutedForeground }]}>
-                    {neededPlayers > 0
-                      ? `Need ${neededPlayers} more player${neededPlayers === 1 ? "" : "s"}`
-                      : waitingBanner.kind === "scheduled_starting"
-                        ? "Starting race…"
-                        : "Starts automatically"}
+                    {isUnlimitedCapacity
+                      ? waitingBanner.kind === "scheduled_starting"
+                        ? "Starting challenge…"
+                        : "Starts automatically"
+                      : neededPlayers > 0
+                        ? `Need ${neededPlayers} more player${neededPlayers === 1 ? "" : "s"}`
+                        : waitingBanner.kind === "scheduled_starting"
+                          ? "Starting race…"
+                          : "Starts automatically"}
                   </Text>
                 </LinearGradient>
               </View>
@@ -2233,9 +2577,14 @@ function MatchmakingScreenContent() {
                 },
               ]}
               onPress={handleCancel}
+              disabled={leaving}
             >
               <Text style={[styles.cancelText, { color: colors.destructive }]}>
-                {leaving ? "Cancelling…" : "Cancel Room"}
+                {leaving
+                  ? "Leaving…"
+                  : isUsdCashPaidRoom
+                    ? USD_CASH_LEAVE_ACTION_LABEL
+                    : "Cancel Room"}
               </Text>
             </TouchableOpacity>
           </>
@@ -2244,14 +2593,23 @@ function MatchmakingScreenContent() {
             style={[
               styles.cancelBtn,
               {
-                borderColor: colors.border,
+                borderColor: isUsdCashPaidRoom ? colors.destructive + "40" : colors.border,
               },
             ]}
             onPress={handleCancel}
             disabled={leaving}
           >
-            <Text style={[styles.cancelText, { color: colors.mutedForeground }]}>
-              {leaving ? "Leaving…" : "Leave Room"}
+            <Text
+              style={[
+                styles.cancelText,
+                { color: isUsdCashPaidRoom ? colors.destructive : colors.mutedForeground },
+              ]}
+            >
+              {leaving
+                ? "Leaving…"
+                : isUsdCashPaidRoom
+                  ? USD_CASH_LEAVE_ACTION_LABEL
+                  : "Leave Room"}
             </Text>
           </TouchableOpacity>
         )}
@@ -2431,7 +2789,9 @@ function MatchmakingScreenContent() {
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", paddingHorizontal: 28 }}>
           <View style={{ backgroundColor: colors.card, borderRadius: 18, borderWidth: 1, borderColor: colors.border, overflow: "hidden" }}>
             <View style={{ paddingHorizontal: 22, paddingTop: 22, paddingBottom: 16, alignItems: "center" }}>
-              {confirmModal === "leave" ? (
+              {confirmModal === "leave" ||
+              confirmModal === "leave_pre_start" ||
+              confirmModal === "leave_post_start" ? (
                 <View
                   style={{
                     width: 52,
@@ -2451,14 +2811,20 @@ function MatchmakingScreenContent() {
                 </View>
               ) : null}
               <Text style={{ fontSize: rf(17), fontWeight: "700", color: colors.foreground, textAlign: "center" }}>
-                {confirmModal === "host_cancel" ? "Cancel Room?" : "Leave Room?"}
+                {confirmModal === "host_cancel"
+                  ? "Cancel Room?"
+                  : confirmModal === "leave_pre_start" || confirmModal === "leave_post_start"
+                    ? cashLeaveCopy.title
+                    : "Leave Room?"}
               </Text>
               <Text style={{ fontSize: rf(14), color: colors.mutedForeground, textAlign: "center", marginTop: 8, lineHeight: 20 }}>
                 {confirmModal === "host_cancel"
                   ? isCoinsBattleRoom
                     ? "This will cancel the waiting room for all players. No coins have been charged yet."
                     : "This will cancel the waiting room for all players."
-                  : "By clicking Leave, you will be withdrawn from the current room registration."}
+                  : confirmModal === "leave_pre_start" || confirmModal === "leave_post_start"
+                    ? cashLeaveCopy.message
+                    : "By clicking Leave, you will be withdrawn from the current room registration."}
               </Text>
             </View>
             <View style={{ height: 1, backgroundColor: colors.border }} />
@@ -2466,9 +2832,14 @@ function MatchmakingScreenContent() {
               <TouchableOpacity
                 style={{ flex: 1, paddingVertical: 12, borderRadius: 11, borderWidth: 1, borderColor: colors.border, alignItems: "center" }}
                 onPress={() => setConfirmModal(null)}
+                disabled={leaving}
               >
                 <Text style={{ color: colors.mutedForeground, fontWeight: "600" }}>
-                  {confirmModal === "host_cancel" ? "Keep Waiting" : "Cancel"}
+                  {confirmModal === "host_cancel"
+                    ? "Keep Waiting"
+                    : confirmModal === "leave_pre_start" || confirmModal === "leave_post_start"
+                      ? cashLeaveCopy.stayLabel
+                      : "Cancel"}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -2477,7 +2848,11 @@ function MatchmakingScreenContent() {
                 onPress={confirmModal === "host_cancel" ? executeHostCancel : executeLeave}
               >
                 <Text style={{ color: "#fff", fontWeight: "700" }}>
-                  {confirmModal === "host_cancel" ? "Cancel Room" : "Leave"}
+                  {confirmModal === "host_cancel"
+                    ? "Cancel Room"
+                    : confirmModal === "leave_pre_start" || confirmModal === "leave_post_start"
+                      ? cashLeaveCopy.confirmLabel
+                      : "Leave"}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -2543,7 +2918,7 @@ function MatchmakingScreenContent() {
 
       {/* ── Refund confirmation (paid cash leave) ── */}
       <Modal
-        visible={refundModalVisible}
+        visible={refundModalVisible && !isUsdCashPaidRoom}
         transparent
         animationType="fade"
         onRequestClose={() => setRefundModalVisible(false)}
@@ -2754,6 +3129,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: SLOT_PAD,
     paddingTop: 7,
     paddingBottom: SLOT_PAD,
+  },
+  unlimitedScroller: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    paddingTop: 8,
+    paddingBottom: 4,
+    paddingHorizontal: 2,
+    gap: 10,
+  },
+  unlimitedSlotCell: {
+    paddingHorizontal: 2,
   },
   playerSlot: {
     width: "100%",

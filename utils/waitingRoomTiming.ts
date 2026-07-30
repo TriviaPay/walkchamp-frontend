@@ -70,6 +70,26 @@ export function resolveRoomExpiresAt(opts: {
   return null;
 }
 
+export function resolveRacePlayerCount(race: Record<string, unknown> | null | undefined): number {
+  if (!race) return 0;
+  const candidates = [
+    race.currentPlayers,
+    race.current_players,
+    race.registeredCount,
+    race.registered_count,
+    race.participantCount,
+    race.participant_count,
+    race.playersJoined,
+    race.players_joined,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      return Math.floor(value);
+    }
+  }
+  return 0;
+}
+
 export function resolveMinimumParticipants(
   value: number | null | undefined,
 ): number {

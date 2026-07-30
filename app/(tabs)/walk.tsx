@@ -67,7 +67,48 @@ import { useTabBarHeight } from "@/hooks/useTabBarHeight";
 import { useIncrementalStepDisplay } from "@/hooks/useIncrementalStepDisplay";
 import { useWalkContext, TrackingStatus } from "@/context/WalkContext";
 import { useStepSourceGuard } from "@/hooks/useStepSourceGuard";
-import { ENABLE_CASH_CHALLENGES, ENABLE_LEGACY_CASH_RACE_CARDS } from "@/config/featureFlags";
+import {
+  ENABLE_CASH_CHALLENGES,
+  ENABLE_LEGACY_CASH_RACE_CARDS,
+  isUnlimitedGoalFrontendEnabled,
+  isWalkTrendingChallengesPreviewEnabled,
+} from "@/config/featureFlags";
+import {
+  UNLIMITED_GOAL_CHALLENGE_TYPE,
+  UNLIMITED_GOAL_DEFAULT_DAILY_STEPS,
+  UNLIMITED_GOAL_DESCRIPTION,
+  UNLIMITED_GOAL_DURATION_DAYS,
+  UNLIMITED_GOAL_ENTRY_AMOUNT_DOLLARS,
+  UNLIMITED_GOAL_PLATFORM_FEE_CENTS,
+  formatDurationDaysLabel,
+  isUnlimitedGoalChallenge,
+  isValidUnlimitedDailyGoalSteps,
+  isValidUnlimitedDurationDays,
+  isValidUnlimitedEntryFeeCents,
+  type UnlimitedGoalDurationDays,
+} from "@/utils/unlimitedGoal";
+import {
+  previewUnlimitedGoalPaymentQuote,
+  type UnlimitedGoalPaymentQuote,
+} from "@/services/unlimitedGoalApi";
+import { UnlimitedGoalFeeBreakdown } from "@/components/UnlimitedGoalFeeBreakdown";
+import { CreateChallengeFlow } from "@/components/CreateChallengeFlow";
+import { TrendingChallengesPreview } from "@/components/trending/TrendingChallengesPreview";
+import { fetchAvailableChallengeCount } from "@/services/trendingChallengesApi";
+import { fetchAvailableUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
+import { mergeUpcomingRoomsById } from "@/utils/unlimitedChallengeRooms";
+import { saveHostedUnlimitedChallenge } from "@/utils/hostedUnlimitedCache";
+import { PremiumStepSlider } from "@/components/PremiumStepSlider";
+import {
+  USD_FIXED_ENTRY_DOLLARS,
+  clampUsdFixedEntryDollars,
+  formatUsdFixedCashChallengeLabel,
+  isValidUsdFixedEntryDollars,
+  usdFixedEntryDollarsToCents,
+  type CreateChallengeDraft,
+  type HostPayloadMeta,
+} from "@/utils/createChallengeFlow";
+import { trackEvent } from "@/services/analytics";
 import { resolveDisplayTodaySteps } from "@/utils/liveRaceDisplay";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
@@ -240,6 +281,35 @@ function isPaidCashFee(fee: number): boolean {
   return fee > 0;
 }
 
+/** Host payload entry type for cash amounts — variable $3–$25 uses paid_usd. */
+function cashHostEntryType(fee: number): string {
+  if (fee === 0) return "free";
+  if (fee === -1) return "coins_battle";
+  if (fee === 1) return "paid_1";
+  if (isValidUsdFixedEntryDollars(fee)) return "paid_usd";
+  if (fee === 5) return "paid_5";
+  return "paid_usd";
+}
+
+function cashHostBody(fee: number, maxPlayers: number, targetSteps: number, trackLayout: string) {
+  const entryType = cashHostEntryType(fee);
+  if (entryType === "paid_usd") {
+    const dollars = clampUsdFixedEntryDollars(fee);
+    const entryFeeCents = usdFixedEntryDollarsToCents(dollars);
+    return {
+      entryType: "paid_usd",
+      challengeFormat: "fixed",
+      maxPlayers,
+      maxParticipants: maxPlayers,
+      targetSteps,
+      trackLayout,
+      customEntryAmountCents: entryFeeCents,
+      entryFeeCents,
+    };
+  }
+  return { entryType, maxPlayers, targetSteps, trackLayout };
+}
+
 function cashChallengeBlockedMessage(serverError?: string): string {
   if (serverError?.includes("Coin-entry challenges are disabled")) {
     return "Coin-entry challenges are turned off on the API server. Enable FEATURE_COIN_ENTRY_CHALLENGES on the backend deployment.";
@@ -281,7 +351,6 @@ const STEP_TARGETS = [
 ];
 
 type GoalPeriodType = TargetStepDuration;
-const USD_ENTRY_AMOUNTS = [3, 5, 10, 15, 20, 25];
 const COINS_ENTRY_AMOUNTS = [500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000];
 function fmtStepLabel(n: number): string {
   if (n < 1000) return String(n);
@@ -1765,10 +1834,14 @@ function WalkScreenContent() {
     stepsSourceReady,
     authReady,
   } = useWalkContext();
-  const { userRank, walletBalance, totalEarned, walletCurrency } = useApp();
+  const { userRank, walletBalance, totalEarned, walletCurrency, refreshWallet } = useApp();
   const { user, logout, loading: authLoading, sessionToken } = useAuth();
+  /** Set before navigating to Waiting Room while a Walk pageSheet is still covering. */
+  const pendingDismissRaceCoverModalsRef = useRef(false);
   const navToMatchmaking = useCallback(
     (opts: Omit<Parameters<typeof buildMatchmakingParams>[0], "user">) => {
+      // Returning from Waiting Room should not flash Walk cover sheets.
+      pendingDismissRaceCoverModalsRef.current = true;
       router.push({
         pathname: "/race/matchmaking",
         params: buildMatchmakingParams({ ...opts, user }),
@@ -1855,12 +1928,22 @@ function WalkScreenContent() {
   const [stepsPickerDraft, setStepsPickerDraft] = useState(getDefaultTargetSteps("daily"));
   const [challengeMaxPlayers, setChallengeMaxPlayers] = useState(getDefaultPlayerCount());
   const [playersPickerDraft, setPlayersPickerDraft] = useState(getDefaultPlayerCount());
-  const [activePicker, setActivePicker] = useState<"entryFee" | "coinAmount" | "usdAmount" | "goalType" | "steps" | "players" | null>(null);
-  const [challengeEntryMode, setChallengeEntryMode] = useState<"free" | "coins" | "usd">("free");
+  const [activePicker, setActivePicker] = useState<"entryFee" | "coinAmount" | "usdAmount" | "goalType" | "steps" | "players" | "unlimitedAmount" | "unlimitedGoal" | "unlimitedDuration" | null>(null);
+  const [challengeEntryMode, setChallengeEntryMode] = useState<"free" | "coins" | "usd" | "unlimited_goal">(
+    isUnlimitedGoalFrontendEnabled() ? "unlimited_goal" : "free",
+  );
   const [challengeUsdAmount, setChallengeUsdAmount] = useState(3);
+  const [unlimitedEntryDollars, setUnlimitedEntryDollars] = useState<number>(UNLIMITED_GOAL_ENTRY_AMOUNT_DOLLARS[0]!);
+  const [unlimitedDailyGoalSteps, setUnlimitedDailyGoalSteps] = useState(UNLIMITED_GOAL_DEFAULT_DAILY_STEPS);
+  const [unlimitedDurationDays, setUnlimitedDurationDays] = useState<UnlimitedGoalDurationDays>(7);
+  const [unlimitedPaymentQuote, setUnlimitedPaymentQuote] = useState<UnlimitedGoalPaymentQuote | null>(null);
   const [setupPaymentQuote, setSetupPaymentQuote] = useState<CashChallengePaymentQuote | null>(null);
   const [createPaymentQuote, setCreatePaymentQuote] = useState<CashChallengePaymentQuote | null>(null);
   const [confirmPaymentQuote, setConfirmPaymentQuote] = useState<CashChallengePaymentQuote | null>(null);
+  const [confirmPaymentQuoteLoading, setConfirmPaymentQuoteLoading] = useState(false);
+  const [confirmPaymentQuoteError, setConfirmPaymentQuoteError] = useState<string | null>(null);
+  const [confirmQuoteRetryNonce, setConfirmQuoteRetryNonce] = useState(0);
+  const confirmQuoteSeqRef = useRef(0);
   const [challengeGoalType, setChallengeGoalType] = useState<GoalPeriodType>("daily");
   const [challengeStartDate, setChallengeStartDate] = useState<Date>(() => toLocalCalendarDate(new Date()));
   const [challengeEndDate, setChallengeEndDate] = useState<Date | null>(null);
@@ -1910,7 +1993,14 @@ function WalkScreenContent() {
   // on a silent 1s interval — only setState when the minute (endMs) actually changes
   // so Walk does not re-render every second for clock labels (those use LiveClockText).
   useEffect(() => {
-    const days = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
+    const days =
+      challengeEntryMode === "unlimited_goal"
+        ? unlimitedDurationDays
+        : challengeGoalType === "daily"
+          ? 1
+          : challengeGoalType === "weekly"
+            ? 7
+            : 30;
     let cancelled = false;
 
     const recompute = () => {
@@ -1957,7 +2047,7 @@ function WalkScreenContent() {
       clearInterval(id);
       sub.remove();
     };
-  }, [challengeStartDate, challengeGoalType, challengeStartTimeIdx, challengeIsNowStart]);
+  }, [challengeStartDate, challengeGoalType, challengeStartTimeIdx, challengeIsNowStart, challengeEntryMode, unlimitedDurationDays]);
 
   useEffect(() => {
     setChallengeTargetSteps(getDefaultTargetSteps(challengeGoalType));
@@ -1968,7 +2058,13 @@ function WalkScreenContent() {
   const [joinWithCodeVisible, setJoinWithCodeVisible] = useState(false);
   const [coinsBattleVisible, setCoinsBattleVisible] = useState(false);
   const [alreadyHostingModal, setAlreadyHostingModal] = useState<{ isActiveRace: boolean; raceId: string | null; entryKey: string } | null>(null);
-  const [confirmEntry, setConfirmEntry] = useState<{ fee: number; label: string; gradients: readonly string[] } | null>(null);
+  const [confirmEntry, setConfirmEntry] = useState<{
+    fee: number;
+    label: string;
+    gradients: readonly string[];
+    /** When true, host can change fixed-cash entry via $3–$25 slider. */
+    feeEditable?: boolean;
+  } | null>(null);
   const [confirmEntryAnimated, setConfirmEntryAnimated] = useState(true);
   const [confirmChecks, setConfirmChecks] = useState<boolean[]>([false, false, false]);
   const [showCreateConfirm, setShowCreateConfirm] = useState(false);
@@ -2110,6 +2206,21 @@ function WalkScreenContent() {
   // network traffic when the user is on a different tab.
   const refetchDbWalk = dbWalk.refetch;
 
+  // Clear leftover Create Challenge / setup sheets when returning from Waiting Room.
+  useFocusEffect(
+    useCallback(() => {
+      if (!pendingDismissRaceCoverModalsRef.current) return;
+      pendingDismissRaceCoverModalsRef.current = false;
+      setChallengeModalAnimated(false);
+      setChallengeModal(false);
+      setChallengeCreating(false);
+      setSetupModalAnimated(false);
+      setSetupModal(null);
+      setConfirmEntryAnimated(false);
+      setConfirmEntry(null);
+    }, []),
+  );
+
   useFocusEffect(useCallback(() => {
     if (!userReady) {
       if (__DEV__) {
@@ -2170,10 +2281,6 @@ function WalkScreenContent() {
     return () => clearTimeout(t);
   }, []));
 
-  // ── Room counts (badge on Available Rooms card) ───────────────────────────
-  const [roomCounts, setRoomCounts] = useState<{ current: number; upcoming: number; total: number }>({ current: 0, upcoming: 0, total: 0 });
-  const roomPulseAnim = useRef(new Animated.Value(1)).current;
-
   /** Registered upcoming rooms for Next Race (same source as Available Rooms). */
   type WalkUpcomingRoom = {
     room_id: string;
@@ -2186,6 +2293,7 @@ function WalkScreenContent() {
     scheduled_start_at: string | null;
     current_user_registered: boolean;
     host_user_id: string;
+    status?: string | null;
   };
   const [registeredUpcomingRooms, setRegisteredUpcomingRooms] = useState<WalkUpcomingRoom[]>([]);
 
@@ -2195,6 +2303,44 @@ function WalkScreenContent() {
     const cached = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(GROUPS_CACHE_KEY);
     return cached?.summary?.total_groups ?? cached?.groups?.length ?? 0;
   });
+  const [availableChallengeCount, setAvailableChallengeCount] = useState(0);
+  const viewAllBlinkAnim = useRef(new Animated.Value(1)).current;
+  const groupsFadeAnim = useRef(new Animated.Value(0)).current;
+  const groupsExploreScale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    groupsFadeAnim.setValue(0);
+    Animated.timing(groupsFadeAnim, {
+      toValue: 1,
+      duration: 420,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [groupsFadeAnim]);
+
+  useEffect(() => {
+    if (availableChallengeCount <= 0) {
+      viewAllBlinkAnim.setValue(1);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(viewAllBlinkAnim, { toValue: 0.2, duration: 700, useNativeDriver: true }),
+        Animated.timing(viewAllBlinkAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [availableChallengeCount, viewAllBlinkAnim]);
+
+  const refreshAvailableChallengeCount = useCallback(async () => {
+    try {
+      const count = await fetchAvailableChallengeCount({ viewerUserId: user?.id });
+      setAvailableChallengeCount(count);
+    } catch {
+      /* keep previous count */
+    }
+  }, [user?.id]);
 
   const syncGroupCountFromCache = useCallback(async () => {
     const mem = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(GROUPS_CACHE_KEY);
@@ -2206,50 +2352,102 @@ function WalkScreenContent() {
     if (disk) setGroupCount(disk.summary?.total_groups ?? disk.groups?.length ?? 0);
   }, []);
 
-  const fetchRoomCounts = useCallback(async () => {
-    try {
-      const res = await authFetch("/api/rooms/counts");
-      if (!res.ok) return;
-      const data = await res.json() as { currentRoomsCount: number; upcomingRoomsCount: number; totalRoomsCount: number };
-      setRoomCounts({ current: data.currentRoomsCount, upcoming: data.upcomingRoomsCount, total: data.totalRoomsCount });
-    } catch {}
-  }, []);
-
   const fetchRegisteredUpcomingRooms = useCallback(async () => {
     try {
-      const res = await authFetch("/api/rooms/available?tab=upcoming");
-      if (!res.ok) return;
-      const data = await res.json() as { rooms?: WalkUpcomingRoom[] };
+      const [res, unlimited] = await Promise.all([
+        authFetch("/api/rooms/available?tab=upcoming"),
+        fetchAvailableUnlimitedChallenges({ viewerUserId: user?.id }),
+      ]);
+      if (!res.ok && unlimited.length === 0) return;
+      const data = res.ok
+        ? ((await res.json()) as { rooms?: WalkUpcomingRoom[] })
+        : { rooms: [] as WalkUpcomingRoom[] };
       const now = Date.now();
       const uid = user?.id;
-      setRegisteredUpcomingRooms(
-        (data.rooms ?? []).filter(
-          (r) =>
-            // Include rooms the user hosts too — a host is not a "registered"
-            // participant, so their own (incl. private) future room would
-            // otherwise never appear in Next Race.
-            (r.current_user_registered || (!!uid && r.host_user_id === uid)) &&
-            !!r.scheduled_start_at &&
-            new Date(r.scheduled_start_at).getTime() > now,
-        ),
+      const unlimitedAsWalk: WalkUpcomingRoom[] = unlimited.map((u) => ({
+        room_id: u.room_id,
+        challenge_type: u.challenge_type,
+        entry_fee: u.entry_fee,
+        coin_entry_amount: u.coin_entry_amount,
+        max_players: u.max_players,
+        registered_count: u.registered_count,
+        scheduled_start_at: u.scheduled_start_at,
+        target_steps: u.target_steps,
+        host_user_id: u.host_user_id,
+        current_user_registered:
+          u.current_user_registered || (!!uid && u.host_user_id === uid),
+        status: u.status,
+      }));
+      const merged = mergeUpcomingRoomsById(data.rooms ?? [], unlimitedAsWalk);
+      const nextRaceRooms = merged.filter((r) => {
+        const isMine =
+          r.current_user_registered || (!!uid && r.host_user_id === uid);
+        if (!isMine || !r.scheduled_start_at) return false;
+        const status = (r.status ?? "").toLowerCase();
+        if (
+          status === "completed" ||
+          status === "cancelled" ||
+          status === "canceled" ||
+          status === "settled"
+        ) {
+          return false;
+        }
+        const startMs = new Date(r.scheduled_start_at).getTime();
+        if (!Number.isFinite(startMs)) return false;
+        // Keep host/participant card through start window while status is still open.
+        if (startMs > now) return true;
+        return (
+          status === "scheduled" ||
+          status === "waiting" ||
+          status === "open" ||
+          status === "active" ||
+          status === "in_progress" ||
+          status === "" ||
+          isUnlimitedGoalChallenge({ challengeType: r.challenge_type })
+        );
+      });
+      console.log(
+        `[NextRace] unlimited=${unlimited.length} merged=${merged.length} nextRace=${nextRaceRooms.length} uid=${uid ?? "none"}`,
+        unlimited.map((u) => ({
+          id: u.room_id,
+          start: u.scheduled_start_at,
+          host: u.host_user_id,
+          reg: u.current_user_registered,
+          status: u.status,
+        })),
       );
+      setRegisteredUpcomingRooms(nextRaceRooms);
     } catch {
       /* keep previous Next Race list */
     }
   }, [user?.id]);
 
+  // Wait for auth/steps hydration — early focus often runs before userReady and
+  // authFetch fails silently, leaving View All at 0 until the next focus.
   useFocusEffect(useCallback(() => {
-    void fetchRoomCounts();
+    if (!userReady) return;
     void fetchRegisteredUpcomingRooms();
     void syncGroupCountFromCache();
-  }, [fetchRoomCounts, fetchRegisteredUpcomingRooms, syncGroupCountFromCache]));
+    void refreshAvailableChallengeCount();
+  }, [
+    userReady,
+    fetchRegisteredUpcomingRooms,
+    syncGroupCountFromCache,
+    refreshAvailableChallengeCount,
+  ]));
+
+  // When Walk stays focused while userReady flips true, also refresh once.
+  useEffect(() => {
+    if (!userReady) return;
+    void refreshAvailableChallengeCount();
+  }, [userReady, refreshAvailableChallengeCount]);
 
   useEffect(() => {
     const ch = subscribeToChannel("public-rooms-available");
     if (!ch) return;
     const refetch = () => {
-      void fetchRoomCounts();
       void fetchRegisteredUpcomingRooms();
+      void refreshAvailableChallengeCount();
     };
     ch.bind("room:created",   refetch);
     ch.bind("room:scheduled", refetch);
@@ -2257,19 +2455,7 @@ function WalkScreenContent() {
     ch.bind("room:cancelled", refetch);
     ch.bind("room:finished",  refetch);
     return () => { unsubscribeFromChannel("public-rooms-available"); };
-  }, [fetchRoomCounts, fetchRegisteredUpcomingRooms]);
-
-  useEffect(() => {
-    if (roomCounts.total <= 0) { roomPulseAnim.stopAnimation(); roomPulseAnim.setValue(1); return; }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(roomPulseAnim, { toValue: 0.25, duration: 900, useNativeDriver: true }),
-        Animated.timing(roomPulseAnim, { toValue: 1,    duration: 900, useNativeDriver: true }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [roomCounts.total, roomPulseAnim]);
+  }, [fetchRegisteredUpcomingRooms, refreshAvailableChallengeCount]);
 
   // Fetch sponsored events status for the Walk tab card; poll every 30 s while on tab
   useFocusEffect(useCallback(() => {
@@ -2422,13 +2608,29 @@ function WalkScreenContent() {
   const selectedEntry: ChallengeEntryOption = ENTRY_OPTIONS[challengeEntryIdx] ?? ENTRY_OPTIONS[0]!;
   const isCoinsBattleEntry = challengeEntryMode === "coins";
   const isUsdEntry = challengeEntryMode === "usd";
+  const isUnlimitedGoalEntry =
+    challengeEntryMode === "unlimited_goal" && isUnlimitedGoalFrontendEnabled();
   const coinEntryAmount = COINS_ENTRY_AMOUNTS[challengeEntryIdx] ?? COINS_ENTRY_AMOUNTS[0]!;
   const goalStepOptions = useMemo(() => getTargetStepOptions(challengeGoalType), [challengeGoalType]);
-  const targetStepsForCreate = isValidTargetSteps(challengeGoalType, challengeTargetSteps)
-    ? challengeTargetSteps
-    : getDefaultTargetSteps(challengeGoalType);
-  const durationDays = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
-  const durationDaysLabel = challengeGoalType === "daily" ? "1 day" : challengeGoalType === "weekly" ? "7 days" : "30 days";
+  const targetStepsForCreate = isUnlimitedGoalEntry
+    ? unlimitedDailyGoalSteps
+    : isValidTargetSteps(challengeGoalType, challengeTargetSteps)
+      ? challengeTargetSteps
+      : getDefaultTargetSteps(challengeGoalType);
+  const durationDays = isUnlimitedGoalEntry
+    ? unlimitedDurationDays
+    : challengeGoalType === "daily"
+      ? 1
+      : challengeGoalType === "weekly"
+        ? 7
+        : 30;
+  const durationDaysLabel = isUnlimitedGoalEntry
+    ? formatDurationDaysLabel(unlimitedDurationDays)
+    : challengeGoalType === "daily"
+      ? "1 day"
+      : challengeGoalType === "weekly"
+        ? "7 days"
+        : "30 days";
 
   useEffect(() => {
     if (!setupModal || setupModal.fee <= 0) {
@@ -2450,6 +2652,18 @@ function WalkScreenContent() {
       cancelled = true;
     };
   }, [setupModal?.fee, playerCount, setupModal]);
+
+  useEffect(() => {
+    if (challengeEntryMode !== "unlimited_goal" || !isUnlimitedGoalFrontendEnabled()) {
+      setUnlimitedPaymentQuote(null);
+      return;
+    }
+    setUnlimitedPaymentQuote(
+      previewUnlimitedGoalPaymentQuote({
+        entryFeeCents: unlimitedEntryDollars * 100,
+      }),
+    );
+  }, [challengeEntryMode, unlimitedEntryDollars]);
 
   useEffect(() => {
     if (challengeEntryMode !== "usd") {
@@ -2475,23 +2689,46 @@ function WalkScreenContent() {
   useEffect(() => {
     if (!confirmEntry || confirmEntry.fee <= 0) {
       setConfirmPaymentQuote(null);
+      setConfirmPaymentQuoteLoading(false);
+      setConfirmPaymentQuoteError(null);
       return;
     }
+    const dollars = clampUsdFixedEntryDollars(confirmEntry.fee);
+    const entryFeeCents = usdFixedEntryDollarsToCents(dollars);
     let cancelled = false;
-    void fetchCashChallengePaymentQuote({
-      entryFeeCents: Math.round(confirmEntry.fee * 100),
-      numberOfPlayers: 10,
-    })
-      .then((q) => {
-        if (!cancelled) setConfirmPaymentQuote(q);
+    const seq = ++confirmQuoteSeqRef.current;
+    setConfirmPaymentQuoteLoading(true);
+    setConfirmPaymentQuoteError(null);
+    const timer = setTimeout(() => {
+      void fetchCashChallengePaymentQuote({
+        entryFeeCents,
+        numberOfPlayers: 10,
       })
-      .catch(() => {
-        if (!cancelled) setConfirmPaymentQuote(null);
-      });
+        .then((q) => {
+          if (cancelled || seq !== confirmQuoteSeqRef.current) return;
+          setConfirmPaymentQuote(q);
+          setConfirmPaymentQuoteLoading(false);
+          setConfirmPaymentQuoteError(null);
+        })
+        .catch((err) => {
+          if (cancelled || seq !== confirmQuoteSeqRef.current) return;
+          // Keep prior quote if it still matches; otherwise summary falls back to entry fee.
+          setConfirmPaymentQuote((prev) => {
+            if (!prev) return null;
+            const prevCents = Math.round(prev.entryFeeCents ?? prev.entryFee * 100);
+            return prevCents === entryFeeCents ? prev : null;
+          });
+          setConfirmPaymentQuoteLoading(false);
+          setConfirmPaymentQuoteError(
+            err instanceof Error ? err.message : "Could not load payment summary.",
+          );
+        });
+    }, 250);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [confirmEntry?.fee, confirmEntry]);
+  }, [confirmEntry?.fee, confirmEntry, confirmQuoteRetryNonce]);
 
   const [freeJoining, setFreeJoining] = useState(false);
   const [joiningEntryKey, setJoiningEntryKey] = useState<string | null>(null);
@@ -2552,7 +2789,18 @@ function WalkScreenContent() {
     isHost?: boolean;
     maxPlayers?: number;
     joinedCount?: number;
+    /** Modal closed — keep seed for Next Race until upcoming list includes it. */
+    modalDismissed?: boolean;
   } | null>(null);
+
+  // Drop local Next Race seed once Available/Unlimited upcoming list has the room.
+  useEffect(() => {
+    const raceId = scheduledRoomResult?.raceId;
+    if (!raceId) return;
+    if (registeredUpcomingRooms.some((r) => r.room_id === raceId)) {
+      setScheduledRoomResult(null);
+    }
+  }, [registeredUpcomingRooms, scheduledRoomResult?.raceId]);
   const [leavingActiveRace, setLeavingActiveRace] = useState(false);
   const pendingRaceActionRef = useRef<(() => Promise<void>) | null>(null);
   const confirmEntryJoinCallbackRef = useRef<(() => void) | null>(null);
@@ -2600,11 +2848,10 @@ function WalkScreenContent() {
   // other challenges while registered, in the join window, or racing sponsored.
   const showSponsoredBlockAlert = useCallback(() => false, []);
 
-  const feeToEntryType = (fee: number) =>
-    fee === 0 ? "free" : fee === 1 ? "paid_1" : fee === 3 ? "paid_3" : fee === -1 ? "coins_battle" : "paid_5";
+  const feeToEntryType = (fee: number) => cashHostEntryType(fee);
 
   const entryKeyToFee = (k: string) =>
-    k === "free" ? 0 : k === "paid_1" ? 1 : k === "paid_3" ? 3 : k === "coins_battle" ? -1 : 5;
+    k === "free" ? 0 : k === "paid_1" ? 1 : k === "paid_3" ? 3 : k === "coins_battle" ? -1 : k === "paid_usd" ? 3 : 5;
 
   const ACTIVE_OR_WAITING = ["user_hosting_active", "user_joined_active", "user_hosting_waiting", "user_joined_waiting"];
 
@@ -2850,24 +3097,32 @@ function WalkScreenContent() {
       const msLeft = startMs - now;
       const phase: RaceStartingSoonPhase =
         msLeft < 10 * 60_000 ? "join_window" : "registered";
+      const isUnlimitedRoom = isUnlimitedGoalChallenge({
+        challengeType: room.challenge_type,
+        maxPlayers: room.max_players,
+      });
       const challengeType: RaceStartingSoonChallengeType =
         room.challenge_type === "sponsored"
           ? "sponsored"
           : room.challenge_type === "coins_battle" || room.coin_entry_amount > 0
             ? "coins"
-            : room.entry_fee > 0
+            : room.entry_fee > 0 || isUnlimitedRoom
               ? "cash"
               : "free";
       const isHost = !!user?.id && user.id === room.host_user_id;
       const joinFee =
-        room.entry_fee > 0 ? room.entry_fee : room.coin_entry_amount > 0 ? -1 : 0;
+        room.entry_fee > 0 || isUnlimitedRoom
+          ? room.entry_fee
+          : room.coin_entry_amount > 0
+            ? -1
+            : 0;
       cards.push({
         key: `upcoming:${room.room_id}`,
         challengeType,
         phase,
         scheduledStartAt: room.scheduled_start_at,
         registeredCount: room.registered_count ?? 1,
-        maxSlots: room.max_players || 10,
+        maxSlots: isUnlimitedRoom ? 0 : room.max_players || 10,
         targetSteps: room.target_steps,
         prizePoolCents:
           room.entry_fee > 0
@@ -2882,11 +3137,24 @@ function WalkScreenContent() {
             return;
           }
           setActiveRace(room.room_id, isHost);
-          joinRace(joinFee, room.max_players, isHost);
+          joinRace(joinFee, isUnlimitedRoom ? 0 : room.max_players, isHost);
           navToMatchmaking({
             raceId: room.room_id,
             isHost,
             initialScheduledStartAt: room.scheduled_start_at,
+            initialEntryType: isUnlimitedRoom
+              ? UNLIMITED_GOAL_CHALLENGE_TYPE
+              : challengeType === "coins"
+                ? "coins_battle"
+                : challengeType === "cash"
+                  ? "paid_usd"
+                  : challengeType === "free"
+                    ? "free"
+                    : undefined,
+            initialMaxPlayers: isUnlimitedRoom ? null : room.max_players,
+            initialTargetSteps: room.target_steps,
+            initialCurrentPlayers: room.registered_count ?? 1,
+            initialDailyGoalSteps: isUnlimitedRoom ? room.target_steps : undefined,
           });
         },
         sortMs: startMs,
@@ -3095,7 +3363,9 @@ function WalkScreenContent() {
           // Room gone — fall through to host a new one
           const res2 = await authFetch(`/api/races/host`, {
             method: "POST",
-            body: JSON.stringify({ entryType: entryKey, maxPlayers: playerCount, targetSteps: selectedTargetSteps, trackLayout: selectedTrackLayout }),
+            body: JSON.stringify(
+              cashHostBody(setupModal.fee, playerCount, selectedTargetSteps, selectedTrackLayout),
+            ),
           });
           if (!res2.ok) {
             const body2 = await res2.json().catch(() => ({})) as Record<string, unknown>;
@@ -3117,7 +3387,9 @@ function WalkScreenContent() {
         // Host a brand-new room
         const res = await authFetch(`/api/races/host`, {
           method: "POST",
-          body: JSON.stringify({ entryType: entryKey, maxPlayers: playerCount, targetSteps: selectedTargetSteps, trackLayout: selectedTrackLayout }),
+          body: JSON.stringify(
+            cashHostBody(setupModal.fee, playerCount, selectedTargetSteps, selectedTrackLayout),
+          ),
         });
         if (!res.ok) {
           const body = await res.json().catch(() => ({})) as Record<string, unknown>;
@@ -3311,12 +3583,16 @@ function WalkScreenContent() {
   };
 
 
-  const handleCreateChallenge = async () => {
+  const submitCreateChallenge = async (args: {
+    body: Record<string, unknown>;
+    meta: HostPayloadMeta;
+    draft: CreateChallengeDraft;
+  }) => {
     if (challengeCreating) return;
+    const { body, meta, draft } = args;
     let navigating = false;
     setChallengeCreating(true);
     try {
-      // Verified tracking required for create (free + paid + coins)
       if (user?.id) {
         const gate = await ensureMatchStepPermissionsReady({
           userId: user.id,
@@ -3331,20 +3607,20 @@ function WalkScreenContent() {
         }
       }
 
-      const entryType = challengeEntryMode === "free" ? "free"
-        : challengeEntryMode === "coins" ? "coins_battle"
-        : "paid_usd";
-      const scheduledStartAt = buildScheduledStartAtFromDate(challengeStartDate, challengeStartTimeIdx);
-      const isScheduled = scheduledStartAt !== null;
-
-      // Validate: selected time must not be in the past
-      if (scheduledStartAt !== null && scheduledStartAt.getTime() <= Date.now()) {
-        AppAlert.alert("Invalid Time", "Please select a future start time.");
+      if (meta.isUnlimited && !isUnlimitedGoalFrontendEnabled()) {
+        AppAlert.alert("Unavailable", "Unlimited Challenge is disabled in this build.");
         setChallengeCreating(false);
         return;
       }
+      if (meta.isUnlimited) {
+        trackEvent("unlimited_challenge_create_started", { mode: "unlimited_goal" });
+      }
 
-      if (challengeEntryMode === "usd") {
+      const entryType = meta.entryTypeApi;
+      const scheduledStartAt = meta.scheduledStartAt;
+      const isScheduled = scheduledStartAt !== null;
+
+      if (meta.isUsd) {
         if (!ENABLE_CASH_CHALLENGES) {
           AppAlert.alert(
             "Cash challenges unavailable",
@@ -3353,7 +3629,7 @@ function WalkScreenContent() {
           setChallengeCreating(false);
           return;
         }
-        const required = createPaymentQuote?.totalPayable ?? challengeUsdAmount;
+        const required = meta.totalChargeCents / 100;
         if (walletBalance < required) {
           const isIndiaUser =
             user?.countryCode === "IN" ||
@@ -3377,42 +3653,17 @@ function WalkScreenContent() {
         }
       }
 
-      if (!isValidPlayerCount(challengeMaxPlayers)) {
-        AppAlert.alert("Invalid Players", "Please select a valid player count between 2 and 10.");
-        setChallengeCreating(false);
-        return;
-      }
-
-      if (!isValidTargetSteps(challengeGoalType, targetStepsForCreate)) {
-        AppAlert.alert("Invalid Target", "Please select a valid target step goal for this challenge duration.");
-        setChallengeCreating(false);
-        return;
-      }
-
-      const timezone = getUserTimezone();
-
-      const body: Record<string, unknown> = {
-        entryType,
-        maxPlayers: challengeMaxPlayers,
-        targetSteps: targetStepsForCreate,
-        trackLayout: challengeTrackLayout,
-        isPrivate: roomType === "private",
-        timezone,
-        goalType: challengeGoalType,
-        ...(challengeEntryMode === "coins" ? { coinEntryAmount } : {}),
-        ...(challengeEntryMode === "usd" ? { customEntryAmountCents: challengeUsdAmount * 100 } : {}),
-        ...(isScheduled ? { scheduledStartAtIso: scheduledStartAt!.toISOString() } : {}),
-        ...(challengeEndDate ? { challengeEndAtIso: challengeEndDate.toISOString() } : {}),
-        challengeDurationDays: durationDays,
-      };
-
-      const res = await authFetch(`/api/races/host`, {
+      const hostUrl = meta.isUnlimited
+        ? "/api/unlimited-challenges/host"
+        : "/api/races/host";
+      const res = await authFetch(hostUrl, {
         method: "POST",
         body: JSON.stringify(body),
       });
 
       const data = await res.json() as {
         raceId?: string;
+        id?: string;
         code?: string;
         error?: string | { message?: string; code?: string };
         message?: string;
@@ -3420,8 +3671,42 @@ function WalkScreenContent() {
         isScheduled?: boolean;
         scheduledStartAt?: string;
         inviteCode?: string;
-        race?: { entryType?: string; targetSteps?: number; coinEntryAmount?: number; entryAmountCents?: number; maxPlayers?: number; isPrivate?: boolean; inviteCode?: string | null };
-        active_race?: { room_id: string; room_status: string; challenge_type: string; entry_fee: number; target_steps: number; current_user_role: string };
+        challenge?: {
+          id?: string;
+          challengeId?: string;
+          totalChargeCents?: number;
+          entryFeeCents?: number;
+          platformFeeCents?: number;
+          inviteCode?: string | null;
+          isPrivate?: boolean;
+          visibility?: string;
+          startAtIso?: string;
+          startAtUtc?: string;
+          scheduledStartAt?: string;
+          dailyGoalSteps?: number;
+          durationDays?: number;
+          status?: string;
+          title?: string;
+          prizePoolCents?: number;
+          participantCount?: number;
+        };
+        race?: {
+          entryType?: string;
+          targetSteps?: number;
+          coinEntryAmount?: number;
+          entryAmountCents?: number;
+          maxPlayers?: number;
+          isPrivate?: boolean;
+          inviteCode?: string | null;
+        };
+        active_race?: {
+          room_id: string;
+          room_status: string;
+          challenge_type: string;
+          entry_fee: number;
+          target_steps: number;
+          current_user_role: string;
+        };
       };
 
       if (!res.ok) {
@@ -3439,8 +3724,6 @@ function WalkScreenContent() {
         const isScheduledRoomConflict =
           /scheduled/i.test(serverCode) ||
           /already.*scheduled|scheduled.*already|scheduled (room|race)/i.test(serverError) ||
-          // The create endpoint currently returns a bare 409 for this rule in
-          // some deployments, without a code/message field.
           (isScheduled && res.status === 409 && !data.active_race);
 
         if (isScheduledRoomConflict) {
@@ -3456,8 +3739,6 @@ function WalkScreenContent() {
             room_type?: string;
             is_sponsored?: boolean;
           };
-          // Sponsored events use entryType "free" — older APIs report them as a
-          // blocking "free" race. Confirm via room type / current sponsored id.
           let sponsoredBlock = isSponsoredActiveRaceConflict(ar, sponsoredRacingId);
           if (!sponsoredBlock && ar.room_id) {
             try {
@@ -3482,69 +3763,175 @@ function WalkScreenContent() {
         return;
       }
 
-      if (!data.raceId) {
+      const unlimitedChallenge = data.challenge;
+      const createdRaceId =
+        data.raceId ??
+        unlimitedChallenge?.id ??
+        unlimitedChallenge?.challengeId ??
+        data.id;
+      if (!createdRaceId) {
         AppAlert.alert("Error", "Unexpected server response. Please try again.");
         return;
       }
 
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      // Unlimited host response: challenge.totalChargeCents is the wallet debit.
+      if (meta.isUnlimited) {
+        const charged =
+          typeof unlimitedChallenge?.totalChargeCents === "number"
+            ? unlimitedChallenge.totalChargeCents
+            : meta.totalChargeCents;
+        if (typeof charged === "number" && charged > 0) {
+          meta.totalChargeCents = charged;
+          if (typeof unlimitedChallenge?.entryFeeCents === "number") {
+            meta.entryFeeCents = unlimitedChallenge.entryFeeCents;
+          }
+          if (typeof unlimitedChallenge?.platformFeeCents === "number") {
+            meta.platformFeeCents = unlimitedChallenge.platformFeeCents;
+          }
+        }
+        void refreshWallet({ silent: true });
+      }
 
-      if (data.isScheduled) {
-        const isPrivateRoom = data.race?.isPrivate ?? (roomType === "private");
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (meta.isUnlimited) {
+        trackEvent("unlimited_challenge_created", { raceId: createdRaceId });
+      }
+
+      const unlimitedIsScheduled =
+        meta.isUnlimited ||
+        data.isScheduled === true ||
+        !!(
+          unlimitedChallenge?.startAtIso ||
+          unlimitedChallenge?.startAtUtc ||
+          unlimitedChallenge?.scheduledStartAt
+        );
+
+      if (unlimitedIsScheduled || data.isScheduled) {
+        const isPrivateRoom =
+          typeof unlimitedChallenge?.isPrivate === "boolean"
+            ? unlimitedChallenge.isPrivate
+            : unlimitedChallenge?.visibility === "private"
+              ? true
+              : unlimitedChallenge?.visibility === "public"
+                ? false
+                : (data.race?.isPrivate ?? draft.visibility === "private");
+        const scheduledStartAt =
+          unlimitedChallenge?.startAtIso ??
+          unlimitedChallenge?.startAtUtc ??
+          unlimitedChallenge?.scheduledStartAt ??
+          data.scheduledStartAt ??
+          meta.scheduledStartAt?.toISOString() ??
+          new Date().toISOString();
+        const entryAmountCents =
+          unlimitedChallenge?.entryFeeCents ??
+          data.race?.entryAmountCents ??
+          meta.entryFeeCents;
+        const dailySteps =
+          unlimitedChallenge?.dailyGoalSteps ??
+          data.race?.targetSteps ??
+          meta.targetOrDailySteps;
+
+        if (meta.isUnlimited) {
+          void saveHostedUnlimitedChallenge({
+            room_id: createdRaceId,
+            status: unlimitedChallenge?.status ?? "scheduled",
+            challenge_type: UNLIMITED_GOAL_CHALLENGE_TYPE,
+            entry_fee: entryAmountCents / 100,
+            coin_entry_amount: 0,
+            title:
+              unlimitedChallenge?.title ??
+              `Unlimited · ${dailySteps.toLocaleString()} steps/day`,
+            target_steps: dailySteps,
+            max_players: 0,
+            registered_count: unlimitedChallenge?.participantCount ?? 1,
+            scheduled_start_at: scheduledStartAt,
+            challenge_duration_days: unlimitedChallenge?.durationDays ?? meta.durationDays,
+            challenge_end_at: meta.endAt?.toISOString() ?? null,
+            selected_track_theme_id: "bg",
+            theme_name: "Unlimited",
+            is_private: !!isPrivateRoom,
+            requires_code: !!isPrivateRoom,
+            host_user_id: user?.id ?? "",
+            host_username: user?.username ?? "You",
+            host_avatar_color: "#00E676",
+            host_avatar_url: null,
+            host_country_flag: null,
+            current_user_registered: true,
+            eligible_to_register: false,
+            capacity_mode: "unlimited",
+            platform_fee_cents: meta.platformFeeCents,
+            total_charge_cents: meta.totalChargeCents,
+            reward_pool:
+              typeof unlimitedChallenge?.prizePoolCents === "number"
+                ? unlimitedChallenge.prizePoolCents / 100
+                : entryAmountCents / 100,
+          });
+        }
+
         setScheduledRoomResult({
-          inviteCode: data.inviteCode ?? null,
-          isPrivate: isPrivateRoom,
-          scheduledStartAt: data.scheduledStartAt ?? new Date().toISOString(),
-          targetSteps: data.race?.targetSteps ?? targetStepsForCreate,
+          inviteCode:
+            unlimitedChallenge?.inviteCode ??
+            data.inviteCode ??
+            null,
+          isPrivate: !!isPrivateRoom,
+          scheduledStartAt,
+          targetSteps: dailySteps,
           entryType: data.race?.entryType ?? entryType,
-          entryAmountCents: data.race?.entryAmountCents ?? 0,
-          coinEntryAmount: data.race?.coinEntryAmount ?? 0,
-          raceId: data.raceId,
+          entryAmountCents,
+          coinEntryAmount: data.race?.coinEntryAmount ?? draft.fixed.coinEntryAmount,
+          raceId: createdRaceId,
           isHost: true,
-          maxPlayers: data.race?.maxPlayers ?? challengeMaxPlayers,
+          maxPlayers: meta.isUnlimited
+            ? undefined
+            : (data.race?.maxPlayers ?? meta.maxPlayers ?? draft.fixed.maxPlayers),
           joinedCount: 1,
         });
         setChallengeModal(false);
-        setChallengeStartDate(toLocalCalendarDate(new Date()));
-        setChallengeEndDate(null);
-        setChallengeStartTimeIdx(0);
         setChallengeCreating(false);
-        // Immediately resync every room-derived widget so the Walk tab reflects
-        // the new scheduled room without needing a focus change or manual refresh.
         void loadChallengeStatuses();
-        void fetchRoomCounts();
         void fetchRegisteredUpcomingRooms();
+        void refreshAvailableChallengeCount();
         return;
       }
 
-      // Instant room — navigate to matchmaking lobby
       setChallengeModalAnimated(false);
+      pendingDismissRaceCoverModalsRef.current = true;
 
       router.push({
         pathname: "/race/matchmaking",
         params: buildMatchmakingParams({
-          raceId: data.raceId!,
+          raceId: createdRaceId,
           isHost: true,
           user,
           initialCurrentPlayers: 1,
           initialEntryType: data.race?.entryType ?? entryType,
-          initialTargetSteps: data.race?.targetSteps ?? targetStepsForCreate,
-          initialCoinEntryAmount: data.race?.coinEntryAmount ?? 0,
-          initialMaxPlayers: data.race?.maxPlayers ?? challengeMaxPlayers,
-          initialIsPrivate: data.race?.isPrivate ?? (roomType === "private"),
-          initialInviteCode: data.race?.inviteCode ?? data.inviteCode ?? "",
+          initialTargetSteps: data.race?.targetSteps ?? meta.targetOrDailySteps,
+          initialCoinEntryAmount: data.race?.coinEntryAmount ?? draft.fixed.coinEntryAmount,
+          initialMaxPlayers: meta.isUnlimited
+            ? null
+            : (data.race?.maxPlayers ?? meta.maxPlayers ?? draft.fixed.maxPlayers),
+          initialIsPrivate: data.race?.isPrivate ?? (draft.visibility === "private"),
+          initialInviteCode:
+            data.race?.inviteCode ??
+            data.inviteCode ??
+            unlimitedChallenge?.inviteCode ??
+            "",
+          initialDailyGoalSteps: meta.isUnlimited ? draft.unlimited.dailyGoalSteps : undefined,
+          initialDurationDays: meta.isUnlimited ? draft.unlimited.durationDays : undefined,
+          initialScheduledStartAt: meta.scheduledStartAt?.toISOString() ?? undefined,
         }),
       });
 
       navigating = true;
       InteractionManager.runAfterInteractions(() => {
+        // Instant dismiss — restore slide animation only in Modal onDismiss.
         setChallengeModal(false);
-        setShowCreateConfirm(false);
-        setCreateConfirmChecks([false, false, false]);
         setChallengeCreating(false);
-        setChallengeModalAnimated(true);
       });
     } catch {
+      if (meta.isUnlimited) {
+        trackEvent("unlimited_challenge_create_failed");
+      }
       AppAlert.alert("Error", "Network error. Please try again.");
     } finally {
       if (!navigating) setChallengeCreating(false);
@@ -3877,17 +4264,39 @@ function WalkScreenContent() {
         <View style={styles.sectionRow}>
           <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: 0 }]}>Join a Challenge</Text>
           <TouchableOpacity
-            onPress={() => router.push("/groups")}
-            style={[styles.roomsBtn, { backgroundColor: colors.primary + "18" }]}
-            activeOpacity={0.7}
+            onPress={() => {
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push("/rooms/available");
+            }}
+            style={styles.roomsBtn}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel={`View all challenges${availableChallengeCount > 0 ? `, ${availableChallengeCount}` : ""}`}
           >
-            <Text style={[styles.roomsBtnText, { color: colors.primary }]}>Groups</Text>
-            {groupCount > 0 && (
-              <View style={[styles.roomsBadge, { backgroundColor: colors.primary + "25", borderColor: colors.primary + "55" }]}>
-                <Text style={[styles.roomsBadgeText, { color: colors.primary }]}>{groupCount}</Text>
-              </View>
-            )}
-            <Feather name="chevron-right" size={13} color={colors.primary} />
+            <LinearGradient
+              colors={["#FB7185", "#E11D48"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.roomsBtnGradient}
+            >
+              <Text style={styles.roomsBtnText}>View All</Text>
+              {availableChallengeCount > 0 ? (
+                <View style={styles.viewAllLiveWrap} accessibilityElementsHidden>
+                  <Animated.View
+                    style={[
+                      styles.viewAllBlinkDot,
+                      { backgroundColor: "#FFFFFF", opacity: viewAllBlinkAnim },
+                    ]}
+                  />
+                  <View style={styles.viewAllCountCircle}>
+                    <Text style={styles.viewAllCountText}>
+                      {availableChallengeCount > 99 ? "99+" : availableChallengeCount}
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+              <Feather name="chevron-right" size={12} color="#FFFFFF" />
+            </LinearGradient>
           </TouchableOpacity>
         </View>
 
@@ -4085,67 +4494,11 @@ function WalkScreenContent() {
           );
         })}
 
-        {/* ── Available Rooms Card ── */}
-        <TouchableOpacity
-          activeOpacity={0.88}
-          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); router.push("/rooms/available"); }}
-          style={[styles.groupsCardWrap, { position: "relative" }]}
-        >
-          <LinearGradient
-            colors={["#0C4A6E", "#0284C7", "#075985"] as [string, string, string]}
-            style={styles.groupsCard}
-            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-          >
-            {/* Glowing nodes background */}
-            <View style={styles.groupsGlowNode1} />
-            <View style={styles.groupsGlowNode2} />
-            <View style={styles.groupsGlowNode3} />
-
-            {/* Left: icon + text */}
-            <View style={styles.groupsLeft}>
-              <LinearGradient colors={["#38BDF8", "#0EA5E9"]} style={styles.groupsIconWrap} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
-                <Feather name="grid" size={20} color="#FFF" />
-              </LinearGradient>
-              <View style={styles.groupsTextBlock}>
-                <Text style={styles.groupsTitle}>Available Rooms</Text>
-                <Text style={styles.groupsSub}>Browse and join upcoming challenges</Text>
-                <View style={styles.groupsTagRow}>
-                  <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Live</Text></View>
-                  <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Upcoming</Text></View>
-                  <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Join</Text></View>
-                </View>
-              </View>
-            </View>
-
-            {/* Right: CTA */}
-            <View style={styles.groupsCta}>
-              <LinearGradient colors={["#38BDF8", "#0284C7"]} style={styles.groupsCtaBtn} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-                <Text style={styles.groupsCtaText}>View</Text>
-              </LinearGradient>
-            </View>
-          </LinearGradient>
-          {roomCounts.total > 0 && (
-            <View style={styles.groupsInviteBadge}>
-              <Animated.View style={[styles.roomsBadgeDot, { backgroundColor: "#FFF", opacity: roomPulseAnim, marginRight: 4 }]} />
-              <Text style={styles.groupsInviteBadgeText}>{roomCounts.total}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-
-        {/* ── Premium Challenges Section ── */}
-        <View>
-          {/* Section header */}
-          <View style={[styles.sectionRow, { marginTop: 8, marginBottom: 4 }]}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Premium Challenges</Text>
-            </View>
-          </View>
-
-          {/* Cash Prize Challenge ($3 card) */}
-          {ENABLE_THREE_DOLLAR_CHALLENGE && (() => {
+        {/* Cash Prize Challenge — directly under Coins Battle */}
+        {ENABLE_THREE_DOLLAR_CHALLENGE && (() => {
             const premOpt = RACE_OPTIONS.find((o) => o.fee === 3)!;
             const premKey = "paid_3";
-            const premCs = challengeStatuses[premKey];
+            const premCs = challengeStatuses[premKey] ?? challengeStatuses.paid_usd;
             const premS = premCs?.status;
 
             const handlePremiumPress = () => {
@@ -4186,8 +4539,9 @@ function WalkScreenContent() {
                       setConfirmChecks([false, false, false]);
                       setConfirmEntry({
                         fee: 3,
-                        label: "$3 Premium Challenge",
+                        label: formatUsdFixedCashChallengeLabel(3),
                         gradients: premOpt.gradientColors,
+                        feeEditable: true,
                       });
                       return Promise.resolve();
                     };
@@ -4202,7 +4556,12 @@ function WalkScreenContent() {
               }
               if (__DEV__) console.log("[PremiumChallenge] create flow opened");
               setConfirmChecks([false, false, false]);
-              setConfirmEntry({ fee: 3, label: "$3 Premium Challenge", gradients: premOpt.gradientColors });
+              setConfirmEntry({
+                fee: 3,
+                label: formatUsdFixedCashChallengeLabel(3),
+                gradients: premOpt.gradientColors,
+                feeEditable: true,
+              });
             };
 
             const premStatusLabel =
@@ -4228,7 +4587,7 @@ function WalkScreenContent() {
                     <Text style={styles.raceCardLabel}>Cash Prize Challenge</Text>
                     <Text style={styles.raceCardSub}>Skill-based walking challenge</Text>
                     <View style={{ flexDirection: "row", gap: 4, marginTop: 5, alignItems: "center", flexShrink: 1 }}>
-                      {["$3 Entry", "Step Goal", "Prize rewards"].map((chip) => (
+                      {["$3–$25", "Step Goal", "Prize rewards"].map((chip) => (
                         <View key={chip} style={{ backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, flexShrink: 1 }}>
                           <Text numberOfLines={1} style={{ color: "#FFF", fontSize: 9, fontWeight: "700" }}>{chip}</Text>
                         </View>
@@ -4248,6 +4607,54 @@ function WalkScreenContent() {
               </TouchableOpacity>
             );
           })()}
+
+        {/* Create Challenge — directly under Cash Prize Challenge */}
+        <TouchableOpacity
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            if (showSponsoredBlockAlert()) return;
+            const anyActive = findAnyActiveRace();
+            if (anyActive) {
+              if (anyActive.cs.isHost) {
+                const isActiveRace = anyActive.cs.status === "user_hosting_active";
+                setAlreadyHostingModal({ isActiveRace, raceId: anyActive.cs.raceId ?? null, entryKey: anyActive.entryKey });
+                return;
+              }
+              pendingRaceActionRef.current = () => {
+                openCreateChallengeModal();
+                return Promise.resolve();
+              };
+              openActiveRaceModalFromStatus(anyActive.entryKey, anyActive.cs);
+              return;
+            }
+            openCreateChallengeModal();
+          }}
+          activeOpacity={0.88}
+          style={[styles.friendsCard, { backgroundColor: colors.card, borderColor: "#A855F730" }]}
+        >
+          <View style={[styles.friendsIcon, { backgroundColor: "#A855F720" }]}>
+            <Feather name="flag" size={22} color="#A855F7" />
+          </View>
+          <View style={styles.friendsText}>
+            <Text style={[styles.friendsLabel, { color: colors.foreground }]}>Create Challenge</Text>
+            <Text style={[styles.friendsSub, { color: colors.mutedForeground }]}>Create public or private challenge</Text>
+          </View>
+          <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+        </TouchableOpacity>
+
+        {/* Unlimited Challenge preview — feature-flagged; stays under Create Challenge */}
+        {isWalkTrendingChallengesPreviewEnabled() ? (
+          <TrendingChallengesPreview />
+        ) : null}
+
+        {/* ── Premium Challenges Section ── */}
+        <View>
+          {/* Section header */}
+          <View style={[styles.sectionRow, { marginTop: 8, marginBottom: 4 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Premium Challenges</Text>
+            </View>
+          </View>
 
           {/* Sponsored Events — always available for browsing */}
           {(() => {
@@ -4376,40 +4783,84 @@ function WalkScreenContent() {
               </TouchableOpacity>
             );
           })()}
+        </View>
 
-          {/* Create Challenge */}
-          <TouchableOpacity
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              if (showSponsoredBlockAlert()) return;
-              const anyActive = findAnyActiveRace();
-              if (anyActive) {
-                if (anyActive.cs.isHost) {
-                  const isActiveRace = anyActive.cs.status === "user_hosting_active";
-                  setAlreadyHostingModal({ isActiveRace, raceId: anyActive.cs.raceId ?? null, entryKey: anyActive.entryKey });
-                  return;
-                }
-                pendingRaceActionRef.current = () => {
-                  openCreateChallengeModal();
-                  return Promise.resolve();
-                };
-                openActiveRaceModalFromStatus(anyActive.entryKey, anyActive.cs);
-                return;
-              }
-              openCreateChallengeModal();
-            }}
-            activeOpacity={0.88}
-            style={[styles.friendsCard, { backgroundColor: colors.card, borderColor: "#A855F730" }]}
-          >
-            <View style={[styles.friendsIcon, { backgroundColor: "#A855F720" }]}>
-              <Feather name="flag" size={22} color="#A855F7" />
+        {/* ── Communities Section ── */}
+        <View>
+          <View style={[styles.sectionRow, { marginTop: 8, marginBottom: 4, alignItems: "flex-start" }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: 2 }]}>Communities</Text>
+              <Text style={[styles.communitiesSectionSub, { color: colors.mutedForeground }]}>
+                Walk, compete and stay motivated together
+              </Text>
             </View>
-            <View style={styles.friendsText}>
-              <Text style={[styles.friendsLabel, { color: colors.foreground }]}>Create Challenge</Text>
-              <Text style={[styles.friendsSub, { color: colors.mutedForeground }]}>Create public or private challenge</Text>
-            </View>
-            <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
-          </TouchableOpacity>
+          </View>
+
+          <Animated.View style={{ opacity: groupsFadeAnim }}>
+            <Pressable
+              onPress={() => {
+                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                router.push("/groups");
+              }}
+              onPressIn={() => {
+                Animated.spring(groupsExploreScale, {
+                  toValue: 0.94,
+                  useNativeDriver: true,
+                  speed: 50,
+                  bounciness: 0,
+                }).start();
+              }}
+              onPressOut={() => {
+                Animated.spring(groupsExploreScale, {
+                  toValue: 1,
+                  useNativeDriver: true,
+                  speed: 40,
+                  bounciness: 6,
+                }).start();
+              }}
+              android_ripple={{ color: "rgba(94,234,212,0.22)", borderless: false }}
+              style={styles.groupsCardWrap}
+              accessibilityRole="button"
+              accessibilityLabel={`Groups${groupCount > 0 ? `, ${groupCount}` : ""}`}
+            >
+              <LinearGradient
+                colors={["#075985", "#0EA5E9", "#38BDF8"] as [string, string, string]}
+                style={styles.groupsCard}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+              >
+                <View style={styles.groupsLeft}>
+                  <View style={styles.groupsIconWrap}>
+                    <Feather name="users" size={20} color="#0369A1" />
+                  </View>
+                  <View style={styles.groupsTextBlock}>
+                    <Text style={styles.groupsTitle}>Groups</Text>
+                    <Text style={styles.groupsSub} numberOfLines={2}>
+                      Create or join groups with friends, family and coworkers to compete together every day.
+                    </Text>
+                    <View style={styles.groupsTagRow}>
+                      <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Friends</Text></View>
+                      <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Family</Text></View>
+                      <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Office</Text></View>
+                    </View>
+                  </View>
+                </View>
+
+                <Animated.View style={[styles.groupsCta, { transform: [{ scale: groupsExploreScale }] }]}>
+                  <View style={styles.groupsCtaBtn}>
+                    <Text style={styles.groupsCtaText}>Explore</Text>
+                  </View>
+                </Animated.View>
+              </LinearGradient>
+              {groupCount > 0 ? (
+                <View style={styles.groupsInviteBadge}>
+                  <Text style={styles.groupsInviteBadgeText}>
+                    {groupCount > 99 ? "99+" : groupCount}
+                  </Text>
+                </View>
+              ) : null}
+            </Pressable>
+          </Animated.View>
         </View>
       </ScrollView>
 
@@ -4513,7 +4964,12 @@ function WalkScreenContent() {
             {!isFreeRace && (
               <>
                 <CashChallengeRewardSplit quote={setupPaymentQuote} colors={colors} />
-                <CashChallengePaymentBreakdown quote={setupPaymentQuote} colors={colors} />
+                <CashChallengePaymentBreakdown
+                  quote={setupPaymentQuote}
+                  entryFeeDollars={setupModal?.fee ?? null}
+                  colors={colors}
+                  title="Payment Summary"
+                />
               </>
             )}
 
@@ -4729,14 +5185,62 @@ function WalkScreenContent() {
             <View style={[styles.detailCard, { backgroundColor: colors.card, borderColor: colors.border, marginBottom: 20 }]}>
               <View style={styles.detailRow}>
                 <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Challenge</Text>
-                <Text style={[styles.detailValue, { color: colors.foreground }]}>{confirmEntry?.label}</Text>
+                <Text style={[styles.detailValue, { color: colors.foreground }]}>
+                  {confirmEntry
+                    ? (confirmEntry.feeEditable
+                        ? formatUsdFixedCashChallengeLabel(confirmEntry.fee)
+                        : confirmEntry.label)
+                    : ""}
+                </Text>
               </View>
               <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />
               <View style={styles.detailRow}>
                 <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Entry Fee</Text>
-                <Text style={[styles.detailValue, { color: colors.accent }]}>${confirmEntry?.fee.toFixed(2)}</Text>
+                <Text style={[styles.detailValue, { color: colors.accent }]}>
+                  ${clampUsdFixedEntryDollars(confirmEntry?.fee ?? 3).toFixed(2)}
+                </Text>
               </View>
-              <CashChallengePaymentBreakdown quote={confirmPaymentQuote} colors={colors} title="Payment Breakdown" />
+              {/* Host flow: allow $3–$25 entry selection. Join flow keeps room fee fixed. */}
+              {confirmEntry?.feeEditable && confirmEntry.fee > 0 ? (
+                <View style={{ marginTop: 12, marginBottom: 4 }}>
+                  <PremiumStepSlider
+                    label="Entry Fee"
+                    values={USD_FIXED_ENTRY_DOLLARS}
+                    selectedValue={clampUsdFixedEntryDollars(confirmEntry.fee)}
+                    onValueChange={(v) => {
+                      const dollars = clampUsdFixedEntryDollars(v);
+                      setConfirmEntry((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              fee: dollars,
+                              label: formatUsdFixedCashChallengeLabel(dollars),
+                            }
+                          : prev,
+                      );
+                    }}
+                    formatValue={(v) => `$${v}`}
+                    minLabel="$3"
+                    maxLabel="$25"
+                    accessibilityLabel="Cash challenge entry fee"
+                    accent={colors.primary}
+                    labelColor={colors.foreground}
+                    helperColor={colors.mutedForeground}
+                    surfaceColor={colors.card}
+                    borderColor={colors.border}
+                    trackGradient={[colors.primary, colors.accent] as [string, string]}
+                  />
+                </View>
+              ) : null}
+              <CashChallengePaymentBreakdown
+                quote={confirmPaymentQuote}
+                loading={confirmPaymentQuoteLoading}
+                entryFeeDollars={clampUsdFixedEntryDollars(confirmEntry?.fee ?? 3)}
+                error={confirmPaymentQuoteError}
+                onRetry={() => setConfirmQuoteRetryNonce((n) => n + 1)}
+                colors={colors}
+                title="Payment Summary"
+              />
               <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />
               <View style={styles.detailRow}>
                 <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Type</Text>
@@ -4748,9 +5252,9 @@ function WalkScreenContent() {
             <Text style={[styles.modalSectionLabel, { color: colors.mutedForeground }]}>Please confirm all of the following:</Text>
 
             {[
-              "I understand this is a skill-based race. My result depends entirely on my activity performance — outcomes are not based on chance.",
-              "I understand that the total payable amount (entry fee + tax/processing + platform service fee) is charged when I confirm. If I leave before the race starts, my entry fee is refunded to my wallet.",
-              "I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
+              "I understand that the challenge cannot be cancelled after creation.",
+              "I understand that leaving before the challenge starts may qualify for an entry-fee refund according to the refund policy. Leaving at or after the challenge start time provides no refund and removes me from prize eligibility.",
+              "I understand that if I leave, the challenge will continue for other participants. I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
             ].map((text, i) => (
               <TouchableOpacity
                 key={i}
@@ -4819,900 +5323,29 @@ function WalkScreenContent() {
         </SafeAreaView>
       </Modal>
 
-      {/* ── Create Challenge Modal ── */}
-      <Modal visible={challengeModal} animationType={challengeModalAnimated ? "slide" : "none"} presentationStyle="pageSheet" transparent={false} onDismiss={() => { setChallengeModalAnimated(true); setActivePicker(null); setShowCreateConfirm(false); setCreateConfirmChecks([false, false, false]); setChallengeStartDate(toLocalCalendarDate(new Date())); setChallengeEndDate(null); setChallengeStartTimeIdx(0); setShowStartDatePicker(false); setShowEndDatePicker(false); setChallengeEntryMode("free"); setChallengeGoalType("daily"); setChallengeTargetSteps(getDefaultTargetSteps("daily")); setStepsPickerDraft(getDefaultTargetSteps("daily")); setChallengeMaxPlayers(getDefaultPlayerCount()); setPlayersPickerDraft(getDefaultPlayerCount()); }}>
-        <SafeAreaView edges={["top", "left", "right", "bottom"]} style={[styles.modalWrap, { backgroundColor: colors.background }]}>
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
-              <LinearGradient
-                colors={roomType === "public" ? [colors.accent, colors.primary] : ["#6D28D9", "#4C1D95"]}
-                style={{ width: 50, height: 50, borderRadius: 16, alignItems: "center", justifyContent: "center" }}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-              >
-                <Feather name={roomType === "private" ? "shield" : "globe"} size={22} color="#FFF" />
-              </LinearGradient>
-              <View>
-                <Text style={{ fontSize: rf(22), fontWeight: "800", color: colors.foreground, letterSpacing: -0.3 }}>Create Challenge</Text>
-                <Text style={{ fontSize: rf(12), color: colors.mutedForeground, marginTop: 2 }}>Set up your challenge. Invite others. Get racing.</Text>
-              </View>
-            </View>
-            <TouchableOpacity
-              onPress={() => { setChallengeModal(false); setShowCreateConfirm(false); setCreateConfirmChecks([false, false, false]); }}
-              style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: colors.border, alignItems: "center", justifyContent: "center" }}
-            >
-              <Feather name="x" size={17} color={colors.mutedForeground} />
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView contentContainerStyle={[styles.modalBody, modalScrollPad]} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-            {showCreateConfirm ? (() => {
-              const entryLabel = challengeEntryMode === "free" ? "Free" : challengeEntryMode === "coins" ? `${coinEntryAmount.toLocaleString()} coins` : `$${challengeUsdAmount}`;
-              const label = `${entryLabel} ${roomType === "public" ? "Public" : "Private"} Challenge`;
-              const gradients: [string, string] = roomType === "public" ? [colors.accent, colors.primary] : ["#A855F7", "#7C3AED"];
-              const isUsdConfirm = challengeEntryMode === "usd";
-              const confirmChecks = isUsdConfirm ? createConfirmChecks : createConfirmChecks;
-              const confirmItems = isUsdConfirm
-                ? [
-                    "I understand this is a skill-based race. My result depends entirely on my activity performance — outcomes are not based on chance.",
-                    "I understand that the total payable amount (entry fee + tax/processing + platform service fee) is charged when I confirm. If I leave before the race starts, my entry fee is refunded to my wallet.",
-                    "I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
-                  ]
-                : [
-                    "I understand this is a skill-based race. My result depends entirely on my activity performance — outcomes are not based on chance.",
-                    "I understand that coins are deducted when the race begins. If I leave the lobby before the race starts, no coins are deducted.",
-                    "I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
-                  ];
-              const canConfirmHost =
-                confirmChecks.every(Boolean) &&
-                (!isUsdConfirm || (createPaymentQuote?.canAfford ?? walletBalance >= (createPaymentQuote?.totalPayable ?? challengeUsdAmount)));
-              return (
-                <>
-                  {/* Summary card */}
-                  <View style={[styles.detailCard, { backgroundColor: colors.card, borderColor: colors.border, marginBottom: 20 }]}>
-                    <View style={styles.detailRow}>
-                      <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Challenge</Text>
-                      <Text style={[styles.detailValue, { color: colors.foreground }]}>{label}</Text>
-                    </View>
-                    <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />
-                    <View style={styles.detailRow}>
-                      <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Entry</Text>
-                      <Text style={[styles.detailValue, { color: colors.accent }]}>{entryLabel}</Text>
-                    </View>
-                    <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />
-                    <View style={styles.detailRow}>
-                      <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Type</Text>
-                      <Text style={[styles.detailValue, { color: colors.foreground }]}>Skill-based race</Text>
-                    </View>
-                  </View>
-
-                  {isUsdConfirm && createPaymentQuote && (
-                    <>
-                      <View style={[styles.detailCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                        {[
-                          { label: "Entry Fee", value: `$${challengeUsdAmount} per player`, color: colors.accent },
-                          { label: "Players", value: String(challengeMaxPlayers), color: colors.foreground },
-                          { label: "Entry Pool / Prize Pool", value: `$${createPaymentQuote.prizePool.toFixed(2)}`, color: colors.gold },
-                        ].map((row, i) => (
-                          <View key={i}>
-                            {i > 0 && <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />}
-                            <View style={styles.detailRow}>
-                              <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>{row.label}</Text>
-                              <Text style={[styles.detailValue, { color: row.color }]}>{row.value}</Text>
-                            </View>
-                          </View>
-                        ))}
-                      </View>
-                      <CashChallengeRewardSplit quote={createPaymentQuote} colors={colors} />
-                      <CashChallengePaymentBreakdown quote={createPaymentQuote} colors={colors} />
-                    </>
-                  )}
-
-                  <Text style={[styles.modalSectionLabel, { color: colors.mutedForeground }]}>Please confirm all of the following:</Text>
-
-                  {confirmItems.map((text, i) => (
-                    <TouchableOpacity
-                      key={i}
-                      style={[styles.confirmCheckRow, { backgroundColor: colors.card, borderColor: createConfirmChecks[i] ? colors.primary + "60" : colors.border }]}
-                      onPress={() => {
-                        const next = [...createConfirmChecks];
-                        next[i] = !next[i];
-                        setCreateConfirmChecks(next);
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <View style={[styles.confirmCheckBox, { backgroundColor: createConfirmChecks[i] ? colors.primary : colors.background, borderColor: createConfirmChecks[i] ? colors.primary : colors.border }]}>
-                        {createConfirmChecks[i] && <Feather name="check" size={13} color="#000" />}
-                      </View>
-                      <Text style={[styles.confirmCheckText, { color: colors.foreground }]}>{text}</Text>
-                    </TouchableOpacity>
-                  ))}
-
-                  <TouchableOpacity
-                    style={[styles.joinBtn, { opacity: canConfirmHost ? 1 : 0.4, marginTop: 8 }]}
-                    disabled={!canConfirmHost || challengeCreating}
-                    onPress={handleCreateChallenge}
-                    activeOpacity={0.85}
-                  >
-                    <LinearGradient
-                      colors={gradients}
-                      style={styles.joinGradient}
-                      start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                    >
-                      {/* Left-to-right fill that sweeps across while the API is in flight */}
-                      <Animated.View
-                        pointerEvents="none"
-                        style={{
-                          position: "absolute", left: 0, top: 0, bottom: 0,
-                          width: createFillAnim.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }),
-                          backgroundColor: "rgba(255,255,255,0.22)",
-                        }}
-                      />
-                      {(challengeCreating || !challengeModalAnimated)
-                        ? <ActivityIndicator size="small" color="#FFF" />
-                        : <Feather name="check-circle" size={20} color="#FFF" />}
-                      <Text style={styles.joinBtnText}>
-                        {(challengeCreating || !challengeModalAnimated)
-                          ? "Creating room…"
-                          : isUsdConfirm && createPaymentQuote
-                            ? `Confirm Payment — $${createPaymentQuote.totalPayable.toFixed(2)}`
-                            : "Confirm & Create Room"}
-                      </Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.cancelBtn, { borderColor: colors.border }]}
-                    onPress={() => { setShowCreateConfirm(false); setCreateConfirmChecks([false, false, false]); }}
-                  >
-                    <Text style={[styles.cancelBtnText, { color: colors.mutedForeground }]}>← Back</Text>
-                  </TouchableOpacity>
-
-                  <Text style={[styles.finePrint, { color: colors.mutedForeground }]}>
-                    Walk Champ is a skill-based race platform. Results are determined by your activity performance — not by chance.
-                  </Text>
-                </>
-              );
-            })() : (
-            <>
-                {/* ── Room Type Toggle ── */}
-                <View style={{ flexDirection: "row", gap: 12, marginBottom: 8 }}>
-                  {(["public", "private"] as const).map((t) => {
-                    const active = roomType === t;
-                    const isPrivate = t === "private";
-                    const accentCol = isPrivate ? "#A855F7" : colors.accent;
-                    return (
-                      <TouchableOpacity
-                        key={t}
-                        style={{ flex: 1, overflow: "hidden", borderRadius: 16, borderWidth: 1.5, borderColor: active ? accentCol : colors.border }}
-                        onPress={() => setRoomType(t)}
-                        activeOpacity={0.82}
-                      >
-                        {active && isPrivate ? (
-                          <LinearGradient
-                            colors={["#3B1B6B", "#1E0B40"]}
-                            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-                            style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 13 }}
-                          >
-                            <Feather name="shield" size={17} color="#C084FC" />
-                            <Text style={{ fontSize: rf(14), fontWeight: "800", color: "#E9D5FF" }}>Private Room</Text>
-                          </LinearGradient>
-                        ) : (
-                          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, backgroundColor: active ? accentCol + "18" : colors.card }}>
-                            <Feather name={isPrivate ? "lock" : "globe"} size={17} color={active ? accentCol : colors.mutedForeground} />
-                            <Text style={{ fontSize: rf(14), fontWeight: "700", color: active ? accentCol : colors.mutedForeground }}>
-                              {isPrivate ? "Private Room" : "Public Room"}
-                            </Text>
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                <Text style={{ fontSize: rf(12), color: colors.mutedForeground, marginBottom: 20, lineHeight: 17 }}>
-                  {roomType === "public"
-                    ? "Open to all eligible players. Anyone matching your settings can join."
-                    : "Invite-only · Share a room code with friends to play together privately."}
-                </Text>
-
-                {/* ── PRIVATE: Join with Code — premium style ── */}
-                {roomType === "private" && (
-                  <>
-                    <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 14, gap: 10 }}>
-                      <View style={{ flex: 1, height: 1, backgroundColor: "#A855F720" }} />
-                      <Text style={{ color: "#A855F770", fontSize: rf(10), fontWeight: "700", letterSpacing: 1.2 }}>OR JOIN EXISTING</Text>
-                      <View style={{ flex: 1, height: 1, backgroundColor: "#A855F720" }} />
-                    </View>
-                    <TouchableOpacity
-                      style={{ overflow: "hidden", borderRadius: 14, marginBottom: 20, borderWidth: 1, borderColor: "#A855F755" }}
-                      onPress={() => setJoinWithCodeVisible(true)}
-                      activeOpacity={0.8}
-                    >
-                      <LinearGradient
-                        colors={["#2D1052", "#1E0B40"]}
-                        start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                        style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 15 }}
-                      >
-                        <Feather name="key" size={16} color="#C084FC" />
-                        <Text style={{ color: "#E9D5FF", fontWeight: "700", fontSize: rf(14), letterSpacing: 0.1 }}>Enter with Room Code</Text>
-                        <Feather name="arrow-right" size={14} color="#A855F780" />
-                      </LinearGradient>
-                    </TouchableOpacity>
-                  </>
-                )}
-
-                {/* ── Settings Card (redesigned to match design) ── */}
-                {(() => {
-                  const accent = roomType === "public" ? colors.accent : "#A855F7";
-                  const today = new Date();
-                  const isToday = isSameDay(challengeStartDate, today);
-                  const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
-                  const rawPreset = isToday
-                    ? (TIME_PRESETS_WITH_NOW[challengeStartTimeIdx] ?? TIME_PRESETS_WITH_NOW[0])
-                    : (TIME_PRESETS_FUTURE[Math.max(0, challengeStartTimeIdx - 1)] ?? TIME_PRESETS_FUTURE[0]);
-                  const displayPreset =
-                    isToday && !rawPreset.isNow && rawPreset.hour * 60 + rawPreset.minute <= nowMinutes
-                      ? (TIME_PRESETS_WITH_NOW[getNextPresetIndexForNow(TIME_PRESETS_WITH_NOW)] ?? rawPreset)
-                      : rawPreset;
-                  const liveNowClock = displayPreset.isNow && isToday;
-                  const timeLabel = liveNowClock
-                    ? "" // LiveClockText owns the live label
-                    : displayPreset.label;
-                  const startDateLabel = isToday
-                    ? "Today"
-                    : challengeStartDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-                  const endDateLabel = challengeEndDate
-                    ? challengeEndDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
-                    : "—";
-                  const endTimeLabel = challengeEndDate ? fmtShortTime12(challengeEndDate) : "—";
-                  const clockTextStyle = { fontSize: rf(12), fontWeight: "700" as const, color: accent, marginTop: 1 };
-                  const endClockTextStyle = { fontSize: rf(12), fontWeight: "700" as const, color: colors.foreground, marginTop: 1 };
-                  const iconBg = { width: rs(34), height: rs(34), borderRadius: 10, backgroundColor: accent + "20", alignItems: "center" as const, justifyContent: "center" as const };
-                  const entryModeIcon = challengeEntryMode === "coins" ? "zap" : challengeEntryMode === "usd" ? "dollar-sign" : "gift";
-                  const entryModeLabel = challengeEntryMode === "free" ? "Free" : challengeEntryMode === "coins" ? "Coins" : "USD Entry";
-                  const goalTypeLabel = challengeGoalType === "daily" ? "1 Day" : challengeGoalType === "weekly" ? "7 Days" : "30 Days";
-                  return (
-                    <View style={{ borderRadius: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card, marginBottom: 14, overflow: "hidden" }}>
-                      {/* Entry Type row */}
-                      <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 12 }} onPress={() => setActivePicker("entryFee")} activeOpacity={0.75}>
-                        <View style={iconBg}><Feather name={entryModeIcon as never} size={15} color={accent} /></View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.foreground }}>Entry Type</Text>
-                          <Text style={{ fontSize: rf(10), color: colors.mutedForeground }}>Challenge entry</Text>
-                        </View>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: accent + "15", borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: accent + "40" }}>
-                          <Text style={{ fontSize: rf(12), fontWeight: "700", color: accent }}>{entryModeLabel}</Text>
-                          <Feather name="chevron-down" size={11} color={accent} />
-                        </View>
-                      </TouchableOpacity>
-                      {/* Coin Amount row */}
-                      {challengeEntryMode === "coins" && <>
-                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginHorizontal: 14 }} />
-                        <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 12 }} onPress={() => setActivePicker("coinAmount")} activeOpacity={0.75}>
-                          <View style={iconBg}><Feather name="zap" size={15} color={accent} /></View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.foreground }}>Coin Amount</Text>
-                            <Text style={{ fontSize: rf(10), color: colors.mutedForeground }}>Coins per player</Text>
-                          </View>
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: accent + "15", borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: accent + "40" }}>
-                            <Text style={{ fontSize: rf(12), fontWeight: "700", color: accent }}>{(COINS_ENTRY_AMOUNTS[challengeEntryIdx] ?? COINS_ENTRY_AMOUNTS[0]!).toLocaleString()} coins</Text>
-                            <Feather name="chevron-down" size={11} color={accent} />
-                          </View>
-                        </TouchableOpacity>
-                      </>}
-                      {/* USD Amount row */}
-                      {challengeEntryMode === "usd" && <>
-                        <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginHorizontal: 14 }} />
-                        <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 12 }} onPress={() => setActivePicker("usdAmount")} activeOpacity={0.75}>
-                          <View style={iconBg}><Feather name="dollar-sign" size={15} color={accent} /></View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.foreground }}>Entry Amount</Text>
-                            <Text style={{ fontSize: rf(10), color: colors.mutedForeground }}>USD per player</Text>
-                          </View>
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: accent + "15", borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: accent + "40" }}>
-                            <Text style={{ fontSize: rf(12), fontWeight: "700", color: accent }}>${challengeUsdAmount}</Text>
-                            <Feather name="chevron-down" size={11} color={accent} />
-                          </View>
-                        </TouchableOpacity>
-                      </>}
-                      {/* Target Steps row */}
-                      <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginHorizontal: 14 }} />
-                      <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 12 }} onPress={() => { setStepsPickerDraft(targetStepsForCreate); setActivePicker("steps"); }} activeOpacity={0.75}>
-                        <View style={iconBg}><Feather name="activity" size={15} color={accent} /></View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.foreground }}>Target Steps</Text>
-                          <Text style={{ fontSize: rf(10), color: colors.mutedForeground }}>Steps to complete in {durationDaysLabel}</Text>
-                        </View>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: accent + "15", borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: accent + "40" }}>
-                          <Text style={{ fontSize: rf(12), fontWeight: "700", color: accent }}>{formatStepLabel(targetStepsForCreate)}</Text>
-                          <Feather name="chevron-down" size={11} color={accent} />
-                        </View>
-                      </TouchableOpacity>
-                      {/* Players row */}
-                      <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginHorizontal: 14 }} />
-                      <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 12 }} onPress={() => { setPlayersPickerDraft(challengeMaxPlayers); setActivePicker("players"); }} activeOpacity={0.75}>
-                        <View style={iconBg}><Feather name="users" size={15} color={accent} /></View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.foreground }}>Players</Text>
-                          <Text style={{ fontSize: rf(10), color: colors.mutedForeground }}>Max participants</Text>
-                        </View>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: accent + "15", borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: accent + "40" }}>
-                          <Text style={{ fontSize: rf(12), fontWeight: "700", color: accent }}>{formatPlayerLabel(challengeMaxPlayers)}</Text>
-                          <Feather name="chevron-down" size={11} color={accent} />
-                        </View>
-                      </TouchableOpacity>
-                      {/* Challenge Duration row */}
-                      <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginHorizontal: 14 }} />
-                      <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 12 }} onPress={() => setActivePicker("goalType")} activeOpacity={0.75}>
-                        <View style={iconBg}><Feather name="clock" size={15} color={accent} /></View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.foreground }}>Challenge Duration</Text>
-                          <Text style={{ fontSize: rf(10), color: colors.mutedForeground }}>Challenge length</Text>
-                        </View>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: accent + "15", borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: accent + "40" }}>
-                          <Text style={{ fontSize: rf(12), fontWeight: "700", color: accent }}>{goalTypeLabel}</Text>
-                          <Feather name="chevron-down" size={11} color={accent} />
-                        </View>
-                      </TouchableOpacity>
-
-                      {/* Start row — date + time inline */}
-                      <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginHorizontal: 14 }} />
-                      <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 10 }}>
-                        <View style={iconBg}><Feather name="calendar" size={15} color={accent} /></View>
-                        <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.foreground, width: 42 }}>Start</Text>
-                        <View style={{ flex: 1, flexDirection: "row", gap: 6, justifyContent: "flex-end" }}>
-                          <TouchableOpacity
-                            style={{ alignItems: "center", backgroundColor: accent + "12", borderRadius: 10, borderWidth: 1, borderColor: accent + "40", paddingHorizontal: 10, paddingVertical: 6 }}
-                            onPress={() => setShowStartDatePicker(true)}
-                            activeOpacity={0.78}
-                          >
-                            <Text style={{ fontSize: rf(9), color: colors.mutedForeground }}>Date</Text>
-                            <Text style={{ fontSize: rf(12), fontWeight: "700", color: accent, marginTop: 1 }}>{startDateLabel}</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={{ alignItems: "center", backgroundColor: accent + "12", borderRadius: 10, borderWidth: 1, borderColor: accent + "40", paddingHorizontal: 10, paddingVertical: 6 }}
-                            onPress={() => {
-                              if (isToday) {
-                                const current = TIME_PRESETS_WITH_NOW[challengeStartTimeIdx];
-                                if (!current?.isNow) {
-                                  const nextIdx = resolveInitialPresetIndex(
-                                    TIME_PRESETS_WITH_NOW,
-                                    challengeStartTimeIdx,
-                                    true,
-                                  );
-                                  setChallengeStartTimeIdx(nextIdx);
-                                }
-                              }
-                              setShowStartTimePicker(true);
-                            }}
-                            activeOpacity={0.78}
-                          >
-                            <Text style={{ fontSize: rf(9), color: colors.mutedForeground }}>Time</Text>
-                            {liveNowClock ? (
-                              <LiveClockText
-                                style={clockTextStyle}
-                                format={(nowMs) => fmtShortTime12(new Date(nowMs))}
-                              />
-                            ) : (
-                              <Text style={clockTextStyle}>{timeLabel}</Text>
-                            )}
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-
-                      {/* End Date/Time row — locked, auto-calculated from start + duration */}
-                      <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginHorizontal: 14 }} />
-                      <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, gap: 10 }}>
-                        <View style={{ width: rs(34), height: rs(34), borderRadius: 10, backgroundColor: colors.border + "60", alignItems: "center", justifyContent: "center" }}>
-                          <Feather name="lock" size={15} color={colors.mutedForeground} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.foreground }}>End Date</Text>
-                          <Text style={{ fontSize: rf(10), color: colors.mutedForeground }}>Locked · based on start + duration</Text>
-                        </View>
-                        <View style={{ flexDirection: "row", gap: 6, opacity: 0.6 }}>
-                          <View style={{ alignItems: "center", backgroundColor: colors.border + "40", borderRadius: 10, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 10, paddingVertical: 6 }}>
-                            <Text style={{ fontSize: rf(9), color: colors.mutedForeground }}>End Date</Text>
-                            <Text style={{ fontSize: rf(12), fontWeight: "700", color: colors.foreground, marginTop: 1 }}>{endDateLabel}</Text>
-                          </View>
-                          <View style={{ alignItems: "center", backgroundColor: colors.border + "40", borderRadius: 10, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 10, paddingVertical: 6 }}>
-                            <Text style={{ fontSize: rf(9), color: colors.mutedForeground }}>End Time</Text>
-                            {liveNowClock ? (
-                              <LiveClockText
-                                style={endClockTextStyle}
-                                format={(nowMs) => {
-                                  const liveNow = new Date(nowMs);
-                                  const days = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
-                                  const start = new Date(challengeStartDate);
-                                  start.setHours(liveNow.getHours(), liveNow.getMinutes(), 0, 0);
-                                  const end = new Date(start);
-                                  end.setDate(end.getDate() + days);
-                                  return fmtShortTime12(end);
-                                }}
-                              />
-                            ) : (
-                              <Text style={endClockTextStyle}>{endTimeLabel}</Text>
-                            )}
-                          </View>
-                        </View>
-                      </View>
-                    </View>
-                  );
-                })()}
-
-                {/* Info chip */}
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.card, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 16, borderWidth: 1, borderColor: colors.border }}>
-                  <Feather name="info" size={14} color="#00B4FF" />
-                  <Text style={{ fontSize: rf(12), color: colors.mutedForeground, flex: 1 }}>
-                    Minimum <Text style={{ color: "#00B4FF", fontWeight: "700" }}>2 players</Text> required to start a challenge.
-                  </Text>
-                </View>
-
-                {/* Prize preview — Coins */}
-                {challengeEntryMode === "coins" && (() => {
-                  const totalCoins = coinEntryAmount * challengeMaxPlayers;
-                  const winnerCount = challengeMaxPlayers <= 2 ? 1 : challengeMaxPlayers === 3 ? 2 : 3;
-                  const splits = winnerCount === 1 ? [1.0] : winnerCount === 2 ? [0.6, 0.4] : [0.5, 0.3, 0.2];
-                  const prizes = splits.map((s) => Math.floor(totalCoins * s));
-                  const accentCol = roomType === "public" ? colors.accent : "#A855F7";
-                  const rankEmojis = ["🥇", "🥈", "🥉"];
-                  const rankLabels = ["1st Place", "2nd Place", "3rd Place"];
-                  return (
-                    <>
-                      <View style={[styles.detailCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                        {[
-                          { label: "Entry", value: `${coinEntryAmount.toLocaleString()} coins / player`, color: accentCol },
-                          { label: "Max Prize Pool", value: `${totalCoins.toLocaleString()} coins`, color: "#FFD700" },
-                          { label: "Winners", value: winnerCount === 1 ? "Top 1 player" : `Top ${winnerCount} players`, color: colors.mutedForeground },
-                        ].map((row, i) => (
-                          <View key={i}>
-                            {i > 0 && <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />}
-                            <View style={styles.detailRow}>
-                              <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>{row.label}</Text>
-                              <Text style={[styles.detailValue, { color: row.color }]}>{row.value}</Text>
-                            </View>
-                          </View>
-                        ))}
-                      </View>
-                      <Text style={[styles.modalSectionLabel, { color: colors.mutedForeground }]}>Reward Split</Text>
-                      {prizes.map((amt, i) => {
-                        const splitPct = winnerCount === 1 ? "100%" : winnerCount === 2 ? (i === 0 ? "60%" : "40%") : (["50%", "30%", "20%"][i]);
-                        return (
-                          <View key={i} style={[styles.detailCard, { backgroundColor: colors.card, borderColor: colors.border, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12 }]}>
-                            <Text style={{ fontSize: rf(22) }}>{rankEmojis[i]}</Text>
-                            <View style={{ flex: 1 }}>
-                              <Text style={{ fontSize: rf(13), fontWeight: "700", color: colors.foreground }}>{rankLabels[i]}</Text>
-                              <Text style={{ fontSize: rf(11), color: colors.mutedForeground }}>{splitPct} of pool</Text>
-                            </View>
-                            <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                              <CoinIcon size="small" />
-                              <Text style={{ fontSize: rf(15), fontWeight: "900", color: "#FFD700" }}>{amt.toLocaleString()}</Text>
-                            </View>
-                          </View>
-                        );
-                      })}
-                    </>
-                  );
-                })()}
-
-                {/* Prize preview — USD */}
-                {challengeEntryMode === "usd" && createPaymentQuote && (() => {
-                  const accentCol = roomType === "public" ? colors.accent : "#A855F7";
-                  return (
-                  <>
-                    <View style={[styles.detailCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                      {[
-                        { label: "Entry Fee", value: `$${challengeUsdAmount} / player`, color: accentCol },
-                        { label: "Players", value: String(challengeMaxPlayers), color: colors.foreground },
-                        { label: "Entry Pool / Prize Pool", value: `$${createPaymentQuote.prizePool.toFixed(2)}`, color: "#22C55E" },
-                      ].map((row, i) => (
-                        <View key={i}>
-                          {i > 0 && <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />}
-                          <View style={styles.detailRow}>
-                            <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>{row.label}</Text>
-                            <Text style={[styles.detailValue, { color: row.color }]}>{row.value}</Text>
-                          </View>
-                        </View>
-                      ))}
-                    </View>
-                    <CashChallengeRewardSplit quote={createPaymentQuote} colors={colors} />
-                    <CashChallengePaymentBreakdown quote={createPaymentQuote} colors={colors} />
-                  </>
-                  );
-                })()}
-                {challengeEntryMode === "usd" && !createPaymentQuote && (
-                  <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />
-                )}
-
-                {/* Track Background */}
-                <View style={styles.trackBgHeader}>
-                  <Text style={[styles.modalSectionLabel, { color: colors.mutedForeground }]}>Track Background</Text>
-                  <Text style={[styles.trackBgHint, { color: colors.mutedForeground }]}>Swipe to choose theme</Text>
-                </View>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.trackLayoutRow}
-                  style={styles.trackLayoutScroll}
-                >
-                  {(() => {
-                    const ownedLayouts = TRACK_LAYOUT_OPTIONS.filter((layout) => {
-                      const themeData = themes.find((t) => t.code === layout.id);
-                      return themeData?.owned ?? FREE_TRACK_CODES.has(layout.id);
-                    });
-                    const activeColor = roomType === "public" ? colors.accent : "#A855F7";
-                    return ownedLayouts.map((layout) => {
-                      const active = challengeTrackLayout === layout.id;
-                      return (
-                        <TouchableOpacity
-                          key={layout.id}
-                          activeOpacity={0.86}
-                          onPress={() => setChallengeTrackLayout(layout.id)}
-                          style={[styles.trackLayoutCard, {
-                            backgroundColor: colors.card,
-                            borderColor: active ? activeColor : colors.border,
-                          }]}
-                        >
-                          <Image source={layout.source} resizeMode="cover" style={styles.trackLayoutImage} />
-                          <LinearGradient colors={["transparent", "rgba(0,0,0,0.78)"]} style={styles.trackLayoutOverlay} />
-                          <View style={styles.trackLayoutFooter}>
-                            <Text style={styles.trackLayoutTitle} numberOfLines={1}>{layout.label}</Text>
-                            <View style={[styles.trackLayoutCheck, {
-                              backgroundColor: active ? activeColor : "rgba(255,255,255,0.12)",
-                              borderColor: active ? activeColor : "rgba(255,255,255,0.32)",
-                            }]}>
-                              {active && <Feather name="check" size={12} color="#000" />}
-                            </View>
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    });
-                  })()}
-                </ScrollView>
-
-                {challengeEntryMode === "usd" && (
-                  <Text style={[styles.paidAckText, { color: colors.mutedForeground }]}>
-                    ⓘ Total payable (entry + tax/processing + platform service fee) is charged when you confirm. Entry fee is refunded to your wallet if you leave before the race starts.
-                  </Text>
-                )}
-
-                {/* Create button */}
-                <TouchableOpacity
-                  style={[styles.joinBtn, { opacity: challengeCreating ? 0.7 : 1 }]}
-                  onPress={() => {
-                    if (isUsdEntry) {
-                      setCreateConfirmChecks([false, false, false]);
-                      setShowCreateConfirm(true);
-                    } else {
-                      handleCreateChallenge();
-                    }
-                  }}
-                  activeOpacity={0.85}
-                  disabled={challengeCreating}
-                >
-                  <LinearGradient
-                    colors={roomType === "public" ? [colors.accent, colors.primary] : ["#A855F7", "#7C3AED"]}
-                    style={styles.joinGradient}
-                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                  >
-                    {(challengeCreating || !challengeModalAnimated) ? (
-                      <ActivityIndicator size="small" color="#FFF" />
-                    ) : (
-                      <Feather name={roomType === "public" ? "globe" : "lock"} size={20} color="#FFF" />
-                    )}
-                    <View style={{ alignItems: "center" }}>
-                      <Text style={styles.joinBtnText}>
-                        {(challengeCreating || !challengeModalAnimated)
-                          ? "Creating room…"
-                          : `Create ${roomType === "public" ? "Public" : "Private"} Room`}
-                      </Text>
-                      {!(challengeCreating || !challengeModalAnimated) && (
-                        <Text style={{ color: "rgba(255,255,255,0.65)", fontSize: rf(11), marginTop: 2 }}>
-                          {roomType === "public" ? "Open to all eligible players" : "Invite only room"}
-                        </Text>
-                      )}
-                    </View>
-                  </LinearGradient>
-                </TouchableOpacity>
-
-                <TouchableOpacity style={[styles.cancelBtn, { borderColor: colors.border }]} onPress={() => setChallengeModal(false)}>
-                  <Text style={[styles.cancelBtnText, { color: colors.mutedForeground }]}>Cancel</Text>
-                </TouchableOpacity>
-            </>
-            )}
-          </ScrollView>
-
-          {/* ── Picker overlay — lives INSIDE the pageSheet so iOS can render it ── */}
-          {activePicker !== null && (
-            <Pressable
-              style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.52)", justifyContent: "flex-end" }}
-              onPress={() => setActivePicker(null)}
-            >
-              <Animated.View
-                style={{ backgroundColor: colors.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingBottom: 40, maxHeight: "80%", transform: [{ translateY: pickerSlideY }] }}
-              >
-                <View>
-                  <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: "center", marginTop: 12, marginBottom: 2 }} />
-                  <Text style={{ fontSize: rf(16), fontWeight: "700", color: colors.foreground, textAlign: "center", paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.border }}>
-                    {activePicker === "entryFee" ? "Entry Type"
-                      : activePicker === "coinAmount" ? "Coin Amount"
-                      : activePicker === "usdAmount" ? "Entry Amount ($)"
-                      : activePicker === "goalType" ? "Goal Type"
-                      : activePicker === "steps" ? "Target Steps"
-                      : "Players"}
-                  </Text>
-                  <ScrollView
-                    showsVerticalScrollIndicator={false}
-                    indicatorStyle="white"
-                    keyboardShouldPersistTaps="handled"
-                    scrollEnabled={activePicker !== "steps" && activePicker !== "players"}
-                  >
-                    {activePicker === "entryFee" && (() => {
-                      const acc = roomType === "public" ? colors.accent : "#A855F7";
-                      const modeOptions = [
-                        { mode: "free" as const, icon: "gift" as const, label: "Free", desc: "No entry fee · Walk & compete for fun" },
-                        { mode: "coins" as const, icon: "zap" as const, label: "Coins", desc: "Enter with coins · Winner takes the coin pool" },
-                        { mode: "usd" as const, icon: "dollar-sign" as const, label: "USD Entry", desc: "Skill-based challenge · Entry fee · Prize rewards" },
-                      ];
-                      return (
-                        <View style={{ padding: rs(12), gap: rs(10) }}>
-                          {modeOptions.map((opt) => {
-                            const sel = challengeEntryMode === opt.mode;
-                            return (
-                              <TouchableOpacity key={opt.mode} activeOpacity={0.72}
-                                onPress={() => { setChallengeEntryMode(opt.mode); setActivePicker(null); }}
-                                style={{ flexDirection: "row", alignItems: "center", gap: rs(12), padding: rs(14), borderRadius: rs(14), borderWidth: 1.5, borderColor: sel ? acc : colors.border, backgroundColor: sel ? acc + "14" : colors.background }}>
-                                <View style={{ width: rs(40), height: rs(40), borderRadius: rs(12), backgroundColor: sel ? acc + "22" : colors.border + "30", alignItems: "center", justifyContent: "center" }}>
-                                  <Feather name={opt.icon} size={rs(20)} color={sel ? acc : colors.mutedForeground} />
-                                </View>
-                                <View style={{ flex: 1 }}>
-                                  <Text style={{ fontSize: rf(15), fontWeight: "700", color: sel ? acc : colors.foreground }}>{opt.label}</Text>
-                                  <Text style={{ fontSize: rf(12), color: colors.mutedForeground, marginTop: 2 }}>{opt.desc}</Text>
-                                </View>
-                                {sel && <Feather name="check-circle" size={rs(20)} color={acc} />}
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </View>
-                      );
-                    })()}
-                    {activePicker === "coinAmount" && (() => {
-                      const acc = roomType === "public" ? colors.accent : "#A855F7";
-                      return (
-                        <View style={{ padding: rs(12), flexDirection: "row", flexWrap: "wrap", gap: rs(8) }}>
-                          {COINS_ENTRY_AMOUNTS.map((amt, idx) => {
-                            const sel = challengeEntryIdx === idx;
-                            const display = amt >= 1000 ? `${(amt / 1000 % 1 === 0 ? amt / 1000 : (amt / 1000).toFixed(1))}k` : String(amt);
-                            return (
-                              <TouchableOpacity key={amt} activeOpacity={0.72}
-                                onPress={() => { setChallengeEntryIdx(idx); setActivePicker(null); }}
-                                style={{ width: "48%", flexDirection: "row", alignItems: "center", gap: rs(8), padding: rs(12), borderRadius: rs(12), borderWidth: 1.5, borderColor: sel ? acc : colors.border, backgroundColor: sel ? acc + "14" : colors.background }}>
-                                <CoinIcon size="small" />
-                                <Text style={{ flex: 1, fontSize: rf(14), fontWeight: sel ? "800" : "500", color: sel ? acc : colors.foreground }}>{display}</Text>
-                                {sel && <Feather name="check" size={rs(14)} color={acc} />}
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </View>
-                      );
-                    })()}
-                    {activePicker === "usdAmount" && USD_ENTRY_AMOUNTS.map((amt) => {
-                      const isActive = challengeUsdAmount === amt;
-                      const acc = roomType === "public" ? colors.accent : "#A855F7";
-                      return (
-                        <TouchableOpacity key={amt} activeOpacity={0.72}
-                          onPress={() => { setChallengeUsdAmount(amt); setActivePicker(null); }}
-                          style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 24, paddingVertical: 17, borderBottomWidth: 1, borderBottomColor: colors.border + "55", backgroundColor: isActive ? acc + "12" : "transparent" }}>
-                          <Text style={{ fontSize: rf(15), color: isActive ? acc : colors.foreground, fontWeight: isActive ? "700" : "500" }}>${amt}</Text>
-                          {isActive && <Feather name="check-circle" size={17} color={acc} />}
-                        </TouchableOpacity>
-                      );
-                    })}
-                    {activePicker === "goalType" && (() => {
-                      const acc = roomType === "public" ? colors.accent : "#A855F7";
-                      const goalOptions = [
-                        { type: "daily" as const, label: "1 Day", desc: "Challenge runs for one day" },
-                        { type: "weekly" as const, label: "7 Days", desc: "Challenge runs for one week" },
-                        { type: "monthly" as const, label: "30 Days", desc: "Challenge runs for one month" },
-                      ];
-                      return (
-                        <View style={{ padding: rs(12), gap: rs(10) }}>
-                          {goalOptions.map((opt) => {
-                            const sel = challengeGoalType === opt.type;
-                            return (
-                              <TouchableOpacity key={opt.type} activeOpacity={0.72}
-                                onPress={() => {
-                                  setChallengeGoalType(opt.type);
-                                  setActivePicker(null);
-                                }}
-                                style={{ flexDirection: "row", alignItems: "center", gap: rs(12), padding: rs(14), borderRadius: rs(14), borderWidth: 1.5, borderColor: sel ? acc : colors.border, backgroundColor: sel ? acc + "14" : colors.background }}>
-                                <View style={{ flex: 1 }}>
-                                  <Text style={{ fontSize: rf(15), fontWeight: "700", color: sel ? acc : colors.foreground }}>{opt.label}</Text>
-                                  <Text style={{ fontSize: rf(12), color: colors.mutedForeground, marginTop: 2 }}>{opt.desc}</Text>
-                                </View>
-                                {sel && <Feather name="check-circle" size={rs(20)} color={acc} />}
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </View>
-                      );
-                    })()}
-                    {activePicker === "steps" && (() => {
-                      const acc = roomType === "public" ? colors.accent : "#A855F7";
-                      return (
-                        <View>
-                          <TargetStepsSliderPicker
-                            duration={challengeGoalType}
-                            options={goalStepOptions}
-                            value={stepsPickerDraft}
-                            onChange={setStepsPickerDraft}
-                            accent={acc}
-                          />
-                          <View style={{ flexDirection: "row", gap: rs(10), paddingHorizontal: rs(16), paddingBottom: rs(16) }}>
-                            <TouchableOpacity
-                              style={{ flex: 1, paddingVertical: rs(13), borderRadius: rs(12), borderWidth: 1, borderColor: colors.border, alignItems: "center" }}
-                              onPress={() => setActivePicker(null)}
-                              activeOpacity={0.8}
-                            >
-                              <Text style={{ fontSize: rf(14), fontWeight: "700", color: colors.mutedForeground }}>Cancel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={{ flex: 1, paddingVertical: rs(13), borderRadius: rs(12), backgroundColor: acc, alignItems: "center" }}
-                              onPress={() => {
-                                setChallengeTargetSteps(stepsPickerDraft);
-                                setActivePicker(null);
-                              }}
-                              activeOpacity={0.8}
-                            >
-                              <Text style={{ fontSize: rf(14), fontWeight: "800", color: "#000" }}>Apply</Text>
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      );
-                    })()}
-                    {activePicker === "players" && (() => {
-                      const acc = roomType === "public" ? colors.accent : "#A855F7";
-                      return (
-                        <View>
-                          <PlayersSliderPicker
-                            value={playersPickerDraft}
-                            onChange={setPlayersPickerDraft}
-                            accent={acc}
-                          />
-                          <View style={{ flexDirection: "row", gap: rs(10), paddingHorizontal: rs(16), paddingBottom: rs(16) }}>
-                            <TouchableOpacity
-                              style={{ flex: 1, paddingVertical: rs(13), borderRadius: rs(12), borderWidth: 1, borderColor: colors.border, alignItems: "center" }}
-                              onPress={() => setActivePicker(null)}
-                              activeOpacity={0.8}
-                            >
-                              <Text style={{ fontSize: rf(14), fontWeight: "700", color: colors.mutedForeground }}>Cancel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={{ flex: 1, paddingVertical: rs(13), borderRadius: rs(12), backgroundColor: acc, alignItems: "center" }}
-                              onPress={() => {
-                                setChallengeMaxPlayers(playersPickerDraft);
-                                setActivePicker(null);
-                              }}
-                              activeOpacity={0.8}
-                            >
-                              <Text style={{ fontSize: rf(14), fontWeight: "800", color: "#000" }}>Apply</Text>
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      );
-                    })()}
-                  </ScrollView>
-                </View>
-              </Animated.View>
-            </Pressable>
-          )}
-
-          {/* ── Native Start Date Picker ── */}
-          {showStartDatePicker && (() => {
-            const accent = roomType === "public" ? colors.accent : "#A855F7";
-            const minDate = toLocalCalendarDate(new Date());
-            const maxDate = toLocalCalendarDate(new Date());
-            maxDate.setDate(maxDate.getDate() + 30);
-            // Android: system dialog only — nesting default picker inside a custom overlay
-            // inside RN Modal drops / reverts future date selections.
-            if (Platform.OS === "android") {
-              return (
-                <DateTimePicker
-                  value={toLocalCalendarDate(challengeStartDate)}
-                  mode="date"
-                  display="default"
-                  minimumDate={minDate}
-                  maximumDate={maxDate}
-                  onChange={onStartDatePickerChange}
-                />
-              );
-            }
-            return (
-              <Pressable
-                style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.65)", justifyContent: "flex-end" }}
-                onPress={() => setShowStartDatePicker(false)}
-              >
-                <Pressable onPress={() => {}}>
-                  <View style={{ backgroundColor: colors.card, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingBottom: 36 }}>
-                    <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: "center", marginTop: 14, marginBottom: 4 }} />
-                    <Text style={{ fontSize: rf(17), fontWeight: "700", color: colors.foreground, textAlign: "center", paddingVertical: 12 }}>Select Start Date</Text>
-                    <DateTimePicker
-                      value={toLocalCalendarDate(challengeStartDate)}
-                      mode="date"
-                      display="inline"
-                      minimumDate={minDate}
-                      maximumDate={maxDate}
-                      themeVariant={isDark ? "dark" : "light"}
-                      accentColor={accent}
-                      onChange={onStartDatePickerChange}
-                    />
-                    <TouchableOpacity
-                      style={{ marginHorizontal: 24, paddingVertical: 15, backgroundColor: accent, borderRadius: 16, alignItems: "center" }}
-                      onPress={() => setShowStartDatePicker(false)}
-                    >
-                      <Text style={{ color: "#FFF", fontWeight: "700", fontSize: rf(16) }}>Done</Text>
-                    </TouchableOpacity>
-                  </View>
-                </Pressable>
-              </Pressable>
-            );
-          })()}
-
-          <StartTimePickerModal
-            visible={showStartTimePicker}
-            accent={roomType === "public" ? colors.accent : "#A855F7"}
-            isToday={isSameDay(challengeStartDate, new Date())}
-            presets={isSameDay(challengeStartDate, new Date()) ? TIME_PRESETS_WITH_NOW : TIME_PRESETS_FUTURE}
-            selectedIndex={
-              isSameDay(challengeStartDate, new Date())
-                ? challengeStartTimeIdx
-                : Math.max(0, challengeStartTimeIdx - 1)
-            }
-            onClose={() => setShowStartTimePicker(false)}
-            onConfirm={(idx) => {
-              const now = new Date();
-              const isTodayConfirm = isSameDay(challengeStartDate, now);
-              let globalIdx = isTodayConfirm ? idx : idx + 1;
-              if (isTodayConfirm) {
-                const preset = TIME_PRESETS_WITH_NOW[globalIdx];
-                const nowMin = now.getHours() * 60 + now.getMinutes();
-                if (preset && !preset.isNow && preset.hour * 60 + preset.minute <= nowMin) {
-                  globalIdx = getNextPresetIndexForNow(TIME_PRESETS_WITH_NOW, now);
-                }
-              }
-              const confirmedPreset = isTodayConfirm
-                ? TIME_PRESETS_WITH_NOW[globalIdx]
-                : TIME_PRESETS_FUTURE[Math.max(0, globalIdx - 1)];
-              const nowSetAt = confirmedPreset?.isNow ? Date.now() : null;
-              setChallengeNowSetAt(nowSetAt);
-              setChallengeStartTimeIdx(globalIdx);
-
-              const days = challengeGoalType === "daily" ? 1 : challengeGoalType === "weekly" ? 7 : 30;
-              const startWithTime = new Date(challengeStartDate);
-              if (confirmedPreset?.isNow && isTodayConfirm) {
-                const anchor = nowSetAt != null ? new Date(nowSetAt) : now;
-                startWithTime.setHours(anchor.getHours(), anchor.getMinutes(), 0, 0);
-              } else if (confirmedPreset) {
-                startWithTime.setHours(
-                  confirmedPreset.isNow ? now.getHours() : confirmedPreset.hour,
-                  confirmedPreset.isNow ? now.getMinutes() : confirmedPreset.minute,
-                  0,
-                  0,
-                );
-              }
-              const endDate = new Date(startWithTime);
-              endDate.setDate(endDate.getDate() + days);
-              setChallengeEndDate(endDate);
-
-              if (__DEV__) {
-                const preset = isTodayConfirm
-                  ? TIME_PRESETS_WITH_NOW[globalIdx]
-                  : TIME_PRESETS_FUTURE[idx];
-                console.log("[CreateChallengeTime] start time selected:", preset?.label);
-              }
-            }}
-          />
-
-        </SafeAreaView>
+      {/* ── Create Challenge Modal (guided multi-step flow) ── */}
+      <Modal
+        visible={challengeModal}
+        animationType={challengeModalAnimated ? "slide" : "none"}
+        presentationStyle="pageSheet"
+        transparent={false}
+        onDismiss={() => {
+          setChallengeModalAnimated(true);
+        }}
+      >
+        <CreateChallengeFlow
+          colors={colors}
+          walletBalance={walletBalance}
+          themes={themes}
+          creating={challengeCreating || !challengeModalAnimated}
+          onClose={() => {
+            setChallengeModalAnimated(false);
+            setChallengeModal(false);
+          }}
+          onCreate={(args) => {
+            void submitCreateChallenge(args);
+          }}
+        />
       </Modal>
 
       {/* Profile Modal */}
@@ -5790,9 +5423,11 @@ function WalkScreenContent() {
         onClose={() => setJoinWithCodeVisible(false)}
         onJoined={(result: JoinWithCodeResult) => {
           setJoinWithCodeVisible(false);
+          setChallengeModalAnimated(false);
           setChallengeModal(false);
           setActiveRace(result.room_id, false);
           joinRace(result.entry_fee, result.max_players, false);
+          pendingDismissRaceCoverModalsRef.current = true;
           router.push({
             pathname: "/race/matchmaking",
             params: buildMatchmakingParams({
@@ -5817,7 +5452,7 @@ function WalkScreenContent() {
       />
 
       {/* ── Scheduled Room Success Modal ── */}
-      {scheduledRoomResult && (() => {
+      {scheduledRoomResult && !scheduledRoomResult.modalDismissed && (() => {
         const srr = scheduledRoomResult;
         const startLabel = new Date(srr.scheduledStartAt).toLocaleString("en-US", {
           month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
@@ -5835,7 +5470,11 @@ function WalkScreenContent() {
             visible={true}
             animationType="fade"
             transparent={true}
-            onRequestClose={() => setScheduledRoomResult(null)}
+            onRequestClose={() => {
+              setScheduledRoomResult((prev) =>
+                prev ? { ...prev, modalDismissed: true } : null,
+              );
+            }}
           >
             <View style={srStyles.overlay}>
               <View style={[srStyles.sheet, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -5880,7 +5519,12 @@ function WalkScreenContent() {
 
                 <TouchableOpacity
                   style={srStyles.doneBtn}
-                  onPress={() => setScheduledRoomResult(null)}
+                  onPress={() => {
+                    // Hide modal but keep Next Race seed until upcoming fetch covers it.
+                    setScheduledRoomResult((prev) =>
+                      prev ? { ...prev, modalDismissed: true } : null,
+                    );
+                  }}
                   activeOpacity={0.8}
                 >
                   <Text style={srStyles.doneBtnText}>Done</Text>
@@ -5972,8 +5616,51 @@ const styles = StyleSheet.create({
     width: rs(18),
     backgroundColor: "#FACC15",
   },
-  roomsBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: rs(5), paddingHorizontal: rs(10), borderRadius: 10 },
-  roomsBtnText: { fontSize: rf(13), fontWeight: "700" },
+  roomsBtn: {
+    borderRadius: 10,
+    overflow: "hidden",
+    shadowColor: "#F43F5E",
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  roomsBtnGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: rs(4),
+    paddingHorizontal: rs(9),
+  },
+  roomsBtnText: { fontSize: rf(11.5), fontWeight: "800", color: "#FFFFFF", letterSpacing: 0.15 },
+  viewAllLiveWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  viewAllBlinkDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  viewAllCountCircle: {
+    minWidth: rs(18),
+    height: rs(18),
+    borderRadius: rs(9),
+    paddingHorizontal: rs(4),
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 0,
+  },
+  viewAllCountText: {
+    color: "#BE123C",
+    fontSize: rf(10),
+    fontWeight: "900",
+    lineHeight: rf(12),
+    includeFontPadding: false,
+    textAlign: "center",
+  },
   roomsBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: rs(7), paddingVertical: rs(2), borderRadius: 8, borderWidth: 1 },
   roomsBadgeDot: { width: 5, height: 5, borderRadius: 3 },
   roomsBadgeText: { fontSize: rf(11), fontWeight: "800" },
@@ -6202,72 +5889,70 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   sponsoredCtaText: { fontSize: 12, fontWeight: "800", color: "#FFF", textAlign: "center" },
-  // Groups card
-  groupsCardWrap: { marginBottom: 10 },
+  // Communities / Groups card — sky azure social identity (not Sponsored purple / not teal)
+  communitiesSectionSub: {
+    fontSize: rf(12),
+    fontWeight: "500",
+    lineHeight: rf(16),
+    marginBottom: 8,
+  },
+  groupsCardWrap: {
+    marginBottom: 10,
+    borderRadius: 18,
+    overflow: "hidden",
+    position: "relative",
+    shadowColor: "#0369A1",
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
   groupsCard: {
     borderRadius: 18,
-    padding: 16,
+    padding: rs(14),
     flexDirection: "row",
     alignItems: "center",
     overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "#FFFFFF10",
-    shadowOpacity: 0.3,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
-  },
-  groupsGlowNode1: {
-    position: "absolute",
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: "#A855F730",
-    top: -20,
-    right: 40,
-  },
-  groupsGlowNode2: {
-    position: "absolute",
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: "#06B6D420",
-    bottom: -10,
-    left: 60,
-  },
-  groupsGlowNode3: {
-    position: "absolute",
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#10B98118",
-    top: 10,
-    right: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,255,255,0.28)",
+    gap: 10,
   },
   groupsLeft: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
   groupsIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: rs(44),
+    height: rs(44),
+    borderRadius: rs(22),
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "rgba(186,230,253,0.95)",
+    flexShrink: 0,
   },
-  groupsTextBlock: { flex: 1 },
-  groupsTitle: { color: "#FFF", fontSize: 16, fontWeight: "800", marginBottom: 2 },
-  groupsSub: { color: "#FFFFFFAA", fontSize: 11, lineHeight: 15, marginBottom: 6 },
-  groupsTagRow: { flexDirection: "row", gap: 5 },
-  groupsTag: { backgroundColor: "#FFFFFF15", paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 },
-  groupsTagText: { color: "#FFFFFFCC", fontSize: 9, fontWeight: "700" },
-  groupsCta: { marginLeft: 8 },
+  groupsTextBlock: { flex: 1, minWidth: 0 },
+  groupsTitle: { color: "#FFF", fontSize: rf(16), fontWeight: "800", marginBottom: 2 },
+  groupsSub: { color: "rgba(255,255,255,0.9)", fontSize: rf(11), lineHeight: rf(15), marginBottom: 6 },
+  groupsTagRow: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
+  groupsTag: {
+    backgroundColor: "rgba(255,255,255,0.18)",
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  groupsTagText: { color: "#FFF", fontSize: rf(9), fontWeight: "700" },
+  groupsCta: { marginLeft: 4, flexShrink: 0 },
   groupsCtaBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 12,
+    backgroundColor: "#FFF",
+    paddingHorizontal: 14,
     paddingVertical: 9,
-    borderRadius: 10,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#0369A1",
+    shadowOpacity: 0.22,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
-  groupsCtaText: { color: "#FFF", fontWeight: "800", fontSize: 12 },
+  groupsCtaText: { color: "#0369A1", fontWeight: "800", fontSize: rf(12) },
   groupsInviteBadge: {
     position: "absolute",
     top: -6,
@@ -6275,13 +5960,13 @@ const styles = StyleSheet.create({
     minWidth: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: "#EF4444",
+    backgroundColor: "#0369A1",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 5,
     borderWidth: 2,
-    borderColor: "#000",
+    borderColor: "#7DD3FC",
     zIndex: 10,
   },
   groupsInviteBadgeText: { color: "#FFF", fontSize: 11, fontWeight: "800" },

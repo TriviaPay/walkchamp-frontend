@@ -6,6 +6,7 @@ import {
   isFutureScheduledStart,
   playersNeeded,
   resolveMinimumParticipants,
+  resolveRacePlayerCount,
   resolveRoomExpiresAt,
   resolveWaitingRoomMode,
   cancellationCopy,
@@ -14,6 +15,11 @@ import {
 } from "./waitingRoomTiming";
 
 const now = Date.parse("2026-07-22T18:00:00.000Z");
+
+assert.equal(resolveRacePlayerCount({ registered_count: 2 }), 2);
+assert.equal(resolveRacePlayerCount({ currentPlayers: 3 }), 3);
+assert.equal(resolveRacePlayerCount({ current_players: 4 }), 4);
+assert.equal(resolveRacePlayerCount({}), 0);
 
 assert.equal(resolveWaitingRoomMode(null, now), "open_window");
 assert.equal(

@@ -9,7 +9,7 @@ function range(start: number, end: number, step: number): number[] {
 }
 
 export function getTargetStepOptions(duration: TargetStepDuration): number[] {
-  if (duration === "daily") return [100, ...range(1000, 10000, 1000)];
+  if (duration === "daily") return [100, ...range(1000, 10000, 1000), 12000, 15000];
   if (duration === "weekly") return [100, ...range(50000, 70000, 1000)];
   return [100, ...range(250000, 300000, 1000)];
 }

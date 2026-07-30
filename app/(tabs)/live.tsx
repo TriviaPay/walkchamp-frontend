@@ -70,18 +70,31 @@ type FilterType = (typeof FILTERS)[number];
 
 const CASH_ENTRY_TYPES = new Set([
   "paid_1", "paid_3", "paid_5", "paid_usd", "cash", "usd",
-  "$1", "$3", "$5", "USD Entry",
+  "$1", "$3", "$5", "USD Entry", "unlimited_goal",
 ]);
 
 /** All paid cash entry races (any amount), excluding sponsored / free / coins. */
 export function isCashChallengeRace(
-  race: Pick<LiveRace, "entryType" | "type"> & { entryAmountCents?: number },
+  race: Pick<LiveRace, "entryType" | "type"> & {
+    entryAmountCents?: number;
+    challengeType?: string | null;
+    capacityMode?: string | null;
+  },
 ): boolean {
   if (race.type === "sponsored") return false;
   const et = (race.entryType ?? "").trim();
   const lower = et.toLowerCase();
   if (lower === "free" || lower === "coins_battle" || lower === "coins battle") return false;
+  if (
+    race.challengeType === "unlimited_goal" ||
+    race.capacityMode === "unlimited" ||
+    lower === "unlimited_goal"
+  ) {
+    return true;
+  }
   if (CASH_ENTRY_TYPES.has(et) || CASH_ENTRY_TYPES.has(lower)) return true;
+  // Dynamic $N labels from Unlimited / paid USD (e.g. "$30")
+  if (/^\$\d+(\.\d+)?$/.test(et)) return true;
   if ((race.entryAmountCents ?? 0) > 0 && lower !== "free" && lower !== "coins_battle") return true;
   return false;
 }
@@ -144,6 +157,8 @@ export interface LiveRace {
   currentUserRole?: string | null;
   currentUserParticipantStatus?: string | null;
   currentUserParticipating?: boolean;
+  challengeType?: string | null;
+  capacityMode?: string | null;
 }
 
 export function formatElapsed(seconds: number): string {
@@ -153,11 +168,33 @@ export function formatElapsed(seconds: number): string {
   return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 
-function formatFinishedAt(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  // Time only — the calendar date is already shown in the date-group header.
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+function sameLocalCalendarDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+/** Compact local times for finished-card Started / Ended (third stats column). */
+function formatFinishedStartEnd(
+  startedAt: string | null,
+  completedAt: string | null,
+): { started: string; ended: string } | null {
+  if (!startedAt || !completedAt) return null;
+  const start = new Date(startedAt);
+  const end = new Date(completedAt);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  const timeOnly = (d: Date) =>
+    d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (sameLocalCalendarDay(start, end)) {
+    return { started: timeOnly(start), ended: timeOnly(end) };
+  }
+  const dateTime = (d: Date) => {
+    const date = d.toLocaleDateString([], { month: "short", day: "numeric" });
+    return `${date} · ${timeOnly(d)}`;
+  };
+  return { started: dateTime(start), ended: dateTime(end) };
 }
 
 function computeElapsed(startedAt: string | null, completedAt?: string | null): number {
@@ -180,6 +217,21 @@ function filterToParam(filter: FilterType): string {
 function applyChipFilter(races: LiveRace[], filter: FilterType): LiveRace[] {
   if (filter === "Cash Challenges") return races.filter(isCashChallengeRace);
   return races;
+}
+
+function shouldMergeUnlimitedLive(filter: FilterType): boolean {
+  return filter === "All" || filter === "My Races" || filter === "Cash Challenges";
+}
+
+function mergeLiveById(primary: LiveRace[], extra: LiveRace[]): LiveRace[] {
+  const seen = new Set(primary.map((r) => r.id));
+  const out = [...primary];
+  for (const race of extra) {
+    if (seen.has(race.id)) continue;
+    seen.add(race.id);
+    out.push(race);
+  }
+  return out;
 }
 
 function mapRaceRow(r: Record<string, unknown>): LiveRace {
@@ -252,36 +304,62 @@ function mapRaceRow(r: Record<string, unknown>): LiveRace {
       (r.currentUserParticipating as boolean | undefined) ??
       (r.current_user_participating as boolean | undefined) ??
       (r.current_user_registered as boolean | undefined),
+    challengeType:
+      (r.challengeType as string | null | undefined) ??
+      (r.challenge_type as string | null | undefined) ??
+      null,
+    capacityMode:
+      (r.capacityMode as string | null | undefined) ??
+      (r.capacity_mode as string | null | undefined) ??
+      null,
   };
 }
 
 const FINISHED_PAGE_SIZE = 15;
 
-async function fetchLiveChallenges(filter: FilterType): Promise<{
+async function fetchLiveChallenges(
+  filter: FilterType,
+  opts?: { viewerUserId?: string | null },
+): Promise<{
   live: LiveRace[];
   finished: LiveRace[];
   ok: boolean;
 }> {
   const fp = filterToParam(filter);
   try {
-    const [liveRes, finishedRes] = await Promise.all([
+    const [liveRes, finishedRes, unlimited] = await Promise.all([
       authFetch(`/api/races?status=in_progress&filter=${encodeURIComponent(fp)}&limit=30`),
       authFetch(`/api/races?status=completed&filter=${encodeURIComponent(fp)}&limit=${FINISHED_PAGE_SIZE}&offset=0`),
+      shouldMergeUnlimitedLive(filter)
+        ? import("@/services/unlimitedChallengesListApi").then((m) =>
+            m.fetchLiveUnlimitedChallenges({ viewerUserId: opts?.viewerUserId }),
+          )
+        : Promise.resolve({ live: [] as LiveRace[], finished: [] as LiveRace[] }),
     ]);
-    if (!liveRes.ok && !finishedRes.ok) return { live: [], finished: [], ok: false };
+    if (!liveRes.ok && !finishedRes.ok && unlimited.live.length === 0 && unlimited.finished.length === 0) {
+      return { live: [], finished: [], ok: false };
+    }
     const liveData = liveRes.ok ? await liveRes.json() as { races?: Record<string, unknown>[] } : { races: [] };
     const finishedData = finishedRes.ok ? await finishedRes.json() as { races?: Record<string, unknown>[] } : { races: [] };
     const seenIds = new Set<string>();
-    const live = applyChipFilter((liveData.races ?? []).filter((r) => {
+    let live = applyChipFilter((liveData.races ?? []).filter((r) => {
       if (seenIds.has(r.id as string)) return false;
       seenIds.add(r.id as string);
       return true;
     }).map(mapRaceRow), filter);
-    const finished = applyChipFilter((finishedData.races ?? []).filter((r) => {
+    let finished = applyChipFilter((finishedData.races ?? []).filter((r) => {
       if (seenIds.has(r.id as string)) return false;
       seenIds.add(r.id as string);
       return true;
     }).map(mapRaceRow), filter);
+
+    if (shouldMergeUnlimitedLive(filter)) {
+      const ulLive = applyChipFilter(unlimited.live as LiveRace[], filter);
+      const ulFinished = applyChipFilter(unlimited.finished as LiveRace[], filter);
+      live = mergeLiveById(live, ulLive);
+      finished = mergeLiveById(finished, ulFinished);
+    }
+
     return { live, finished, ok: true };
   } catch {
     return { live: [], finished: [], ok: false };
@@ -728,9 +806,25 @@ function RaceCardBase({
     prefetchTrackTheme(trackMedia, "full");
     router.push({
       pathname: "/race/live-detail",
-      params: { id: race.id, trackLayout: race.trackLayout },
+      params: {
+        id: race.id,
+        trackLayout: race.trackLayout,
+        ...(race.challengeType === "unlimited_goal" || race.capacityMode === "unlimited"
+          ? { challengeType: "unlimited_goal", capacityMode: "unlimited" }
+          : null),
+      },
     });
-  }, [race.id, race.trackLayout, race.imageSet, race.imageUrl, race.assetVersion, race.width, race.height]);
+  }, [
+    race.id,
+    race.trackLayout,
+    race.challengeType,
+    race.capacityMode,
+    race.imageSet,
+    race.imageUrl,
+    race.assetVersion,
+    race.width,
+    race.height,
+  ]);
 
   const openSpectatorRace = useCallback(() => {
     // Same real race track / live board as participants — live-detail already
@@ -738,9 +832,25 @@ function RaceCardBase({
     prefetchTrackTheme(trackMedia, "full");
     router.push({
       pathname: "/race/live-detail",
-      params: { id: race.id, trackLayout: race.trackLayout },
+      params: {
+        id: race.id,
+        trackLayout: race.trackLayout,
+        ...(race.challengeType === "unlimited_goal" || race.capacityMode === "unlimited"
+          ? { challengeType: "unlimited_goal", capacityMode: "unlimited" }
+          : null),
+      },
     });
-  }, [race.id, race.trackLayout, race.imageSet, race.imageUrl, race.assetVersion, race.width, race.height]);
+  }, [
+    race.id,
+    race.trackLayout,
+    race.challengeType,
+    race.capacityMode,
+    race.imageSet,
+    race.imageUrl,
+    race.assetVersion,
+    race.width,
+    race.height,
+  ]);
 
   const entryColor: Record<string, string> = {
     Free: NEON_GREEN,
@@ -772,7 +882,16 @@ function RaceCardBase({
     : isCoinsBattle && race.coinEntryAmount > 0
     ? `${(race.coinEntryAmount * race.playerCount).toLocaleString()} coins`
     : race.prizePool > 0 ? `$${race.prizePool.toFixed(2)}` : null;
-  const elapsedLabel = isFinished ? "Duration" : "Elapsed";
+  const elapsedLabel = "Elapsed";
+  const finishedStartEnd = isFinished
+    ? formatFinishedStartEnd(
+        race.startedAt ?? race.createdAt,
+        race.completedAt ??
+          (race.startedAt && race.elapsedSeconds > 0
+            ? new Date(new Date(race.startedAt).getTime() + race.elapsedSeconds * 1000).toISOString()
+            : null),
+      )
+    : null;
   const challengeEndsLabel = !isFinished
     ? getChallengeDaysLeftLabel({
         challengeEndAt: race.challengeEndAt,
@@ -840,16 +959,6 @@ function RaceCardBase({
                   {isSponsored ? "🏆 Sponsored" : isCoinsBattle ? "⚔️ Coins" : race.entryType}
                 </Text>
               </View>
-              {isFinished && race.completedAt && (
-                <Text
-                  style={[
-                    st.cardTimestamp,
-                    !isDark && { backgroundColor: "rgba(0,0,0,0.06)", color: colors.mutedForeground },
-                  ]}
-                >
-                  {formatFinishedAt(race.completedAt)}
-                </Text>
-              )}
             </View>
             <View style={st.spectBadge}>
               <Feather name="eye" size={11} color={MUTED} />
@@ -887,11 +996,24 @@ function RaceCardBase({
       </TrackThemeImageBackground>
 
       {/* ── Stats row ───────────────────────────────────────────────────── */}
-      <View style={[st.statsRow, { borderBottomColor: colors.border }]}>
+      <View
+        style={[
+          st.statsRow,
+          { borderBottomColor: colors.border },
+          // Slightly tighter vertical padding so Started/Ended stack fits without growing the card
+          isFinished && finishedStartEnd ? { paddingVertical: rs(8) } : null,
+        ]}
+      >
         <View style={st.statItem}>
           <View style={st.statValueRow}>
             <Feather name="users" size={11} color={colors.mutedForeground} />
-            <Text style={[st.statValue, { color: colors.foreground }]}>{race.playerCount}/{race.maxPlayers}</Text>
+            <Text style={[st.statValue, { color: colors.foreground }]}>
+              {race.challengeType === "unlimited_goal" ||
+              race.capacityMode === "unlimited" ||
+              race.maxPlayers <= 0
+                ? `${race.playerCount} joined`
+                : `${race.playerCount}/${race.maxPlayers}`}
+            </Text>
           </View>
           <Text style={[st.statLabel, { color: colors.mutedForeground }]}>Participants</Text>
         </View>
@@ -905,11 +1027,28 @@ function RaceCardBase({
         </View>
         <View style={[st.statDiv, { backgroundColor: colors.border }]} />
         <View style={st.statItem}>
-          <View style={st.statValueRow}>
-            <Feather name="clock" size={11} color={colors.mutedForeground} />
-            <Text style={[st.statValue, { color: colors.foreground }]}>{formatElapsed(race.elapsedSeconds)}</Text>
-          </View>
-          <Text style={[st.statLabel, { color: colors.mutedForeground }]}>{elapsedLabel}</Text>
+          {isFinished && finishedStartEnd ? (
+            <View style={st.finishedTimeStack}>
+              <Text style={[st.finishedTimeLabel, { color: colors.mutedForeground }]}>Started</Text>
+              <Text style={[st.finishedTimeValue, { color: colors.foreground }]} numberOfLines={1}>
+                {finishedStartEnd.started}
+              </Text>
+              <Text style={[st.finishedTimeLabel, st.finishedTimeLabelGap, { color: colors.mutedForeground }]}>
+                Ended
+              </Text>
+              <Text style={[st.finishedTimeValue, { color: colors.foreground }]} numberOfLines={1}>
+                {finishedStartEnd.ended}
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={st.statValueRow}>
+                <Feather name="clock" size={11} color={colors.mutedForeground} />
+                <Text style={[st.statValue, { color: colors.foreground }]}>{formatElapsed(race.elapsedSeconds)}</Text>
+              </View>
+              <Text style={[st.statLabel, { color: colors.mutedForeground }]}>{elapsedLabel}</Text>
+            </>
+          )}
         </View>
         {prizePoolDisplay && (!isFinished || isCoinsBattle || isSponsored) && (
           <>
@@ -1360,10 +1499,19 @@ export default function LiveTab() {
 
       // ── 2. Fetch fresh data in the background ────────────────────────────────
       const [{ live, finished, ok }, myRaceResult] = await Promise.all([
-        fetchLiveChallenges(activeFilter),
+        fetchLiveChallenges(activeFilter, { viewerUserId: user?.id }),
         fetchMyActiveRaces(),
       ]);
       const idSet = new Set(myRaceResult.all.map((r) => r.id));
+      // Unlimited my-active may not be on /api/races/my-active — include Live rows the user owns/joined.
+      for (const race of [...live, ...finished]) {
+        if (
+          race.currentUserParticipating ||
+          (!!user?.id && race.hostUserId === user.id)
+        ) {
+          idSet.add(race.id);
+        }
+      }
       const participation = {
         userId: user?.id,
         username: user?.username,
@@ -1914,7 +2062,6 @@ const st = StyleSheet.create({
   cardTitleRow:     { flexDirection: "row", alignItems: "flex-end", gap: 8 },
   cardTitleWrap:    { flex: 1 },
   cardTitle:        { fontSize: rf(17), fontWeight: "900", letterSpacing: -0.3 },
-  cardTimestamp:    { fontSize: rf(10), color: "#C8D8E8", flexShrink: 1, backgroundColor: "rgba(0,0,0,0.50)", borderRadius: 6, paddingHorizontal: 6, paddingVertical: 3, overflow: "hidden" },
 
   // Badges
   liveBadge:        { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#FF000025", borderRadius: 8, paddingHorizontal: 7, paddingVertical: 4, borderWidth: 1, borderColor: "#FF000060" },
@@ -1975,6 +2122,10 @@ const st = StyleSheet.create({
   },
   statLabel:        { fontSize: rf(10), marginTop: 2 },
   statDiv:          { width: 1, height: 30 },
+  finishedTimeStack: { alignItems: "center", justifyContent: "center", width: "100%" },
+  finishedTimeLabel: { fontSize: rf(9), fontWeight: "600", lineHeight: rf(11) },
+  finishedTimeLabelGap: { marginTop: 3 },
+  finishedTimeValue: { fontSize: rf(11), fontWeight: "800", lineHeight: rf(13) },
 
   // Players
   playersSection:   { paddingHorizontal: rs(12), paddingVertical: rs(10), gap: 10, borderBottomWidth: 1 },

@@ -24,13 +24,19 @@ export interface WaitingRoomParticipant {
 
 export interface WaitingRoomLiveMeta {
   currentPlayers: number;
-  maxPlayers: number;
+  maxPlayers: number | null;
   status: string;
   targetSteps?: number;
   entryType?: string;
+  challengeType?: string;
   entryAmountCents?: number;
   coinEntryAmount?: number;
   coinPrizePool?: number;
+  prizePoolCents?: number;
+  platformFeeCents?: number;
+  dailyGoalSteps?: number;
+  durationDays?: number;
+  capacityMode?: "finite" | "unlimited";
   isPrivate?: boolean;
   inviteCode?: string | null;
   minimumParticipants?: number;
@@ -108,10 +114,13 @@ export function buildMatchmakingParams(options: {
   initialEntryType?: string;
   initialTargetSteps?: number;
   initialCoinEntryAmount?: number;
-  initialMaxPlayers?: number;
+  initialMaxPlayers?: number | null;
   initialIsPrivate?: boolean;
   initialInviteCode?: string;
   initialScheduledStartAt?: string | null;
+  initialPrizePoolCents?: number;
+  initialDailyGoalSteps?: number;
+  initialDurationDays?: number;
 }): Record<string, string> {
   const params: Record<string, string> = {
     raceId: options.raceId,
@@ -139,6 +148,9 @@ export function buildMatchmakingParams(options: {
   if (options.initialMaxPlayers != null) {
     params.initialMaxPlayers = String(options.initialMaxPlayers);
   }
+  if (options.initialMaxPlayers === null) {
+    params.initialCapacityMode = "unlimited";
+  }
   if (options.initialIsPrivate != null) {
     params.initialIsPrivate = options.initialIsPrivate ? "true" : "false";
   }
@@ -147,6 +159,15 @@ export function buildMatchmakingParams(options: {
   }
   if (options.initialScheduledStartAt) {
     params.initialScheduledStartAt = options.initialScheduledStartAt;
+  }
+  if (options.initialPrizePoolCents != null) {
+    params.initialPrizePoolCents = String(options.initialPrizePoolCents);
+  }
+  if (options.initialDailyGoalSteps != null) {
+    params.initialDailyGoalSteps = String(options.initialDailyGoalSteps);
+  }
+  if (options.initialDurationDays != null) {
+    params.initialDurationDays = String(options.initialDurationDays);
   }
 
   return params;

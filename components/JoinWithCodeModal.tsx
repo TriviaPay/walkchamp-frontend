@@ -366,9 +366,9 @@ export default function JoinWithCodeModal({
 }
 
 const CONSENT_LINES = [
-  "I understand this is a skill-based race. My result depends entirely on my activity performance — outcomes are not based on chance.",
-  "I understand that entry fees are charged when the race begins. If I leave the lobby before the race starts, no fee is charged.",
-  "I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
+  "I understand that the challenge cannot be cancelled after creation.",
+  "I understand that leaving before the challenge starts may qualify for an entry-fee refund according to the refund policy. Leaving at or after start provides no refund and removes me from prize eligibility.",
+  "I understand that if I leave, the challenge will continue for other participants. I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
 ];
 
 function SummaryRow({

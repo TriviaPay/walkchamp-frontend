@@ -657,7 +657,11 @@ export function RaceStartingSoonCard({
         >
           <InfoPill
             icon={<Text style={styles.infoEmoji}>👥</Text>}
-            text={`${registeredCount} / ${maxSlots}`}
+            text={
+              maxSlots > 0
+                ? `${registeredCount} / ${maxSlots}`
+                : `${registeredCount} joined`
+            }
             borderColor={theme.pillBorder}
             style={challengeType === "coins" ? styles.coinsSecondaryInfoPill : undefined}
           />
@@ -732,8 +736,7 @@ export function RaceStartingSoonCard({
 
 const styles = StyleSheet.create({
   wrap: {
-    height: Math.max(rs(455), 410),
-    marginBottom: rs(12),
+    marginBottom: rs(8),
     borderRadius: rs(24),
     shadowOpacity: 0.45,
     shadowRadius: 18,
@@ -741,9 +744,10 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   card: {
-    flex: 1,
     borderRadius: rs(24),
-    padding: rs(16),
+    paddingTop: rs(11),
+    paddingHorizontal: rs(11),
+    paddingBottom: rs(11),
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.08)",
@@ -767,13 +771,13 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: rs(8),
-    gap: rs(8),
+    marginBottom: rs(5),
+    gap: rs(6),
   },
   badge: {
     borderWidth: 1,
     paddingHorizontal: rs(8),
-    paddingVertical: rs(4),
+    paddingVertical: rs(3),
     borderRadius: rs(8),
   },
   badgeCash: {
@@ -793,7 +797,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(52,211,153,0.65)",
     borderWidth: 1,
     paddingHorizontal: rs(8),
-    paddingVertical: rs(4),
+    paddingVertical: rs(3),
     borderRadius: rs(999),
   },
   registeredText: {
@@ -802,38 +806,38 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   title: {
-    minHeight: rf(24),
+    minHeight: rf(22),
     color: "#FFF",
     fontSize: rf(20),
     fontWeight: "900",
     letterSpacing: 0.2,
   },
   subtitle: {
-    minHeight: rf(32),
+    minHeight: rf(28),
     color: "rgba(237,233,254,0.82)",
     fontSize: rf(12),
-    lineHeight: rf(16),
-    marginTop: rs(2),
-    marginBottom: rs(12),
+    lineHeight: rf(15),
+    marginTop: rs(1),
+    marginBottom: rs(6),
   },
   midRow: {
-    minHeight: rs(54),
+    minHeight: rs(44),
     flexDirection: "row",
     flexWrap: "wrap",
     alignItems: "center",
-    gap: rs(10),
-    marginBottom: rs(12),
+    gap: rs(8),
+    marginBottom: rs(6),
   },
   countdownIconWrap: {
-    width: rs(54),
-    height: rs(54),
+    width: rs(44),
+    height: rs(44),
     alignItems: "center",
     justifyContent: "center",
   },
   countdownIcon: {
-    width: rs(48),
-    height: rs(48),
-    borderRadius: rs(24),
+    width: rs(40),
+    height: rs(40),
+    borderRadius: rs(20),
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
@@ -847,7 +851,7 @@ const styles = StyleSheet.create({
     fontSize: rf(10),
     fontWeight: "800",
     letterSpacing: 1,
-    marginBottom: rs(6),
+    marginBottom: rs(3),
   },
   timeRow: {
     flexDirection: "row",
@@ -855,9 +859,9 @@ const styles = StyleSheet.create({
   },
   timeBoxWrap: { alignItems: "center" },
   timeBox: {
-    minWidth: rs(36),
+    minWidth: rs(34),
     paddingHorizontal: rs(5),
-    paddingVertical: rs(7),
+    paddingVertical: rs(5),
     borderRadius: rs(10),
     alignItems: "center",
     borderWidth: 1,
@@ -872,14 +876,14 @@ const styles = StyleSheet.create({
   timeLabel: {
     fontSize: rf(8),
     fontWeight: "700",
-    marginTop: rs(3),
+    marginTop: rs(2),
     letterSpacing: 0.5,
   },
   colon: {
     fontSize: rf(18),
     fontWeight: "800",
     marginHorizontal: rs(2),
-    marginTop: rs(6),
+    marginTop: rs(4),
   },
   livePill: {
     alignSelf: "flex-start",
@@ -888,7 +892,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: rs(10),
     paddingHorizontal: rs(12),
-    paddingVertical: rs(10),
+    paddingVertical: rs(7),
   },
   livePillText: {
     color: "#6EE7B7",
@@ -896,10 +900,10 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   prizeSection: {
-    minHeight: rs(62),
+    minHeight: rs(48),
     alignItems: "center",
-    marginBottom: rs(12),
-    paddingTop: rs(2),
+    marginBottom: rs(6),
+    paddingTop: 0,
   },
   prizeHeading: {
     width: "100%",
@@ -907,7 +911,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: rs(6),
-    marginBottom: rs(5),
+    marginBottom: rs(3),
   },
   prizeRule: {
     flex: 1,
@@ -965,13 +969,13 @@ const styles = StyleSheet.create({
     transform: [{ skewX: "-18deg" }],
   },
   infoRow: {
-    height: rs(36),
+    height: rs(30),
     flexDirection: "row",
     gap: rs(6),
-    marginBottom: rs(10),
+    marginBottom: rs(6),
   },
   infoRowEmphasized: {
-    height: rs(42),
+    height: rs(36),
   },
   infoPill: {
     flex: 1,
@@ -982,12 +986,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: rs(10),
     paddingHorizontal: rs(7),
-    paddingVertical: rs(6),
+    paddingVertical: rs(4),
   },
   entryFeePill: {
     flex: 1.32,
     minWidth: 0,
-    minHeight: rs(42),
+    minHeight: rs(36),
     paddingHorizontal: rs(7),
   },
   coinsEntryFeePill: {
@@ -1040,19 +1044,19 @@ const styles = StyleSheet.create({
     fontSize: rf(9.5),
     fontWeight: "700",
   },
-  progressBlock: { marginBottom: rs(12) },
+  progressBlock: { marginBottom: rs(6) },
   progressMsg: {
     color: "rgba(237,233,254,0.85)",
     fontSize: rf(11),
     fontWeight: "600",
-    marginBottom: rs(6),
+    marginBottom: rs(3),
   },
   progressMsgCash: {
     color: "rgba(253,230,138,0.9)",
     fontWeight: "700",
   },
   progressTrack: {
-    height: rs(6),
+    height: rs(5),
     borderRadius: rs(999),
     backgroundColor: "rgba(255,255,255,0.1)",
     overflow: "hidden",
@@ -1066,11 +1070,12 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
   },
   ctaTouch: {
-    marginTop: "auto",
+    marginTop: rs(6),
     borderRadius: rs(14),
     overflow: "hidden",
   },
   cta: {
+    minHeight: rs(48),
     height: rs(48),
     borderRadius: rs(14),
     flexDirection: "row",

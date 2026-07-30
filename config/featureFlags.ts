@@ -52,6 +52,38 @@ export const ENABLE_CASH_CHALLENGES =
   process.env.EXPO_PUBLIC_ENABLE_CASH_CHALLENGES !== "false";
 
 /**
+ * Unlimited Daily Goal Challenge (`unlimited_goal`) frontend surfaces.
+ *
+ * Off by default. Enable with:
+ *   EXPO_PUBLIC_ENABLE_UNLIMITED_GOAL=true
+ * Instant rollback without env rebuild: flip the hard switch below to `false`.
+ */
+export const ENABLE_UNLIMITED_GOAL_FRONTEND =
+  process.env.EXPO_PUBLIC_ENABLE_UNLIMITED_GOAL === "true" &&
+  // Local hard switch — flip to false for instant revert without env vars.
+  true;
+
+/** Prefer this helper so call sites stay readable. */
+export function isUnlimitedGoalFrontendEnabled(): boolean {
+  return ENABLE_UNLIMITED_GOAL_FRONTEND;
+}
+
+/**
+ * Walk-tab Trending Challenges preview (stacked carousel below Create Challenge).
+ *
+ * Dev default: on. Disable with:
+ *   EXPO_PUBLIC_ENABLE_WALK_TRENDING_CHALLENGES_PREVIEW=false
+ * Instant rollback: flip hard switch to `false`.
+ */
+export const ENABLE_WALK_TRENDING_CHALLENGES_PREVIEW =
+  process.env.EXPO_PUBLIC_ENABLE_WALK_TRENDING_CHALLENGES_PREVIEW !== "false" &&
+  true;
+
+export function isWalkTrendingChallengesPreviewEnabled(): boolean {
+  return ENABLE_WALK_TRENDING_CHALLENGES_PREVIEW;
+}
+
+/**
  * Legacy $1 / $3 / $5 cards in the main Join section (off by default).
  * Cash Prize Challenge in Premium uses ENABLE_CASH_CHALLENGES instead.
  */

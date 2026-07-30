@@ -50,9 +50,22 @@ import { useApp } from "@/context/AppContext";
 import {
   refundMessageFromCancelBody,
   refundMessageFromLeaveBody,
+  formatCashLeaveSuccessMessage,
   type RaceCancelResponse,
   type RaceLeaveResponse,
 } from "@/services/refundApi";
+import {
+  isAlreadyLeftLeaveError,
+  isUnlimitedCashChallenge,
+  mapPaidCancelError,
+  previewChallengeHasStarted,
+  usdCashLeaveConfirmCopy,
+  usdCashLeaveEndpoint,
+  USD_CASH_LEAVE_ACTION_LABEL,
+} from "@/utils/usdCashChallengeLeavePolicy";
+import { isUnlimitedGoalChallenge, formatPlayerCountDisplay } from "@/utils/unlimitedGoal";
+import { fetchAvailableUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
+import { mergeUpcomingRoomsById } from "@/utils/unlimitedChallengeRooms";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const BG = "#080B14";
@@ -91,6 +104,7 @@ interface UpcomingRoom {
   host_country_flag: string | null;
   current_user_registered: boolean;
   eligible_to_register: boolean;
+  capacity_mode?: string | null;
 }
 
 
@@ -132,6 +146,7 @@ interface Room {
   team_b_country: string | null;
   team_b_country_code: string | null;
   scheduled_start_at?: string | null;
+  capacity_mode?: string | null;
 }
 
 
@@ -247,7 +262,14 @@ function PremiumPrizeAmount({
 
 function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCardProps) {
   const isPrivate = room.requires_code;
-  const isFull = room.current_players >= room.max_players;
+  const isUnlimited = isUnlimitedGoalChallenge({
+    challengeType: room.challenge_type,
+    capacityMode: room.capacity_mode,
+    maxPlayers: room.max_players,
+  });
+  const isFull = isUnlimited
+    ? false
+    : room.current_players >= room.max_players;
   const disabled = joining || isFull;
   const isCoins = room.challenge_type === "coins_battle";
   const isCash = !isCoins && room.entry_fee > 0;
@@ -314,12 +336,26 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
         {isPrivate ? (
           <View style={[cc.visBadge, { backgroundColor: PURPLE + "28", borderColor: PURPLE + "65" }]}>
             <Feather name="lock" size={7} color={PURPLE} />
-            <Text style={[cc.visBadgeText, { color: PURPLE }]}>Private {room.current_players}/{room.max_players}</Text>
+            <Text style={[cc.visBadgeText, { color: PURPLE }]}>
+              Private{" "}
+              {formatPlayerCountDisplay({
+                current: room.current_players,
+                max: room.max_players,
+                isUnlimited,
+              })}
+            </Text>
           </View>
         ) : (
           <View style={[cc.visBadge, { backgroundColor: GREEN + "18", borderColor: GREEN + "45" }]}>
             <Feather name="globe" size={7} color={GREEN} />
-            <Text style={[cc.visBadgeText, { color: GREEN }]}>Public {room.current_players}/{room.max_players}</Text>
+            <Text style={[cc.visBadgeText, { color: GREEN }]}>
+              Public{" "}
+              {formatPlayerCountDisplay({
+                current: room.current_players,
+                max: room.max_players,
+                isUnlimited,
+              })}
+            </Text>
           </View>
         )}
       </View>
@@ -363,7 +399,12 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
           <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 2 }}>
             <Feather name="users" size={9} color="#8B9AC0" />
             <Text style={[cc.countdownSmall, { color: "#8B9AC0" }]}>
-              {room.current_players}/{room.max_players} players joined
+              {isUnlimited
+                ? formatPlayerCountDisplay({
+                    current: room.current_players,
+                    isUnlimited: true,
+                  })
+                : `${room.current_players}/${room.max_players} players joined`}
             </Text>
           </View>
         </View>
@@ -784,9 +825,16 @@ function UpcomingAvatar({ userId, avatarColor, username, isSponsored, size = rs(
 
 function UpcomingRoomCard({ room, currentUserId, onRegister, onCancel, onCancelRoom, onViewHost, registering }: UpcomingRoomCardProps) {
   const countdown   = useCountdown(room.scheduled_start_at);
-  const isFull      = room.registered_count >= room.max_players;
+  const isUnlimited = isUnlimitedGoalChallenge({
+    challengeType: room.challenge_type,
+    capacityMode: room.capacity_mode,
+    maxPlayers: room.max_players,
+  });
+  const isFull      = isUnlimited ? false : room.registered_count >= room.max_players;
   const isSponsored = room.challenge_type === "sponsored";
-  const isCash      = !isSponsored && room.entry_fee > 0;
+  const isCoins     = !isSponsored && room.challenge_type === "coins_battle";
+  const isCash      = !isSponsored && !isCoins && (room.entry_fee > 0 || isUnlimited);
+  const isUsdCash   = isCash;
   const isHost      = !isSponsored && !!currentUserId && currentUserId === room.host_user_id;
 
   const accent      = isSponsored ? "#7C3AFF" : (isCash ? CASH_BLUE : GREEN);
@@ -826,6 +874,11 @@ function UpcomingRoomCard({ room, currentUserId, onRegister, onCancel, onCancelR
               <Text style={{ fontSize: rf(11) }}>🏆</Text>
               <Text style={[ucard.headerTitle, { color: "#C47BFF" }]}>WALKCHAMP</Text>
             </>
+          ) : isUnlimited ? (
+            <>
+              <Feather name="dollar-sign" size={11} color={CASH_BLUE} />
+              <Text style={[ucard.headerTitle, { color: CASH_BLUE }]}>UNLIMITED CHALLENGE</Text>
+            </>
           ) : isCash ? (
             <>
               <Feather name="dollar-sign" size={11} color={CASH_BLUE} />
@@ -857,7 +910,13 @@ function UpcomingRoomCard({ room, currentUserId, onRegister, onCancel, onCancelR
           )}
           <View style={ucard.playerPill}>
             <Feather name="users" size={10} color="#8B9AC0" />
-            <Text style={ucard.playerText}>{room.registered_count}/{room.max_players}</Text>
+            <Text style={ucard.playerText}>
+              {formatPlayerCountDisplay({
+                current: room.registered_count,
+                max: room.max_players,
+                isUnlimited,
+              })}
+            </Text>
           </View>
         </View>
       </View>
@@ -940,13 +999,15 @@ function UpcomingRoomCard({ room, currentUserId, onRegister, onCancel, onCancelR
       {!isSponsored && isHost ? (
         <TouchableOpacity
           style={[ucard.cancelRoomBtn, { opacity: registering ? 0.5 : 1 }]}
-          onPress={() => !registering && onCancelRoom(room)}
+          onPress={() => !registering && (isUsdCash ? onCancel(room) : onCancelRoom(room))}
           disabled={registering}
           activeOpacity={0.8}
         >
           {registering
-            ? <><ActivityIndicator size="small" color="#FF4444" /><Text style={ucard.cancelRoomBtnText}>Cancelling…</Text></>
-            : <><Feather name="x-octagon" size={14} color="#FF4444" /><Text style={ucard.cancelRoomBtnText}>Cancel Room</Text></>
+            ? <><ActivityIndicator size="small" color="#FF4444" /><Text style={ucard.cancelRoomBtnText}>{isUsdCash ? "Leaving…" : "Cancelling…"}</Text></>
+            : isUsdCash
+              ? <><Feather name="log-out" size={14} color="#FF4444" /><Text style={ucard.cancelRoomBtnText}>{USD_CASH_LEAVE_ACTION_LABEL}</Text></>
+              : <><Feather name="x-octagon" size={14} color="#FF4444" /><Text style={ucard.cancelRoomBtnText}>Cancel Room</Text></>
           }
         </TouchableOpacity>
       ) : room.current_user_registered ? (
@@ -957,8 +1018,10 @@ function UpcomingRoomCard({ room, currentUserId, onRegister, onCancel, onCancelR
           activeOpacity={0.8}
         >
           {registering
-            ? <><ActivityIndicator size="small" color="#8B9AC0" /><Text style={ucard.cancelRegBtnText}>Cancelling…</Text></>
-            : <><Feather name="x-circle" size={14} color="#8B9AC0" /><Text style={ucard.cancelRegBtnText}>Cancel Registration</Text></>
+            ? <><ActivityIndicator size="small" color="#8B9AC0" /><Text style={ucard.cancelRegBtnText}>{isUsdCash ? "Leaving…" : "Cancelling…"}</Text></>
+            : isUsdCash
+              ? <><Feather name="log-out" size={14} color="#FF8A65" /><Text style={ucard.cancelRegBtnText}>{USD_CASH_LEAVE_ACTION_LABEL}</Text></>
+              : <><Feather name="x-circle" size={14} color="#8B9AC0" /><Text style={ucard.cancelRegBtnText}>Cancel Registration</Text></>
           }
         </TouchableOpacity>
       ) : (
@@ -1105,10 +1168,16 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
   room, currentUserId, onRegister, onCancel, onCancelRoom, onViewHost, onGoWaiting, registering,
 }: CompactCardProps) {
   const countdown   = useCountdown(room.scheduled_start_at);
-  const isFull      = room.registered_count >= room.max_players;
+  const isUnlimited = isUnlimitedGoalChallenge({
+    challengeType: room.challenge_type,
+    capacityMode: room.capacity_mode,
+    maxPlayers: room.max_players,
+  });
+  const isFull      = isUnlimited ? false : room.registered_count >= room.max_players;
   const isSponsored = room.challenge_type === "sponsored";
   const isCoins     = !isSponsored && room.challenge_type === "coins_battle";
-  const isCash      = !isSponsored && !isCoins && room.entry_fee > 0;
+  const isCash      = !isSponsored && !isCoins && (room.entry_fee > 0 || isUnlimited);
+  const isUsdCash   = isCash;
   const isHost      = !isSponsored && !!currentUserId && currentUserId === room.host_user_id;
   const accent      = isSponsored ? "#7C3AFF" : isCash ? CASH_BLUE : isCoins ? GOLD : GREEN;
 
@@ -1161,7 +1230,7 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
               : isCoins ? <CoinIcon size={11} />
               : <Ionicons name="walk-outline" size={10} color={accent} />}
             <Text style={[cc.typeBadgeText, { color: accent }]}>
-              {isSponsored ? "CHAMP" : isCash ? "CASH" : isCoins ? "COINS" : "FREE"}
+              {isSponsored ? "CHAMP" : isUnlimited ? "UNLIMITED" : isCash ? "CASH" : isCoins ? "COINS" : "FREE"}
             </Text>
           </View>
           {isCash && (
@@ -1189,12 +1258,26 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
         {room.requires_code ? (
           <View style={[cc.visBadge, { backgroundColor: PURPLE + "28", borderColor: PURPLE + "65" }]}>
             <Feather name="lock" size={7} color={PURPLE} />
-            <Text style={[cc.visBadgeText, { color: PURPLE }]}>Private {room.registered_count}/{room.max_players}</Text>
+            <Text style={[cc.visBadgeText, { color: PURPLE }]}>
+              Private{" "}
+              {formatPlayerCountDisplay({
+                current: room.registered_count,
+                max: room.max_players,
+                isUnlimited,
+              })}
+            </Text>
           </View>
         ) : (
           <View style={[cc.visBadge, { backgroundColor: GREEN + "18", borderColor: GREEN + "45" }]}>
             <Feather name="globe" size={7} color={GREEN} />
-            <Text style={[cc.visBadgeText, { color: GREEN }]}>Public {room.registered_count}/{room.max_players}</Text>
+            <Text style={[cc.visBadgeText, { color: GREEN }]}>
+              Public{" "}
+              {formatPlayerCountDisplay({
+                current: room.registered_count,
+                max: room.max_players,
+                isUnlimited,
+              })}
+            </Text>
           </View>
         )}
       </View>
@@ -1297,16 +1380,29 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
             </View>
             <Feather name="chevron-right" size={16} color="#60A5FA" />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[cc.cancelRoomBtn, { opacity: registering ? 0.6 : 1 }]}
-            onPress={() => !registering && onCancelRoom(room)}
-            disabled={registering}
-            activeOpacity={0.8}
-          >
-            {registering
-              ? <ActivityIndicator size="small" color="#FF6B6B" />
-              : <Text style={cc.cancelRoomBtnText}>Cancel Room</Text>}
-          </TouchableOpacity>
+          {!isUsdCash ? (
+            <TouchableOpacity
+              style={[cc.cancelRoomBtn, { opacity: registering ? 0.6 : 1 }]}
+              onPress={() => !registering && onCancelRoom(room)}
+              disabled={registering}
+              activeOpacity={0.8}
+            >
+              {registering
+                ? <ActivityIndicator size="small" color="#FF6B6B" />
+                : <Text style={cc.cancelRoomBtnText}>Cancel Room</Text>}
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[cc.withdrawBtn, { opacity: registering ? 0.6 : 1 }]}
+              onPress={() => !registering && onCancel(room)}
+              disabled={registering}
+              activeOpacity={0.8}
+            >
+              {registering
+                ? <ActivityIndicator size="small" color="#FF8A65" />
+                : <><Feather name="log-out" size={11} color="#FF8A65" /><Text style={cc.withdrawBtnText}>{USD_CASH_LEAVE_ACTION_LABEL}</Text></>}
+            </TouchableOpacity>
+          )}
         </View>
       ) : room.current_user_registered ? (
         <View style={{ gap: 8 }}>
@@ -1336,7 +1432,7 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
           >
             {registering
               ? <ActivityIndicator size="small" color="#FF8A65" />
-              : <><Feather name="log-out" size={11} color="#FF8A65" /><Text style={cc.withdrawBtnText}>Withdraw Registration</Text></>}
+              : <><Feather name="log-out" size={11} color="#FF8A65" /><Text style={cc.withdrawBtnText}>{isUsdCash ? USD_CASH_LEAVE_ACTION_LABEL : "Withdraw Registration"}</Text></>}
           </TouchableOpacity>
         </View>
       ) : (
@@ -1677,7 +1773,10 @@ function AvailableRoomsScreenContent() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
     try {
-      const res = await authFetch(`/api/rooms/available?filter=all&sort=newest&limit=30`, { signal: controller.signal });
+      const [res, unlimited] = await Promise.all([
+        authFetch(`/api/rooms/available?filter=all&sort=newest&limit=30`, { signal: controller.signal }),
+        fetchAvailableUnlimitedChallenges({ viewerUserId: user?.id }),
+      ]);
       if (!res.ok) throw new Error(`Server error ${res.status}`);
       const data = (await res.json()) as {
         rooms: Room[];
@@ -1685,8 +1784,53 @@ function AvailableRoomsScreenContent() {
         public_room_count?: number;
         private_room_count?: number;
       };
-      setRooms(data.rooms ?? []);
-      setActiveRoomCount(data.active_room_count ?? (data.rooms?.length ?? 0));
+      // Unlimited challenges are scheduled (upcoming). Keep Instant tab as race rooms only,
+      // but still accept any unlimited_goal rows the rooms API may return.
+      const baseRooms = data.rooms ?? [];
+      const unlimitedActive = unlimited
+        .filter((u) => {
+          const start = u.scheduled_start_at ? new Date(u.scheduled_start_at).getTime() : NaN;
+          return Number.isFinite(start) && start <= Date.now();
+        })
+        .map(
+          (u): Room => ({
+            room_id: u.room_id,
+            challenge_type: u.challenge_type,
+            entry_fee: u.entry_fee,
+            title: u.title,
+            target_steps: u.target_steps,
+            max_players: 0,
+            current_players: u.registered_count,
+            available_slots: Number.MAX_SAFE_INTEGER,
+            reward_pool: u.reward_pool ?? u.entry_fee,
+            coin_entry_amount: 0,
+            reward_label: "",
+            host_user_id: u.host_user_id,
+            host_username: u.host_username,
+            host_avatar_color: u.host_avatar_color,
+            host_avatar_url: u.host_avatar_url,
+            host_country_flag: u.host_country_flag,
+            country_code: null,
+            country_label: "",
+            theme_name: u.theme_name,
+            selected_track_theme_id: u.selected_track_theme_id,
+            is_private: u.is_private,
+            requires_code: u.requires_code,
+            created_at: u.scheduled_start_at ?? new Date().toISOString(),
+            joinable: u.eligible_to_register,
+            join_block_reason: null,
+            race_type: null,
+            team_a_country: null,
+            team_a_country_code: null,
+            team_b_country: null,
+            team_b_country_code: null,
+            scheduled_start_at: u.scheduled_start_at,
+            capacity_mode: "unlimited",
+          }),
+        );
+      const mergedRooms = mergeUpcomingRoomsById(baseRooms, unlimitedActive);
+      setRooms(mergedRooms);
+      setActiveRoomCount(data.active_room_count ?? mergedRooms.length);
       setPublicRoomCount(data.public_room_count ?? 0);
       setPrivateRoomCount(data.private_room_count ?? 0);
     } catch (err) {
@@ -1700,7 +1844,7 @@ function AvailableRoomsScreenContent() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [user?.id]);
 
   const fetchUpcomingRooms = useCallback(async (isRefresh = false) => {
     if (isRefresh) setUpcomingRefreshing(true);
@@ -1709,10 +1853,47 @@ function AvailableRoomsScreenContent() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
     try {
-      const res = await authFetch(`/api/rooms/available?tab=upcoming`, { signal: controller.signal });
-      if (!res.ok) throw new Error(`Server error ${res.status}`);
-      const data = (await res.json()) as { rooms: UpcomingRoom[] };
-      setUpcomingRooms(data.rooms ?? []);
+      const [res, unlimited] = await Promise.all([
+        authFetch(`/api/rooms/available?tab=upcoming`, { signal: controller.signal }),
+        fetchAvailableUnlimitedChallenges({ viewerUserId: user?.id }),
+      ]);
+      if (!res.ok && unlimited.length === 0) {
+        throw new Error(`Server error ${res.status}`);
+      }
+      const data = res.ok
+        ? ((await res.json()) as { rooms: UpcomingRoom[] })
+        : { rooms: [] as UpcomingRoom[] };
+      const now = Date.now();
+      const upcomingUnlimited = unlimited.filter((u) => {
+        const status = (u.status ?? "").toLowerCase();
+        if (
+          status === "completed" ||
+          status === "cancelled" ||
+          status === "canceled" ||
+          status === "settled"
+        ) {
+          return false;
+        }
+        // Always surface open Unlimited challenges in Scheduled (not only future start).
+        if (u.challenge_type === "unlimited_goal" || u.capacity_mode === "unlimited") {
+          return true;
+        }
+        if (!u.scheduled_start_at) return true;
+        const start = new Date(u.scheduled_start_at).getTime();
+        return !Number.isFinite(start) || start > now;
+      }) as UpcomingRoom[];
+      const mergedUpcoming = mergeUpcomingRoomsById(data.rooms ?? [], upcomingUnlimited);
+      console.log(
+        `[AvailableUpcoming] rooms=${data.rooms?.length ?? 0} unlimited=${upcomingUnlimited.length} merged=${mergedUpcoming.length}`,
+        upcomingUnlimited.map((u) => ({
+          id: u.room_id,
+          start: u.scheduled_start_at,
+          private: u.is_private,
+          title: u.title,
+          status: u.status,
+        })),
+      );
+      setUpcomingRooms(mergedUpcoming);
     } catch (err) {
       const isAbort = err instanceof Error && err.name === "AbortError";
       setUpcomingError(isAbort ? "Request timed out." : err instanceof Error ? err.message : "Could not load upcoming rooms.");
@@ -1721,7 +1902,7 @@ function AvailableRoomsScreenContent() {
       setUpcomingLoading(false);
       setUpcomingRefreshing(false);
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     void Promise.all([fetchRooms(), fetchUpcomingRooms()]);
@@ -1771,10 +1952,25 @@ function AvailableRoomsScreenContent() {
       if (room.requires_code && roomCode) {
         body.code = roomCode;
       }
-      const res = await authFetch(`/api/rooms/${room.room_id}/register`, {
+      const isUnlimitedRoom = isUnlimitedGoalChallenge({
+        challengeType: room.challenge_type,
+        capacityMode: room.capacity_mode,
+        maxPlayers: room.max_players,
+      });
+      const registerPath = isUnlimitedRoom
+        ? `/api/unlimited-challenges/${room.room_id}/join`
+        : `/api/rooms/${room.room_id}/register`;
+      let res = await authFetch(registerPath, {
         method: "POST",
         body: JSON.stringify(body),
       });
+      // Fallback if join alias differs on older backends.
+      if (!res.ok && isUnlimitedRoom && (res.status === 404 || res.status === 405)) {
+        res = await authFetch(`/api/rooms/${room.room_id}/register`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+      }
       const bodyRes = await res.json().catch(() => ({})) as Record<string, unknown>;
       if (!res.ok) {
         const code = bodyRes.code as string | undefined;
@@ -1887,43 +2083,93 @@ function AvailableRoomsScreenContent() {
 
   const handleCancelRegistration = useCallback(async (room: UpcomingRoom) => {
     if (registeringRoomId) return;
-    setRegisteringRoomId(room.room_id);
-    try {
-      // Scheduled rooms: cancel registration (no charge until race starts).
-      // Open/full waiting rooms: leave triggers canonical wallet refund.
-      const useLeave = room.status === "open" || room.status === "full";
-      const res = await authFetch(
-        useLeave
-          ? `/api/races/${room.room_id}/leave`
-          : `/api/rooms/${room.room_id}/cancel-registration`,
-        { method: "POST", ...(useLeave ? { body: JSON.stringify({ reason: "cancel_registration" }) } : {}) },
-      );
-      const body = await res.json().catch(() => ({})) as RaceLeaveResponse & Record<string, unknown>;
-      if (!res.ok) {
-        AppAlert.alert("Could not cancel", (body.error as string) ?? "Please try again.");
-        return;
+    const isUsd =
+      room.challenge_type !== "sponsored" &&
+      room.challenge_type !== "coins_battle" &&
+      room.entry_fee > 0;
+    const isUnlimited = isUnlimitedCashChallenge({
+      entryFee: room.entry_fee,
+      entryType: room.challenge_type,
+      challengeType: room.challenge_type,
+      maxPlayers: room.max_players,
+    });
+    const isHost = !!user?.id && user.id === room.host_user_id;
+    const hasStartedPreview = previewChallengeHasStarted({
+      scheduledStartAt: room.scheduled_start_at,
+      status: room.status,
+    });
+    const copy = usdCashLeaveConfirmCopy({ hasStartedPreview, isHost });
+
+    const runLeave = async () => {
+      setRegisteringRoomId(room.room_id);
+      try {
+        let res: Response;
+        let body: RaceLeaveResponse = {};
+        if (isUsd) {
+          res = await authFetch(usdCashLeaveEndpoint(room.room_id, isUnlimited), {
+            method: "POST",
+            body: JSON.stringify({ reason: "cancel_registration" }),
+          });
+          body = (await res.json().catch(() => ({}))) as RaceLeaveResponse;
+          if (!res.ok && !isAlreadyLeftLeaveError(res.status, body)) {
+            AppAlert.alert("Could not leave", body.error ?? "Please try again.");
+            return;
+          }
+          void refreshWallet({ silent: true });
+          AppAlert.alert("Left Challenge", formatCashLeaveSuccessMessage(body));
+        } else {
+          const useLeave = room.status === "open" || room.status === "full";
+          res = await authFetch(
+            useLeave
+              ? `/api/races/${room.room_id}/leave`
+              : `/api/rooms/${room.room_id}/cancel-registration`,
+            { method: "POST", ...(useLeave ? { body: JSON.stringify({ reason: "cancel_registration" }) } : {}) },
+          );
+          body = (await res.json().catch(() => ({}))) as RaceLeaveResponse;
+          if (!res.ok) {
+            AppAlert.alert("Could not cancel", body.error ?? "Please try again.");
+            return;
+          }
+          if (useLeave) {
+            await refreshWallet();
+            const refundMsg = refundMessageFromLeaveBody(body);
+            if (refundMsg) AppAlert.alert("Refund", refundMsg);
+          }
+        }
+        setUpcomingRooms((prev) =>
+          prev.map((r) =>
+            r.room_id === room.room_id
+              ? { ...r, current_user_registered: false, registered_count: Math.max(0, r.registered_count - 1), eligible_to_register: true }
+              : r
+          )
+        );
+      } catch {
+        AppAlert.alert("Error", "Network error. Please try again.");
+      } finally {
+        setRegisteringRoomId(null);
       }
-      if (useLeave) {
-        await refreshWallet();
-        const refundMsg = refundMessageFromLeaveBody(body);
-        if (refundMsg) AppAlert.alert("Refund", refundMsg);
-      }
-      setUpcomingRooms((prev) =>
-        prev.map((r) =>
-          r.room_id === room.room_id
-            ? { ...r, current_user_registered: false, registered_count: Math.max(0, r.registered_count - 1), eligible_to_register: true }
-            : r
-        )
-      );
-    } catch {
-      AppAlert.alert("Error", "Network error. Please try again.");
-    } finally {
-      setRegisteringRoomId(null);
+    };
+
+    if (isUsd) {
+      AppAlert.alert(copy.title, copy.message, [
+        { text: copy.stayLabel, style: "cancel" },
+        { text: copy.confirmLabel, style: "destructive", onPress: () => { void runLeave(); } },
+      ]);
+      return;
     }
-  }, [registeringRoomId, refreshWallet]);
+    await runLeave();
+  }, [registeringRoomId, refreshWallet, user?.id]);
 
   const handleCancelRoom = useCallback(async (room: UpcomingRoom) => {
     if (registeringRoomId) return;
+    const isUsd =
+      room.challenge_type !== "sponsored" &&
+      room.challenge_type !== "coins_battle" &&
+      room.entry_fee > 0;
+    if (isUsd) {
+      void handleCancelRegistration(room);
+      return;
+    }
     AppAlert.alert(
       "Cancel Room",
       "Are you sure you want to cancel this room? All registered participants will be notified.",
@@ -1934,9 +2180,6 @@ function AvailableRoomsScreenContent() {
           onPress: async () => {
             setRegisteringRoomId(room.room_id);
             try {
-              // Scheduled rooms (notably coins battles) may not be cancellable
-              // via the races namespace — fall back to the rooms namespace, the
-              // same split used by withdraw (cancel-registration vs leave).
               let res = await authFetch(`/api/races/${room.room_id}/cancel`, { method: "POST" });
               let body = await res.json().catch(() => ({})) as RaceCancelResponse & Record<string, unknown>;
               if (!res.ok) {
@@ -1950,7 +2193,7 @@ function AvailableRoomsScreenContent() {
                 }
               }
               if (!res.ok) {
-                AppAlert.alert("Could not cancel", (body.error as string) ?? "Please try again.");
+                AppAlert.alert("Could not cancel", mapPaidCancelError(body));
                 return;
               }
               await refreshWallet();
@@ -1966,7 +2209,7 @@ function AvailableRoomsScreenContent() {
         },
       ]
     );
-  }, [registeringRoomId, refreshWallet]);
+  }, [registeringRoomId, refreshWallet, handleCancelRegistration]);
 
   // ── Pusher subscription ────────────────────────────────────────────────────
   useEffect(() => {
@@ -2529,11 +2772,9 @@ function AvailableRoomsScreenContent() {
 
                 {[
                   "I am 18 years of age or older and legally eligible to participate in paid challenges in my jurisdiction.",
-                  "I understand this is a skill-based walking challenge. My result depends entirely on my step performance — outcomes are not based on chance.",
-                  isUpcoming
-                    ? "I understand that entry fees are charged when the race begins at its scheduled time. If I cancel my registration before the race starts, my entry fee is refunded to my wallet."
-                    : "I understand that the total payable amount (entry fee + tax/processing + platform service fee) is charged when I confirm. If I leave before the race starts, my entry fee is refunded to my wallet.",
-                  "I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
+                  "I understand that the challenge cannot be cancelled after creation.",
+                  "I understand that leaving before the challenge starts may qualify for an entry-fee refund according to the refund policy. Leaving at or after the challenge start time provides no refund and removes me from prize eligibility.",
+                  "I understand that if I leave, the challenge will continue for other participants. I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
                 ].map((text, i) => (
                   <TouchableOpacity
                     key={i}

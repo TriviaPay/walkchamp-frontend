@@ -89,4 +89,6 @@ export const STORAGE_KEYS = {
   PENDING_DEPOSIT: "walkchamp_pending_deposit_v1",
   /** Payment result to show on wallet tab after Universal Link / resume poll. */
   PAYMENT_RESULT: "walkchamp_payment_result_v1",
+  /** Unlimited challenges hosted by this device user (Next Race / Available seed). */
+  HOSTED_UNLIMITED_CHALLENGES: "walkchamp_hosted_unlimited_challenges_v1",
 };

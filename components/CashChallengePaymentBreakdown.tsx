@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, StyleSheet, ActivityIndicator, Pressable } from "react-native";
 import type { CashChallengePaymentQuote } from "@/services/cashChallengeApi";
 import { formatUsdFromDollars, refundBreakdownFromQuote } from "@/services/cashChallengeApi";
 
@@ -15,36 +15,123 @@ type Props = {
   };
   title?: string;
   showPool?: boolean;
+  /** Small loading indicator in the fee area while a new quote is fetched. */
+  loading?: boolean;
+  /** Always show summary for this entry fee even if the quote request is pending/failed. */
+  entryFeeDollars?: number | null;
+  error?: string | null;
+  onRetry?: () => void;
 };
+
+function quoteMatchesEntry(
+  quote: CashChallengePaymentQuote | null,
+  entryFeeDollars: number | null | undefined,
+): quote is CashChallengePaymentQuote {
+  if (!quote) return false;
+  if (typeof entryFeeDollars !== "number" || !Number.isFinite(entryFeeDollars)) return true;
+  const expectedCents = Math.round(entryFeeDollars * 100);
+  return Math.round(quote.entryFeeCents ?? quote.entryFee * 100) === expectedCents;
+}
 
 export function CashChallengePaymentBreakdown({
   quote,
   colors,
-  title = "Payment Breakdown",
+  title = "Payment Summary",
   showPool = false,
+  loading = false,
+  entryFeeDollars,
+  error = null,
+  onRetry,
 }: Props) {
-  if (!quote) return null;
+  const hasEntry =
+    typeof entryFeeDollars === "number" && Number.isFinite(entryFeeDollars) && entryFeeDollars > 0;
+  const matchedQuote = quoteMatchesEntry(quote, entryFeeDollars) ? quote : null;
+
+  if (!matchedQuote && !loading && !hasEntry && !error) return null;
+
+  if (!matchedQuote) {
+    return (
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <View style={styles.titleRow}>
+          <Text style={[styles.title, { color: colors.foreground, marginBottom: 0 }]}>{title}</Text>
+          {loading ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+        </View>
+        {hasEntry ? (
+          <>
+            <View style={styles.row}>
+              <Text style={[styles.label, { color: colors.mutedForeground }]}>Entry Fee</Text>
+              <Text style={[styles.value, { color: colors.foreground }]}>
+                {formatUsdFromDollars(entryFeeDollars)}
+              </Text>
+            </View>
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+            <View style={styles.row}>
+              <Text style={[styles.label, { color: colors.mutedForeground }]}>
+                Tax / Payment Processing Fee
+              </Text>
+              <Text style={[styles.value, { color: colors.mutedForeground }]}>
+                {loading ? "…" : "—"}
+              </Text>
+            </View>
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+            <View style={styles.row}>
+              <Text style={[styles.label, { color: colors.mutedForeground }]}>
+                Platform Service Fee
+              </Text>
+              <Text style={[styles.value, { color: colors.mutedForeground }]}>
+                {loading ? "…" : "—"}
+              </Text>
+            </View>
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+            <View style={styles.row}>
+              <Text style={[styles.label, { color: colors.mutedForeground }]}>Total Payable</Text>
+              <Text style={[styles.value, styles.total, { color: colors.mutedForeground }]}>
+                {loading ? "…" : "—"}
+              </Text>
+            </View>
+          </>
+        ) : (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text style={[styles.label, { color: colors.mutedForeground }]}>Updating fees…</Text>
+          </View>
+        )}
+        {error ? (
+          <View style={styles.errorBlock}>
+            <Text style={styles.errorText}>{error}</Text>
+            {onRetry ? (
+              <Pressable onPress={onRetry} style={styles.retryBtn} accessibilityRole="button">
+                <Text style={[styles.retryText, { color: colors.primary }]}>Retry</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : loading && hasEntry ? (
+          <Text style={[styles.hint, { color: colors.mutedForeground }]}>Updating fees…</Text>
+        ) : null}
+      </View>
+    );
+  }
 
   const rows = [
     ...(showPool
       ? [
-          { label: "Entry Fee", value: `${formatUsdFromDollars(quote.entryFee)} per player`, accent: false },
-          { label: "Players", value: String(quote.numberOfPlayers), accent: false },
-          { label: "Entry Pool / Prize Pool", value: formatUsdFromDollars(quote.prizePool), accent: true },
+          { label: "Entry Fee", value: `${formatUsdFromDollars(matchedQuote.entryFee)} per player`, accent: false },
+          { label: "Players", value: String(matchedQuote.numberOfPlayers), accent: false },
+          { label: "Entry Pool / Prize Pool", value: formatUsdFromDollars(matchedQuote.prizePool), accent: true },
         ]
       : []),
-    { label: "Entry Fee", value: formatUsdFromDollars(quote.entryFee), accent: false },
+    { label: "Entry Fee", value: formatUsdFromDollars(matchedQuote.entryFee), accent: false },
     {
       label: "Tax / Payment Processing Fee",
-      value: formatUsdFromDollars(quote.paymentProcessingFee),
+      value: formatUsdFromDollars(matchedQuote.paymentProcessingFee),
       accent: false,
     },
     {
       label: "Platform Service Fee",
-      value: formatUsdFromDollars(quote.platformServiceFee),
+      value: formatUsdFromDollars(matchedQuote.platformServiceFee),
       accent: false,
     },
-    { label: "Total Payable", value: formatUsdFromDollars(quote.totalPayable), accent: true },
+    { label: "Total Payable", value: formatUsdFromDollars(matchedQuote.totalPayable), accent: true },
   ];
 
   const uniqueRows = showPool
@@ -53,7 +140,10 @@ export function CashChallengePaymentBreakdown({
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <Text style={[styles.title, { color: colors.foreground }]}>{title}</Text>
+      <View style={styles.titleRow}>
+        <Text style={[styles.title, { color: colors.foreground, marginBottom: 0 }]}>{title}</Text>
+        {loading ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+      </View>
       {uniqueRows.map((row, i) => (
         <View key={`${row.label}-${i}`}>
           {i > 0 && <View style={[styles.divider, { backgroundColor: colors.border }]} />}
@@ -71,9 +161,9 @@ export function CashChallengePaymentBreakdown({
           </View>
         </View>
       ))}
-      {!quote.canAfford && (
+      {!matchedQuote.canAfford && (
         <Text style={[styles.insufficient, { color: "#EF4444" }]}>
-          Insufficient balance. You need {formatUsdFromDollars(quote.totalPayable)}.
+          Insufficient balance. You need {formatUsdFromDollars(matchedQuote.totalPayable)}.
         </Text>
       )}
     </View>
@@ -182,12 +272,25 @@ export function CashChallengeRefundBreakdown({
 const styles = StyleSheet.create({
   card: { borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 12 },
   title: { fontSize: 13, fontWeight: "700", marginBottom: 8 },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+    gap: 8,
+  },
+  loadingRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8 },
   row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6 },
   label: { fontSize: 13, flex: 1, paddingRight: 8 },
   value: { fontSize: 14, fontWeight: "600" },
   total: { fontSize: 16, fontWeight: "800" },
   divider: { height: 1 },
   insufficient: { marginTop: 10, fontSize: 12, fontWeight: "600" },
+  hint: { marginTop: 8, fontSize: 12, fontWeight: "500" },
+  errorBlock: { marginTop: 10, gap: 6 },
+  errorText: { color: "#EF4444", fontSize: 12, fontWeight: "600" },
+  retryBtn: { alignSelf: "flex-start", paddingVertical: 4 },
+  retryText: { fontSize: 13, fontWeight: "700" },
   splitRow: {
     flexDirection: "row",
     alignItems: "center",
