@@ -73,18 +73,24 @@ export function resolveRoomExpiresAt(opts: {
 export function resolveRacePlayerCount(race: Record<string, unknown> | null | undefined): number {
   if (!race) return 0;
   const candidates = [
+    race.registered_count,
+    race.registeredCount,
     race.currentPlayers,
     race.current_players,
-    race.registeredCount,
-    race.registered_count,
     race.participantCount,
     race.participant_count,
+    race.joinedCount,
+    race.joined_count,
     race.playersJoined,
     race.players_joined,
   ];
   for (const value of candidates) {
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
       return Math.floor(value);
+    }
+    if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) {
+      const n = Number(value);
+      if (n >= 0) return Math.floor(n);
     }
   }
   return 0;

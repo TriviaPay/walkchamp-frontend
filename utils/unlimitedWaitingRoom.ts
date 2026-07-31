@@ -2,6 +2,10 @@
  * Map Unlimited Challenge detail API → waiting-room race/participant shapes.
  */
 
+import {
+  extractUnlimitedChallengeRows,
+  normalizeUnlimitedChallengeToUpcomingRoom,
+} from "@/utils/unlimitedChallengeRooms";
 import { UNLIMITED_GOAL_CHALLENGE_TYPE } from "@/utils/unlimitedGoal";
 import { resolveMinimumParticipants } from "@/utils/waitingRoomTiming";
 
@@ -32,6 +36,160 @@ function asNumber(value: unknown): number | null {
   return null;
 }
 
+/** Pull a participant array from common API shapes (array or { data|items|results }). */
+function asParticipantList(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  const rec = asRecord(value);
+  if (!rec) return [];
+  for (const key of ["data", "items", "results", "participants", "registrations", "members"]) {
+    const nested = rec[key];
+    if (Array.isArray(nested)) return nested;
+  }
+  return [];
+}
+
+const COUNT_KEYS = [
+  "registered_count",
+  "registeredCount",
+  "current_players",
+  "currentPlayers",
+  "participantCount",
+  "participant_count",
+  "joinedCount",
+  "joined_count",
+  "playersJoined",
+  "players_joined",
+  "totalParticipants",
+  "total_participants",
+  "totalRegistered",
+  "total_registered",
+  "totalRegistrations",
+  "total_registrations",
+  "registrationCount",
+  "registration_count",
+  "memberCount",
+  "member_count",
+  "activeCount",
+  "active_count",
+  "numParticipants",
+  "num_participants",
+] as const;
+
+function collectCountFromRecord(obj: Record<string, unknown>): number {
+  let max = 0;
+  for (const key of COUNT_KEYS) {
+    const n = asNumber(obj[key]);
+    if (n != null && n > max) max = Math.floor(n);
+  }
+  return max;
+}
+
+/** Walk common nested envelopes for a join count (stats/meta/counts/…). */
+function collectNestedCounts(obj: Record<string, unknown>): number {
+  let max = collectCountFromRecord(obj);
+  for (const key of [
+    "stats",
+    "meta",
+    "counts",
+    "summary",
+    "registration",
+    "registrations",
+    "metrics",
+  ]) {
+    const nested = asRecord(obj[key]);
+    if (nested) max = Math.max(max, collectCountFromRecord(nested));
+  }
+  return max;
+}
+
+function deriveCountFromPrizePool(obj: Record<string, unknown>): number {
+  const entryCents =
+    asNumber(
+      pick(obj, "entryFeeCents", "entry_fee_cents", "entryAmountCents", "entry_amount_cents"),
+    ) ??
+    (() => {
+      const dollars = asNumber(pick(obj, "entry_fee", "entryFee"));
+      if (dollars == null) return null;
+      return dollars > 0 && dollars < 1000 ? Math.round(dollars * 100) : Math.round(dollars);
+    })();
+  const prizeCents = asNumber(
+    pick(
+      obj,
+      "prizePoolCents",
+      "prize_pool_cents",
+      "currentPrizePoolCents",
+      "current_prize_pool_cents",
+    ),
+  );
+  if (
+    entryCents != null &&
+    entryCents > 0 &&
+    prizeCents != null &&
+    prizeCents >= entryCents
+  ) {
+    return Math.floor(prizeCents / entryCents);
+  }
+  return 0;
+}
+
+function participantRowKey(row: unknown): string | null {
+  const obj = asRecord(row);
+  if (!obj) return null;
+  const user = asRecord(pick(obj, "user", "profile", "member")) ?? {};
+  return (
+    asString(pick(obj, "userId", "user_id", "memberUserId", "member_user_id")) ??
+    asString(pick(user, "id", "userId", "user_id")) ??
+    asString(pick(obj, "participantId", "participant_id", "id"))
+  );
+}
+
+/** Deduplicate API player rows — detail returns the same list as both `players` and `participants`. */
+function dedupeParticipantRows(rows: unknown[]): unknown[] {
+  const byKey = new Map<string, unknown>();
+  const noKey: unknown[] = [];
+  for (const row of rows) {
+    const key = participantRowKey(row);
+    if (!key) {
+      noKey.push(row);
+      continue;
+    }
+    if (!byKey.has(key)) byKey.set(key, row);
+  }
+  return [...byKey.values(), ...noKey];
+}
+
+function resolveParticipantCount(
+  challenge: Record<string, unknown>,
+  root: Record<string, unknown>,
+  listLength: number,
+): { count: number; hasExplicit: boolean } {
+  // Prefer challenge.participantCount (authoritative) over list length / prize math.
+  const fromExplicit = Math.max(
+    collectNestedCounts(challenge),
+    collectNestedCounts(root),
+  );
+  if (fromExplicit > 0) {
+    return { count: fromExplicit, hasExplicit: true };
+  }
+
+  const fromPrize = Math.max(
+    deriveCountFromPrizePool(challenge),
+    deriveCountFromPrizePool(root),
+  );
+
+  const listRow =
+    normalizeUnlimitedChallengeToUpcomingRoom(
+      extractUnlimitedChallengeRows(root)[0] ?? challenge,
+    ) ?? normalizeUnlimitedChallengeToUpcomingRoom(challenge);
+  const fromListNormalizer = listRow?.registered_count ?? 0;
+
+  const count = Math.max(fromPrize, fromListNormalizer, listLength, 1);
+  return {
+    count,
+    hasExplicit: fromPrize > 0 || fromListNormalizer > Math.max(listLength, 0),
+  };
+}
+
 export type UnlimitedWaitingRoomMapped = {
   race: {
     id: string;
@@ -54,6 +212,8 @@ export type UnlimitedWaitingRoomMapped = {
     challengeType: string;
     capacityMode: "unlimited";
     startedAt: string | null;
+    /** True when a dedicated count field (or prize-derived count) was found. */
+    hasExplicitPlayerCount?: boolean;
   };
   participants: unknown[];
 };
@@ -85,18 +245,6 @@ export function mapUnlimitedDetailToWaitingRoom(
       : null) ??
     visibility === "private";
 
-  const participantCount =
-    asNumber(
-      pick(
-        challenge,
-        "participantCount",
-        "participant_count",
-        "currentPlayers",
-        "current_players",
-        "registered_count",
-      ),
-    ) ?? 1;
-
   const startAt = asString(
     pick(
       challenge,
@@ -108,18 +256,39 @@ export function mapUnlimitedDetailToWaitingRoom(
     ),
   );
 
-  const participantCollections = [
-    pick(root, "participants", "registrations", "registeredParticipants", "members"),
-    pick(challenge, "participants", "registrations", "registeredParticipants", "members"),
-  ];
-  const participants = participantCollections.flatMap((c) =>
-    Array.isArray(c) ? c : [],
-  );
+  // Backend returns the same roster as both `players` and `participants` — collect
+  // once per source key family, then dedupe by userId so counts stay exact.
+  const participantKeys = [
+    "players",
+    "participants",
+    "registrations",
+    "registeredParticipants",
+    "registered_participants",
+    "members",
+    "previewParticipants",
+    "preview_participants",
+    "leaderboard",
+    "standings",
+    "rankings",
+    "liveLeaderboard",
+    "live_leaderboard",
+    "entries",
+  ] as const;
+  const rawParticipants: unknown[] = [];
+  for (const source of [root, challenge]) {
+    for (const key of participantKeys) {
+      rawParticipants.push(...asParticipantList(source[key]));
+    }
+  }
+  const participants = dedupeParticipantRows(rawParticipants);
+
+  const { count: participantCount, hasExplicit: hasExplicitPlayerCount } =
+    resolveParticipantCount(challenge, root, participants.length);
 
   return {
     race: {
       id,
-      currentPlayers: Math.max(participantCount, participants.length, 1),
+      currentPlayers: participantCount,
       maxPlayers: null,
       status: asString(pick(challenge, "status", "room_status")) ?? "waiting",
       targetSteps:
@@ -158,6 +327,7 @@ export function mapUnlimitedDetailToWaitingRoom(
       challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
       capacityMode: "unlimited",
       startedAt: asString(pick(challenge, "startedAt", "started_at")),
+      hasExplicitPlayerCount,
     },
     participants,
   };

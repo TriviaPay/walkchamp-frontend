@@ -218,6 +218,7 @@ export type UnlimitedLiveDetailMapped = {
     challengeEndAt: string | null;
     challengeDurationDays: number | null;
     prizePoolCents: number;
+    hasExplicitPlayerCount?: boolean;
   };
   participants: Array<{
     id: string;
@@ -237,24 +238,61 @@ export type UnlimitedLiveDetailMapped = {
 function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped["participants"][number] | null {
   const obj = asRecord(raw);
   if (!obj) return null;
-  const user = asRecord(pick(obj, "user", "profile")) ?? {};
+  const user =
+    asRecord(pick(obj, "user", "profile", "member", "registrant", "walker", "athlete")) ??
+    {};
   const userId =
-    asString(pick(obj, "userId", "user_id", "id")) ??
-    asString(pick(user, "id", "userId", "user_id"));
+    asString(
+      pick(
+        obj,
+        "userId",
+        "user_id",
+        "memberUserId",
+        "member_user_id",
+        "uid",
+        "participantUserId",
+        "participant_user_id",
+      ),
+    ) ??
+    asString(pick(user, "id", "userId", "user_id")) ??
+    // Some list rows use top-level `id` as the user id.
+    asString(pick(obj, "id"));
   if (!userId) return null;
   const username =
-    asString(pick(obj, "username", "displayName", "name")) ??
-    asString(pick(user, "username", "displayName", "name")) ??
+    asString(
+      pick(obj, "displayName", "display_name", "fullName", "full_name", "username", "name", "handle"),
+    ) ??
+    asString(
+      pick(user, "displayName", "display_name", "fullName", "full_name", "username", "name", "handle"),
+    ) ??
     "Walker";
+  const statusRaw = asString(
+    pick(obj, "status", "participantStatus", "participant_status", "registrationStatus"),
+  );
   return {
-    id: asString(pick(obj, "id", "participantId")) ?? `${userId}:${index}`,
+    id:
+      asString(pick(obj, "participantId", "participant_id", "registrationId", "registration_id")) ??
+      asString(pick(obj, "id")) ??
+      `${userId}:${index}`,
     userId,
     currentSteps:
       asNumber(
-        pick(obj, "currentSteps", "current_steps", "steps", "todaySteps", "today_steps"),
+        pick(
+          obj,
+          "currentSteps",
+          "current_steps",
+          "steps",
+          "todaySteps",
+          "today_steps",
+          "raceSteps",
+          "race_steps",
+          "stepCount",
+          "step_count",
+        ),
       ) ?? 0,
-    status: asString(pick(obj, "status", "participantStatus", "participant_status")),
-    rank: asNumber(pick(obj, "rank", "displayRank", "display_rank")),
+    // Default active so preview rows without status aren't filtered out of Live Race.
+    status: statusRaw ?? "active",
+    rank: asNumber(pick(obj, "rank", "displayRank", "display_rank", "position")),
     username,
     countryFlag:
       asString(pick(obj, "countryFlag", "country_flag")) ??
@@ -270,9 +308,38 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
       asNumber(pick(obj, "avatarVersion", "avatar_version")) ??
       asNumber(pick(user, "avatarVersion", "avatar_version")),
     isHost:
-      asString(pick(obj, "role", "membershipRole"))?.toLowerCase() === "host" ||
-      pick(obj, "isHost", "is_host") === true,
+      asString(pick(obj, "role", "membershipRole", "membership_role"))?.toLowerCase() ===
+        "host" || pick(obj, "isHost", "is_host") === true,
   };
+}
+
+/** Merge extra participant rows (e.g. from /api/races/:id) into an Unlimited mapped list. */
+export function mergeUnlimitedLiveParticipants(
+  primary: UnlimitedLiveDetailMapped["participants"],
+  extra: unknown[],
+): UnlimitedLiveDetailMapped["participants"] {
+  const byUser = new Map<string, UnlimitedLiveDetailMapped["participants"][number]>();
+  primary.forEach((p, i) => {
+    if (p.userId) byUser.set(p.userId, p);
+    else byUser.set(p.id || `p:${i}`, p);
+  });
+  extra.forEach((row, i) => {
+    const mapped = mapParticipant(row, primary.length + i);
+    if (!mapped) return;
+    const prev = byUser.get(mapped.userId);
+    if (!prev) {
+      byUser.set(mapped.userId, mapped);
+      return;
+    }
+    byUser.set(mapped.userId, {
+      ...prev,
+      ...mapped,
+      currentSteps: Math.max(prev.currentSteps, mapped.currentSteps),
+      username: mapped.username !== "Walker" ? mapped.username : prev.username,
+      isHost: prev.isHost || mapped.isHost,
+    });
+  });
+  return [...byUser.values()];
 }
 
 /** Map GET /api/unlimited-challenges/:id → live-detail race + participants. */
@@ -310,11 +377,10 @@ export function mapUnlimitedDetailToLiveDetail(
   });
 
   const entryCents = waiting.race.entryAmountCents ?? 0;
-  const participantCount = Math.max(
-    waiting.race.currentPlayers,
-    waiting.participants.length,
-    1,
-  );
+  // Prefer explicit challenge.participantCount — never inflate from a duplicated list.
+  const participantCount = waiting.race.hasExplicitPlayerCount
+    ? Math.max(waiting.race.currentPlayers, 1)
+    : Math.max(waiting.race.currentPlayers, waiting.participants.length, 1);
   const apiPrize =
     asNumber(pick(challenge, "prizePoolCents", "prize_pool_cents", "currentPrizePoolCents")) ??
     0;
@@ -329,23 +395,25 @@ export function mapUnlimitedDetailToLiveDetail(
   const hostUserId =
     asString(pick(challenge, "hostUserId", "host_user_id")) ?? "";
 
-  const participants = waiting.participants
+  let participants = waiting.participants
     .map((p, i) => mapParticipant(p, i))
     .filter((p): p is NonNullable<typeof p> => p != null);
 
   // Ensure host appears if participants empty.
   if (participants.length === 0 && hostUserId) {
-    participants.push({
-      id: hostUserId,
-      userId: hostUserId,
-      currentSteps: 0,
-      status: "active",
-      rank: 1,
-      username: asString(pick(challenge, "hostUsername", "host_username")) ?? "Host",
-      countryFlag: null,
-      avatarColor: "#00E676",
-      isHost: true,
-    });
+    participants = [
+      {
+        id: hostUserId,
+        userId: hostUserId,
+        currentSteps: 0,
+        status: "active",
+        rank: 1,
+        username: asString(pick(challenge, "hostUsername", "host_username")) ?? "Host",
+        countryFlag: null,
+        avatarColor: "#00E676",
+        isHost: true,
+      },
+    ];
   }
 
   return {
@@ -358,7 +426,9 @@ export function mapUnlimitedDetailToLiveDetail(
       entryAmountCents: entryCents,
       entryAmountDollars: entryCents / 100,
       targetSteps: waiting.race.targetSteps,
-      currentPlayers: participantCount,
+      currentPlayers: waiting.race.hasExplicitPlayerCount
+        ? participantCount
+        : Math.max(participantCount, participants.length, 1),
       maxPlayers: null,
       startedAt: status === "waiting" ? null : startAt,
       completedAt: status === "completed" ? endAt : null,
@@ -375,6 +445,7 @@ export function mapUnlimitedDetailToLiveDetail(
         pick(challenge, "durationDays", "duration_days", "challengeDurationDays"),
       ),
       prizePoolCents: prizeCents,
+      hasExplicitPlayerCount: !!waiting.race.hasExplicitPlayerCount,
     },
     participants,
   };

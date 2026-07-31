@@ -2346,6 +2346,8 @@ function AvailableRoomsScreenContent() {
 
       setActiveRace(room.room_id, false);
       joinRace(room.entry_fee, room.max_players, false);
+      const isUnlimitedJoin =
+        room.challenge_type === "unlimited_goal" || room.capacity_mode === "unlimited";
       router.push({
         pathname: "/race/matchmaking",
         params: buildMatchmakingParams({
@@ -2353,6 +2355,11 @@ function AvailableRoomsScreenContent() {
           isHost: false,
           user,
           initialScheduledStartAt: room.scheduled_start_at,
+          initialCurrentPlayers: room.current_players ?? 1,
+          initialEntryType: isUnlimitedJoin ? "unlimited_goal" : room.challenge_type,
+          initialMaxPlayers: isUnlimitedJoin ? null : room.max_players,
+          initialTargetSteps: room.target_steps,
+          initialDailyGoalSteps: isUnlimitedJoin ? room.target_steps : undefined,
         }),
       });
     } catch {
@@ -2466,6 +2473,8 @@ function AvailableRoomsScreenContent() {
       });
       return;
     }
+    const isUnlimitedRoom =
+      room.challenge_type === "unlimited_goal" || room.capacity_mode === "unlimited";
     router.push({
       pathname: "/race/matchmaking",
       params: buildMatchmakingParams({
@@ -2473,6 +2482,11 @@ function AvailableRoomsScreenContent() {
         isHost: !!user?.id && user.id === room.host_user_id,
         user,
         initialScheduledStartAt: room.scheduled_start_at,
+        initialCurrentPlayers: room.registered_count ?? 1,
+        initialEntryType: isUnlimitedRoom ? "unlimited_goal" : room.challenge_type,
+        initialMaxPlayers: isUnlimitedRoom ? null : room.max_players,
+        initialTargetSteps: room.target_steps,
+        initialDailyGoalSteps: isUnlimitedRoom ? room.target_steps : undefined,
       }),
     });
   }, [user]);

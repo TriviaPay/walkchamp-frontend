@@ -97,8 +97,9 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
   const audioRouteRef           = useRef<AudioRoute>("speaker");
 
   useEffect(() => { micStateRef.current  = micState;   }, [micState]);
-  useEffect(() => { muteAllActiveRef.current = muteAllActive; }, [muteAllActive]);
-  useEffect(() => { unmuteExceptionsRef.current = unmuteExceptions; }, [unmuteExceptions]);
+  // Sync mute-all refs during render so first-tap unmute never reads a stale value.
+  muteAllActiveRef.current = muteAllActive;
+  unmuteExceptionsRef.current = unmuteExceptions;
   useEffect(() => { hasMicPassRef.current = hasMicPass; }, [hasMicPass]);
   useEffect(() => { audioRouteRef.current = audioRoute; }, [audioRoute]);
 
@@ -538,12 +539,13 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
     autoConnectAttemptedRef.current = false;
   }, [dummyAudioOnly]);
 
+  // Read state (not effect-synced refs) so Mute All → Unmute updates on the first tap/render.
   const isRemoteLocallyMuted = useCallback((userId: string) => {
-    if (muteAllActiveRef.current) {
-      return !unmuteExceptionsRef.current.includes(userId);
+    if (muteAllActive) {
+      return !unmuteExceptions.includes(userId);
     }
     return locallyMutedUserIds.includes(userId);
-  }, [locallyMutedUserIds]);
+  }, [muteAllActive, unmuteExceptions, locallyMutedUserIds]);
 
   /**
    * Individual local mute. Clears any Mute-All exception for this user.

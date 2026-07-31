@@ -45,7 +45,10 @@ import {
   formatPlayerCountDisplay,
   isUnlimitedGoalChallenge,
 } from "@/utils/unlimitedGoal";
-import { mapUnlimitedDetailToLiveDetail } from "@/utils/unlimitedLiveRace";
+import {
+  mapUnlimitedDetailToLiveDetail,
+  mergeUnlimitedLiveParticipants,
+} from "@/utils/unlimitedLiveRace";
 import { trackEvent } from "@/services/analytics";
 import { LiveTaglineRotator, type LiveTaglineAlt } from "@/components/LiveTaglineRotator";
 import { RaceClockInfoBar } from "@/components/race/RaceClockInfoBar";
@@ -194,7 +197,9 @@ interface RaceData {
   coinPrizePool?: number;
   coinWinnersPool?: number;
   winnerCount?: number;
-  prizePoolCents?: number; }
+  prizePoolCents?: number;
+  hasExplicitPlayerCount?: boolean;
+}
 
 interface RaceParticipant {
   id: string;
@@ -225,8 +230,36 @@ interface LiveRaceDetailCache {
 
 const liveRaceDetailCacheKey = (raceId: string) => `live-race-detail:v1:${raceId}`;
 
+async function fetchParticipantListFromPath(path: string): Promise<unknown[]> {
+  try {
+    const res = await authFetch(path);
+    if (!res.ok) return [];
+    const body = (await res.json().catch(() => null)) as Record<string, unknown> | unknown[] | null;
+    if (Array.isArray(body)) return body;
+    if (!body || typeof body !== "object") return [];
+    for (const key of [
+      "participants",
+      "registrations",
+      "leaderboard",
+      "standings",
+      "rankings",
+      "members",
+      "data",
+      "items",
+      "results",
+    ]) {
+      const v = (body as Record<string, unknown>)[key];
+      if (Array.isArray(v)) return v;
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
 async function fetchUnlimitedLiveDetailPayload(
   challengeId: string,
+  opts?: { currentUserId?: string | null; currentUsername?: string | null },
 ): Promise<LiveRaceDetailCache | null> {
   if (!isUnlimitedGoalFrontendEnabled()) return null;
   try {
@@ -234,9 +267,68 @@ async function fetchUnlimitedLiveDetailPayload(
     if (!res.ok) return null;
     const mapped = mapUnlimitedDetailToLiveDetail(await res.json().catch(() => null));
     if (!mapped) return null;
+
+    let participants = mapped.participants as RaceParticipant[];
+
+    // Only hit extra endpoints when the detail roster is clearly incomplete.
+    if (participants.length < Math.min(mapped.race.currentPlayers, 20)) {
+      const extras = await Promise.all([
+        fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/participants`),
+        fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/leaderboard`),
+        fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/registrations`),
+        (async () => {
+          try {
+            const raceRes = await authFetch(`/api/races/${challengeId}`);
+            if (!raceRes.ok) return [] as unknown[];
+            const data = (await raceRes.json().catch(() => null)) as {
+              participants?: unknown[];
+              registrations?: unknown[];
+              leaderboard?: unknown[];
+            } | null;
+            return [
+              ...(Array.isArray(data?.participants) ? data!.participants! : []),
+              ...(Array.isArray(data?.registrations) ? data!.registrations! : []),
+              ...(Array.isArray(data?.leaderboard) ? data!.leaderboard! : []),
+            ];
+          } catch {
+            return [] as unknown[];
+          }
+        })(),
+      ]);
+      participants = mergeUnlimitedLiveParticipants(
+        participants,
+        extras.flat(),
+      ) as RaceParticipant[];
+    }
+
+    // Guarantee the current viewer appears on Race Track / Live Board.
+    const meId = opts?.currentUserId;
+    if (meId && !participants.some((p) => p.userId === meId)) {
+      participants = [
+        {
+          id: meId,
+          userId: meId,
+          currentSteps: 0,
+          status: "active",
+          rank: participants.length + 1,
+          username: opts?.currentUsername?.trim() || "You",
+          countryFlag: null,
+          avatarColor: "#00E676",
+          isHost: mapped.race.creatorId === meId,
+        } as RaceParticipant,
+        ...participants,
+      ];
+    }
+
     return {
-      race: mapped.race as RaceData,
-      participants: mapped.participants as RaceParticipant[],
+      race: {
+        ...mapped.race,
+        // Keep backend participantCount authoritative when present (avoid 101→202).
+        currentPlayers: mapped.race.hasExplicitPlayerCount
+          ? Math.max(mapped.race.currentPlayers, 1)
+          : Math.max(mapped.race.currentPlayers, participants.length, 1),
+      } as RaceData,
+      participants,
     };
   } catch {
     return null;
@@ -1555,10 +1647,10 @@ function LiveRaceDetailScreenContent() {
     paramDummyRace,
     { unlimitedChallenge: unlimitedHint && isUnlimitedGoalFrontendEnabled() },
   );
+  // Prefer Unlimited detail whenever the feature is on — nav hints can be missing
+  // when opening Live Race from deep links / Live tab, and /api/races often has 0 rows.
   const preferUnlimitedDetail =
-    !useDummyRace &&
-    isUnlimitedGoalFrontendEnabled() &&
-    unlimitedHint;
+    !useDummyRace && isUnlimitedGoalFrontendEnabled();
   const initialCache =
     raceId && typeof raceId === "string"
       ? screenCache.getSync<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId))
@@ -2447,8 +2539,12 @@ function LiveRaceDetailScreenContent() {
     raceDetailFetchInFlightRef.current = true;
     try {
       let applied = false;
-      if (preferUnlimitedDetail) {
-        const unlimited = await fetchUnlimitedLiveDetailPayload(raceId);
+      // Always try Unlimited first when enabled — /api/races often has empty participants.
+      if (preferUnlimitedDetail || isUnlimitedGoalFrontendEnabled()) {
+        const unlimited = await fetchUnlimitedLiveDetailPayload(raceId, {
+          currentUserId: user?.id,
+          currentUsername: user?.username,
+        });
         if (unlimited) {
           markLiveRaceFetched(gateKey);
           setRace(unlimited.race);
@@ -2487,26 +2583,10 @@ function LiveRaceDetailScreenContent() {
           applied = true;
         }
       }
-      if (!applied && !preferUnlimitedDetail) {
-        const unlimited = await fetchUnlimitedLiveDetailPayload(raceId);
-        if (unlimited) {
-          markLiveRaceFetched(gateKey);
-          setRace(unlimited.race);
-          if (unlimited.race.status === "in_progress" || unlimited.race.status === "completed") {
-            raceAlreadyStartedRef.current = true;
-          }
-          setParticipants(unlimited.participants);
-          hydrateInProgressRace(unlimited.race, unlimited.participants);
-          if (isTrackLayoutId(unlimited.race.trackLayout)) {
-            setTrackLayoutId(unlimited.race.trackLayout);
-          }
-          void screenCache.set(liveRaceDetailCacheKey(raceId), unlimited);
-        }
-      }
     } finally {
       raceDetailFetchInFlightRef.current = false;
     }
-  }, [raceId, hydrateInProgressRace, preferUnlimitedDetail, useDummyRace]);
+  }, [raceId, hydrateInProgressRace, preferUnlimitedDetail, useDummyRace, user?.id, user?.username]);
 
   // Pause step reads when leaving the screen; catch up from device + server on return.
   const catchUpStepsRef = useRef(catchUpLiveRaceSteps);
@@ -2620,8 +2700,11 @@ function LiveRaceDetailScreenContent() {
     fetchInFlightRef.current = true;
     try {
       let racePayload: LiveRaceDetailCache | null = null;
-      if (preferUnlimitedDetail) {
-        racePayload = await fetchUnlimitedLiveDetailPayload(raceId);
+      if (preferUnlimitedDetail || isUnlimitedGoalFrontendEnabled()) {
+        racePayload = await fetchUnlimitedLiveDetailPayload(raceId, {
+          currentUserId: user?.id,
+          currentUsername: user?.username,
+        });
       }
       if (!racePayload) {
         const detailRes = await authFetch(`/api/races/${raceId}`);
@@ -2632,9 +2715,6 @@ function LiveRaceDetailScreenContent() {
             participants: Array.isArray(data.participants) ? data.participants : [],
           };
         }
-      }
-      if (!racePayload && !preferUnlimitedDetail) {
-        racePayload = await fetchUnlimitedLiveDetailPayload(raceId);
       }
 
       if (racePayload?.race) {
@@ -2691,7 +2771,7 @@ function LiveRaceDetailScreenContent() {
     } finally {
       fetchInFlightRef.current = false;
     }
-  }, [raceId, hydrateInProgressRace, preferUnlimitedDetail, useDummyRace]);
+  }, [raceId, hydrateInProgressRace, preferUnlimitedDetail, useDummyRace, user?.id, user?.username]);
 
   // Frontend-only dummy Unlimited Race session (Waiting Room → Live Race).
   useEffect(() => {

@@ -116,6 +116,7 @@ import {
   getWaitingRoomBanner,
   playersNeeded,
   resolveMinimumParticipants,
+  resolveRacePlayerCount,
   resolveRoomExpiresAt,
   resolveWaitingRoomMode,
 } from "@/utils/waitingRoomTiming";
@@ -187,6 +188,8 @@ type RaceHostProfile = {
 type RawParticipantRecord = Partial<RoomParticipant> & {
   user_id?: string;
   username?: string;
+  displayName?: string | null;
+  fullName?: string | null;
   country_flag?: string | null;
   avatar_color?: string | null;
   avatar_url?: string | null;
@@ -195,7 +198,7 @@ type RawParticipantRecord = Partial<RoomParticipant> & {
   joined_at?: string | null;
   registered_at?: string | null;
   created_at?: string | null;
-  user?: RaceHostProfile | null;
+  user?: (RaceHostProfile & { displayName?: string | null }) | null;
 };
 
 type WaitingRoomRacePayload = {
@@ -270,7 +273,14 @@ function coerceRoomParticipant(
   return {
     id: String(raw.id ?? `registration-${userIdStr}`),
     userId: userIdStr,
-    username: firstNonEmpty(raw.username, profile?.username) ?? "Player",
+    username:
+      firstNonEmpty(
+        raw.displayName,
+        raw.fullName,
+        raw.username,
+        profile?.displayName,
+        profile?.username,
+      ) ?? "Player",
     country: cleanString(raw.country) ?? cleanString(profile?.country),
     countryFlag:
       cleanString(raw.countryFlag) ??
@@ -1395,7 +1405,18 @@ function MatchmakingScreenContent() {
     const cached = readWaitingRoomCacheSync(backendRaceId);
     if (cached?.participants?.length) {
       setParticipants(cached.participants);
-      if (cached.liveRoom) setLiveRoom(cached.liveRoom);
+      if (cached.liveRoom) {
+        const seeded = Number(params.initialCurrentPlayers) || 0;
+        setLiveRoom({
+          ...cached.liveRoom,
+          // Never let a stale 1-player cache wipe a real list/nav count.
+          currentPlayers: Math.max(
+            cached.liveRoom.currentPlayers ?? 0,
+            seeded,
+            1,
+          ),
+        });
+      }
       return;
     }
 
@@ -1594,16 +1615,15 @@ function MatchmakingScreenContent() {
         return;
       }
       try {
-        const preferUnlimited =
-          isUnlimitedGoalRoom ||
-          params.initialCapacityMode === "unlimited" ||
-          params.initialEntryType === UNLIMITED_GOAL_CHALLENGE_TYPE;
-
         let racePayload: WaitingRoomRacePayload | null = null;
         let rawParticipantCollections: unknown[] = [];
         let usedUnlimitedEndpoint = false;
+        let unlimitedMappedCount: number | null = null;
+        let unlimitedHasExplicitCount = false;
 
-        if (preferUnlimited) {
+        // Always try Unlimited detail first. /api/races/:id often returns a
+        // shadow race with currentPlayers=1 while registrations live on Unlimited.
+        {
           const ulRes = await authFetch(`/api/unlimited-challenges/${backendRaceId}`);
           if (ulRes.ok) {
             const mapped = mapUnlimitedDetailToWaitingRoom(await ulRes.json());
@@ -1611,6 +1631,8 @@ function MatchmakingScreenContent() {
               usedUnlimitedEndpoint = true;
               racePayload = mapped.race as WaitingRoomRacePayload;
               rawParticipantCollections = [mapped.participants];
+              unlimitedMappedCount = mapped.race.currentPlayers;
+              unlimitedHasExplicitCount = !!mapped.race.hasExplicitPlayerCount;
             }
           }
         }
@@ -1628,17 +1650,6 @@ function MatchmakingScreenContent() {
               data.race?.registrations,
               data.race?.registeredParticipants,
             ];
-          } else if (!preferUnlimited) {
-            // Race id may actually be an Unlimited challenge.
-            const ulRes = await authFetch(`/api/unlimited-challenges/${backendRaceId}`);
-            if (ulRes.ok) {
-              const mapped = mapUnlimitedDetailToWaitingRoom(await ulRes.json());
-              if (mapped) {
-                usedUnlimitedEndpoint = true;
-                racePayload = mapped.race as WaitingRoomRacePayload;
-                rawParticipantCollections = [mapped.participants];
-              }
-            }
           }
         }
 
@@ -1677,6 +1688,40 @@ function MatchmakingScreenContent() {
           challengeDurationDays?: number;
         };
 
+        const unlimitedCapacity =
+          usedUnlimitedEndpoint ||
+          dataRace.capacityMode === "unlimited" ||
+          dataRace.challengeType === UNLIMITED_GOAL_CHALLENGE_TYPE ||
+          dataRace.entryType === UNLIMITED_GOAL_CHALLENGE_TYPE ||
+          dataRace.maxPlayers == null ||
+          (typeof dataRace.maxPlayers === "number" && dataRace.maxPlayers <= 0);
+
+        // Same min-player / canStart rules as Free / Coins / Cash — Unlimited
+        // only differs on capacity (no max), not on who may start the race.
+        const minParticipants = resolveMinimumParticipants(
+          dataRace.minimumParticipants ??
+            dataRace.minParticipants ??
+            dataRace.min_players ??
+            dataRace.minimum_participants,
+        );
+        // Prefer backend registered/current count — never derive from avatar-list length.
+        const seededNavCount = Number(params.initialCurrentPlayers) || 0;
+        const priorLiveCount = liveRoomRef.current?.currentPlayers ?? 0;
+        const resolvedFromPayload = Math.max(
+          resolveRacePlayerCount(dataRace as Record<string, unknown>),
+          typeof dataRace.currentPlayers === "number" ? dataRace.currentPlayers : 0,
+          unlimitedMappedCount ?? 0,
+          0,
+        );
+        // Preview-only Unlimited payloads often omit totals — keep nav/list seed then.
+        const resolvedPlayerCount = Math.max(
+          resolvedFromPayload,
+          unlimitedHasExplicitCount || resolvedFromPayload > 1
+            ? 0
+            : Math.max(seededNavCount, priorLiveCount),
+          1,
+        );
+
         if (usedUnlimitedEndpoint && dataRace.id) {
           void import("@/utils/hostedUnlimitedCache")
             .then(async ({ loadLeftUnlimitedChallengeIds, saveHostedUnlimitedChallenge }) => {
@@ -1692,7 +1737,7 @@ function MatchmakingScreenContent() {
                 title: `Unlimited · ${(dataRace.targetSteps ?? 0).toLocaleString()} steps/day`,
                 target_steps: dataRace.targetSteps ?? 0,
                 max_players: 0,
-                registered_count: dataRace.currentPlayers ?? 1,
+                registered_count: resolvedPlayerCount,
                 scheduled_start_at: dataRace.scheduledStartAt ?? dataRace.scheduled_start_at ?? null,
                 challenge_duration_days: dataRace.challengeDurationDays ?? 0,
                 challenge_end_at: dataRace.challengeEndAt ?? dataRace.challenge_end_at ?? null,
@@ -1717,25 +1762,8 @@ function MatchmakingScreenContent() {
             })
             .catch(() => {});
         }
-
-        const unlimitedCapacity =
-          usedUnlimitedEndpoint ||
-          dataRace.capacityMode === "unlimited" ||
-          dataRace.challengeType === UNLIMITED_GOAL_CHALLENGE_TYPE ||
-          dataRace.entryType === UNLIMITED_GOAL_CHALLENGE_TYPE ||
-          dataRace.maxPlayers == null ||
-          (typeof dataRace.maxPlayers === "number" && dataRace.maxPlayers <= 0);
-
-        // Same min-player / canStart rules as Free / Coins / Cash — Unlimited
-        // only differs on capacity (no max), not on who may start the race.
-        const minParticipants = resolveMinimumParticipants(
-          dataRace.minimumParticipants ??
-            dataRace.minParticipants ??
-            dataRace.min_players ??
-            dataRace.minimum_participants,
-        );
         const nextLiveRoom = {
-          currentPlayers: dataRace.currentPlayers ?? 1,
+          currentPlayers: resolvedPlayerCount,
           maxPlayers: unlimitedCapacity ? 0 : (dataRace.maxPlayers ?? raceMaxPlayers),
           status: dataRace.status,
           targetSteps:
@@ -1752,7 +1780,7 @@ function MatchmakingScreenContent() {
           canStart:
             typeof dataRace.canStart === "boolean"
               ? dataRace.canStart
-              : (dataRace.currentPlayers ?? 1) >= minParticipants,
+              : resolvedPlayerCount >= minParticipants,
           roomExpiresAt:
             dataRace.roomExpiresAt ??
             dataRace.room_expires_at ??
@@ -1846,7 +1874,7 @@ function MatchmakingScreenContent() {
           (effectiveLiveStatus === "in_progress" || dataRace.status === "in_progress") &&
           startPhaseRef.current === "idle"
         ) {
-          beginCountdown(3, dataRace.currentPlayers ?? 2);
+          beginCountdown(3, resolvedPlayerCount);
         }
       } catch {
         setParticipantsLoading(false);
@@ -2222,11 +2250,12 @@ function MatchmakingScreenContent() {
   ]);
 
   // ── Derived values ────────────────────────────────────────────────────────
-  const realPlayerCount = Math.max(
-    liveRoom?.currentPlayers ?? 0,
-    participants.length,
-    playersJoined,
-  );
+  // Prefer backend currentPlayers (challenge.participantCount) over list length.
+  const backendPlayerCount = liveRoom?.currentPlayers ?? 0;
+  const realPlayerCount =
+    backendPlayerCount > 0
+      ? Math.max(backendPlayerCount, playersJoined)
+      : Math.max(participants.length, playersJoined, 1);
   const realMaxPlayers = liveRoom?.maxPlayers ?? raceMaxPlayers;
   const waitingRoomMode = resolveWaitingRoomMode(scheduledStartAt, nowMs);
   const minimumParticipants = resolveMinimumParticipants(liveRoom?.minimumParticipants);
@@ -2585,8 +2614,8 @@ function MatchmakingScreenContent() {
               {participantsLoading
                 ? "—"
                 : isUnlimitedCapacity
-                  ? `${occupiedPlayerCount} joined`
-                  : `${occupiedPlayerCount} / ${realMaxPlayers}`}
+                  ? `${realPlayerCount.toLocaleString()} joined`
+                  : `${realPlayerCount} / ${realMaxPlayers}`}
             </Text>
           </View>
 
