@@ -117,7 +117,10 @@ import { PublicProfileModal } from "@/components/PublicProfileModal";
 import type { PublicProfileInitialData } from "@/components/PublicProfileModal";
 import { useTopBanner } from "@/context/TopBannerContext";
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
-import { applyParticipantProgressEvent } from "@/services/liveRaceParticipantState";
+import {
+  applyParticipantProgressEvent,
+  mergeParticipantsPreservingSteps,
+} from "@/services/liveRaceParticipantState";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import {
   prefetchTrackTheme,
@@ -270,12 +273,22 @@ async function fetchUnlimitedLiveDetailPayload(
 
     let participants = mapped.participants as RaceParticipant[];
 
-    // Only hit extra endpoints when the detail roster is clearly incomplete.
-    if (participants.length < Math.min(mapped.race.currentPlayers, 20)) {
+    // Always enrich live steps the same way normal races do:
+    // Unlimited detail often has the full roster with currentSteps=0 until we
+    // merge leaderboard / /api/races/:id progress rows.
+    const rosterIncomplete =
+      participants.length < Math.min(mapped.race.currentPlayers, 20);
+    const needsLiveSteps =
+      mapped.race.status === "in_progress" ||
+      mapped.race.status === "active" ||
+      mapped.race.status === "live" ||
+      participants.every((p) => (p.currentSteps ?? 0) <= 0);
+    if (rosterIncomplete || needsLiveSteps) {
       const extras = await Promise.all([
         fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/participants`),
         fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/leaderboard`),
         fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/registrations`),
+        fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/progress`),
         (async () => {
           try {
             const raceRes = await authFetch(`/api/races/${challengeId}`);
@@ -2455,8 +2468,9 @@ function LiveRaceDetailScreenContent() {
         `backendHydrated=spectator raceId=${raceId} participantNotifications=false`,
       );
       for (const p of parts) {
-        setConfirmedSteps(p.userId, p.currentSteps, { instant: true });
-        prevStepsMapRef.current[p.userId] = p.currentSteps;
+        const steps = Math.max(prevStepsMapRef.current[p.userId] ?? 0, p.currentSteps ?? 0);
+        setConfirmedSteps(p.userId, steps, { instant: true });
+        prevStepsMapRef.current[p.userId] = steps;
       }
       return;
     }
@@ -2513,8 +2527,10 @@ function LiveRaceDetailScreenContent() {
         p.userId === user.id ||
         (!!user.username && p.username.toLowerCase() === user.username.toLowerCase());
       if (isMe) continue;
-      setConfirmedSteps(p.userId, p.currentSteps, { instant: true });
-      prevStepsMapRef.current[p.userId] = p.currentSteps;
+      // Never reset remote walkers to 0 when Unlimited detail omits live steps.
+      const steps = Math.max(prevStepsMapRef.current[p.userId] ?? 0, p.currentSteps ?? 0);
+      setConfirmedSteps(p.userId, steps, { instant: true });
+      prevStepsMapRef.current[p.userId] = steps;
     }
   }, [raceId, user?.id, user?.username, setActiveRace, setRaceTargetSteps, resumeLiveRace, catchUpLiveRaceSteps, setConfirmedSteps, stopRaceStepTracking]);
 
@@ -2551,7 +2567,12 @@ function LiveRaceDetailScreenContent() {
           if (unlimited.race.status === "in_progress" || unlimited.race.status === "completed") {
             raceAlreadyStartedRef.current = true;
           }
-          setParticipants(unlimited.participants);
+          const raceDone = unlimited.race.status === "completed";
+          setParticipants((prev) =>
+            mergeParticipantsPreservingSteps(prev, unlimited.participants, {
+              raceCompleted: raceDone,
+            }),
+          );
           hydrateInProgressRace(unlimited.race, unlimited.participants);
           if (isTrackLayoutId(unlimited.race.trackLayout)) {
             setTrackLayoutId(unlimited.race.trackLayout);
@@ -2569,15 +2590,19 @@ function LiveRaceDetailScreenContent() {
           if (data.race?.status === "in_progress" || data.race?.status === "completed") {
             raceAlreadyStartedRef.current = true;
           }
-          setParticipants(Array.isArray(data.participants) ? data.participants : []);
-          hydrateInProgressRace(data.race, Array.isArray(data.participants) ? data.participants : []);
+          const nextParts = Array.isArray(data.participants) ? data.participants : [];
+          const raceDone = data.race?.status === "completed";
+          setParticipants((prev) =>
+            mergeParticipantsPreservingSteps(prev, nextParts, { raceCompleted: raceDone }),
+          );
+          hydrateInProgressRace(data.race, nextParts);
           if (isTrackLayoutId(data.race?.trackLayout)) {
             setTrackLayoutId(data.race.trackLayout);
           }
           if (data.race) {
             void screenCache.set(liveRaceDetailCacheKey(raceId), {
               race: data.race,
-              participants: Array.isArray(data.participants) ? data.participants : [],
+              participants: nextParts,
             });
           }
           applied = true;
@@ -2724,7 +2749,10 @@ function LiveRaceDetailScreenContent() {
         if (racePayload.race.status === "in_progress" || racePayload.race.status === "completed") {
           raceAlreadyStartedRef.current = true;
         }
-        setParticipants(parts);
+        const raceDone = racePayload.race.status === "completed";
+        setParticipants((prev) =>
+          mergeParticipantsPreservingSteps(prev, parts, { raceCompleted: raceDone }),
+        );
         hydrateInProgressRace(racePayload.race, parts);
         if (racePayload.race.status === "completed") {
           const me = parts.find(

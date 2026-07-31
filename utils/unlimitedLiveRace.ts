@@ -269,27 +269,44 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
   const statusRaw = asString(
     pick(obj, "status", "participantStatus", "participant_status", "registrationStatus"),
   );
+  const progress = asRecord(pick(obj, "progress", "stats", "liveProgress", "live_progress")) ?? {};
+  const currentSteps = Math.max(
+    asNumber(
+      pick(
+        obj,
+        "currentSteps",
+        "current_steps",
+        "steps",
+        "todaySteps",
+        "today_steps",
+        "raceSteps",
+        "race_steps",
+        "stepCount",
+        "step_count",
+        "totalChallengeSteps",
+        "total_challenge_steps",
+      ),
+    ) ?? 0,
+    asNumber(
+      pick(
+        progress,
+        "currentSteps",
+        "current_steps",
+        "steps",
+        "raceSteps",
+        "race_steps",
+        "stepCount",
+        "step_count",
+      ),
+    ) ?? 0,
+  );
   return {
     id:
       asString(pick(obj, "participantId", "participant_id", "registrationId", "registration_id")) ??
       asString(pick(obj, "id")) ??
       `${userId}:${index}`,
     userId,
-    currentSteps:
-      asNumber(
-        pick(
-          obj,
-          "currentSteps",
-          "current_steps",
-          "steps",
-          "todaySteps",
-          "today_steps",
-          "raceSteps",
-          "race_steps",
-          "stepCount",
-          "step_count",
-        ),
-      ) ?? 0,
+    currentSteps,
     // Default active so preview rows without status aren't filtered out of Live Race.
     status: statusRaw ?? "active",
     rank: asNumber(pick(obj, "rank", "displayRank", "display_rank", "position")),
