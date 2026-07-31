@@ -287,13 +287,6 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
     asString(pickRaw(host, "username", "name", "displayName")) ??
     "Host";
 
-  const role = asString(
-    pickRaw(obj, "currentUserRole", "current_user_role", "role", "membershipRole"),
-  )?.toLowerCase();
-  const isHostFlag =
-    asBool(pickRaw(obj, "isHost", "is_host", "currentUserIsHost")) ??
-    role === "host";
-
   const memberExplicit = asBool(
     pickRaw(
       obj,
@@ -304,7 +297,27 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
       "joined",
     ),
   );
-  const member = memberExplicit === true || !!isHostFlag;
+  const participationStatus = asString(
+    pickRaw(
+      obj,
+      "participationStatus",
+      "participation_status",
+      "currentUserParticipantStatus",
+      "current_user_participant_status",
+      "memberStatus",
+      "member_status",
+    ),
+  )?.toLowerCase();
+  const hasLeft =
+    participationStatus === "left" ||
+    participationStatus === "withdrawn" ||
+    participationStatus === "cancelled" ||
+    participationStatus === "canceled" ||
+    participationStatus === "refunded";
+
+  // Membership must be explicit (or left). Do NOT infer from isHost / hostUserId —
+  // creator id remains after Leave and would keep Next Race cards stuck.
+  const member = hasLeft ? false : memberExplicit === true;
 
   const eligible =
     asBool(

@@ -91,4 +91,6 @@ export const STORAGE_KEYS = {
   PAYMENT_RESULT: "walkchamp_payment_result_v1",
   /** Unlimited challenges hosted by this device user (Next Race / Available seed). */
   HOSTED_UNLIMITED_CHALLENGES: "walkchamp_hosted_unlimited_challenges_v1",
+  /** Unlimited challenge IDs the user left — suppress Next Race host heuristic. */
+  LEFT_UNLIMITED_CHALLENGES: "walkchamp_left_unlimited_challenges_v1",
 };

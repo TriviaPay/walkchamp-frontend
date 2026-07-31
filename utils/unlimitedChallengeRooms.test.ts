@@ -81,8 +81,51 @@ const utcRow = normalizeUnlimitedChallengeToUpcomingRoom({
 });
 assert.ok(utcRow);
 assert.equal(utcRow!.scheduled_start_at, "2026-08-01T05:00:00.000Z");
-assert.equal(utcRow!.current_user_registered, true);
+// isHost alone must NOT imply registered (Leave keeps creator as host).
+assert.equal(utcRow!.current_user_registered, false);
 assert.equal(utcRow!.host_user_id, "host-2");
+
+// After Leave: explicit registered=false / left status stays unregistered.
+const leftRoom = normalizeUnlimitedChallengeToUpcomingRoom({
+  id: "ul-left",
+  visibility: "public",
+  entryFeeCents: 1000,
+  dailyGoalSteps: 100,
+  durationDays: 7,
+  startAtUtc: "2026-08-02T05:00:00.000Z",
+  hostUserId: "host-left",
+  isHost: true,
+  currentUserRegistered: false,
+});
+assert.ok(leftRoom);
+assert.equal(leftRoom!.current_user_registered, false);
+
+const leftStatus = normalizeUnlimitedChallengeToUpcomingRoom({
+  id: "ul-left-status",
+  visibility: "public",
+  entryFeeCents: 1000,
+  dailyGoalSteps: 100,
+  durationDays: 7,
+  startAtUtc: "2026-08-02T05:00:00.000Z",
+  hostUserId: "host-left",
+  isHost: true,
+  participationStatus: "left",
+});
+assert.ok(leftStatus);
+assert.equal(leftStatus!.current_user_registered, false);
+
+const stillJoined = normalizeUnlimitedChallengeToUpcomingRoom({
+  id: "ul-joined",
+  visibility: "public",
+  entryFeeCents: 3000,
+  dailyGoalSteps: 100,
+  durationDays: 7,
+  startAtUtc: "2026-08-02T05:00:00.000Z",
+  hostUserId: "host-2",
+  currentUserRegistered: true,
+});
+assert.ok(stillJoined);
+assert.equal(stillJoined!.current_user_registered, true);
 
 // Nested data.unlimitedChallenges envelope
 const nested = extractUnlimitedChallengeRows({

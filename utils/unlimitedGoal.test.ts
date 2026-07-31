@@ -54,6 +54,7 @@ assert.equal(preview.totalChargeCents, 10_050);
 
 assert.equal(isValidUnlimitedDailyGoalSteps(10_000), true);
 assert.equal(isValidUnlimitedDailyGoalSteps(UNLIMITED_GOAL_DEFAULT_DAILY_STEPS), true);
+assert.equal(isValidUnlimitedDailyGoalSteps(100), true); // testing-only option
 assert.equal(isValidUnlimitedDailyGoalSteps(2999), false);
 assert.equal(isValidUnlimitedDailyGoalSteps(3100), false);
 assert.equal(isValidUnlimitedDailyGoalSteps(20_000), true);
@@ -81,8 +82,10 @@ assert.deepEqual(
 );
 
 const daily = getUnlimitedDailyGoalStepOptions();
-assert.equal(daily[0], 3000);
+assert.equal(daily[0], 100); // testing-only option first
+assert.equal(daily[1], 3000);
 assert.equal(daily.at(-1), 20000);
 assert.equal(daily.includes(10_000), true);
+assert.equal(daily.includes(100), true);
 
 console.log("unlimitedGoal.test.ts: ok");

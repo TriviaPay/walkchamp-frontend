@@ -1305,8 +1305,30 @@ function MatchmakingScreenContent() {
       AppAlert.alert("Left Challenge", formatCashLeaveSuccessMessage(body ?? { success: true }));
     }
 
+    // Drop local Next Race / hosted Unlimited seed so left rooms don't linger.
+    if (backendRaceId) {
+      if (isUnlimitedGoalRoom) {
+        void import("@/utils/hostedUnlimitedCache")
+          .then(({ removeHostedUnlimitedChallenge }) =>
+            removeHostedUnlimitedChallenge(backendRaceId),
+          )
+          .catch(() => {});
+      }
+      void import("@/utils/challengeLocalEvents")
+        .then(({ emitChallengeLeft }) => emitChallengeLeft(backendRaceId))
+        .catch(() => {});
+    }
+
     navigateToWalkInstant();
-  }, [leaving, runRoomExitApi, navigateToWalkInstant, isUsdCashPaidRoom, refreshWallet]);
+  }, [
+    leaving,
+    runRoomExitApi,
+    navigateToWalkInstant,
+    isUsdCashPaidRoom,
+    refreshWallet,
+    backendRaceId,
+    isUnlimitedGoalRoom,
+  ]);
 
   const executeHostCancel = useCallback(async () => {
     if (leaving || exitingRef.current) return;
@@ -1656,39 +1678,44 @@ function MatchmakingScreenContent() {
         };
 
         if (usedUnlimitedEndpoint && dataRace.id) {
-          void import("@/utils/hostedUnlimitedCache").then(({ saveHostedUnlimitedChallenge }) =>
-            saveHostedUnlimitedChallenge({
-              room_id: dataRace.id!,
-              status: dataRace.status ?? "waiting",
-              challenge_type: UNLIMITED_GOAL_CHALLENGE_TYPE,
-              entry_fee: (dataRace.entryAmountCents ?? 0) / 100,
-              coin_entry_amount: 0,
-              title: `Unlimited · ${(dataRace.targetSteps ?? 0).toLocaleString()} steps/day`,
-              target_steps: dataRace.targetSteps ?? 0,
-              max_players: 0,
-              registered_count: dataRace.currentPlayers ?? 1,
-              scheduled_start_at: dataRace.scheduledStartAt ?? dataRace.scheduled_start_at ?? null,
-              challenge_duration_days: dataRace.challengeDurationDays ?? 0,
-              challenge_end_at: dataRace.challengeEndAt ?? dataRace.challenge_end_at ?? null,
-              selected_track_theme_id: "bg",
-              theme_name: "Unlimited",
-              is_private: !!dataRace.isPrivate,
-              requires_code: !!dataRace.isPrivate,
-              host_user_id:
-                dataRace.hostUserId ??
-                dataRace.host_user_id ??
-                dataRace.creatorId ??
-                user?.id ??
-                "",
-              host_username: user?.username ?? "You",
-              host_avatar_color: "#00E676",
-              host_avatar_url: null,
-              host_country_flag: null,
-              current_user_registered: true,
-              eligible_to_register: false,
-              capacity_mode: "unlimited",
-            }),
-          ).catch(() => {});
+          void import("@/utils/hostedUnlimitedCache")
+            .then(async ({ loadLeftUnlimitedChallengeIds, saveHostedUnlimitedChallenge }) => {
+              const leftIds = await loadLeftUnlimitedChallengeIds();
+              // Don't resurrect a room the viewer already left.
+              if (leftIds.has(dataRace.id!)) return;
+              await saveHostedUnlimitedChallenge({
+                room_id: dataRace.id!,
+                status: dataRace.status ?? "waiting",
+                challenge_type: UNLIMITED_GOAL_CHALLENGE_TYPE,
+                entry_fee: (dataRace.entryAmountCents ?? 0) / 100,
+                coin_entry_amount: 0,
+                title: `Unlimited · ${(dataRace.targetSteps ?? 0).toLocaleString()} steps/day`,
+                target_steps: dataRace.targetSteps ?? 0,
+                max_players: 0,
+                registered_count: dataRace.currentPlayers ?? 1,
+                scheduled_start_at: dataRace.scheduledStartAt ?? dataRace.scheduled_start_at ?? null,
+                challenge_duration_days: dataRace.challengeDurationDays ?? 0,
+                challenge_end_at: dataRace.challengeEndAt ?? dataRace.challenge_end_at ?? null,
+                selected_track_theme_id: "bg",
+                theme_name: "Unlimited",
+                is_private: !!dataRace.isPrivate,
+                requires_code: !!dataRace.isPrivate,
+                host_user_id:
+                  dataRace.hostUserId ??
+                  dataRace.host_user_id ??
+                  dataRace.creatorId ??
+                  user?.id ??
+                  "",
+                host_username: user?.username ?? "You",
+                host_avatar_color: "#00E676",
+                host_avatar_url: null,
+                host_country_flag: null,
+                current_user_registered: true,
+                eligible_to_register: false,
+                capacity_mode: "unlimited",
+              });
+            })
+            .catch(() => {});
         }
 
         const unlimitedCapacity =

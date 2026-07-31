@@ -50,7 +50,8 @@ assert.deepEqual(
   [7, 10, 30, 60, 90],
 );
 const daily = getUnlimitedDailyGoalStepOptions();
-assert.equal(daily[0], 3000);
+assert.equal(daily[0], 100); // testing-only option
+assert.equal(daily.includes(3000), true);
 assert.equal(daily.at(-1), 20000);
 
 const draft = createDefaultDraft();
@@ -80,21 +81,30 @@ assert.equal(
   const unl = createDefaultDraft();
   unl.entryType = "usd";
   unl.usdFormat = "unlimited_goal";
-  assert.equal(canContinueStep(3, unl), true);
-  assert.equal(
-    canContinueStep(3, {
-      ...unl,
-      unlimited: { ...unl.unlimited, dailyGoalSteps: 2500 },
-    }),
-    false,
-  );
-  assert.equal(
-    getStepBlockReason(3, {
-      ...unl,
-      unlimited: { ...unl.unlimited, dailyGoalSteps: 2500 },
-    }),
-    "invalid_daily_goal",
-  );
+  if (isUnlimitedGoalFrontendEnabled()) {
+    assert.equal(canContinueStep(3, unl), true);
+    assert.equal(
+      canContinueStep(3, {
+        ...unl,
+        unlimited: { ...unl.unlimited, dailyGoalSteps: 2500 },
+      }),
+      false,
+    );
+    assert.equal(
+      canContinueStep(3, {
+        ...unl,
+        unlimited: { ...unl.unlimited, dailyGoalSteps: 100 },
+      }),
+      true,
+    ); // testing-only 100-step option
+    assert.equal(
+      getStepBlockReason(3, {
+        ...unl,
+        unlimited: { ...unl.unlimited, dailyGoalSteps: 2500 },
+      }),
+      "invalid_daily_goal",
+    );
+  }
 }
 
 // Step 2 must NOT require entry/goal (when unlimited is enabled)

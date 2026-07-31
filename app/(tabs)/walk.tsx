@@ -34,6 +34,7 @@ import {
   ActivityIndicator,
   Animated,
   AppState,
+  DeviceEventEmitter,
   Easing,
   FlatList,
   Image,
@@ -98,6 +99,7 @@ import { fetchAvailableChallengeCount } from "@/services/trendingChallengesApi";
 import { fetchAvailableUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
 import { mergeUpcomingRoomsById } from "@/utils/unlimitedChallengeRooms";
 import { saveHostedUnlimitedChallenge } from "@/utils/hostedUnlimitedCache";
+import { CHALLENGE_LEFT_EVENT } from "@/utils/challengeLocalEvents";
 import { PremiumStepSlider } from "@/components/PremiumStepSlider";
 import {
   USD_FIXED_ENTRY_DOLLARS,
@@ -2354,11 +2356,13 @@ function WalkScreenContent() {
 
   const fetchRegisteredUpcomingRooms = useCallback(async () => {
     try {
-      const [res, unlimited] = await Promise.all([
+      const [{ loadLeftUnlimitedChallengeIds }, res, unlimited] = await Promise.all([
+        import("@/utils/hostedUnlimitedCache"),
         authFetch("/api/rooms/available?tab=upcoming"),
         fetchAvailableUnlimitedChallenges({ viewerUserId: user?.id }),
       ]);
       if (!res.ok && unlimited.length === 0) return;
+      const leftIds = await loadLeftUnlimitedChallengeIds();
       const data = res.ok
         ? ((await res.json()) as { rooms?: WalkUpcomingRoom[] })
         : { rooms: [] as WalkUpcomingRoom[] };
@@ -2374,14 +2378,21 @@ function WalkScreenContent() {
         scheduled_start_at: u.scheduled_start_at,
         target_steps: u.target_steps,
         host_user_id: u.host_user_id,
-        current_user_registered:
-          u.current_user_registered || (!!uid && u.host_user_id === uid),
+        // Membership only — host id alone is not enough after Leave.
+        current_user_registered: !!u.current_user_registered && !leftIds.has(u.room_id),
         status: u.status,
       }));
       const merged = mergeUpcomingRoomsById(data.rooms ?? [], unlimitedAsWalk);
       const nextRaceRooms = merged.filter((r) => {
-        const isMine =
-          r.current_user_registered || (!!uid && r.host_user_id === uid);
+        if (leftIds.has(r.room_id)) return false;
+        const isUnlimited = isUnlimitedGoalChallenge({
+          challengeType: r.challenge_type,
+          maxPlayers: r.max_players,
+        });
+        // Unlimited: only active registration. Fixed/others: host still counts.
+        const isMine = isUnlimited
+          ? !!r.current_user_registered
+          : r.current_user_registered || (!!uid && r.host_user_id === uid);
         if (!isMine || !r.scheduled_start_at) return false;
         const status = (r.status ?? "").toLowerCase();
         if (
@@ -2792,6 +2803,32 @@ function WalkScreenContent() {
     /** Modal closed — keep seed for Next Race until upcoming list includes it. */
     modalDismissed?: boolean;
   } | null>(null);
+
+  // Waiting Room Leave → drop from Next Race immediately (incl. local create seed).
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(
+      CHALLENGE_LEFT_EVENT,
+      (payload: { raceId?: string }) => {
+        const raceId = payload?.raceId;
+        if (!raceId) return;
+        setRegisteredUpcomingRooms((prev) => prev.filter((r) => r.room_id !== raceId));
+        setScheduledRoomResult((prev) => (prev?.raceId === raceId ? null : prev));
+        setChallengeStatuses((prev) => {
+          let changed = false;
+          const next: Record<string, ChallengeStatus> = {};
+          for (const [key, status] of Object.entries(prev)) {
+            if (status?.raceId === raceId) {
+              changed = true;
+              continue;
+            }
+            next[key] = status;
+          }
+          return changed ? next : prev;
+        });
+      },
+    );
+    return () => sub.remove();
+  }, []);
 
   // Drop local Next Race seed once Available/Unlimited upcoming list has the room.
   useEffect(() => {
@@ -3832,7 +3869,8 @@ function WalkScreenContent() {
           meta.targetOrDailySteps;
 
         if (meta.isUnlimited) {
-          void saveHostedUnlimitedChallenge({
+          void saveHostedUnlimitedChallenge(
+            {
             room_id: createdRaceId,
             status: unlimitedChallenge?.status ?? "scheduled",
             challenge_type: UNLIMITED_GOAL_CHALLENGE_TYPE,
@@ -3865,7 +3903,9 @@ function WalkScreenContent() {
               typeof unlimitedChallenge?.prizePoolCents === "number"
                 ? unlimitedChallenge.prizePoolCents / 100
                 : entryAmountCents / 100,
-          });
+            },
+            { resumeAfterLeave: true },
+          );
         }
 
         setScheduledRoomResult({

@@ -25,6 +25,8 @@ export const UNLIMITED_GOAL_DEFAULT_DAILY_STEPS = 10_000;
 export const UNLIMITED_GOAL_DAILY_STEPS_MIN = 3_000;
 export const UNLIMITED_GOAL_DAILY_STEPS_MAX = 20_000;
 export const UNLIMITED_GOAL_DAILY_STEPS_INCREMENT = 500;
+/** Testing-only daily goal option (not part of the production 3k–20k range). */
+export const UNLIMITED_GOAL_DAILY_STEPS_TEST_OPTIONS = [100] as const;
 
 /**
  * Discrete whole-dollar entry amounts for Unlimited create/join.
@@ -122,8 +124,11 @@ export function isValidUnlimitedEntryFeeCents(cents: number): boolean {
 }
 
 export function isValidUnlimitedDailyGoalSteps(steps: number): boolean {
+  if (!Number.isInteger(steps)) return false;
+  if ((UNLIMITED_GOAL_DAILY_STEPS_TEST_OPTIONS as readonly number[]).includes(steps)) {
+    return true;
+  }
   return (
-    Number.isInteger(steps) &&
     steps >= UNLIMITED_GOAL_DAILY_STEPS_MIN &&
     steps <= UNLIMITED_GOAL_DAILY_STEPS_MAX &&
     (steps - UNLIMITED_GOAL_DAILY_STEPS_MIN) % UNLIMITED_GOAL_DAILY_STEPS_INCREMENT === 0
@@ -151,7 +156,7 @@ export function previewUnlimitedTotalChargeCents(entryFeeCents: number): {
 }
 
 export function getUnlimitedDailyGoalStepOptions(): number[] {
-  const options: number[] = [];
+  const options: number[] = [...UNLIMITED_GOAL_DAILY_STEPS_TEST_OPTIONS];
   for (
     let s = UNLIMITED_GOAL_DAILY_STEPS_MIN;
     s <= UNLIMITED_GOAL_DAILY_STEPS_MAX;

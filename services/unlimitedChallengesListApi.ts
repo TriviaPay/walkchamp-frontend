@@ -7,6 +7,7 @@ import { isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
 import { logger } from "@/utils/logger";
 import {
   loadHostedUnlimitedChallenges,
+  loadLeftUnlimitedChallengeIds,
   saveHostedUnlimitedChallenge,
 } from "@/utils/hostedUnlimitedCache";
 import {
@@ -102,6 +103,137 @@ async function fetchUnlimitedDetailRoom(id: string): Promise<UnlimitedUpcomingRo
   }
 }
 
+function participantUserIdsFromDetailPayload(
+  payload: unknown,
+): { found: boolean; ids: string[] } {
+  if (!payload || typeof payload !== "object") return { found: false, ids: [] };
+  const root = payload as Record<string, unknown>;
+  const challenge =
+    root.challenge && typeof root.challenge === "object"
+      ? (root.challenge as Record<string, unknown>)
+      : root;
+  const collections = [
+    root.participants,
+    root.registrations,
+    root.members,
+    challenge.participants,
+    challenge.registrations,
+    challenge.members,
+  ];
+  let found = false;
+  const ids: string[] = [];
+  for (const c of collections) {
+    if (!Array.isArray(c)) continue;
+    found = true;
+    for (const row of c) {
+      if (!row || typeof row !== "object") continue;
+      const r = row as Record<string, unknown>;
+      const user = r.user && typeof r.user === "object" ? (r.user as Record<string, unknown>) : null;
+      const id =
+        (typeof r.userId === "string" && r.userId) ||
+        (typeof r.user_id === "string" && r.user_id) ||
+        (typeof user?.id === "string" && user.id) ||
+        (typeof user?.userId === "string" && user.userId) ||
+        null;
+      if (id) ids.push(id);
+    }
+  }
+  return { found, ids };
+}
+
+/**
+ * Drop hosted Next Race seeds when detail proves the viewer is no longer a member.
+ * Leave-before-leftIds bugs left stale seeds that host heuristics kept resurrecting.
+ */
+async function reconcileHostedMembership(opts: {
+  hosted: UnlimitedUpcomingRoom[];
+  viewerUserId?: string | null;
+}): Promise<UnlimitedUpcomingRoom[]> {
+  const viewerId = opts.viewerUserId;
+  if (!viewerId || opts.hosted.length === 0) return opts.hosted;
+
+  const { removeHostedUnlimitedChallenge } = await import("@/utils/hostedUnlimitedCache");
+  const kept: UnlimitedUpcomingRoom[] = [];
+
+  await Promise.all(
+    opts.hosted.map(async (seed) => {
+      try {
+        const res = await authFetch(`/api/unlimited-challenges/${seed.room_id}`);
+        if (!res.ok) {
+          kept.push(seed);
+          return;
+        }
+        const data: unknown = await res.json().catch(() => null);
+        const rawRow = (extractUnlimitedChallengeRows(data)[0] ?? data) as
+          | Record<string, unknown>
+          | null;
+        const normalized = normalizeUnlimitedChallengeToUpcomingRoom(rawRow);
+        const explicitReg =
+          rawRow && typeof rawRow === "object"
+            ? (() => {
+                const v =
+                  rawRow.currentUserRegistered ??
+                  rawRow.current_user_registered ??
+                  rawRow.isMember ??
+                  rawRow.is_member ??
+                  rawRow.joined;
+                return typeof v === "boolean" ? v : null;
+              })()
+            : null;
+        const partStatus = String(
+          (rawRow as Record<string, unknown> | null)?.participationStatus ??
+            (rawRow as Record<string, unknown> | null)?.participation_status ??
+            "",
+        ).toLowerCase();
+        const rawLeft =
+          partStatus === "left" ||
+          partStatus === "withdrawn" ||
+          partStatus === "cancelled" ||
+          partStatus === "canceled" ||
+          partStatus === "refunded";
+
+        if (explicitReg === true && !rawLeft) {
+          kept.push({
+            ...seed,
+            ...(normalized ?? {}),
+            room_id: seed.room_id,
+            current_user_registered: true,
+          } as UnlimitedUpcomingRoom);
+          return;
+        }
+        if (explicitReg === false || rawLeft) {
+          await removeHostedUnlimitedChallenge(seed.room_id);
+          logger.debug(
+            "UnlimitedList",
+            `reconcile drop seed id=${seed.room_id} explicitReg=${String(explicitReg)} left=${rawLeft}`,
+          );
+          return;
+        }
+        const { found: hasParticipantList, ids: participantIds } =
+          participantUserIdsFromDetailPayload(data);
+        if (hasParticipantList) {
+          if (!participantIds.includes(viewerId)) {
+            await removeHostedUnlimitedChallenge(seed.room_id);
+            logger.debug(
+              "UnlimitedList",
+              `reconcile drop left seed id=${seed.room_id} viewer not in participants`,
+            );
+            return;
+          }
+          kept.push({ ...seed, current_user_registered: true });
+          return;
+        }
+        // Ambiguous detail — keep seed (create path) until Leave marks leftIds.
+        kept.push(seed);
+      } catch {
+        kept.push(seed);
+      }
+    }),
+  );
+
+  return kept;
+}
+
 function startHasPassed(room: UnlimitedUpcomingRoom, nowMs = Date.now()): boolean {
   if (!room.scheduled_start_at) return false;
   const t = new Date(room.scheduled_start_at).getTime();
@@ -122,39 +254,61 @@ export async function fetchAvailableUnlimitedChallenges(opts?: {
     loadHostedUnlimitedChallenges(),
   ]);
 
-  const fromApi = mergeUpcomingRoomsById(...batches).map((room) => {
-    const isViewerHost =
-      !!opts?.viewerUserId &&
-      !!room.host_user_id &&
-      room.host_user_id === opts.viewerUserId;
-    if (!isViewerHost) return room;
+  const fromApi = mergeUpcomingRoomsById(...batches);
+  const leftIds = await loadLeftUnlimitedChallengeIds();
+  const hostedActive = await reconcileHostedMembership({
+    hosted,
+    viewerUserId: opts?.viewerUserId,
+  });
+
+  // Membership = explicit API registered OR reconciled hosted seed.
+  // Never treat hostUserId alone as registered (Leave keeps creator id on the row).
+  const merged = mergeUpcomingRoomsById(hostedActive, fromApi).map((room) => {
+    if (leftIds.has(room.room_id)) {
+      return {
+        ...room,
+        current_user_registered: false,
+        eligible_to_register: !room.is_private,
+      };
+    }
+    const seed = hostedActive.find((h) => h.room_id === room.room_id);
+    const registered =
+      room.current_user_registered === true || !!seed?.current_user_registered;
+    if (!registered) {
+      return {
+        ...room,
+        current_user_registered: false,
+      };
+    }
     return {
       ...room,
       current_user_registered: true,
       eligible_to_register: false,
     };
   });
-  const merged = mergeUpcomingRoomsById(hosted, fromApi);
 
+  // Refresh seeds only for rooms already joined (seed or explicit API membership).
   await Promise.all(
-    fromApi.map(async (room) => {
-      const isViewerHost =
-        !!opts?.viewerUserId &&
-        !!room.host_user_id &&
-        room.host_user_id === opts.viewerUserId;
-      if (room.scheduled_start_at && (room.current_user_registered || isViewerHost)) {
-        await saveHostedUnlimitedChallenge({
-          ...room,
-          current_user_registered: true,
-          host_user_id: room.host_user_id || opts?.viewerUserId || "",
-        });
+    merged.map(async (room) => {
+      if (!room.scheduled_start_at || !room.current_user_registered || leftIds.has(room.room_id)) {
+        return;
       }
+      const hadSeed = hostedActive.some((h) => h.room_id === room.room_id);
+      const apiRegistered = fromApi.some(
+        (r) => r.room_id === room.room_id && r.current_user_registered,
+      );
+      if (!hadSeed && !apiRegistered) return;
+      await saveHostedUnlimitedChallenge({
+        ...room,
+        current_user_registered: true,
+        host_user_id: room.host_user_id || opts?.viewerUserId || "",
+      });
     }),
   );
 
   logger.debug(
     "UnlimitedList",
-    `merged api=${fromApi.length} hosted=${hosted.length} total=${merged.length} viewer=${opts?.viewerUserId ? "yes" : "no"}`,
+    `merged api=${fromApi.length} hosted=${hostedActive.length} left=${leftIds.size} total=${merged.length} viewer=${opts?.viewerUserId ? "yes" : "no"}`,
   );
   return merged;
 }
@@ -185,6 +339,7 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
   ]);
 
   const fromApi = mergeUpcomingRoomsById(...batches);
+  const leftIds = await loadLeftUnlimitedChallengeIds();
   const knownIds = new Set(fromApi.map((r) => r.room_id));
 
   // Detail-hydrate: hosted misses + any list row whose start already passed
@@ -203,32 +358,34 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
     await Promise.all([...idsNeedingDetail].map((id) => fetchUnlimitedDetailRoom(id)))
   ).filter((r): r is UnlimitedUpcomingRoom => r != null);
 
+  // Membership is explicit only — never hostUserId (Leave keeps creator id).
   const merged = mergeUpcomingRoomsById(hosted, fromApi, detailRooms).map((room) => {
-    const isViewerHost =
-      !!opts?.viewerUserId &&
-      !!room.host_user_id &&
-      room.host_user_id === opts.viewerUserId;
-    if (!isViewerHost && !room.current_user_registered) return room;
+    if (leftIds.has(room.room_id)) {
+      return {
+        ...room,
+        current_user_registered: false,
+        eligible_to_register: !room.is_private,
+      };
+    }
+    if (room.current_user_registered !== true) {
+      return { ...room, current_user_registered: false };
+    }
     return {
       ...room,
       current_user_registered: true,
       eligible_to_register: false,
-      host_user_id: room.host_user_id || opts?.viewerUserId || room.host_user_id,
     };
   });
 
   await Promise.all(
     merged.map(async (room) => {
+      if (!room.current_user_registered || leftIds.has(room.room_id)) return;
       const liveStatus = normalizeUnlimitedLiveStatus(room.status, {
         startAt: room.scheduled_start_at,
         endAt: room.challenge_end_at,
         nowMs,
       });
-      if (
-        isUnlimitedLiveEligible(liveStatus) &&
-        (room.current_user_registered ||
-          (!!opts?.viewerUserId && room.host_user_id === opts.viewerUserId))
-      ) {
+      if (isUnlimitedLiveEligible(liveStatus)) {
         await saveHostedUnlimitedChallenge({
           ...room,
           status: liveStatus,
