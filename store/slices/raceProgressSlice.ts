@@ -238,12 +238,19 @@ const raceProgressSlice = createSlice({
       state.username = action.payload.username;
       state.goalSteps = action.payload.goalSteps;
       state.totalParticipants = action.payload.totalParticipants ?? state.totalParticipants;
-      state.raceSteps = boot;
+      // Same race re-hydrate (poll/focus) must not wipe higher local steps with API 0.
+      const sameRace = prevActive === action.payload.raceId;
+      const nextSteps = sameRace ? Math.max(state.raceSteps ?? 0, boot) : boot;
+      state.raceSteps = nextSteps;
       state.raceStepsLastUpdatedAt = new Date().toISOString();
       state.verifiedRaceSteps = null;
       state.verifiedRaceStepsAt = null;
-      state.reconciledRaceSteps = boot;
-      state.backendAcceptedLiveSteps = boot;
+      state.reconciledRaceSteps = sameRace
+        ? Math.max(state.reconciledRaceSteps ?? 0, nextSteps)
+        : nextSteps;
+      state.backendAcceptedLiveSteps = sameRace
+        ? Math.max(state.backendAcceptedLiveSteps ?? 0, nextSteps)
+        : nextSteps;
       state.backendReconciledSteps = null;
       state.reconciliationStatus = "not_started";
       state.finalAuthoritativeSteps = null;

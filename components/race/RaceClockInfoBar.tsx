@@ -127,7 +127,11 @@ export const RaceClockInfoBar = memo(function RaceClockInfoBar({
             <Text style={[s.infoLbl, card.color ? { color: card.color } : null]}>{card.label}</Text>
           </View>
           <Text
-            style={[s.infoVal, card.color ? { color: card.color } : null]}
+            style={[
+              s.infoVal,
+              { textAlign: "center", alignSelf: "stretch" },
+              card.color ? { color: card.color } : null,
+            ]}
             numberOfLines={1}
             adjustsFontSizeToFit
             minimumFontScale={0.75}

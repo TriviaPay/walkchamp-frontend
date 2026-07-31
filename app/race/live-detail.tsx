@@ -137,6 +137,18 @@ const FALLBACK_COLORS = [
   "#00B4FF","#FF5C93","#35D0BA","#F97316","#8B5CF6",
 ];
 
+/** Stable per-user accent so track rings stay distinct when API reuses one avatarColor. */
+function accentColorForUser(userId: string, avatarColor?: string | null): string {
+  const generic = !avatarColor
+    || /^#abc123$/i.test(avatarColor)
+    || /^#00e676$/i.test(avatarColor)
+    || /^#22c55e$/i.test(avatarColor);
+  if (!generic && avatarColor) return avatarColor;
+  let h = 0;
+  for (let i = 0; i < userId.length; i++) h = (h * 31 + userId.charCodeAt(i)) >>> 0;
+  return FALLBACK_COLORS[h % FALLBACK_COLORS.length]!;
+}
+
 /** Coins awarded per rank in free races */
 const FREE_TIER_COINS = [50, 30, 20];
 /** Pool the top-N coin tiers and split equally among N tied rank-1 winners. */
@@ -271,47 +283,35 @@ async function fetchUnlimitedLiveDetailPayload(
     const mapped = mapUnlimitedDetailToLiveDetail(await res.json().catch(() => null));
     if (!mapped) return null;
 
+    // Trust detail `players` / `participants` as the roster (same as Waiting Room).
     let participants = mapped.participants as RaceParticipant[];
 
-    // Always enrich live steps the same way normal races do:
-    // Unlimited detail often has the full roster with currentSteps=0 until we
-    // merge leaderboard / /api/races/:id progress rows.
-    const rosterIncomplete =
-      participants.length < Math.min(mapped.race.currentPlayers, 20);
-    const needsLiveSteps =
-      mapped.race.status === "in_progress" ||
-      mapped.race.status === "active" ||
-      mapped.race.status === "live" ||
-      participants.every((p) => (p.currentSteps ?? 0) <= 0);
-    if (rosterIncomplete || needsLiveSteps) {
-      const extras = await Promise.all([
-        fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/participants`),
-        fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/leaderboard`),
-        fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/registrations`),
-        fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/progress`),
-        (async () => {
-          try {
-            const raceRes = await authFetch(`/api/races/${challengeId}`);
-            if (!raceRes.ok) return [] as unknown[];
-            const data = (await raceRes.json().catch(() => null)) as {
-              participants?: unknown[];
-              registrations?: unknown[];
-              leaderboard?: unknown[];
-            } | null;
-            return [
-              ...(Array.isArray(data?.participants) ? data!.participants! : []),
-              ...(Array.isArray(data?.registrations) ? data!.registrations! : []),
-              ...(Array.isArray(data?.leaderboard) ? data!.leaderboard! : []),
-            ];
-          } catch {
-            return [] as unknown[];
-          }
-        })(),
-      ]);
-      participants = mergeUnlimitedLiveParticipants(
-        participants,
-        extras.flat(),
-      ) as RaceParticipant[];
+    // Soft step enrichment only — never replace/drop the detail roster.
+    // Merge max(currentSteps) from races/leaderboard when available.
+    if (participants.length > 0 && mapped.race.status !== "waiting") {
+      try {
+        const extras = await Promise.all([
+          fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/leaderboard`),
+          (async () => {
+            try {
+              const raceRes = await authFetch(`/api/races/${challengeId}`);
+              if (!raceRes.ok) return [] as unknown[];
+              const data = (await raceRes.json().catch(() => null)) as {
+                participants?: unknown[];
+              } | null;
+              return Array.isArray(data?.participants) ? data.participants : [];
+            } catch {
+              return [] as unknown[];
+            }
+          })(),
+        ]);
+        const flat = extras.flat();
+        if (flat.length > 0) {
+          participants = mergeUnlimitedLiveParticipants(participants, flat) as RaceParticipant[];
+        }
+      } catch {
+        // Keep detail roster as-is if enrichment fails.
+      }
     }
 
     // Guarantee the current viewer appears on Race Track / Live Board.
@@ -336,7 +336,6 @@ async function fetchUnlimitedLiveDetailPayload(
     return {
       race: {
         ...mapped.race,
-        // Keep backend participantCount authoritative when present (avoid 101→202).
         currentPlayers: mapped.race.hasExplicitPlayerCount
           ? Math.max(mapped.race.currentPlayers, 1)
           : Math.max(mapped.race.currentPlayers, participants.length, 1),
@@ -1660,10 +1659,11 @@ function LiveRaceDetailScreenContent() {
     paramDummyRace,
     { unlimitedChallenge: unlimitedHint && isUnlimitedGoalFrontendEnabled() },
   );
-  // Prefer Unlimited detail whenever the feature is on — nav hints can be missing
-  // when opening Live Race from deep links / Live tab, and /api/races often has 0 rows.
+  // Only prefer Unlimited detail for Unlimited challenges (nav hint or known type).
   const preferUnlimitedDetail =
-    !useDummyRace && isUnlimitedGoalFrontendEnabled();
+    !useDummyRace &&
+    isUnlimitedGoalFrontendEnabled() &&
+    unlimitedHint;
   const initialCache =
     raceId && typeof raceId === "string"
       ? screenCache.getSync<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId))
@@ -2310,14 +2310,13 @@ function LiveRaceDetailScreenContent() {
             ? p.rank
             : index + 1;
       const username = p.username || "Runner";
-      const avatarAccent =
-        p.avatarColor ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length];
+      const avatarAccent = accentColorForUser(p.userId, p.avatarColor);
       return {
         id: p.id, userId: p.userId, rank,
         name: isMe ? "You" : username,
         steps: effectiveSteps,
         isMe,
-        // Profile ring = user's selected avatar color (You = green). Rank badge uses medal/white separately.
+        // Profile ring = per-user accent (You = green). Avoid identical dummy avatarColors.
         rankColor: p.status === "forfeited"
           ? "#FF4444"
           : isMe
@@ -2496,6 +2495,12 @@ function LiveRaceDetailScreenContent() {
               ).toISOString()
             : undefined)
         : raceData.challengeEndAt ?? undefined;
+    // Never boot/catch-up from API 0 when local race steps are already higher.
+    const preservedSteps = Math.max(
+      me.currentSteps ?? 0,
+      localStepsRef.current ?? 0,
+      store.getState().raceProgress.raceSteps ?? 0,
+    );
     ensureActiveRaceInStore({
       raceId,
       raceStartTime: new Date(raceData.startedAt ?? Date.now()).toISOString(),
@@ -2503,7 +2508,7 @@ function LiveRaceDetailScreenContent() {
       username: user.username ?? "Runner",
       goalSteps: resolvedGoal ?? store.getState().raceProgress.goalSteps ?? 0,
       totalParticipants: raceData.currentPlayers ?? parts.length,
-      bootSteps: me.currentSteps ?? 0,
+      bootSteps: preservedSteps,
       participantConfirmed: true,
       preserveAsCompanion,
       isSponsored: raceData.type === "sponsored",
@@ -2514,13 +2519,13 @@ function LiveRaceDetailScreenContent() {
       resumeLiveRace(
         raceData.currentPlayers ?? parts.length,
         new Date(raceData.startedAt ?? Date.now()),
-        me.currentSteps ?? 0,
+        preservedSteps,
         raceData.type === "sponsored" && raceData.startedAt
           ? new Date(new Date(raceData.startedAt).getTime() + 3 * 60 * 60 * 1000)
           : null,
       );
     }
-    void catchUpLiveRaceSteps(me.currentSteps ?? 0, true);
+    void catchUpLiveRaceSteps(preservedSteps, true);
     stepEngineLog("LiveRace", `backendHydrated=true raceId=${raceId} participantNotifications=true`);
     for (const p of parts) {
       const isMe =
@@ -2555,8 +2560,7 @@ function LiveRaceDetailScreenContent() {
     raceDetailFetchInFlightRef.current = true;
     try {
       let applied = false;
-      // Always try Unlimited first when enabled — /api/races often has empty participants.
-      if (preferUnlimitedDetail || isUnlimitedGoalFrontendEnabled()) {
+      if (preferUnlimitedDetail) {
         const unlimited = await fetchUnlimitedLiveDetailPayload(raceId, {
           currentUserId: user?.id,
           currentUsername: user?.username,
@@ -2568,11 +2572,13 @@ function LiveRaceDetailScreenContent() {
             raceAlreadyStartedRef.current = true;
           }
           const raceDone = unlimited.race.status === "completed";
-          setParticipants((prev) =>
-            mergeParticipantsPreservingSteps(prev, unlimited.participants, {
+          // Prefer detail roster; preserve higher live steps from prior poll/Pusher.
+          setParticipants((prev) => {
+            if (!unlimited.participants.length) return prev;
+            return mergeParticipantsPreservingSteps(prev, unlimited.participants, {
               raceCompleted: raceDone,
-            }),
-          );
+            });
+          });
           hydrateInProgressRace(unlimited.race, unlimited.participants);
           if (isTrackLayoutId(unlimited.race.trackLayout)) {
             setTrackLayoutId(unlimited.race.trackLayout);
@@ -2592,9 +2598,12 @@ function LiveRaceDetailScreenContent() {
           }
           const nextParts = Array.isArray(data.participants) ? data.participants : [];
           const raceDone = data.race?.status === "completed";
-          setParticipants((prev) =>
-            mergeParticipantsPreservingSteps(prev, nextParts, { raceCompleted: raceDone }),
-          );
+          setParticipants((prev) => {
+            if (!nextParts.length) return prev;
+            return mergeParticipantsPreservingSteps(prev, nextParts, {
+              raceCompleted: raceDone,
+            });
+          });
           hydrateInProgressRace(data.race, nextParts);
           if (isTrackLayoutId(data.race?.trackLayout)) {
             setTrackLayoutId(data.race.trackLayout);
@@ -2606,6 +2615,30 @@ function LiveRaceDetailScreenContent() {
             });
           }
           applied = true;
+        } else if (!preferUnlimitedDetail) {
+          // Race id may be an Unlimited challenge opened without nav hints.
+          const unlimited = await fetchUnlimitedLiveDetailPayload(raceId, {
+            currentUserId: user?.id,
+            currentUsername: user?.username,
+          });
+          if (unlimited) {
+            markLiveRaceFetched(gateKey);
+            setRace(unlimited.race);
+            if (unlimited.race.status === "in_progress" || unlimited.race.status === "completed") {
+              raceAlreadyStartedRef.current = true;
+            }
+            setParticipants((prev) => {
+              if (!unlimited.participants.length) return prev;
+              return mergeParticipantsPreservingSteps(prev, unlimited.participants, {
+                raceCompleted: unlimited.race.status === "completed",
+              });
+            });
+            hydrateInProgressRace(unlimited.race, unlimited.participants);
+            if (isTrackLayoutId(unlimited.race.trackLayout)) {
+              setTrackLayoutId(unlimited.race.trackLayout);
+            }
+            void screenCache.set(liveRaceDetailCacheKey(raceId), unlimited);
+          }
         }
       }
     } finally {
@@ -2659,7 +2692,10 @@ function LiveRaceDetailScreenContent() {
         "LiveScreen",
         `focus raceId=${raceId} userId=${user.id} renderedSteps=${localStepsRef.current} participantNotifications=true`,
       );
-      void catchUpStepsRef.current(me.currentSteps ?? 0, true);
+      void catchUpStepsRef.current(
+        Math.max(me.currentSteps ?? 0, localStepsRef.current ?? 0),
+        true,
+      );
       stepEngineLog("LiveRace", `rejoinStart raceId=${raceId} cachedStateRendered=true`);
     } else {
       void suppressSpectatorLiveRaceNotifications(raceId);
@@ -2725,7 +2761,7 @@ function LiveRaceDetailScreenContent() {
     fetchInFlightRef.current = true;
     try {
       let racePayload: LiveRaceDetailCache | null = null;
-      if (preferUnlimitedDetail || isUnlimitedGoalFrontendEnabled()) {
+      if (preferUnlimitedDetail) {
         racePayload = await fetchUnlimitedLiveDetailPayload(raceId, {
           currentUserId: user?.id,
           currentUsername: user?.username,
@@ -2739,6 +2775,11 @@ function LiveRaceDetailScreenContent() {
             race: data.race as RaceData,
             participants: Array.isArray(data.participants) ? data.participants : [],
           };
+        } else if (!preferUnlimitedDetail) {
+          racePayload = await fetchUnlimitedLiveDetailPayload(raceId, {
+            currentUserId: user?.id,
+            currentUsername: user?.username,
+          });
         }
       }
 
@@ -2750,8 +2791,11 @@ function LiveRaceDetailScreenContent() {
           raceAlreadyStartedRef.current = true;
         }
         const raceDone = racePayload.race.status === "completed";
+        // First paint: use detail roster directly so users always show.
         setParticipants((prev) =>
-          mergeParticipantsPreservingSteps(prev, parts, { raceCompleted: raceDone }),
+          prev.length === 0
+            ? parts
+            : mergeParticipantsPreservingSteps(prev, parts, { raceCompleted: raceDone }),
         );
         hydrateInProgressRace(racePayload.race, parts);
         if (racePayload.race.status === "completed") {
@@ -4285,11 +4329,21 @@ const s = StyleSheet.create({
   leaveTxt:    { color: "#FFFFFF", fontSize: 13, fontWeight: "800", marginRight: 4 },
   headerSpacer: { width: 68 },
   infoBar:  { flexDirection: "row", paddingHorizontal: 12, gap: 6, minHeight: 44, alignItems: "center" },
-  infoCard: { flex: 1, backgroundColor: "#111421", borderRadius: 8, borderWidth: 1, borderColor: "#22263A", paddingHorizontal: 8, paddingVertical: 4, minWidth: 0 },
-  infoRow:  { flexDirection: "row", alignItems: "center", gap: 3 },
+  infoCard: {
+    flex: 1,
+    backgroundColor: "#111421",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#22263A",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    minWidth: 0,
+    alignItems: "center",
+  },
+  infoRow:  { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3 },
   infoIcon: { fontSize: 10 },
-  infoLbl:  { fontSize: 7, color: "#858A9C", fontWeight: "800", letterSpacing: 0.4 },
-  infoVal:  { fontSize: 14, fontWeight: "900", color: "#FFFFFF", marginTop: 0 },
+  infoLbl:  { fontSize: 7, color: "#858A9C", fontWeight: "800", letterSpacing: 0.4, textAlign: "center" },
+  infoVal:  { fontSize: 14, fontWeight: "900", color: "#FFFFFF", marginTop: 0, textAlign: "center", width: "100%" },
 
   bannerClose:          { marginLeft: "auto" as unknown as number, padding: 2 },
   finishedBanner:       { marginHorizontal: 12, marginTop: 8, borderRadius: 16, borderWidth: 1.5, padding: 14, gap: 10, backgroundColor: "#FFD70012", borderColor: "#FFD70044" },

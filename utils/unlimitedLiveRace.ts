@@ -241,6 +241,7 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
   const user =
     asRecord(pick(obj, "user", "profile", "member", "registrant", "walker", "athlete")) ??
     {};
+  // Prefer real userId — never treat participant row `id` as userId (breaks roster).
   const userId =
     asString(
       pick(
@@ -253,10 +254,7 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
         "participantUserId",
         "participant_user_id",
       ),
-    ) ??
-    asString(pick(user, "id", "userId", "user_id")) ??
-    // Some list rows use top-level `id` as the user id.
-    asString(pick(obj, "id"));
+    ) ?? asString(pick(user, "id", "userId", "user_id"));
   if (!userId) return null;
   const username =
     asString(
