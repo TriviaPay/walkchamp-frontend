@@ -137,6 +137,7 @@ export function stepEngineLog(tag: string, message: string): void {
   if (typeof __DEV__ === "undefined" || !__DEV__) return;
   const important =
     tag === "AuthSwitch" ||
+    tag === "RosterDiag" ||
     /rejected|failed|skippedCompletedRace/i.test(message);
   if (!important && !STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) return;
   console.log(`[${tag}] ${message}`);
