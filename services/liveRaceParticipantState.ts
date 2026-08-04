@@ -64,11 +64,12 @@ export function mergeParticipantsPreservingSteps<T extends RaceParticipantLike>(
       rank: p.rank ?? prev.rank,
     };
   });
-  // Keep anyone we only knew from Pusher who hasn't appeared in the new roster yet.
+  // Keep prior walkers missing from this poll (Pusher / partial Unlimited enrichment).
+  // Regular live races also retain remotes until a definitive leave event arrives.
   for (const p of previous) {
     const key = p.userId || p.id;
     if (!key || seen.has(key)) continue;
-    if ((p.currentSteps ?? 0) > 0) merged.push(p);
+    merged.push(p);
   }
   return merged;
 }

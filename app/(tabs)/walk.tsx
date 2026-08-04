@@ -96,7 +96,7 @@ import { UnlimitedGoalFeeBreakdown } from "@/components/UnlimitedGoalFeeBreakdow
 import { CreateChallengeFlow } from "@/components/CreateChallengeFlow";
 import { TrendingChallengesPreview } from "@/components/trending/TrendingChallengesPreview";
 import { fetchAvailableChallengeCount } from "@/services/trendingChallengesApi";
-import { fetchAvailableUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
+import { fetchAvailableUnlimitedChallenges, fetchMyOpenUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
 import { mergeUpcomingRoomsById } from "@/utils/unlimitedChallengeRooms";
 import { saveHostedUnlimitedChallenge } from "@/utils/hostedUnlimitedCache";
 import { CHALLENGE_LEFT_EVENT } from "@/utils/challengeLocalEvents";
@@ -2356,11 +2356,14 @@ function WalkScreenContent() {
 
   const fetchRegisteredUpcomingRooms = useCallback(async () => {
     try {
-      const [{ loadLeftUnlimitedChallengeIds }, res, unlimited] = await Promise.all([
-        import("@/utils/hostedUnlimitedCache"),
-        authFetch("/api/rooms/available?tab=upcoming"),
-        fetchAvailableUnlimitedChallenges({ viewerUserId: user?.id }),
-      ]);
+      const [{ loadLeftUnlimitedChallengeIds, clearUnlimitedChallengeLeft }, res, unlimitedWaiting, unlimitedMine] =
+        await Promise.all([
+          import("@/utils/hostedUnlimitedCache"),
+          authFetch("/api/rooms/available?tab=upcoming"),
+          fetchAvailableUnlimitedChallenges({ viewerUserId: user?.id }),
+          fetchMyOpenUnlimitedChallenges({ viewerUserId: user?.id }),
+        ]);
+      const unlimited = mergeUpcomingRoomsById(unlimitedWaiting, unlimitedMine);
       if (!res.ok && unlimited.length === 0) return;
       const leftIds = await loadLeftUnlimitedChallengeIds();
       const data = res.ok
@@ -2368,57 +2371,68 @@ function WalkScreenContent() {
         : { rooms: [] as WalkUpcomingRoom[] };
       const now = Date.now();
       const uid = user?.id;
-      const unlimitedAsWalk: WalkUpcomingRoom[] = unlimited.map((u) => ({
-        room_id: u.room_id,
-        challenge_type: u.challenge_type,
-        entry_fee: u.entry_fee,
-        coin_entry_amount: u.coin_entry_amount,
-        max_players: u.max_players,
-        registered_count: u.registered_count,
-        scheduled_start_at: u.scheduled_start_at,
-        target_steps: u.target_steps,
-        host_user_id: u.host_user_id,
-        // Membership only — host id alone is not enough after Leave.
-        current_user_registered: !!u.current_user_registered && !leftIds.has(u.room_id),
-        status: u.status,
-      }));
+      const unlimitedAsWalk: WalkUpcomingRoom[] = unlimited.map((u) => {
+        const serverReg = !!u.current_user_registered;
+        if (serverReg && leftIds.has(u.room_id)) {
+          void clearUnlimitedChallengeLeft(u.room_id);
+        }
+        return {
+          room_id: u.room_id,
+          challenge_type: u.challenge_type,
+          entry_fee: u.entry_fee,
+          coin_entry_amount: u.coin_entry_amount,
+          max_players: u.max_players,
+          registered_count: u.registered_count,
+          scheduled_start_at: u.scheduled_start_at,
+          target_steps: u.target_steps,
+          host_user_id: u.host_user_id,
+          // Prefer server membership over stale local left marks.
+          current_user_registered: serverReg || (!leftIds.has(u.room_id) && !!u.current_user_registered),
+          status: u.status,
+        };
+      });
       const merged = mergeUpcomingRoomsById(data.rooms ?? [], unlimitedAsWalk);
       const nextRaceRooms = merged.filter((r) => {
-        if (leftIds.has(r.room_id)) return false;
+        // Only drop leftIds when server did not confirm membership.
         const isUnlimited = isUnlimitedGoalChallenge({
           challengeType: r.challenge_type,
           maxPlayers: r.max_players,
         });
-        // Unlimited: only active registration. Fixed/others: host still counts.
         const isMine = isUnlimited
           ? !!r.current_user_registered
           : r.current_user_registered || (!!uid && r.host_user_id === uid);
-        if (!isMine || !r.scheduled_start_at) return false;
+        if (!isMine) return false;
+        if (leftIds.has(r.room_id) && !r.current_user_registered) return false;
+        if (!r.scheduled_start_at) return false;
         const status = (r.status ?? "").toLowerCase();
         if (
           status === "completed" ||
           status === "cancelled" ||
           status === "canceled" ||
+          status === "cancelled_by_platform" ||
+          status === "canceled_by_platform" ||
           status === "settled"
         ) {
           return false;
         }
         const startMs = new Date(r.scheduled_start_at).getTime();
         if (!Number.isFinite(startMs)) return false;
-        // Keep host/participant card through start window while status is still open.
+        // Keep host/participant card through start + while Unlimited is still open/active.
         if (startMs > now) return true;
         return (
           status === "scheduled" ||
           status === "waiting" ||
           status === "open" ||
           status === "active" ||
+          status === "starting" ||
+          status === "settling" ||
           status === "in_progress" ||
           status === "" ||
-          isUnlimitedGoalChallenge({ challengeType: r.challenge_type })
+          isUnlimited
         );
       });
       console.log(
-        `[NextRace] unlimited=${unlimited.length} merged=${merged.length} nextRace=${nextRaceRooms.length} uid=${uid ?? "none"}`,
+        `[NextRace] unlimited=${unlimited.length} mine=${unlimitedMine.length} merged=${merged.length} nextRace=${nextRaceRooms.length} uid=${uid ?? "none"}`,
         unlimited.map((u) => ({
           id: u.room_id,
           start: u.scheduled_start_at,
@@ -3126,18 +3140,32 @@ function WalkScreenContent() {
       coveredRaceIds.add(srr.raceId);
     }
 
-    // Available Rooms — registered upcoming (has scheduledStartAt; fills gaps when challenges/available omits it)
+    // Available Rooms — registered upcoming + Unlimited still racing after start.
     for (const room of registeredUpcomingRooms) {
       if (!room.scheduled_start_at || coveredRaceIds.has(room.room_id)) continue;
       const startMs = new Date(room.scheduled_start_at).getTime();
-      if (!(startMs > now)) continue;
-      const msLeft = startMs - now;
-      const phase: RaceStartingSoonPhase =
-        msLeft < 10 * 60_000 ? "join_window" : "registered";
+      if (!Number.isFinite(startMs)) continue;
+      const status = (room.status ?? "").toLowerCase();
       const isUnlimitedRoom = isUnlimitedGoalChallenge({
         challengeType: room.challenge_type,
         maxPlayers: room.max_players,
       });
+      const isLiveStatus =
+        status === "active" ||
+        status === "starting" ||
+        status === "settling" ||
+        status === "in_progress";
+      const hasStarted = startMs <= now || isLiveStatus;
+      // Classic: only before start. Unlimited: also while actively racing.
+      if (!isUnlimitedRoom && hasStarted) continue;
+
+      const msLeft = startMs - now;
+      const phase: RaceStartingSoonPhase =
+        isUnlimitedRoom && hasStarted
+          ? "racing"
+          : msLeft < 10 * 60_000
+            ? "join_window"
+            : "registered";
       const challengeType: RaceStartingSoonChallengeType =
         room.challenge_type === "sponsored"
           ? "sponsored"
@@ -3175,6 +3203,17 @@ function WalkScreenContent() {
           }
           setActiveRace(room.room_id, isHost);
           joinRace(joinFee, isUnlimitedRoom ? 0 : room.max_players, isHost);
+          if (phase === "racing" && isUnlimitedRoom) {
+            router.push({
+              pathname: "/race/live-detail",
+              params: {
+                id: room.room_id,
+                challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
+                capacityMode: "unlimited",
+              },
+            });
+            return;
+          }
           navToMatchmaking({
             raceId: room.room_id,
             isHost,

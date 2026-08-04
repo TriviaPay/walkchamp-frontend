@@ -50,7 +50,7 @@ function mergeParticipantsPreservingSteps(
   for (const p of previous) {
     const key = p.userId || p.id;
     if (!key || seen.has(key)) continue;
-    if ((p.currentSteps ?? 0) > 0) merged.push(p);
+    merged.push(p);
   }
   return merged;
 }
@@ -75,5 +75,12 @@ assert.equal(
   ]).find((p) => p.userId === "a")!.currentSteps,
   800,
 );
+
+// Prior remotes with 0 steps are kept when a partial poll omits them.
+const keepZero = mergeParticipantsPreservingSteps(
+  [{ id: "9", userId: "z", currentSteps: 0, rank: 9 }],
+  [{ id: "1", userId: "a", currentSteps: 10, rank: 1 }],
+);
+assert.ok(keepZero.some((p) => p.userId === "z"));
 
 console.log("liveRaceParticipantState.test.ts: ok");

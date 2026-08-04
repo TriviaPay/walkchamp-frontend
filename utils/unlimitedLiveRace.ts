@@ -103,7 +103,7 @@ export function isUnlimitedLiveEligible(status: string): boolean {
   return status === "in_progress" || status === "completed";
 }
 
-/** Terminal statuses that should never appear as Live Now / Recently Finished cards. */
+/** Terminal statuses that should never appear as Live Now cards. */
 export function isUnlimitedTerminalExcludedFromLive(status: string | null | undefined): boolean {
   const raw = (status ?? "").trim().toLowerCase();
   return (
@@ -111,6 +111,18 @@ export function isUnlimitedTerminalExcludedFromLive(status: string | null | unde
     raw === "canceled" ||
     raw === "cancelled_by_platform" ||
     raw === "canceled_by_platform"
+  );
+}
+
+/** Ended challenges eligible for Live "Recently Finished". */
+export function isUnlimitedFinishedForLiveTab(status: string | null | undefined): boolean {
+  const raw = (status ?? "").trim().toLowerCase();
+  return (
+    raw === "completed" ||
+    raw === "finished" ||
+    raw === "ended" ||
+    raw === "closed" ||
+    isUnlimitedTerminalExcludedFromLive(raw)
   );
 }
 

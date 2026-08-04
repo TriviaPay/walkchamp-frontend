@@ -3115,6 +3115,38 @@ function LiveRaceDetailScreenContent() {
     return () => clearInterval(id);
   }, [isActive, raceId, race?.status, sessionToken, fetchRaceDetails]);
 
+  // Waiting Unlimited Challenges: no in_progress poll above — refresh roster so joins
+  // appear even if Pusher is missed (Waiting Room already polls; live-detail did not).
+  useEffect(() => {
+    if (!raceId || !sessionToken || useDummyRace) return;
+    const status = String(race?.status ?? "").toLowerCase();
+    const waitingOpen =
+      status === "waiting" || status === "starting" || status === "scheduled";
+    const unlimitedOpen =
+      preferUnlimitedDetail ||
+      unlimitedHint ||
+      isUnlimitedGoalChallenge(race);
+    if (!waitingOpen || !unlimitedOpen) return;
+    const id = setInterval(() => {
+      void fetchRaceDetails(false, {
+        gateKey: `${raceId}:waiting-roster`,
+        minIntervalMs: STEP_SYNC_CONFIG.MATCHMAKING_ROOM_POLL_MS,
+      });
+    }, STEP_SYNC_CONFIG.MATCHMAKING_ROOM_POLL_MS);
+    return () => clearInterval(id);
+  }, [
+    raceId,
+    sessionToken,
+    useDummyRace,
+    race?.status,
+    race?.challengeType,
+    race?.capacityMode,
+    race?.entryType,
+    preferUnlimitedDetail,
+    unlimitedHint,
+    fetchRaceDetails,
+  ]);
+
   // ── Spectator heartbeat ───────────────────────────────────────────────────
   // All viewers (participants + spectators) register every 60s for watch count.
   useEffect(() => {
@@ -3189,12 +3221,12 @@ function LiveRaceDetailScreenContent() {
     connectPusher();
     const channelName = `public-live-race-${raceId}`;
     const channel = subscribeToChannel(channelName);
-    // Also listen on the canonical unlimited channel (belt-and-suspenders with dual-emit).
+    // Always bind the canonical unlimited channel when the feature is on — dual-emit
+    // covers joins even when this screen was opened without challengeType nav params.
     const unlimitedChannelName = CHANNELS.unlimitedChallenge(raceId);
-    const unlimitedChannel =
-      preferUnlimitedDetail || unlimitedHint
-        ? subscribeToChannel(unlimitedChannelName)
-        : null;
+    const unlimitedChannel = isUnlimitedGoalFrontendEnabled()
+      ? subscribeToChannel(unlimitedChannelName)
+      : null;
     if (!channel && !unlimitedChannel) return;
     stepEngineLog("Pusher", `connected=true channel=${channelName}`);
     stepEngineLog("LiveRace", `realtimeSubscribed=true raceId=${raceId}`);
@@ -3422,6 +3454,9 @@ function LiveRaceDetailScreenContent() {
       ch.bind("race:player-left",           refreshParticipants);
       ch.bind("race:participant_left",      refreshParticipants);
       ch.bind("race:participant-forfeited", refreshParticipants);
+      // Unlimited join/leave also emit room:participant_* on the live-race channel.
+      ch.bind("room:participant_joined", refreshParticipants);
+      ch.bind("room:participant_left", refreshParticipants);
       ch.bind("race:progress_updated", onProgress);
       ch.bind("race:comment_new",      onComment);
       ch.bind("race:reaction_updated", onReaction);
@@ -3470,6 +3505,8 @@ function LiveRaceDetailScreenContent() {
         channel.unbind("race:player-left",           refreshParticipants);
         channel.unbind("race:participant_left",      refreshParticipants);
         channel.unbind("race:participant-forfeited", refreshParticipants);
+        channel.unbind("room:participant_joined", refreshParticipants);
+        channel.unbind("room:participant_left", refreshParticipants);
         channel.unbind("race:progress_updated", onProgress);
         channel.unbind("race:comment_new",      onComment);
         channel.unbind("race:reaction_updated", onReaction);
@@ -3494,7 +3531,7 @@ function LiveRaceDetailScreenContent() {
         unsubscribeFromChannel(unlimitedChannelName);
       }
     };
-  }, [raceId, refreshResultStatus, useDummyRace, preferUnlimitedDetail, unlimitedHint]);
+  }, [raceId, refreshResultStatus, useDummyRace]);
 
   // ── Cheer send ────────────────────────────────────────────────────────────
   const sendMessage = useCallback((text: string, isQuickReaction = false): boolean => {

@@ -70,7 +70,7 @@ export async function markUnlimitedChallengeLeft(roomId: string): Promise<void> 
   await storageSet(STORAGE_KEYS.LEFT_UNLIMITED_CHALLENGES, next);
 }
 
-async function clearUnlimitedChallengeLeft(roomId: string): Promise<void> {
+export async function clearUnlimitedChallengeLeft(roomId: string): Promise<void> {
   const prev = await loadLeftEntries();
   await storageSet(
     STORAGE_KEYS.LEFT_UNLIMITED_CHALLENGES,
@@ -128,6 +128,16 @@ export async function saveHostedUnlimitedChallenge(
 
 export async function removeHostedUnlimitedChallenge(roomId: string): Promise<void> {
   await markUnlimitedChallengeLeft(roomId);
+  const prev = await loadHostedUnlimitedChallenges({ includeStarted: true });
+  await storageSet(
+    STORAGE_KEYS.HOSTED_UNLIMITED_CHALLENGES,
+    prev.filter((r) => r.room_id !== roomId),
+  );
+}
+
+/** Drop a seed from device cache without marking the challenge as left. */
+export async function purgeHostedUnlimitedChallenge(roomId: string): Promise<void> {
+  if (!roomId) return;
   const prev = await loadHostedUnlimitedChallenges({ includeStarted: true });
   await storageSet(
     STORAGE_KEYS.HOSTED_UNLIMITED_CHALLENGES,

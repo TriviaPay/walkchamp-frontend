@@ -9,8 +9,8 @@ import {
   loadHostedUnlimitedChallenges,
   loadLeftUnlimitedChallengeIds,
   saveHostedUnlimitedChallenge,
-  clearAllHostedUnlimitedChallenges,
-  removeHostedUnlimitedChallenge,
+  purgeHostedUnlimitedChallenge,
+  clearUnlimitedChallengeLeft,
 } from "@/utils/hostedUnlimitedCache";
 import {
   extractUnlimitedChallengeRows,
@@ -21,6 +21,7 @@ import {
 } from "@/utils/unlimitedChallengeRooms";
 import {
   isUnlimitedTerminalExcludedFromLive,
+  isUnlimitedFinishedForLiveTab,
   mapUnlimitedUpcomingToLiveRaceFields,
   type UnlimitedLiveRaceFields,
 } from "@/utils/unlimitedLiveRace";
@@ -36,18 +37,34 @@ const LIST_PATHS = [
 ] as const;
 
 /**
- * Live tab sources — prefer dedicated live + my-active endpoints, then status filters.
- * Default waiting list is last (for schedule-based client classification only).
+ * Live tab sources — ONLY endpoints that return running challenges.
+ * Do NOT fall back to the default waiting list: those rows + stale hosted
+ * seeds with status "in_progress" resurrect cancelled Jul challenges as Live.
  */
 const LIVE_LIST_PATHS = [
   "/api/unlimited-challenges/live",
   "/api/unlimited-challenges/my-active",
   "/api/unlimited-challenges?status=active",
+  "/api/unlimited-challenges?status=live",
   "/api/unlimited-challenges?status=in_progress",
-  "/api/unlimited-challenges?status=active&visibility=public",
-  "/api/unlimited-challenges",
-  "/api/unlimited-challenges?visibility=public",
 ] as const;
+
+/** Recently finished Unlimited for Live tab (completed + platform-cancelled). */
+const FINISHED_LIST_PATHS = [
+  "/api/unlimited-challenges/recently-finished",
+  "/api/unlimited-challenges?status=completed",
+] as const;
+
+const SERVER_LIVE_STATUSES = new Set([
+  "active",
+  "starting",
+  "settling",
+  "in_progress",
+  "running",
+  "live",
+  "started",
+]);
+
 
 function topKeys(data: unknown): string {
   if (Array.isArray(data)) return `array(len=${data.length})`;
@@ -94,7 +111,11 @@ async function fetchUnlimitedDetailRoom(id: string): Promise<UnlimitedUpcomingRo
     if (!res.ok) return null;
     const data: unknown = await res.json().catch(() => null);
     const rows = extractUnlimitedChallengeRows(data);
-    const first = rows[0] ?? data;
+    const first =
+      rows[0] ??
+      (data && typeof data === "object" && data !== null
+        ? (data as Record<string, unknown>).challenge ?? data
+        : data);
     return normalizeUnlimitedChallengeToUpcomingRoom(first);
   } catch {
     return null;
@@ -245,12 +266,6 @@ async function reconcileHostedMembership(opts: {
   return kept;
 }
 
-function startHasPassed(room: UnlimitedUpcomingRoom, nowMs = Date.now()): boolean {
-  if (!room.scheduled_start_at) return false;
-  const t = new Date(room.scheduled_start_at).getTime();
-  return Number.isFinite(t) && t <= nowMs;
-}
-
 /**
  * Public/joinable unlimited challenges from dedicated + rooms list endpoints,
  * plus locally hosted seeds so the creator always sees their room.
@@ -274,7 +289,21 @@ export async function fetchAvailableUnlimitedChallenges(opts?: {
 
   // Membership = explicit API registered OR reconciled hosted seed.
   // Never treat hostUserId alone as registered (Leave keeps creator id on the row).
+  // If the server still says registered, clear stale local "left" marks from ghost cleanup.
   const merged = mergeUpcomingRoomsById(hostedActive, fromApi).map((room) => {
+    const seed = hostedActive.find((h) => h.room_id === room.room_id);
+    const serverRegistered =
+      room.current_user_registered === true || !!seed?.current_user_registered;
+    if (serverRegistered) {
+      if (leftIds.has(room.room_id)) {
+        void clearUnlimitedChallengeLeft(room.room_id);
+      }
+      return {
+        ...room,
+        current_user_registered: true,
+        eligible_to_register: false,
+      };
+    }
     if (leftIds.has(room.room_id)) {
       return {
         ...room,
@@ -282,19 +311,9 @@ export async function fetchAvailableUnlimitedChallenges(opts?: {
         eligible_to_register: !room.is_private,
       };
     }
-    const seed = hostedActive.find((h) => h.room_id === room.room_id);
-    const registered =
-      room.current_user_registered === true || !!seed?.current_user_registered;
-    if (!registered) {
-      return {
-        ...room,
-        current_user_registered: false,
-      };
-    }
     return {
       ...room,
-      current_user_registered: true,
-      eligible_to_register: false,
+      current_user_registered: false,
     };
   });
 
@@ -332,8 +351,54 @@ export async function fetchAvailableUnlimitedAsRoomLikes(opts?: {
 }
 
 /**
+ * Viewer's open Unlimited memberships (waiting + starting + active + settling).
+ * Used by Walk Next Race so started challenges still appear.
+ */
+export async function fetchMyOpenUnlimitedChallenges(opts?: {
+  viewerUserId?: string | null;
+}): Promise<UnlimitedUpcomingRoom[]> {
+  if (!isUnlimitedGoalFrontendEnabled()) return [];
+
+  const [myActive, hosted] = await Promise.all([
+    fetchPathRows("/api/unlimited-challenges/my-active"),
+    loadHostedUnlimitedChallenges({ includeStarted: true }),
+  ]);
+  const leftIds = await loadLeftUnlimitedChallengeIds();
+
+  const open = mergeUpcomingRoomsById(myActive, hosted).filter((room) => {
+    const status = String(room.status ?? "").trim().toLowerCase();
+    if (
+      status === "completed" ||
+      status === "cancelled" ||
+      status === "canceled" ||
+      status === "cancelled_by_platform" ||
+      status === "canceled_by_platform"
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  return open.map((room) => {
+    const serverReg = room.current_user_registered === true;
+    const isHost =
+      !!opts?.viewerUserId &&
+      !!room.host_user_id &&
+      room.host_user_id === opts.viewerUserId;
+    if (serverReg || isHost) {
+      if (leftIds.has(room.room_id)) void clearUnlimitedChallengeLeft(room.room_id);
+      return { ...room, current_user_registered: true, eligible_to_register: false };
+    }
+    if (leftIds.has(room.room_id)) {
+      return { ...room, current_user_registered: false };
+    }
+    return room;
+  });
+}
+
+/**
  * Active + recently finished Unlimited challenges for the Live tab.
- * Trusts server live statuses only — never resurrects cancelled seeds via schedule.
+ * Trusts server live/my-active + recently-finished — never nukes membership via clearAll.
  */
 export async function fetchLiveUnlimitedChallenges(opts?: {
   viewerUserId?: string | null;
@@ -343,48 +408,88 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
   }
 
   const nowMs = Date.now();
-  const [batches, hosted] = await Promise.all([
-    Promise.all(LIVE_LIST_PATHS.map((p) => fetchPathRows(p))),
-    loadHostedUnlimitedChallenges({ includeStarted: true }),
-  ]);
 
-  const fromApiRaw = mergeUpcomingRoomsById(...batches);
-  const fromApi = fromApiRaw.filter((r) => !isUnlimitedTerminalExcludedFromLive(r.status));
+  let liveBatches: UnlimitedUpcomingRoom[][] = [];
+  let finishedBatches: UnlimitedUpcomingRoom[][] = [];
+  try {
+    [liveBatches, finishedBatches] = await Promise.all([
+      Promise.all(LIVE_LIST_PATHS.map((p) => fetchPathRows(p))),
+      Promise.all(FINISHED_LIST_PATHS.map((p) => fetchPathRows(p))),
+    ]);
+  } catch (err) {
+    logger.debug(
+      "UnlimitedList",
+      `liveTab list fetch failed: ${err instanceof Error ? err.message : "error"}`,
+    );
+  }
+
+  const hosted = await loadHostedUnlimitedChallenges({ includeStarted: true }).catch(() => []);
+
+  const fromApiRaw = mergeUpcomingRoomsById(...liveBatches);
+  const fromApi = fromApiRaw.filter((r) => {
+    const s = String(r.status ?? "").trim().toLowerCase();
+    // Keep running + waiting (my-active); drop cancelled from Live Now path.
+    return !isUnlimitedTerminalExcludedFromLive(s) || SERVER_LIVE_STATUSES.has(s);
+  });
   const leftIds = await loadLeftUnlimitedChallengeIds();
+  const serverLiveIds = new Set(
+    fromApi
+      .filter((r) => SERVER_LIVE_STATUSES.has(String(r.status ?? "").trim().toLowerCase()))
+      .map((r) => r.room_id),
+  );
 
-  // Always re-validate every hosted seed against detail — cancelled challenges often
-  // linger on-device with a stale "in_progress"/"waiting" label.
-  const idsNeedingDetail = new Set<string>([
-    ...hosted.map((h) => h.room_id),
-    ...fromApi.filter((r) => startHasPassed(r, nowMs)).map((r) => r.room_id),
-  ]);
+  // Also keep my-active waiting IDs so we never treat "only waiting open" as empty live wipe.
+  const serverOpenIds = new Set(fromApi.map((r) => r.room_id));
 
-  const detailRooms = (
-    await Promise.all([...idsNeedingDetail].map((id) => fetchUnlimitedDetailRoom(id)))
-  ).filter((r): r is UnlimitedUpcomingRoom => r != null);
+  const staleHostedIds = hosted
+    .map((h) => h.room_id)
+    .filter((id) => !serverOpenIds.has(id));
 
+  const confirmedLiveFromDetail: UnlimitedUpcomingRoom[] = [];
   await Promise.all(
-    detailRooms.map(async (room) => {
-      if (!isUnlimitedTerminalExcludedFromLive(room.status)) return;
-      await removeHostedUnlimitedChallenge(room.room_id);
+    staleHostedIds.map(async (id) => {
+      const room = await fetchUnlimitedDetailRoom(id);
+      if (!room) {
+        const seed = hosted.find((h) => h.room_id === id);
+        const seedStatus = String(seed?.status ?? "").trim().toLowerCase();
+        if (seed && SERVER_LIVE_STATUSES.has(seedStatus)) {
+          confirmedLiveFromDetail.push(seed);
+          return;
+        }
+        await purgeHostedUnlimitedChallenge(id);
+        return;
+      }
+      if (isUnlimitedTerminalExcludedFromLive(room.status)) {
+        // Cancelled/completed — purge seed without poisoning leftIds for unrelated flows.
+        await purgeHostedUnlimitedChallenge(id);
+        return;
+      }
+      const statusLower = String(room.status ?? "").trim().toLowerCase();
+      if (SERVER_LIVE_STATUSES.has(statusLower) || statusLower === "waiting") {
+        if (SERVER_LIVE_STATUSES.has(statusLower)) confirmedLiveFromDetail.push(room);
+        return;
+      }
+      await purgeHostedUnlimitedChallenge(id);
     }),
   );
 
-  const detailActive = detailRooms.filter(
-    (r) => !isUnlimitedTerminalExcludedFromLive(r.status),
-  );
-  const detailById = new Map(detailActive.map((r) => [r.room_id, r]));
+  const merged = mergeUpcomingRoomsById(fromApi, confirmedLiveFromDetail).map((room) => {
+    const serverSaysMember = [room, ...fromApi.filter((r) => r.room_id === room.room_id)].some(
+      (r) => r?.current_user_registered === true,
+    );
+    const isHost =
+      !!opts?.viewerUserId &&
+      !!room.host_user_id &&
+      room.host_user_id === opts.viewerUserId;
 
-  // Prefer detail status over stale hosted seed status.
-  const hostedActive = hosted
-    .map((h) => {
-      const detail = detailById.get(h.room_id);
-      if (detail) return { ...h, ...detail, room_id: h.room_id };
-      return h;
-    })
-    .filter((h) => !isUnlimitedTerminalExcludedFromLive(h.status));
-
-  const merged = mergeUpcomingRoomsById(hostedActive, fromApi, detailActive).map((room) => {
+    if (serverSaysMember || isHost) {
+      if (leftIds.has(room.room_id)) void clearUnlimitedChallengeLeft(room.room_id);
+      return {
+        ...room,
+        current_user_registered: true,
+        eligible_to_register: false,
+      };
+    }
     if (leftIds.has(room.room_id)) {
       return {
         ...room,
@@ -392,54 +497,59 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
         eligible_to_register: !room.is_private,
       };
     }
-    const seed = hostedActive.find((h) => h.room_id === room.room_id);
-    const fromAny = [room, seed, ...fromApi.filter((r) => r.room_id === room.room_id)].some(
-      (r) => r?.current_user_registered === true,
-    );
-    if (fromAny) {
-      return {
-        ...room,
-        current_user_registered: true,
-        eligible_to_register: false,
-      };
-    }
     return {
       ...room,
-      current_user_registered: false,
+      current_user_registered: room.current_user_registered === true,
     };
   });
 
   const live: UnlimitedLiveRaceFields[] = [];
   const finished: UnlimitedLiveRaceFields[] = [];
+
   for (const room of merged) {
-    if (isUnlimitedTerminalExcludedFromLive(room.status)) continue;
-    const mapped = mapUnlimitedUpcomingToLiveRaceFields(room, nowMs);
+    const statusLower = String(room.status ?? "").trim().toLowerCase();
+    if (isUnlimitedTerminalExcludedFromLive(statusLower)) continue;
+    if (!SERVER_LIVE_STATUSES.has(statusLower)) continue; // waiting stays off Live Now
+    const mapped = mapUnlimitedUpcomingToLiveRaceFields(
+      { ...room, status: "active" },
+      nowMs,
+    );
     if (!mapped) continue;
-    if (mapped.status === "completed") finished.push(mapped);
-    else live.push(mapped);
+    live.push(mapped);
   }
 
-  // Server has nothing live → wipe local Unlimited seeds so ghosts cannot return.
-  if (live.length === 0 && hosted.length > 0) {
-    await clearAllHostedUnlimitedChallenges();
-    logger.debug("UnlimitedList", `cleared ${hosted.length} hosted seeds — no server live`);
-  } else {
-    await Promise.all(
-      live.map(async (row) => {
-        const room = merged.find((r) => r.room_id === row.id);
-        if (!room?.current_user_registered || leftIds.has(row.id)) return;
-        await saveHostedUnlimitedChallenge({
-          ...room,
-          status: row.status,
-          current_user_registered: true,
-        });
-      }),
+  // Finished list — completed + cancelled_by_platform (ended challenges).
+  const finishedRaw = mergeUpcomingRoomsById(...finishedBatches);
+  for (const room of finishedRaw) {
+    if (!isUnlimitedFinishedForLiveTab(room.status)) continue;
+    // Map cancelled → completed for Live "Recently Finished" display.
+    const mapped = mapUnlimitedUpcomingToLiveRaceFields(
+      { ...room, status: "completed" },
+      nowMs,
     );
+    if (!mapped) continue;
+    finished.push({ ...mapped, status: "completed" });
   }
+
+  // Persist membership for live races only — never clearAll (that marked left and hid Walk).
+  await Promise.all(
+    live.map(async (row) => {
+      const room = merged.find((r) => r.room_id === row.id);
+      if (!room?.current_user_registered) return;
+      await saveHostedUnlimitedChallenge(
+        {
+          ...room,
+          status: room.status,
+          current_user_registered: true,
+        },
+        { resumeAfterLeave: true },
+      );
+    }),
+  );
 
   logger.debug(
     "UnlimitedList",
-    `liveTab live=${live.length} finished=${finished.length} api=${fromApi.length} hosted=${hosted.length} details=${detailRooms.length}` +
+    `liveTab live=${live.length} finished=${finished.length} apiLive=${fromApi.length} apiFinished=${finishedRaw.length} hostedWas=${hosted.length} serverLive=${serverLiveIds.size}` +
       (live[0] ? ` sampleLive=${live[0].id} fee=${live[0].entryAmountCents}` : ""),
   );
   return { live, finished };

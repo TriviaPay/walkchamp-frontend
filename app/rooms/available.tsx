@@ -2248,31 +2248,75 @@ function AvailableRoomsScreenContent() {
       );
     });
 
-    ch.bind("room:participant_joined", (data: { room_id: string; current_players?: number }) => {
+    ch.bind("room:participant_joined", (data: {
+      room_id: string;
+      raceId?: string;
+      current_players?: number;
+      registered_count?: number;
+      participantCount?: number;
+    }) => {
+      const roomId = data.room_id ?? data.raceId;
+      const explicitCount =
+        data.registered_count ?? data.current_players ?? data.participantCount;
       setRooms((prev) => {
         const next = prev
           .map((r) => {
-            if (r.room_id !== data.room_id) return r;
-            const newCount = data.current_players ?? r.current_players + 1;
-            return { ...r, current_players: newCount, available_slots: r.max_players - newCount };
+            if (r.room_id !== roomId) return r;
+            const newCount = explicitCount ?? r.current_players + 1;
+            const unlimited = r.max_players <= 0;
+            return {
+              ...r,
+              current_players: newCount,
+              available_slots: unlimited ? 999 : Math.max(0, r.max_players - newCount),
+            };
           })
-          .filter((r) => r.current_players < r.max_players);
-        const wasVisible = prev.some((r) => r.room_id === data.room_id);
-        const stillVisible = next.some((r) => r.room_id === data.room_id);
+          // Unlimited rooms use max_players=0 — never drop them as "full".
+          .filter((r) => r.max_players <= 0 || r.current_players < r.max_players);
+        const wasVisible = prev.some((r) => r.room_id === roomId);
+        const stillVisible = next.some((r) => r.room_id === roomId);
         if (wasVisible && !stillVisible) {
           setActiveRoomCount((c) => Math.max(0, c - 1));
         }
         return next;
       });
+      // Unlimited Challenges emit participant_joined (not room:registered) — keep Upcoming in sync.
+      setUpcomingRooms((prev) =>
+        prev.map((r) => {
+          if (r.room_id !== roomId) return r;
+          const newCount = explicitCount ?? r.registered_count + 1;
+          return { ...r, registered_count: newCount };
+        }),
+      );
     });
 
-    ch.bind("room:participant_left", (data: { room_id: string; current_players?: number }) => {
+    ch.bind("room:participant_left", (data: {
+      room_id: string;
+      raceId?: string;
+      current_players?: number;
+      registered_count?: number;
+      participantCount?: number;
+    }) => {
+      const roomId = data.room_id ?? data.raceId;
+      const explicitCount =
+        data.registered_count ?? data.current_players ?? data.participantCount;
       setRooms((prev) =>
         prev.map((r) => {
-          if (r.room_id !== data.room_id) return r;
-          const newCount = data.current_players ?? Math.max(0, r.current_players - 1);
-          return { ...r, current_players: newCount, available_slots: r.max_players - newCount };
-        })
+          if (r.room_id !== roomId) return r;
+          const newCount = explicitCount ?? Math.max(0, r.current_players - 1);
+          const unlimited = r.max_players <= 0;
+          return {
+            ...r,
+            current_players: newCount,
+            available_slots: unlimited ? 999 : Math.max(0, r.max_players - newCount),
+          };
+        }),
+      );
+      setUpcomingRooms((prev) =>
+        prev.map((r) => {
+          if (r.room_id !== roomId) return r;
+          const newCount = explicitCount ?? Math.max(0, r.registered_count - 1);
+          return { ...r, registered_count: newCount };
+        }),
       );
     });
 

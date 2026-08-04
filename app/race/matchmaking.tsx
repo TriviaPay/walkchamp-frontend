@@ -80,7 +80,7 @@ import {
 import { mapUnlimitedDetailToWaitingRoom } from "@/utils/unlimitedWaitingRoom";
 import { UNLIMITED_GOAL_CHALLENGE_TYPE } from "@/utils/unlimitedGoal";
 import { normalizeUnlimitedLiveStatus } from "@/utils/unlimitedLiveRace";
-import { isUnlimitedRaceDummyDataEnabled } from "@/config/featureFlags";
+import { isUnlimitedRaceDummyDataEnabled, isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
 import {
   DUMMY_UNLIMITED_RACE_ID,
   getDummyWaitingRoomParticipants,
@@ -494,6 +494,8 @@ function normalizeWaitingRoomParticipants(
 
   return normalized.sort((a, b) => {
     if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
+    // Current user sits beside the host (slot 2), not at the end by join time.
+    if (a.isCurrentUser !== b.isCurrentUser) return a.isCurrentUser ? -1 : 1;
     return participantTime(a) - participantTime(b);
   });
 }
@@ -1930,12 +1932,16 @@ function MatchmakingScreenContent() {
     if (!backendRaceId) return;
     connectPusher();
     const channel = subscribeToChannel(CHANNELS.liveRace(backendRaceId));
-    if (!channel) return;
+    const unlimitedChannel =
+      isUnlimitedGoalRoom && isUnlimitedGoalFrontendEnabled()
+        ? subscribeToChannel(CHANNELS.unlimitedChallenge(backendRaceId))
+        : null;
+    if (!channel && !unlimitedChannel) return;
 
     const currentPlayers = () => liveRoomRef.current?.currentPlayers ?? 2;
 
-    const refreshRoomFromServer = (data?: { raceId?: string; room_id?: string }) => {
-      const eventRoomId = data?.raceId ?? data?.room_id;
+    const refreshRoomFromServer = (data?: { raceId?: string; room_id?: string; challengeId?: string }) => {
+      const eventRoomId = data?.raceId ?? data?.room_id ?? data?.challengeId;
       if (eventRoomId && eventRoomId !== backendRaceId) return;
       void pollRoomRef.current?.(true);
     };
@@ -2002,38 +2008,53 @@ function MatchmakingScreenContent() {
       );
     };
 
-    channel.bind("race:starting", onStarting);
-    channel.bind(EVENTS.RACE_STARTED, onStarted);
-    channel.bind("race:cancelled", onCancelled);
-    channel.bind("waiting_room_cancelled", onCancelled);
-    channel.bind("waiting_room_expired", onCancelled);
-    channel.bind("room:participant_removed", onRemoved);
-    channel.bind("race:player-left", onLeft);
-    channel.bind("race:player-joined", refreshRoomFromServer);
-    channel.bind("coins_battle.joined", refreshRoomFromServer);
-    channel.bind("room:registered", refreshRoomFromServer);
-    channel.bind("room:registration_cancelled", refreshRoomFromServer);
-    channel.bind("room:participant_joined", refreshRoomFromServer);
-    channel.bind("room:participant_left", refreshRoomFromServer);
+    if (channel) {
+      channel.bind("race:starting", onStarting);
+      channel.bind(EVENTS.RACE_STARTED, onStarted);
+      channel.bind("race:cancelled", onCancelled);
+      channel.bind("waiting_room_cancelled", onCancelled);
+      channel.bind("waiting_room_expired", onCancelled);
+      channel.bind("room:participant_removed", onRemoved);
+      channel.bind("race:player-left", onLeft);
+      channel.bind("race:player-joined", refreshRoomFromServer);
+      channel.bind("coins_battle.joined", refreshRoomFromServer);
+      channel.bind("room:registered", refreshRoomFromServer);
+      channel.bind("room:registration_cancelled", refreshRoomFromServer);
+      channel.bind("room:participant_joined", refreshRoomFromServer);
+      channel.bind("room:participant_left", refreshRoomFromServer);
+    }
+    if (unlimitedChannel) {
+      unlimitedChannel.bind("participant_joined", refreshRoomFromServer);
+      unlimitedChannel.bind("participant_left", refreshRoomFromServer);
+      unlimitedChannel.bind("challenge_cancelled", onCancelled);
+    }
 
     return () => {
-      channel.unbind("race:starting", onStarting);
-      channel.unbind(EVENTS.RACE_STARTED, onStarted);
-      channel.unbind("race:cancelled", onCancelled);
-      channel.unbind("waiting_room_cancelled", onCancelled);
-      channel.unbind("waiting_room_expired", onCancelled);
-      channel.unbind("room:participant_removed", onRemoved);
-      channel.unbind("race:player-left", onLeft);
-      channel.unbind("race:player-joined", refreshRoomFromServer);
-      channel.unbind("coins_battle.joined", refreshRoomFromServer);
-      channel.unbind("room:registered", refreshRoomFromServer);
-      channel.unbind("room:registration_cancelled", refreshRoomFromServer);
-      channel.unbind("room:participant_joined", refreshRoomFromServer);
-      channel.unbind("room:participant_left", refreshRoomFromServer);
-      unsubscribeFromChannel(CHANNELS.liveRace(backendRaceId));
+      if (channel) {
+        channel.unbind("race:starting", onStarting);
+        channel.unbind(EVENTS.RACE_STARTED, onStarted);
+        channel.unbind("race:cancelled", onCancelled);
+        channel.unbind("waiting_room_cancelled", onCancelled);
+        channel.unbind("waiting_room_expired", onCancelled);
+        channel.unbind("room:participant_removed", onRemoved);
+        channel.unbind("race:player-left", onLeft);
+        channel.unbind("race:player-joined", refreshRoomFromServer);
+        channel.unbind("coins_battle.joined", refreshRoomFromServer);
+        channel.unbind("room:registered", refreshRoomFromServer);
+        channel.unbind("room:registration_cancelled", refreshRoomFromServer);
+        channel.unbind("room:participant_joined", refreshRoomFromServer);
+        channel.unbind("room:participant_left", refreshRoomFromServer);
+        unsubscribeFromChannel(CHANNELS.liveRace(backendRaceId));
+      }
+      if (unlimitedChannel) {
+        unlimitedChannel.unbind("participant_joined", refreshRoomFromServer);
+        unlimitedChannel.unbind("participant_left", refreshRoomFromServer);
+        unlimitedChannel.unbind("challenge_cancelled", onCancelled);
+        unsubscribeFromChannel(CHANNELS.unlimitedChallenge(backendRaceId));
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backendRaceId, beginCountdown, showTerminalRoomClosed]);
+  }, [backendRaceId, beginCountdown, showTerminalRoomClosed, isUnlimitedGoalRoom]);
 
   // Scheduled registration events are emitted on the existing public rooms
   // channel before the race join window opens.
@@ -2321,6 +2342,8 @@ function MatchmakingScreenContent() {
     });
     const ordered = [...deduped.values()].sort((a, b) => {
       if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
+      // Show me right beside the host (not last among 100+ joiners).
+      if (a.isCurrentUser !== b.isCurrentUser) return a.isCurrentUser ? -1 : 1;
       return participantTime(a) - participantTime(b);
     });
     if (isUnlimitedCapacity || realMaxPlayers <= 0) return ordered;

@@ -23,6 +23,7 @@ function pickRaw(obj: Record<string, unknown>, ...keys: string[]): unknown {
 function asString(value: unknown): string | null {
   if (typeof value === "string" && value.trim()) return value;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
   return null;
 }
 
@@ -98,6 +99,12 @@ export function extractUnlimitedChallengeRows(payload: unknown): unknown[] {
 
   if (looksLikeChallengeRow(obj)) return [obj];
 
+  // Detail envelope: { challenge: {...}, players: [...] }
+  for (const key of ["challenge", "unlimitedChallenge", "unlimited_challenge", "room"] as const) {
+    const nested = asRecord(obj[key]);
+    if (nested && looksLikeChallengeRow(nested)) return [nested];
+  }
+
   for (const key of LIST_ARRAY_KEYS) {
     const v = obj[key];
     if (Array.isArray(v)) return v;
@@ -107,11 +114,26 @@ export function extractUnlimitedChallengeRows(payload: unknown): unknown[] {
       for (const inner of LIST_ARRAY_KEYS) {
         if (Array.isArray(nested[inner])) return nested[inner] as unknown[];
       }
+      // data: { challenge: {...} }
+      for (const inner of ["challenge", "unlimitedChallenge", "room"] as const) {
+        const deep = asRecord(nested[inner]);
+        if (deep && looksLikeChallengeRow(deep)) return [deep];
+      }
     }
   }
 
   // One-level scan for arrays of challenge-shaped objects.
-  for (const value of Object.values(obj)) {
+  // Skip participants/players — those look like rows with `id` but are not challenges.
+  for (const [key, value] of Object.entries(obj)) {
+    if (
+      key === "players" ||
+      key === "participants" ||
+      key === "members" ||
+      key === "registrations" ||
+      key === "leaderboard"
+    ) {
+      continue;
+    }
     if (!Array.isArray(value) || value.length === 0) continue;
     if (value.some(looksLikeChallengeRow)) return value;
   }

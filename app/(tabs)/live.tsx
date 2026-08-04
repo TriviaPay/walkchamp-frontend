@@ -331,9 +331,11 @@ async function fetchLiveChallenges(
       authFetch(`/api/races?status=in_progress&filter=${encodeURIComponent(fp)}&limit=30`),
       authFetch(`/api/races?status=completed&filter=${encodeURIComponent(fp)}&limit=${FINISHED_PAGE_SIZE}&offset=0`),
       shouldMergeUnlimitedLive(filter)
-        ? import("@/services/unlimitedChallengesListApi").then((m) =>
-            m.fetchLiveUnlimitedChallenges({ viewerUserId: opts?.viewerUserId }),
-          )
+        ? import("@/services/unlimitedChallengesListApi")
+            .then((m) =>
+              m.fetchLiveUnlimitedChallenges({ viewerUserId: opts?.viewerUserId }),
+            )
+            .catch(() => ({ live: [] as LiveRace[], finished: [] as LiveRace[] }))
         : Promise.resolve({ live: [] as LiveRace[], finished: [] as LiveRace[] }),
     ]);
     if (!liveRes.ok && !finishedRes.ok && unlimited.live.length === 0 && unlimited.finished.length === 0) {
@@ -1504,11 +1506,18 @@ export default function LiveTab() {
             r.capacityMode !== "unlimited" &&
             r.entryType !== "unlimited_goal",
         );
+        const strippedUnlimited =
+          cached.live.length > liveSansUnlimited.length ||
+          cached.finished.length > finishedSansUnlimited.length;
         setLiveChallenges(liveSansUnlimited);
         setFinishedChallenges(finishedSansUnlimited);
         setFinishedOffset(FINISHED_PAGE_SIZE);
         setHasMoreFinished(finishedSansUnlimited.length >= FINISHED_PAGE_SIZE);
-        setLoading(false); // clear spinner — fresh fetch happens silently below
+        // If we hid Unlimited cards pending server truth, keep the spinner until
+        // fetch finishes — avoids empty Live for ~1 min then ghost cards reappearing.
+        if (!strippedUnlimited) {
+          setLoading(false);
+        }
       }
 
       // ── 2. Fetch fresh data in the background ────────────────────────────────
