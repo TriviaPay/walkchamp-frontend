@@ -39,6 +39,8 @@ const LIVE_STATUSES = new Set([
   "running",
   "started",
   "live",
+  "starting",
+  "settling",
 ]);
 const FINISHED_STATUSES = new Set([
   "completed",
@@ -61,14 +63,28 @@ const WAITING_STATUSES = new Set([
 /** Normalize API status → Live tab status (`in_progress` | `completed` | other).
  * Prefer schedule windows over stale waiting/scheduled labels — backend may keep
  * listing active Unlimited rows as "waiting" after startAtUtc.
+ *
+ * When `requireServerLive` is true (Live tab), never promote waiting→live via
+ * schedule alone — that resurrects cancelled challenges from device cache.
  */
 export function normalizeUnlimitedLiveStatus(
   status: string | null | undefined,
-  opts?: { startAt?: string | null; endAt?: string | null; nowMs?: number },
+  opts?: {
+    startAt?: string | null;
+    endAt?: string | null;
+    nowMs?: number;
+    /** Live tab: only trust explicit live/finished server statuses. */
+    requireServerLive?: boolean;
+  },
 ): "in_progress" | "completed" | "waiting" | string {
   const raw = (status ?? "").trim().toLowerCase();
   if (FINISHED_STATUSES.has(raw)) return "completed";
   if (LIVE_STATUSES.has(raw)) return "in_progress";
+
+  if (opts?.requireServerLive) {
+    if (WAITING_STATUSES.has(raw)) return "waiting";
+    return raw || "waiting";
+  }
 
   const now = opts?.nowMs ?? Date.now();
   const startMs = opts?.startAt ? new Date(opts.startAt).getTime() : NaN;
@@ -142,10 +158,14 @@ export function mapUnlimitedUpcomingToLiveRaceFields(
   room: UnlimitedUpcomingRoom,
   nowMs = Date.now(),
 ): UnlimitedLiveRaceFields | null {
+  if (isUnlimitedTerminalExcludedFromLive(room.status)) return null;
+
   const status = normalizeUnlimitedLiveStatus(room.status, {
     startAt: room.scheduled_start_at,
     endAt: room.challenge_end_at,
     nowMs,
+    // Live cards must not resurrect cancelled/waiting seeds via schedule windows.
+    requireServerLive: true,
   });
   if (!isUnlimitedLiveEligible(status)) return null;
 

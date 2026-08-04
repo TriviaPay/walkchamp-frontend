@@ -134,3 +134,21 @@ export async function removeHostedUnlimitedChallenge(roomId: string): Promise<vo
     prev.filter((r) => r.room_id !== roomId),
   );
 }
+
+/** Wipe all locally cached Unlimited seeds (used when server has no open challenges). */
+export async function clearAllHostedUnlimitedChallenges(): Promise<void> {
+  const prev = await loadHostedUnlimitedChallenges({ includeStarted: true });
+  if (prev.length === 0) {
+    await storageSet(STORAGE_KEYS.HOSTED_UNLIMITED_CHALLENGES, []);
+    return;
+  }
+  const leftPrev =
+    (await storageGet<LeftUnlimitedEntry[]>(STORAGE_KEYS.LEFT_UNLIMITED_CHALLENGES)) ?? [];
+  const now = Date.now();
+  const leftNext: LeftUnlimitedEntry[] = [
+    ...prev.map((r) => ({ roomId: r.room_id, leftAtMs: now })),
+    ...leftPrev,
+  ].slice(0, 40);
+  await storageSet(STORAGE_KEYS.LEFT_UNLIMITED_CHALLENGES, leftNext);
+  await storageSet(STORAGE_KEYS.HOSTED_UNLIMITED_CHALLENGES, []);
+}

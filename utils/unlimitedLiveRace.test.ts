@@ -74,12 +74,20 @@ const room: UnlimitedUpcomingRoom = {
 };
 
 const mapped = mapUnlimitedUpcomingToLiveRaceFields(room, nowAfterStart);
-assert.ok(mapped);
-assert.equal(mapped.status, "in_progress");
-assert.equal(mapped.entryType, "$30");
-assert.equal(mapped.maxPlayers, 0);
-assert.equal(mapped.challengeType, "unlimited_goal");
-assert.equal(mapped.capacityMode, "unlimited");
+assert.equal(
+  mapped,
+  null,
+  "waiting + past start must NOT become Live via schedule alone (avoids cancelled ghosts)",
+);
+
+const liveRoom: UnlimitedUpcomingRoom = { ...room, status: "active" };
+const mappedLive = mapUnlimitedUpcomingToLiveRaceFields(liveRoom, nowAfterStart);
+assert.ok(mappedLive);
+assert.equal(mappedLive.status, "in_progress");
+assert.equal(mappedLive.entryType, "$30");
+assert.equal(mappedLive.maxPlayers, 0);
+assert.equal(mappedLive.challengeType, "unlimited_goal");
+assert.equal(mappedLive.capacityMode, "unlimited");
 
 const detailMapped = mapUnlimitedDetailToLiveDetail({
   challenge: {

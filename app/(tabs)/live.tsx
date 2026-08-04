@@ -1490,10 +1490,24 @@ export default function LiveTab() {
       // First app launch after a kill: warm mem from disk (fast, ~20 ms)
       if (!cached) cached = await screenCache.get<{ live: LiveRace[]; finished: LiveRace[] }>(cacheKey);
       if (cached) {
-        setLiveChallenges(cached.live);
-        setFinishedChallenges(cached.finished);
+        // Never paint stale Unlimited cards from disk/mem cache — cancelled challenges
+        // were surviving here after server cancel. Classic races can still show instantly.
+        const liveSansUnlimited = cached.live.filter(
+          (r) =>
+            r.challengeType !== "unlimited_goal" &&
+            r.capacityMode !== "unlimited" &&
+            r.entryType !== "unlimited_goal",
+        );
+        const finishedSansUnlimited = cached.finished.filter(
+          (r) =>
+            r.challengeType !== "unlimited_goal" &&
+            r.capacityMode !== "unlimited" &&
+            r.entryType !== "unlimited_goal",
+        );
+        setLiveChallenges(liveSansUnlimited);
+        setFinishedChallenges(finishedSansUnlimited);
         setFinishedOffset(FINISHED_PAGE_SIZE);
-        setHasMoreFinished(cached.finished.length >= FINISHED_PAGE_SIZE);
+        setHasMoreFinished(finishedSansUnlimited.length >= FINISHED_PAGE_SIZE);
         setLoading(false); // clear spinner — fresh fetch happens silently below
       }
 
