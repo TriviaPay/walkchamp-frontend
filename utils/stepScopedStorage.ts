@@ -58,7 +58,7 @@ export async function writeDailyStepsForUserDate(
   userId: string,
   localDate: string,
   steps: number,
-  opts?: { forceZero?: boolean },
+  opts?: { forceZero?: boolean; immediate?: boolean },
 ): Promise<void> {
   const key = stepScopedKeys(userId, localDate).steps;
   const value = Math.max(0, Math.floor(steps));
@@ -74,6 +74,12 @@ export async function writeDailyStepsForUserDate(
   }
   const existing = pendingDailyWrites.get(key);
   if (existing) clearTimeout(existing);
+  // Account-switch / midnight resets must be visible to the next read immediately.
+  if (opts?.immediate || opts?.forceZero) {
+    pendingDailyWrites.delete(key);
+    await storageSet(key, value);
+    return;
+  }
   pendingDailyWrites.set(
     key,
     setTimeout(() => {

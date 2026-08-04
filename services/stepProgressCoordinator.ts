@@ -155,7 +155,7 @@ function scheduleWalkNotificationUpdate(force = false): void {
  */
 export async function resolveAuthoritativeTodaySteps(
   userId: string,
-  opts?: { mergeNative?: boolean },
+  opts?: { mergeNative?: boolean; ignoreProvider?: boolean },
 ): Promise<number> {
   const today = getLocalDateStr();
   const rp = store.getState().raceProgress;
@@ -187,28 +187,41 @@ export async function resolveAuthoritativeTodaySteps(
     }
   }
 
-  try {
-    const data = await stepProviderManager.getTodayStepsForBackgroundPoll();
-    if (data) {
-      let providerSteps = Math.max(0, data.steps);
-      if (
-        opts?.mergeNative !== false &&
-        Platform.OS === "android" &&
-        !stepProviderManager.usesVerifiedStepSource()
-      ) {
-        providerSteps = await mergeWalkStepsWithNative(providerSteps);
+  if (!opts?.ignoreProvider) {
+    try {
+      const data = await stepProviderManager.getTodayStepsForBackgroundPoll();
+      if (data) {
+        let providerSteps = Math.max(0, data.steps);
+        if (
+          opts?.mergeNative !== false &&
+          Platform.OS === "android" &&
+          !stepProviderManager.usesVerifiedStepSource()
+        ) {
+          providerSteps = await mergeWalkStepsWithNative(providerSteps);
+        }
+        const { applyVerifiedAccountStepIsolation } = await import(
+          "@/services/steps/verifiedAccountStepIsolation"
+        );
+        const isolated = applyVerifiedAccountStepIsolation(
+          userId,
+          providerSteps,
+          today,
+        );
+        const resolved =
+          isolated != null
+            ? isolated
+            : resolveTodayDisplaySteps({
+                providerSteps,
+                backendSteps: accepted,
+                previousProviderSteps: accepted,
+              });
+        accepted = filterLegacyStepIncrease(accepted, resolved, {
+          backendSteps: backendSynced,
+        });
       }
-      const resolved = resolveTodayDisplaySteps({
-        providerSteps,
-        backendSteps: accepted,
-        previousProviderSteps: accepted,
-      });
-      accepted = filterLegacyStepIncrease(accepted, resolved, {
-        backendSteps: backendSynced,
-      });
+    } catch {
+      // keep accumulated steps
     }
-  } catch {
-    // keep accumulated steps
   }
 
   stepEngineLog(
@@ -393,6 +406,14 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
 
   lastWalkNotificationSteps = -1;
   markFreshLocalDay(90_000);
+  try {
+    const { clearVerifiedAccountStepIsolation } = await import(
+      "@/services/steps/verifiedAccountStepIsolation"
+    );
+    clearVerifiedAccountStepIsolation();
+  } catch {
+    /* optional */
+  }
 
   await writeDailyStepsForUserDate(activeUserId, today, 0, { forceZero: true });
   await storageSet(stepScopedKeys(activeUserId, today).lastSyncedStepsCount, 0);
@@ -2159,16 +2180,62 @@ export async function bindStepSessionToUser(userId: string): Promise<boolean> {
   logger.debug("StepService", `started for new user userId=${userId}`);
   const today = getLocalDateStr();
   suppressLegacyStepBumps(12_000);
+
+  const {
+    beginVerifiedAccountStepIsolation,
+    clearVerifiedAccountStepIsolation,
+  } = await import("@/services/steps/verifiedAccountStepIsolation");
+  // Same-user re-login: HC stays authoritative. Account switch: isolate.
+  clearVerifiedAccountStepIsolation();
+
   // Always prefer THIS account's durable daily cache (keyed by userId).
   // Never force 0 on account switch — that wiped restored totals after A→B→A.
   // mergeNative only when same-user re-login (avoid inheriting prior account FGS).
-  const cachedBoot = await readDailyStepsForUserDate(userId, today).catch(() => 0);
-  const bootSteps = Math.max(
-    cachedBoot,
-    await resolveAuthoritativeTodaySteps(userId, {
-      mergeNative: !switched,
-    }).catch(() => cachedBoot),
-  );
+  let cachedBoot = await readDailyStepsForUserDate(userId, today).catch(() => 0);
+  const scoped = stepScopedKeys(userId, today);
+  const lastSynced =
+    (await storageGet<number>(scoped.lastSyncedStepsCount).catch(() => 0)) ?? 0;
+  let bootSteps = cachedBoot;
+
+  if (switched && stepProviderManager.usesVerifiedStepSource()) {
+    // Device HC/HK is shared across logins on one phone. Never boot the new
+    // account from the live device total — only from what THIS account already
+    // synced. Post-bind walking is attributed as a delta from the HC baseline.
+    let providerBaseline = 0;
+    try {
+      const data = await stepProviderManager.getTodayStepsForBackgroundPoll();
+      providerBaseline = Math.max(0, data?.steps ?? 0);
+    } catch {
+      providerBaseline = 0;
+    }
+    // Trust backend watermark only. Local cache may contain the previous
+    // account's device HC total written under this userId by older builds.
+    bootSteps = Math.max(0, lastSynced);
+    if (cachedBoot !== bootSteps) {
+      await writeDailyStepsForUserDate(userId, today, bootSteps, {
+        forceZero: bootSteps === 0,
+        immediate: true,
+      }).catch(() => {});
+    }
+    beginVerifiedAccountStepIsolation({
+      userId,
+      localDate: today,
+      accountFloor: bootSteps,
+      providerBaseline,
+    });
+    stepEngineLog(
+      "AuthSwitch",
+      `verifiedIsolation userId=${userId} floor=${bootSteps} hcBaseline=${providerBaseline} lastSynced=${lastSynced}`,
+    );
+  } else {
+    bootSteps = Math.max(
+      cachedBoot,
+      await resolveAuthoritativeTodaySteps(userId, {
+        mergeNative: !switched,
+        ignoreProvider: false,
+      }).catch(() => cachedBoot),
+    );
+  }
   // Ensure Redux is empty of any prior account before boot (logout may race).
   if (switched || store.getState().raceProgress.userId !== userId) {
     store.dispatch(raceProgressActions.resetStepStateForLogout());
@@ -2525,6 +2592,14 @@ export async function restoreActiveLiveRaceNotificationForUser(
 export async function clearStepSessionForLogout(userId: string | undefined): Promise<void> {
   const epoch = bumpStepSessionEpoch();
   logger.debug("Logout", `clearing step session userId=${userId ?? "unknown"} epoch=${epoch}`);
+  try {
+    const { clearVerifiedAccountStepIsolation } = await import(
+      "@/services/steps/verifiedAccountStepIsolation"
+    );
+    clearVerifiedAccountStepIsolation();
+  } catch {
+    /* optional */
+  }
   await clearUserSessionStepState(userId, "logout", { epoch });
   if (epoch !== getStepSessionEpoch()) {
     logger.debug("Logout", `aborted post-clear — newer session epoch=${getStepSessionEpoch()}`);

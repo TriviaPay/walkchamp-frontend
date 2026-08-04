@@ -303,12 +303,22 @@ async function submitStepsToBackend(
       /* optional */
     }
 
+    let deviceHeaders: Record<string, string> = {};
+    try {
+      const { buildSessionRequestHeaders } = await import(
+        "@/services/sessionRequestHeaders"
+      );
+      deviceHeaders = await buildSessionRequestHeaders();
+    } catch {
+      /* optional — backend falls back to single-device totals without it */
+    }
     const res = await fetch(`${API_BASE}/api/walk/steps`, {
       method: "POST",
       signal: timeoutSignal(STEP_SYNC_TIMEOUT),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${session}`,
+        ...deviceHeaders,
       },
       body: JSON.stringify(body),
     });
@@ -608,6 +618,30 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       if (stepBindUserIdRef.current !== user.id) {
         return backendTodayStepsRef.current;
       }
+      // After A→B on the same phone, HC/HK still report the device total.
+      // Isolation maps that to this account's floor + post-bind delta only.
+      try {
+        const {
+          applyVerifiedAccountStepIsolation,
+        } = require("@/services/steps/verifiedAccountStepIsolation") as typeof import("@/services/steps/verifiedAccountStepIsolation");
+        const isolated = applyVerifiedAccountStepIsolation(user.id, provider);
+        if (isolated != null) {
+          if (isolated >= lastProviderPollRef.current) {
+            lastProviderPollRef.current = isolated;
+          }
+          logStepAccuracyAudit({
+            surface: "walk",
+            providerSteps: provider,
+            backendSteps: backendTodayStepsRef.current,
+            displaySteps: isolated,
+            providerId: stepProviderManager.getActiveProviderId(),
+            extra: { accountIsolated: true },
+          });
+          return isolated;
+        }
+      } catch {
+        /* optional */
+      }
       const display = resolveTodayDisplaySteps({
         providerSteps: provider,
         backendSteps: backendTodayStepsRef.current,
@@ -798,24 +832,66 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
               backendTodayStepsRef.current,
               todayStepsRef.current,
             );
+            let usedAccountIsolation = false;
             if (stepProviderManager.usesVerifiedStepSource()) {
-              displaySteps = hydrateStepDisplayFromSources({
-                providerSteps,
-                backendSteps: backendTodayStepsRef.current,
-                localCachedSteps: localForFloor,
-                allowBackendCatchUp: false,
-                previousProviderSteps: displaySteps,
-              });
-              displaySteps = Math.max(displaySteps, floor);
+              let isolatedDisplay: number | null = null;
+              try {
+                const {
+                  applyVerifiedAccountStepIsolation,
+                  beginVerifiedAccountStepIsolation,
+                } = require("@/services/steps/verifiedAccountStepIsolation") as typeof import("@/services/steps/verifiedAccountStepIsolation");
+                // Account switch: never seed UI from shared device HC total.
+                if (accountSwitched) {
+                  const accountFloor = Math.max(0, backendTodayStepsRef.current);
+                  beginVerifiedAccountStepIsolation({
+                    userId: user.id,
+                    localDate: today,
+                    accountFloor,
+                    providerBaseline: providerSteps,
+                  });
+                  isolatedDisplay = accountFloor;
+                  usedAccountIsolation = true;
+                  stepEngineLog(
+                    "AuthSwitch",
+                    `hydrateIsolation userId=${user.id} floor=${accountFloor} hcBaseline=${providerSteps}`,
+                  );
+                } else {
+                  isolatedDisplay = applyVerifiedAccountStepIsolation(
+                    user.id,
+                    providerSteps,
+                    today,
+                  );
+                  usedAccountIsolation = isolatedDisplay != null;
+                }
+              } catch {
+                isolatedDisplay = null;
+              }
+              if (isolatedDisplay != null) {
+                displaySteps = isolatedDisplay;
+              } else {
+                displaySteps = hydrateStepDisplayFromSources({
+                  providerSteps,
+                  backendSteps: backendTodayStepsRef.current,
+                  localCachedSteps: localForFloor,
+                  allowBackendCatchUp: false,
+                  previousProviderSteps: displaySteps,
+                });
+                displaySteps = Math.max(displaySteps, floor);
+              }
             } else {
               // Legacy sensor: on init trust backend + cache only — provider updates via watch.
               displaySteps = floor;
             }
-            displaySteps = filterLegacyStepIncrease(floor, displaySteps, {
-              backendSteps: backendTodayStepsRef.current,
-            });
-            if (rolled || isFreshLocalDay()) {
-              displaySteps = Math.min(displaySteps, Math.max(providerSteps, backendTodayStepsRef.current));
+            if (!usedAccountIsolation) {
+              displaySteps = filterLegacyStepIncrease(floor, displaySteps, {
+                backendSteps: backendTodayStepsRef.current,
+              });
+              if (rolled || isFreshLocalDay()) {
+                displaySteps = Math.min(
+                  displaySteps,
+                  Math.max(providerSteps, backendTodayStepsRef.current),
+                );
+              }
             }
             lastProviderPollRef.current = displaySteps;
             // Prefer backend total as lastSynced — never mark provider-only steps as synced.
@@ -1105,17 +1181,35 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         ? 0
         : backendSteps;
       const effectiveLocal = isFreshLocalDay() ? 0 : localCached;
-      const mergedDisplay = hydrateStepDisplayFromSources({
-        providerSteps,
-        backendSteps: backendTodayStepsRef.current,
-        localCachedSteps: effectiveLocal,
-        allowBackendCatchUp:
-          stepProviderManager.getActiveProviderId() === "android_legacy_sensor",
-        previousProviderSteps: providerStepsAtBindRef.current || effectiveLocal,
-      });
-      const displaySteps = isFreshLocalDay()
-        ? Math.max(mergedDisplay, todayStepsRef.current)
-        : Math.max(mergedDisplay, todayStepsRef.current, localCached);
+      let isolatedDisplay: number | null = null;
+      try {
+        const {
+          applyVerifiedAccountStepIsolation,
+        } = require("@/services/steps/verifiedAccountStepIsolation") as typeof import("@/services/steps/verifiedAccountStepIsolation");
+        isolatedDisplay = applyVerifiedAccountStepIsolation(
+          user.id,
+          providerSteps,
+        );
+      } catch {
+        isolatedDisplay = null;
+      }
+      const mergedDisplay =
+        isolatedDisplay != null
+          ? isolatedDisplay
+          : hydrateStepDisplayFromSources({
+              providerSteps,
+              backendSteps: backendTodayStepsRef.current,
+              localCachedSteps: effectiveLocal,
+              allowBackendCatchUp:
+                stepProviderManager.getActiveProviderId() === "android_legacy_sensor",
+              previousProviderSteps: providerStepsAtBindRef.current || effectiveLocal,
+            });
+      const displaySteps =
+        isolatedDisplay != null
+          ? Math.max(mergedDisplay, backendTodayStepsRef.current)
+          : isFreshLocalDay()
+            ? Math.max(mergedDisplay, todayStepsRef.current)
+            : Math.max(mergedDisplay, todayStepsRef.current, localCached);
       if (displaySteps >= lastProviderPollRef.current) {
         lastProviderPollRef.current = displaySteps;
       }
