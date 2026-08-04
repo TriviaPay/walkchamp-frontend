@@ -1737,6 +1737,10 @@ export default function LiveTab() {
   }, [load]);
 
   const liveCount = liveChallenges.length;
+  const racingDisplay = Math.max(
+    counts.racing,
+    liveChallenges.reduce((sum, r) => sum + Math.max(0, r.playerCount || 0), 0),
+  );
   const finishedCount = finishedChallenges.length;
 
   // Open the date-specific "View All" screen. The already-filtered races for the
@@ -1851,7 +1855,7 @@ export default function LiveTab() {
             <Text style={[st.heroTitle, { color: colors.foreground }]}>Live Challenges</Text>
             <View style={st.presenceRow}>
               <Text style={st.racingDot}>●</Text>
-              <Text style={[st.presenceText, { color: colors.mutedForeground }]}>{formatCount(counts.racing)} racing</Text>
+              <Text style={[st.presenceText, { color: colors.mutedForeground }]}>{formatCount(racingDisplay)} racing</Text>
               <Feather name="eye" size={12} color={colors.mutedForeground} style={{ marginLeft: 6 }} />
               <Text style={[st.presenceText, { color: colors.mutedForeground }]}>{formatCount(counts.spectating)} watching</Text>
             </View>

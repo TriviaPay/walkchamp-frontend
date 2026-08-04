@@ -19,6 +19,7 @@ import {
 } from "@/utils/unlimitedChallengeRooms";
 import {
   isUnlimitedLiveEligible,
+  isUnlimitedTerminalExcludedFromLive,
   mapUnlimitedUpcomingToLiveRaceFields,
   normalizeUnlimitedLiveStatus,
   type UnlimitedLiveRaceFields,
@@ -35,20 +36,17 @@ const LIST_PATHS = [
 ] as const;
 
 /**
- * Live tab sources. Default list still returns started Unlimited rows (status may
- * stay "waiting"); classify by startAt/endAt client-side. Status probes are
- * best-effort — many 404 or ignore the param.
+ * Live tab sources — prefer dedicated live + my-active endpoints, then status filters.
+ * Default waiting list is last (for schedule-based client classification only).
  */
 const LIVE_LIST_PATHS = [
-  "/api/unlimited-challenges",
-  "/api/unlimited-challenges?visibility=public",
+  "/api/unlimited-challenges/live",
+  "/api/unlimited-challenges/my-active",
   "/api/unlimited-challenges?status=active",
   "/api/unlimited-challenges?status=in_progress",
   "/api/unlimited-challenges?status=active&visibility=public",
-  "/api/unlimited-challenges?status=completed",
-  "/api/unlimited-challenges/active",
-  "/api/unlimited-challenges/my-active",
-  "/api/unlimited-challenges/mine",
+  "/api/unlimited-challenges",
+  "/api/unlimited-challenges?visibility=public",
 ] as const;
 
 function topKeys(data: unknown): string {
@@ -168,6 +166,19 @@ async function reconcileHostedMembership(opts: {
           | Record<string, unknown>
           | null;
         const normalized = normalizeUnlimitedChallengeToUpcomingRoom(rawRow);
+        const challengeStatus = String(
+          normalized?.status ??
+            (rawRow as Record<string, unknown> | null)?.status ??
+            "",
+        ).toLowerCase();
+        if (isUnlimitedTerminalExcludedFromLive(challengeStatus)) {
+          await removeHostedUnlimitedChallenge(seed.room_id);
+          logger.debug(
+            "UnlimitedList",
+            `reconcile drop cancelled seed id=${seed.room_id} status=${challengeStatus}`,
+          );
+          return;
+        }
         const explicitReg =
           rawRow && typeof rawRow === "object"
             ? (() => {
@@ -338,7 +349,8 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
     loadHostedUnlimitedChallenges({ includeStarted: true }),
   ]);
 
-  const fromApi = mergeUpcomingRoomsById(...batches);
+  const fromApiRaw = mergeUpcomingRoomsById(...batches);
+  const fromApi = fromApiRaw.filter((r) => !isUnlimitedTerminalExcludedFromLive(r.status));
   const leftIds = await loadLeftUnlimitedChallengeIds();
   const knownIds = new Set(fromApi.map((r) => r.room_id));
 
@@ -358,8 +370,24 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
     await Promise.all([...idsNeedingDetail].map((id) => fetchUnlimitedDetailRoom(id)))
   ).filter((r): r is UnlimitedUpcomingRoom => r != null);
 
-  // Membership is explicit only — never hostUserId (Leave keeps creator id).
-  const merged = mergeUpcomingRoomsById(hosted, fromApi, detailRooms).map((room) => {
+  // Drop platform-cancelled / cancelled seeds so they cannot reappear as Live Now.
+  const { removeHostedUnlimitedChallenge } = await import("@/utils/hostedUnlimitedCache");
+  await Promise.all(
+    detailRooms.map(async (room) => {
+      if (!isUnlimitedTerminalExcludedFromLive(room.status)) return;
+      await removeHostedUnlimitedChallenge(room.room_id);
+    }),
+  );
+  const detailActive = detailRooms.filter(
+    (r) => !isUnlimitedTerminalExcludedFromLive(r.status),
+  );
+  const hostedActive = hosted.filter(
+    (h) => !isUnlimitedTerminalExcludedFromLive(h.status),
+  );
+
+  // Membership: preserve true from any merge source (hosted seed / my-active / detail).
+  // Later thin list rows often omit current_user_registered — do not wipe it to false.
+  const merged = mergeUpcomingRoomsById(hostedActive, fromApi, detailActive).map((room) => {
     if (leftIds.has(room.room_id)) {
       return {
         ...room,
@@ -367,13 +395,20 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
         eligible_to_register: !room.is_private,
       };
     }
-    if (room.current_user_registered !== true) {
-      return { ...room, current_user_registered: false };
+    const seed = hostedActive.find((h) => h.room_id === room.room_id);
+    const fromAny = [room, seed, ...fromApi.filter((r) => r.room_id === room.room_id)].some(
+      (r) => r?.current_user_registered === true,
+    );
+    if (fromAny) {
+      return {
+        ...room,
+        current_user_registered: true,
+        eligible_to_register: false,
+      };
     }
     return {
       ...room,
-      current_user_registered: true,
-      eligible_to_register: false,
+      current_user_registered: false,
     };
   });
 
@@ -398,8 +433,11 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
   const live: UnlimitedLiveRaceFields[] = [];
   const finished: UnlimitedLiveRaceFields[] = [];
   for (const room of merged) {
+    if (isUnlimitedTerminalExcludedFromLive(room.status)) continue;
     const mapped = mapUnlimitedUpcomingToLiveRaceFields(room, nowMs);
     if (!mapped) continue;
+    // Platform-cancelled rows must not resurface via schedule windows / local seeds.
+    if (isUnlimitedTerminalExcludedFromLive(mapped.status)) continue;
     if (mapped.status === "completed") finished.push(mapped);
     else live.push(mapped);
   }

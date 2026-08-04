@@ -203,6 +203,8 @@ export const CHANNELS = {
   PRESENCE: "public-presence",
   LIVE_LEADERBOARD: "public-leaderboard-global",
   liveRace: (raceId: string) => `public-live-race-${raceId}`,
+  /** Unlimited Challenge canonical channel (backend also mirrors to liveRace). */
+  unlimitedChallenge: (challengeId: string) => `unlimited-challenge-${challengeId}`,
   privateUser: (userId: string) => `private-user-${userId}`,
   /** Backend emits session-invalidated here for the superseded session id. */
   privateSession: (sessionId: string) => `private-session-${sessionId}`,

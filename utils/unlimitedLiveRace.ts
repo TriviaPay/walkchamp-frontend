@@ -47,6 +47,8 @@ const FINISHED_STATUSES = new Set([
   "closed",
   "cancelled",
   "canceled",
+  "cancelled_by_platform",
+  "canceled_by_platform",
 ]);
 const WAITING_STATUSES = new Set([
   "waiting",
@@ -83,6 +85,17 @@ export function normalizeUnlimitedLiveStatus(
 
 export function isUnlimitedLiveEligible(status: string): boolean {
   return status === "in_progress" || status === "completed";
+}
+
+/** Terminal statuses that should never appear as Live Now / Recently Finished cards. */
+export function isUnlimitedTerminalExcludedFromLive(status: string | null | undefined): boolean {
+  const raw = (status ?? "").trim().toLowerCase();
+  return (
+    raw === "cancelled" ||
+    raw === "canceled" ||
+    raw === "cancelled_by_platform" ||
+    raw === "canceled_by_platform"
+  );
 }
 
 /** Cash badge label for Live cards (matches $1/$3 style). */
@@ -241,7 +254,8 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
   const user =
     asRecord(pick(obj, "user", "profile", "member", "registrant", "walker", "athlete")) ??
     {};
-  // Prefer real userId — never treat participant row `id` as userId (breaks roster).
+  // Prefer explicit userId fields; fall back to row id (Waiting Room does the same)
+  // so Unlimited detail rows that only expose `id` still appear on Live Race.
   const userId =
     asString(
       pick(
@@ -254,7 +268,9 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
         "participantUserId",
         "participant_user_id",
       ),
-    ) ?? asString(pick(user, "id", "userId", "user_id"));
+    ) ??
+    asString(pick(user, "id", "userId", "user_id")) ??
+    asString(pick(obj, "participantId", "participant_id", "id"));
   if (!userId) return null;
   const username =
     asString(
@@ -355,6 +371,123 @@ export function mergeUnlimitedLiveParticipants(
     });
   });
   return [...byUser.values()];
+}
+
+/**
+ * Overlay classic `/api/races/:id` live fields onto Unlimited detail.
+ * Keeps Unlimited challenge metadata/roster; takes race status/startedAt/steps when present
+ * so Unlimited Live Race tracks like a normal live race.
+ */
+export function overlayClassicRaceOnUnlimitedDetail(
+  unlimited: UnlimitedLiveDetailMapped,
+  racePayload: unknown,
+): UnlimitedLiveDetailMapped {
+  const root = asRecord(racePayload);
+  if (!root) return unlimited;
+
+  const raceRec =
+    asRecord(pick(root, "race", "data")) ??
+    (typeof pick(root, "status") === "string" ? root : null);
+
+  const raceParts = (() => {
+    for (const key of ["participants", "players", "leaderboard", "standings"]) {
+      const list = root[key];
+      if (Array.isArray(list)) return list;
+      const nested = raceRec ? raceRec[key] : undefined;
+      if (Array.isArray(nested)) return nested;
+    }
+    return [] as unknown[];
+  })();
+
+  const participants =
+    raceParts.length > 0
+      ? mergeUnlimitedLiveParticipants(unlimited.participants, raceParts)
+      : unlimited.participants;
+
+  if (!raceRec) {
+    return { ...unlimited, participants };
+  }
+
+  const apiStatus = asString(pick(raceRec, "status", "raceStatus", "race_status"));
+  const startedAt =
+    asString(pick(raceRec, "startedAt", "started_at", "startAt", "start_at")) ??
+    unlimited.race.startedAt;
+  const completedAt =
+    asString(pick(raceRec, "completedAt", "completed_at")) ??
+    unlimited.race.completedAt;
+
+  let status = unlimited.race.status;
+  if (apiStatus) {
+    const normalized = normalizeUnlimitedLiveStatus(apiStatus, {
+      startAt: startedAt ?? unlimited.race.scheduledStartAt,
+      endAt: completedAt ?? unlimited.race.challengeEndAt,
+    });
+    // Prefer classic race live/completed when Unlimited detail is still "waiting".
+    if (
+      normalized === "in_progress" ||
+      normalized === "completed" ||
+      status === "waiting" ||
+      !status
+    ) {
+      status = normalized;
+    }
+  } else if (status === "waiting" && startedAt) {
+    status = normalizeUnlimitedLiveStatus(status, {
+      startAt: startedAt,
+      endAt: unlimited.race.challengeEndAt,
+    });
+  }
+
+  const currentPlayers =
+    asNumber(
+      pick(raceRec, "currentPlayers", "current_players", "playerCount", "player_count"),
+    ) ?? unlimited.race.currentPlayers;
+
+  return {
+    race: {
+      ...unlimited.race,
+      status,
+      startedAt:
+        status === "waiting"
+          ? unlimited.race.startedAt
+          : startedAt ?? unlimited.race.startedAt ?? unlimited.race.scheduledStartAt,
+      completedAt: status === "completed" ? completedAt ?? unlimited.race.completedAt : null,
+      currentPlayers: Math.max(currentPlayers ?? 0, participants.length, 1),
+    },
+    participants,
+  };
+}
+
+/** Force a mapped Unlimited race into in_progress when the client is already tracking it. */
+export function coerceUnlimitedRaceInProgress(
+  race: UnlimitedLiveDetailMapped["race"],
+  opts?: { forceLive?: boolean; nowMs?: number },
+): UnlimitedLiveDetailMapped["race"] {
+  if (race.status === "completed") return race;
+  if (opts?.forceLive) {
+    return {
+      ...race,
+      status: "in_progress",
+      startedAt:
+        race.startedAt ??
+        race.scheduledStartAt ??
+        new Date(opts.nowMs ?? Date.now()).toISOString(),
+    };
+  }
+  const status = normalizeUnlimitedLiveStatus(race.status, {
+    startAt: race.startedAt ?? race.scheduledStartAt,
+    endAt: race.challengeEndAt,
+    nowMs: opts?.nowMs,
+  });
+  if (status === race.status) return race;
+  return {
+    ...race,
+    status,
+    startedAt:
+      status === "waiting"
+        ? null
+        : race.startedAt ?? race.scheduledStartAt ?? new Date(opts?.nowMs ?? Date.now()).toISOString(),
+  };
 }
 
 /** Map GET /api/unlimited-challenges/:id → live-detail race + participants. */

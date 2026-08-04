@@ -46,8 +46,10 @@ import {
   isUnlimitedGoalChallenge,
 } from "@/utils/unlimitedGoal";
 import {
+  coerceUnlimitedRaceInProgress,
   mapUnlimitedDetailToLiveDetail,
   mergeUnlimitedLiveParticipants,
+  overlayClassicRaceOnUnlimitedDetail,
 } from "@/utils/unlimitedLiveRace";
 import { trackEvent } from "@/services/analytics";
 import { LiveTaglineRotator, type LiveTaglineAlt } from "@/components/LiveTaglineRotator";
@@ -57,6 +59,7 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useRace } from "@/context/RaceContext";
 import { useWalkContext } from "@/context/WalkContext";
+import { usePresence } from "@/context/PresenceContext";
 import { useRaceProgress } from "@/hooks/useRaceProgress";
 import { updateRankFromBackend, ensureActiveRaceInStore, clearActiveRaceProgress, suppressLiveRaceNotification, suppressSpectatorLiveRaceNotifications } from "@/services/stepProgressCoordinator";
 import { findEligibleLiveRaceParticipant } from "@/utils/raceNotificationEligibility";
@@ -103,7 +106,9 @@ import { debounceKeyed } from "@/utils/apiRequestCoordinator";
 import {
   connectPusher,
   subscribeToChannel,
-  unsubscribeFromChannel, } from "@/services/realtimeService";
+  unsubscribeFromChannel,
+  CHANNELS,
+} from "@/services/realtimeService";
 import { formatDuration } from "@/utils/format";
 import { localizeSponsoredEventTitle } from "@/utils/timezone";
 import {
@@ -274,45 +279,60 @@ async function fetchParticipantListFromPath(path: string): Promise<unknown[]> {
 
 async function fetchUnlimitedLiveDetailPayload(
   challengeId: string,
-  opts?: { currentUserId?: string | null; currentUsername?: string | null },
+  opts?: {
+    currentUserId?: string | null;
+    currentUsername?: string | null;
+    /** Client already tracking this challenge as a live race (Waiting Room → Live). */
+    forceLive?: boolean;
+  },
 ): Promise<LiveRaceDetailCache | null> {
   if (!isUnlimitedGoalFrontendEnabled()) return null;
   try {
     const res = await authFetch(`/api/unlimited-challenges/${challengeId}`);
     if (!res.ok) return null;
-    const mapped = mapUnlimitedDetailToLiveDetail(await res.json().catch(() => null));
+    let mapped = mapUnlimitedDetailToLiveDetail(await res.json().catch(() => null));
     if (!mapped) return null;
+
+    // Same as regular Live Race: pull classic race + leaderboard for live steps/status.
+    // Never drop the Unlimited roster — only overlay max(currentSteps) / live status.
+    try {
+      const [leaderboardRows, raceJson] = await Promise.all([
+        fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/leaderboard`),
+        (async () => {
+          try {
+            const raceRes = await authFetch(`/api/races/${challengeId}`);
+            if (!raceRes.ok) return null;
+            return await raceRes.json().catch(() => null);
+          } catch {
+            return null;
+          }
+        })(),
+      ]);
+      if (raceJson) {
+        mapped = overlayClassicRaceOnUnlimitedDetail(mapped, raceJson);
+      }
+      if (leaderboardRows.length > 0) {
+        mapped = {
+          ...mapped,
+          participants: mergeUnlimitedLiveParticipants(
+            mapped.participants,
+            leaderboardRows,
+          ),
+        };
+      }
+    } catch {
+      // Keep Unlimited detail as-is if enrichment fails.
+    }
+
+    mapped = {
+      ...mapped,
+      race: coerceUnlimitedRaceInProgress(mapped.race, {
+        forceLive: opts?.forceLive === true,
+      }),
+    };
 
     // Trust detail `players` / `participants` as the roster (same as Waiting Room).
     let participants = mapped.participants as RaceParticipant[];
-
-    // Soft step enrichment only — never replace/drop the detail roster.
-    // Merge max(currentSteps) from races/leaderboard when available.
-    if (participants.length > 0 && mapped.race.status !== "waiting") {
-      try {
-        const extras = await Promise.all([
-          fetchParticipantListFromPath(`/api/unlimited-challenges/${challengeId}/leaderboard`),
-          (async () => {
-            try {
-              const raceRes = await authFetch(`/api/races/${challengeId}`);
-              if (!raceRes.ok) return [] as unknown[];
-              const data = (await raceRes.json().catch(() => null)) as {
-                participants?: unknown[];
-              } | null;
-              return Array.isArray(data?.participants) ? data.participants : [];
-            } catch {
-              return [] as unknown[];
-            }
-          })(),
-        ]);
-        const flat = extras.flat();
-        if (flat.length > 0) {
-          participants = mergeUnlimitedLiveParticipants(participants, flat) as RaceParticipant[];
-        }
-      } catch {
-        // Keep detail roster as-is if enrichment fails.
-      }
-    }
 
     // Guarantee the current viewer appears on Race Track / Live Board.
     const meId = opts?.currentUserId;
@@ -948,7 +968,7 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
     (race as RaceData & { prizePerWinnerCents?: number }).prizePerWinnerCents,
   );
   const countLabel = formatPlayerCountDisplay({
-    current: participants.length || race.currentPlayers,
+    current: Math.max(race.currentPlayers || 0, participants.length, 1),
     max: race.maxPlayers,
     isUnlimited,
   });
@@ -1708,12 +1728,29 @@ function LiveRaceDetailScreenContent() {
   );
 
   const { user, sessionToken }                     = useAuth();
-  const { setRaceTargetSteps, resumeLiveRace, setActiveRace, catchUpLiveRaceSteps, recordFinishedRaceStepsForWalk, userRaceSteps, stopRaceStepTracking, raceVerification } = useRace();
+  const { setUserStatus } = usePresence();
+  const {
+    setRaceTargetSteps,
+    resumeLiveRace,
+    setActiveRace,
+    catchUpLiveRaceSteps,
+    recordFinishedRaceStepsForWalk,
+    userRaceSteps,
+    stopRaceStepTracking,
+    raceVerification,
+    racePhase,
+    raceId: contextRaceId,
+  } = useRace();
   const { resumeStepWatching, refreshTodaySteps } = useWalkContext();
   const raceProgress = useRaceProgress();
   const canonicalRaceSteps = raceProgress.raceSteps;
   const liveRaceSteps = resolveLiveRaceDisplaySteps(canonicalRaceSteps, userRaceSteps);
   const canonicalRank = raceProgress.rank;
+  /** True when this screen's race is already being tracked (same as regular live races). */
+  const trackingThisRace =
+    !!raceId &&
+    racePhase === "in_race" &&
+    (contextRaceId === raceId || raceProgress.activeRaceId === raceId);
   const localStepsRef = useRef(liveRaceSteps);
   localStepsRef.current = liveRaceSteps;
   const raceResumedRef = useRef(false);
@@ -2092,17 +2129,34 @@ function LiveRaceDetailScreenContent() {
   }, [micState]);
 
   // ── Derived from race/participants ─────────────────────────────────────────
-  const isActive    = race?.status === "in_progress";
+  // Match regular live races: once RaceContext is tracking this id, treat as LIVE
+  // even if Unlimited detail briefly still says "waiting".
   const isCompleted = race?.status === "completed";
+  const isActive =
+    !isCompleted &&
+    (race?.status === "in_progress" || trackingThisRace);
   const isFree      = race?.entryType === "free";
+
+  // Keep global Live header "racing" count aligned while this screen is open.
+  useEffect(() => {
+    if (!raceId || useDummyRace) return;
+    if (isActive) {
+      setUserStatus("racing");
+      return () => setUserStatus("online");
+    }
+    setUserStatus("online");
+    return undefined;
+  }, [raceId, useDummyRace, isActive, setUserStatus]);
 
   const resolveParticipantRaceSteps = useCallback(
     (p: RaceParticipant, isMe = false): number => {
       if (isMe && isCompleted && finalRaceSteps !== null) return finalRaceSteps;
-      if (isMe && isActive) return liveRaceSteps;
+      // Own steps always come from the live tracker while this race is active —
+      // same as classic Live Race (never show stale API 0 for self).
+      if (isMe && (isActive || trackingThisRace)) return liveRaceSteps;
       return Math.max(0, p.currentSteps);
     },
-    [isActive, isCompleted, finalRaceSteps, liveRaceSteps],
+    [isActive, isCompleted, finalRaceSteps, liveRaceSteps, trackingThisRace],
   );
 
   const startedAtMs   = race?.startedAt   ? new Date(race.startedAt).getTime()   : null;
@@ -2453,12 +2507,51 @@ function LiveRaceDetailScreenContent() {
     raceData: RaceData | null | undefined,
     parts: RaceParticipant[],
   ) => {
-    if (!raceId || !raceData || raceData.status !== "in_progress" || !user?.id) return;
+    if (!raceId || !raceData || !user?.id) return;
+
+    const alreadyTracking =
+      racePhase === "in_race" &&
+      (contextRaceId === raceId ||
+        store.getState().raceProgress.activeRaceId === raceId);
+
+    // Unlimited detail can lag as "waiting" after Waiting Room start — coerce live
+    // the same way regular races hydrate once the client is tracking.
+    let liveRaceData: RaceData = raceData;
+    if (raceData.status !== "in_progress" && raceData.status !== "completed") {
+      const scheduledStartAt =
+        (raceData as { scheduledStartAt?: string | null }).scheduledStartAt ?? null;
+      const startMs = Date.parse(
+        String(raceData.startedAt ?? scheduledStartAt ?? ""),
+      );
+      const scheduleSaysLive = Number.isFinite(startMs) && startMs <= Date.now();
+      if (alreadyTracking || scheduleSaysLive) {
+        liveRaceData = {
+          ...raceData,
+          status: "in_progress",
+          startedAt:
+            raceData.startedAt ??
+            scheduledStartAt ??
+            new Date().toISOString(),
+        };
+      }
+    }
+
+    if (liveRaceData.status !== "in_progress") return;
     raceAlreadyStartedRef.current = true;
 
     // Spectators may view the race + Pusher updates, but must NOT enter participant
     // race tracking or the live race progress notification.
-    const me = findEligibleLiveRaceParticipant(parts, user);
+    const me =
+      findEligibleLiveRaceParticipant(parts, user) ??
+      (alreadyTracking && user.id
+        ? ({
+            id: user.id,
+            userId: user.id,
+            currentSteps: localStepsRef.current ?? 0,
+            status: "active",
+            username: user.username ?? "You",
+          } as RaceParticipant)
+        : null);
     if (!me) {
       void suppressSpectatorLiveRaceNotifications(raceId);
       stopRaceStepTracking("spectator_or_ineligible");
@@ -2477,8 +2570,8 @@ function LiveRaceDetailScreenContent() {
     const prevActiveId = store.getState().raceProgress.activeRaceId;
     const preserveAsCompanion = !!prevActiveId && prevActiveId !== raceId;
     const resolvedGoal =
-      typeof raceData.targetSteps === "number" && raceData.targetSteps > 0
-        ? raceData.targetSteps
+      typeof liveRaceData.targetSteps === "number" && liveRaceData.targetSteps > 0
+        ? liveRaceData.targetSteps
         : undefined;
     // Keep RaceContext target in sync BEFORE resumeLiveRace — otherwise it
     // restarts the ongoing notification with the default 1000-step goal.
@@ -2487,14 +2580,14 @@ function LiveRaceDetailScreenContent() {
     }
     setActiveRace(raceId, false);
     const challengeEndAt =
-      raceData.type === "sponsored"
-        ? raceData.challengeEndAt ??
-          (raceData.startedAt
+      liveRaceData.type === "sponsored"
+        ? liveRaceData.challengeEndAt ??
+          (liveRaceData.startedAt
             ? new Date(
-                new Date(raceData.startedAt).getTime() + 3 * 60 * 60 * 1000,
+                new Date(liveRaceData.startedAt).getTime() + 3 * 60 * 60 * 1000,
               ).toISOString()
             : undefined)
-        : raceData.challengeEndAt ?? undefined;
+        : liveRaceData.challengeEndAt ?? undefined;
     // Never boot/catch-up from API 0 when local race steps are already higher.
     const preservedSteps = Math.max(
       me.currentSteps ?? 0,
@@ -2503,25 +2596,25 @@ function LiveRaceDetailScreenContent() {
     );
     ensureActiveRaceInStore({
       raceId,
-      raceStartTime: new Date(raceData.startedAt ?? Date.now()).toISOString(),
+      raceStartTime: new Date(liveRaceData.startedAt ?? Date.now()).toISOString(),
       userId: user.id,
       username: user.username ?? "Runner",
       goalSteps: resolvedGoal ?? store.getState().raceProgress.goalSteps ?? 0,
-      totalParticipants: raceData.currentPlayers ?? parts.length,
+      totalParticipants: liveRaceData.currentPlayers ?? parts.length,
       bootSteps: preservedSteps,
       participantConfirmed: true,
       preserveAsCompanion,
-      isSponsored: raceData.type === "sponsored",
+      isSponsored: liveRaceData.type === "sponsored",
       challengeEndAt,
     });
     if (!raceResumedRef.current) {
       raceResumedRef.current = true;
       resumeLiveRace(
-        raceData.currentPlayers ?? parts.length,
-        new Date(raceData.startedAt ?? Date.now()),
+        liveRaceData.currentPlayers ?? parts.length,
+        new Date(liveRaceData.startedAt ?? Date.now()),
         preservedSteps,
-        raceData.type === "sponsored" && raceData.startedAt
-          ? new Date(new Date(raceData.startedAt).getTime() + 3 * 60 * 60 * 1000)
+        liveRaceData.type === "sponsored" && liveRaceData.startedAt
+          ? new Date(new Date(liveRaceData.startedAt).getTime() + 3 * 60 * 60 * 1000)
           : null,
       );
     }
@@ -2537,7 +2630,18 @@ function LiveRaceDetailScreenContent() {
       setConfirmedSteps(p.userId, steps, { instant: true });
       prevStepsMapRef.current[p.userId] = steps;
     }
-  }, [raceId, user?.id, user?.username, setActiveRace, setRaceTargetSteps, resumeLiveRace, catchUpLiveRaceSteps, setConfirmedSteps, stopRaceStepTracking]);
+  }, [
+    raceId,
+    user,
+    racePhase,
+    contextRaceId,
+    setActiveRace,
+    setRaceTargetSteps,
+    resumeLiveRace,
+    catchUpLiveRaceSteps,
+    setConfirmedSteps,
+    stopRaceStepTracking,
+  ]);
 
   const fetchRaceDetails = useCallback(async (
     force = false,
@@ -2560,10 +2664,15 @@ function LiveRaceDetailScreenContent() {
     raceDetailFetchInFlightRef.current = true;
     try {
       let applied = false;
+      const forceLive =
+        racePhase === "in_race" &&
+        (contextRaceId === raceId ||
+          store.getState().raceProgress.activeRaceId === raceId);
       if (preferUnlimitedDetail) {
         const unlimited = await fetchUnlimitedLiveDetailPayload(raceId, {
           currentUserId: user?.id,
           currentUsername: user?.username,
+          forceLive,
         });
         if (unlimited) {
           markLiveRaceFetched(gateKey);
@@ -2573,17 +2682,27 @@ function LiveRaceDetailScreenContent() {
           }
           const raceDone = unlimited.race.status === "completed";
           // Prefer detail roster; preserve higher live steps from prior poll/Pusher.
+          // Hydrate from the *merged* list (same as regular live races) — never from
+          // a raw empty Unlimited paint that would mark us spectator and stop steps.
+          let mergedParts = unlimited.participants;
           setParticipants((prev) => {
-            if (!unlimited.participants.length) return prev;
-            return mergeParticipantsPreservingSteps(prev, unlimited.participants, {
+            if (!unlimited.participants.length) {
+              mergedParts = prev;
+              return prev;
+            }
+            mergedParts = mergeParticipantsPreservingSteps(prev, unlimited.participants, {
               raceCompleted: raceDone,
             });
+            return mergedParts;
           });
-          hydrateInProgressRace(unlimited.race, unlimited.participants);
+          hydrateInProgressRace(unlimited.race, mergedParts);
           if (isTrackLayoutId(unlimited.race.trackLayout)) {
             setTrackLayoutId(unlimited.race.trackLayout);
           }
-          void screenCache.set(liveRaceDetailCacheKey(raceId), unlimited);
+          void screenCache.set(liveRaceDetailCacheKey(raceId), {
+            race: unlimited.race,
+            participants: mergedParts,
+          });
           applied = true;
         }
       }
@@ -2598,20 +2717,25 @@ function LiveRaceDetailScreenContent() {
           }
           const nextParts = Array.isArray(data.participants) ? data.participants : [];
           const raceDone = data.race?.status === "completed";
+          let mergedParts = nextParts;
           setParticipants((prev) => {
-            if (!nextParts.length) return prev;
-            return mergeParticipantsPreservingSteps(prev, nextParts, {
+            if (!nextParts.length) {
+              mergedParts = prev;
+              return prev;
+            }
+            mergedParts = mergeParticipantsPreservingSteps(prev, nextParts, {
               raceCompleted: raceDone,
             });
+            return mergedParts;
           });
-          hydrateInProgressRace(data.race, nextParts);
+          hydrateInProgressRace(data.race, mergedParts);
           if (isTrackLayoutId(data.race?.trackLayout)) {
             setTrackLayoutId(data.race.trackLayout);
           }
           if (data.race) {
             void screenCache.set(liveRaceDetailCacheKey(raceId), {
               race: data.race,
-              participants: nextParts,
+              participants: mergedParts,
             });
           }
           applied = true;
@@ -2620,6 +2744,7 @@ function LiveRaceDetailScreenContent() {
           const unlimited = await fetchUnlimitedLiveDetailPayload(raceId, {
             currentUserId: user?.id,
             currentUsername: user?.username,
+            forceLive,
           });
           if (unlimited) {
             markLiveRaceFetched(gateKey);
@@ -2627,24 +2752,41 @@ function LiveRaceDetailScreenContent() {
             if (unlimited.race.status === "in_progress" || unlimited.race.status === "completed") {
               raceAlreadyStartedRef.current = true;
             }
+            let mergedParts = unlimited.participants;
             setParticipants((prev) => {
-              if (!unlimited.participants.length) return prev;
-              return mergeParticipantsPreservingSteps(prev, unlimited.participants, {
+              if (!unlimited.participants.length) {
+                mergedParts = prev;
+                return prev;
+              }
+              mergedParts = mergeParticipantsPreservingSteps(prev, unlimited.participants, {
                 raceCompleted: unlimited.race.status === "completed",
               });
+              return mergedParts;
             });
-            hydrateInProgressRace(unlimited.race, unlimited.participants);
+            hydrateInProgressRace(unlimited.race, mergedParts);
             if (isTrackLayoutId(unlimited.race.trackLayout)) {
               setTrackLayoutId(unlimited.race.trackLayout);
             }
-            void screenCache.set(liveRaceDetailCacheKey(raceId), unlimited);
+            void screenCache.set(liveRaceDetailCacheKey(raceId), {
+              race: unlimited.race,
+              participants: mergedParts,
+            });
           }
         }
       }
     } finally {
       raceDetailFetchInFlightRef.current = false;
     }
-  }, [raceId, hydrateInProgressRace, preferUnlimitedDetail, useDummyRace, user?.id, user?.username]);
+  }, [
+    raceId,
+    hydrateInProgressRace,
+    preferUnlimitedDetail,
+    useDummyRace,
+    user?.id,
+    user?.username,
+    racePhase,
+    contextRaceId,
+  ]);
 
   // Pause step reads when leaving the screen; catch up from device + server on return.
   const catchUpStepsRef = useRef(catchUpLiveRaceSteps);
@@ -2655,7 +2797,13 @@ function LiveRaceDetailScreenContent() {
   participantsOnFocusRef.current = participants;
 
   useFocusEffect(useCallback(() => {
-    if (!raceId || race?.status !== "in_progress" || raceCompletedRef.current || !user?.id) return;
+    const focusLive =
+      race?.status === "in_progress" ||
+      (race?.status !== "completed" &&
+        racePhase === "in_race" &&
+        (contextRaceId === raceId ||
+          store.getState().raceProgress.activeRaceId === raceId));
+    if (!raceId || !focusLive || raceCompletedRef.current || !user?.id) return;
 
     const me = findEligibleLiveRaceParticipant(participantsOnFocusRef.current, user);
     if (me) {
@@ -2697,7 +2845,13 @@ function LiveRaceDetailScreenContent() {
         true,
       );
       stepEngineLog("LiveRace", `rejoinStart raceId=${raceId} cachedStateRendered=true`);
-    } else {
+    } else if (
+      !(
+        racePhase === "in_race" &&
+        (contextRaceId === raceId ||
+          store.getState().raceProgress.activeRaceId === raceId)
+      )
+    ) {
       void suppressSpectatorLiveRaceNotifications(raceId);
       stopRaceStepTracking("spectator_or_ineligible");
       stepEngineLog(
@@ -2714,7 +2868,7 @@ function LiveRaceDetailScreenContent() {
         void resumeStepWatching();
       }, 0);
     };
-  }, [raceId, race?.status, race?.startedAt, race?.targetSteps, race?.currentPlayers, race?.type, race?.challengeEndAt, user?.id, user?.username, resumeStepWatching, refreshTodaySteps, stopRaceStepTracking, setRaceTargetSteps]));
+  }, [raceId, race?.status, race?.startedAt, race?.targetSteps, race?.currentPlayers, race?.type, race?.challengeEndAt, user?.id, user?.username, resumeStepWatching, refreshTodaySteps, stopRaceStepTracking, setRaceTargetSteps, racePhase, contextRaceId]));
 
   useEffect(() => {
     if (!raceId || !user?.id) return;
@@ -2761,10 +2915,15 @@ function LiveRaceDetailScreenContent() {
     fetchInFlightRef.current = true;
     try {
       let racePayload: LiveRaceDetailCache | null = null;
+      const forceLive =
+        racePhase === "in_race" &&
+        (contextRaceId === raceId ||
+          store.getState().raceProgress.activeRaceId === raceId);
       if (preferUnlimitedDetail) {
         racePayload = await fetchUnlimitedLiveDetailPayload(raceId, {
           currentUserId: user?.id,
           currentUsername: user?.username,
+          forceLive,
         });
       }
       if (!racePayload) {
@@ -2779,6 +2938,7 @@ function LiveRaceDetailScreenContent() {
           racePayload = await fetchUnlimitedLiveDetailPayload(raceId, {
             currentUserId: user?.id,
             currentUsername: user?.username,
+            forceLive,
           });
         }
       }
@@ -2792,14 +2952,17 @@ function LiveRaceDetailScreenContent() {
         }
         const raceDone = racePayload.race.status === "completed";
         // First paint: use detail roster directly so users always show.
-        setParticipants((prev) =>
-          prev.length === 0
-            ? parts
-            : mergeParticipantsPreservingSteps(prev, parts, { raceCompleted: raceDone }),
-        );
-        hydrateInProgressRace(racePayload.race, parts);
+        let mergedParts = parts;
+        setParticipants((prev) => {
+          mergedParts =
+            prev.length === 0
+              ? parts
+              : mergeParticipantsPreservingSteps(prev, parts, { raceCompleted: raceDone });
+          return mergedParts;
+        });
+        hydrateInProgressRace(racePayload.race, mergedParts);
         if (racePayload.race.status === "completed") {
-          const me = parts.find(
+          const me = mergedParts.find(
             (p) =>
               p.userId === user?.id ||
               (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase()),
@@ -2817,7 +2980,10 @@ function LiveRaceDetailScreenContent() {
         if (isTrackLayoutId(racePayload.race.trackLayout)) {
           setTrackLayoutId(racePayload.race.trackLayout);
         }
-        void screenCache.set(liveRaceDetailCacheKey(raceId), racePayload);
+        void screenCache.set(liveRaceDetailCacheKey(raceId), {
+          race: racePayload.race,
+          participants: mergedParts,
+        });
         setLoading(false);
       }
 
@@ -2843,7 +3009,16 @@ function LiveRaceDetailScreenContent() {
     } finally {
       fetchInFlightRef.current = false;
     }
-  }, [raceId, hydrateInProgressRace, preferUnlimitedDetail, useDummyRace, user?.id, user?.username]);
+  }, [
+    raceId,
+    hydrateInProgressRace,
+    preferUnlimitedDetail,
+    useDummyRace,
+    user?.id,
+    user?.username,
+    racePhase,
+    contextRaceId,
+  ]);
 
   // Frontend-only dummy Unlimited Race session (Waiting Room → Live Race).
   useEffect(() => {
@@ -3014,7 +3189,13 @@ function LiveRaceDetailScreenContent() {
     connectPusher();
     const channelName = `public-live-race-${raceId}`;
     const channel = subscribeToChannel(channelName);
-    if (!channel) return;
+    // Also listen on the canonical unlimited channel (belt-and-suspenders with dual-emit).
+    const unlimitedChannelName = CHANNELS.unlimitedChallenge(raceId);
+    const unlimitedChannel =
+      preferUnlimitedDetail || unlimitedHint
+        ? subscribeToChannel(unlimitedChannelName)
+        : null;
+    if (!channel && !unlimitedChannel) return;
     stepEngineLog("Pusher", `connected=true channel=${channelName}`);
     stepEngineLog("LiveRace", `realtimeSubscribed=true raceId=${raceId}`);
 
@@ -3066,10 +3247,21 @@ function LiveRaceDetailScreenContent() {
         }
       }
       refresh(true); };
-    const onProgress = (data: { participantId?: string; userId?: string; steps?: number; rank?: number }) => {
+    const onProgress = (data: {
+      participantId?: string;
+      userId?: string;
+      steps?: number;
+      todaySteps?: number;
+      rank?: number;
+    }) => {
       if (raceCompletedRef.current || raceRef.current?.status === "completed") return;
-      if (typeof data.steps !== "number") return;
-      const newSteps = data.steps;
+      const newSteps =
+        typeof data.steps === "number"
+          ? data.steps
+          : typeof data.todaySteps === "number"
+            ? data.todaySteps
+            : null;
+      if (newSteps == null) return;
       const uid = data.userId ?? data.participantId ?? "";
       const meId = currentUserIdRef.current;
       if (uid === meId && countdownActiveRef.current) return;
@@ -3224,57 +3416,96 @@ function LiveRaceDetailScreenContent() {
     };
 
     const refreshParticipants = () => refresh(true);
-    channel.bind("race:started",          onStarted);
-    channel.bind("race:player-joined",    refreshParticipants);
-    channel.bind("race:player-left",           refreshParticipants);
-    channel.bind("race:participant_left",      refreshParticipants);
-    channel.bind("race:participant-forfeited", refreshParticipants);
-    channel.bind("race:progress_updated", onProgress);
-    channel.bind("race:comment_new",      onComment);
-    channel.bind("race:reaction_updated", onReaction);
-    channel.bind("race:completed",        onCompleted);
-    channel.bind("race:winners",          refresh);
-    channel.bind("race:spectator_count",  onSpectatorCount);
-    channel.bind("participant_finished_goal", onFinishedGoal);
-    const onVerificationEvent = () => {
-      void refreshResultStatus();
+    const bindRaceEvents = (ch: NonNullable<typeof channel>) => {
+      ch.bind("race:started",          onStarted);
+      ch.bind("race:player-joined",    refreshParticipants);
+      ch.bind("race:player-left",           refreshParticipants);
+      ch.bind("race:participant_left",      refreshParticipants);
+      ch.bind("race:participant-forfeited", refreshParticipants);
+      ch.bind("race:progress_updated", onProgress);
+      ch.bind("race:comment_new",      onComment);
+      ch.bind("race:reaction_updated", onReaction);
+      ch.bind("race:completed",        onCompleted);
+      ch.bind("race:winners",          refresh);
+      ch.bind("race:spectator_count",  onSpectatorCount);
+      ch.bind("participant_finished_goal", onFinishedGoal);
+      const onVerificationEvent = () => {
+        void refreshResultStatus();
+      };
+      ch.bind("participant:verification_status_changed", onVerificationEvent);
+      ch.bind("participant:reconciled_progress_changed", onVerificationEvent);
+      ch.bind("race:verification_delayed", onVerificationEvent);
+      ch.bind("race:review_required", onVerificationEvent);
+      ch.bind("race:final_progress_confirmed", onVerificationEvent);
+      return onVerificationEvent;
     };
-    channel.bind("participant:verification_status_changed", onVerificationEvent);
-    channel.bind("participant:reconciled_progress_changed", onVerificationEvent);
-    channel.bind("race:verification_delayed", onVerificationEvent);
-    channel.bind("race:review_required", onVerificationEvent);
-    channel.bind("race:final_progress_confirmed", onVerificationEvent);
+
+    const onVerificationEvent = channel ? bindRaceEvents(channel) : null;
+
+    const onUnlimitedProgress = (data: {
+      participantId?: string;
+      userId?: string;
+      steps?: number;
+      todaySteps?: number;
+      rank?: number;
+    }) => {
+      onProgress({
+        ...data,
+        steps: typeof data.steps === "number" ? data.steps : data.todaySteps,
+      });
+    };
+    if (unlimitedChannel) {
+      unlimitedChannel.bind("progress_updated", onUnlimitedProgress);
+      unlimitedChannel.bind("participant_joined", refreshParticipants);
+      unlimitedChannel.bind("participant_left", refreshParticipants);
+      unlimitedChannel.bind("challenge_started", onStarted);
+      unlimitedChannel.bind("challenge_completed", onCompleted);
+      unlimitedChannel.bind("challenge_cancelled", onCompleted);
+    }
 
     return () => {
-      channel.unbind("race:started",          onStarted);
-      channel.unbind("race:player-joined",    refreshParticipants);
-      channel.unbind("race:player-left",           refreshParticipants);
-      channel.unbind("race:participant_left",      refreshParticipants);
-      channel.unbind("race:participant-forfeited", refreshParticipants);
-      channel.unbind("race:progress_updated", onProgress);
-      channel.unbind("race:comment_new",      onComment);
-      channel.unbind("race:reaction_updated", onReaction);
-      channel.unbind("race:completed",        onCompleted);
-      channel.unbind("race:winners",          refresh);
-      channel.unbind("race:spectator_count",  onSpectatorCount);
-      channel.unbind("participant_finished_goal", onFinishedGoal);
-      channel.unbind("participant:verification_status_changed", onVerificationEvent);
-      channel.unbind("participant:reconciled_progress_changed", onVerificationEvent);
-      channel.unbind("race:verification_delayed", onVerificationEvent);
-      channel.unbind("race:review_required", onVerificationEvent);
-      channel.unbind("race:final_progress_confirmed", onVerificationEvent);
-      unsubscribeFromChannel(channelName); }; }, [raceId, refreshResultStatus, useDummyRace]);
+      if (channel && onVerificationEvent) {
+        channel.unbind("race:started",          onStarted);
+        channel.unbind("race:player-joined",    refreshParticipants);
+        channel.unbind("race:player-left",           refreshParticipants);
+        channel.unbind("race:participant_left",      refreshParticipants);
+        channel.unbind("race:participant-forfeited", refreshParticipants);
+        channel.unbind("race:progress_updated", onProgress);
+        channel.unbind("race:comment_new",      onComment);
+        channel.unbind("race:reaction_updated", onReaction);
+        channel.unbind("race:completed",        onCompleted);
+        channel.unbind("race:winners",          refresh);
+        channel.unbind("race:spectator_count",  onSpectatorCount);
+        channel.unbind("participant_finished_goal", onFinishedGoal);
+        channel.unbind("participant:verification_status_changed", onVerificationEvent);
+        channel.unbind("participant:reconciled_progress_changed", onVerificationEvent);
+        channel.unbind("race:verification_delayed", onVerificationEvent);
+        channel.unbind("race:review_required", onVerificationEvent);
+        channel.unbind("race:final_progress_confirmed", onVerificationEvent);
+        unsubscribeFromChannel(channelName);
+      }
+      if (unlimitedChannel) {
+        unlimitedChannel.unbind("progress_updated", onUnlimitedProgress);
+        unlimitedChannel.unbind("participant_joined", refreshParticipants);
+        unlimitedChannel.unbind("participant_left", refreshParticipants);
+        unlimitedChannel.unbind("challenge_started", onStarted);
+        unlimitedChannel.unbind("challenge_completed", onCompleted);
+        unlimitedChannel.unbind("challenge_cancelled", onCompleted);
+        unsubscribeFromChannel(unlimitedChannelName);
+      }
+    };
+  }, [raceId, refreshResultStatus, useDummyRace, preferUnlimitedDetail, unlimitedHint]);
 
   // ── Cheer send ────────────────────────────────────────────────────────────
-  const sendMessage = useCallback((text: string, isQuickReaction = false) => {
-    if (!raceId || !isActive || !text.trim()) return;
+  const sendMessage = useCallback((text: string, isQuickReaction = false): boolean => {
+    if (!raceId || !isActive || !text.trim()) return false;
     const trimmed = text.trim();
 
     // Per-button 1-second cooldown for quick reactions
     if (isQuickReaction) {
       const now = Date.now();
       const last = reactionCooldownRef.current[trimmed] ?? 0;
-      if (now - last < 1000) return;
+      if (now - last < 1000) return false;
       reactionCooldownRef.current[trimmed] = now;
     }
 
@@ -3303,33 +3534,92 @@ function LiveRaceDetailScreenContent() {
     setComments((prev) => [...prev, optimistic].slice(-60));
     setTimeout(() => cheerScrollRef.current?.scrollToEnd({ animated: true }), 50);
 
+    // Dummy / offline preview — keep local message, no backend.
+    if (useDummyRace) {
+      setComments((prev) =>
+        prev.map((c) =>
+          c.clientMessageId === clientMsgId ? { ...c, status: "sent", isOptimistic: false } : c,
+        ),
+      );
+      return true;
+    }
+
     // Fire-and-forget POST in background
     void (async () => {
+      const markFailed = () => {
+        setComments((prev) =>
+          prev.map((c) =>
+            c.clientMessageId === clientMsgId ? { ...c, status: "failed" } : c,
+          ),
+        );
+      };
+      const markSentLocal = () => {
+        setComments((prev) =>
+          prev.map((c) =>
+            c.clientMessageId === clientMsgId
+              ? { ...c, status: "sent", isOptimistic: false }
+              : c,
+          ),
+        );
+      };
       try {
+        // Match live-track payload (`text`); clientMessageId is client-only for dedupe.
         const res = await authFetch(`/api/races/${raceId}/comments`, {
           method: "POST",
-          body: JSON.stringify({ text: trimmed, clientMessageId: clientMsgId }),
+          body: JSON.stringify({ text: trimmed }),
         });
         if (res.ok) {
-          const body = await res.json().catch(() => null) as { comment?: RaceComment } | null;
-          if (body?.comment) {
-            const normalized = normalizeIncomingComment({ ...body.comment, clientMessageId: clientMsgId });
-            if (normalized) setComments((prev) => mergeOrAppendComment(prev, normalized));
+          const body = await res.json().catch(() => null) as {
+            comment?: RaceComment;
+            data?: RaceComment;
+          } | RaceComment | null;
+          const rawComment =
+            body && typeof body === "object"
+              ? ("comment" in body && body.comment
+                  ? body.comment
+                  : "data" in body && body.data
+                    ? body.data
+                    : "id" in body && "text" in body
+                      ? (body as RaceComment)
+                      : null)
+              : null;
+          if (rawComment) {
+            const normalized = normalizeIncomingComment({
+              ...rawComment,
+              clientMessageId: clientMsgId,
+            });
+            if (normalized) {
+              setComments((prev) => mergeOrAppendComment(prev, normalized));
+              return;
+            }
           }
+          // 200 without a parseable comment — still treat as delivered so UI doesn't stick on "sending".
+          markSentLocal();
         } else {
-          setComments((prev) => prev.map((c) => c.clientMessageId === clientMsgId ? { ...c, status: "failed" } : c));
+          if (__DEV__) {
+            const errBody = await res.text().catch(() => "");
+            console.warn(
+              `[LiveChat] POST /api/races/${raceId}/comments → ${res.status}`,
+              errBody.slice(0, 200),
+            );
+          }
+          markFailed();
         }
-      } catch {
-        setComments((prev) => prev.map((c) => c.clientMessageId === clientMsgId ? { ...c, status: "failed" } : c));
+      } catch (err) {
+        if (__DEV__) {
+          console.warn(`[LiveChat] send failed raceId=${raceId}`, err);
+        }
+        markFailed();
       }
     })();
-  }, [raceId, isActive, participants, currentUserId, user]);
+    return true;
+  }, [raceId, isActive, participants, currentUserId, user, useDummyRace]);
 
   const handleSendCheer = useCallback(() => {
     if (!cheerText.trim()) return;
     const text = cheerText.trim();
-    setCheerText("");
-    sendMessage(text);
+    // Only clear the input after send is accepted (avoids wiping text when race isn't LIVE).
+    if (sendMessage(text)) setCheerText("");
   }, [cheerText, sendMessage]);
 
   const handleReact = useCallback(async (emoji: string) => {
@@ -3394,7 +3684,7 @@ function LiveRaceDetailScreenContent() {
       maxPlayers: race.maxPlayers,
     });
   const participantValue = formatPlayerCountDisplay({
-    current: participants.length || race.currentPlayers,
+    current: Math.max(race.currentPlayers || 0, participants.length, 1),
     max: race.maxPlayers,
     isUnlimited: isUnlimitedLive,
   });
@@ -3940,8 +4230,8 @@ function LiveRaceDetailScreenContent() {
         </View>
       </View>}
 
-      {/* ── Live chat + cheers — hidden in fullscreen; compact on Live Board so 10 rows fit ── */}
-      {isActive && !isTrackFullscreen && selectedView === "race_track" && (
+      {/* ── Live chat + cheers — same visibility as the send bar (both Race Track + Live Board) ── */}
+      {isActive && !isTrackFullscreen && (
         <>
           {/* Message feed */}
           <View style={[st.liveChatPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>

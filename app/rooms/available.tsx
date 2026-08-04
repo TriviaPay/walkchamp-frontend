@@ -66,6 +66,7 @@ import {
 import { isUnlimitedGoalChallenge, formatPlayerCountDisplay } from "@/utils/unlimitedGoal";
 import { fetchAvailableUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
 import { mergeUpcomingRoomsById } from "@/utils/unlimitedChallengeRooms";
+import { saveHostedUnlimitedChallenge } from "@/utils/hostedUnlimitedCache";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const BG = "#080B14";
@@ -2001,6 +2002,15 @@ function AvailableRoomsScreenContent() {
             : r
         )
       );
+      if (isUnlimitedRoom) {
+        void saveHostedUnlimitedChallenge({
+          ...room,
+          current_user_registered: true,
+          eligible_to_register: false,
+          registered_count: (bodyRes.registered_count as number) ?? room.registered_count + 1,
+          host_user_id: room.host_user_id || "",
+        });
+      }
     } catch {
       AppAlert.alert("Error", "Network error. Please try again.");
     } finally {
@@ -2326,17 +2336,27 @@ function AvailableRoomsScreenContent() {
     if (joiningRoomId) return;
     setJoiningRoomId(room.room_id);
     try {
-      const endpoint = room.entry_fee > 0
-        ? `/api/races/${room.room_id}/join-paid`
-        : `/api/races/${room.room_id}/join`;
+      const isUnlimitedJoin =
+        room.challenge_type === "unlimited_goal" || room.capacity_mode === "unlimited";
+      const endpoint = isUnlimitedJoin
+        ? `/api/unlimited-challenges/${room.room_id}/join`
+        : room.entry_fee > 0
+          ? `/api/races/${room.room_id}/join-paid`
+          : `/api/races/${room.room_id}/join`;
 
-      const res = await authFetch(endpoint, { method: "POST" });
+      const res = await authFetch(endpoint, {
+        method: "POST",
+        body: isUnlimitedJoin
+          ? JSON.stringify({ acceptedCashChallengeConsent: room.entry_fee > 0 })
+          : undefined,
+      });
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as Record<string, unknown>;
-        if (res.status === 409 && body.code === "ACTIVE_RACE_EXISTS") {
+        if (res.status === 409 && (body.code === "ACTIVE_RACE_EXISTS" || body.code === "one_challenge_at_a_time")) {
           pendingRaceActionRef.current = () => doJoin(room);
-          setActiveRaceModal(body.active_race as ActiveRaceInfo);
+          if (body.active_race) setActiveRaceModal(body.active_race as ActiveRaceInfo);
+          else AppAlert.alert("Could not join", (body.error as string) ?? "You already have an active challenge.");
           return;
         }
         AppAlert.alert("Could not join", (body.error as string) ?? "Room may be full or closed.");
@@ -2346,8 +2366,35 @@ function AvailableRoomsScreenContent() {
 
       setActiveRace(room.room_id, false);
       joinRace(room.entry_fee, room.max_players, false);
-      const isUnlimitedJoin =
-        room.challenge_type === "unlimited_goal" || room.capacity_mode === "unlimited";
+      if (isUnlimitedJoin) {
+        void saveHostedUnlimitedChallenge({
+          room_id: room.room_id,
+          title: room.title || "Unlimited Challenge",
+          entry_fee: room.entry_fee,
+          coin_entry_amount: room.coin_entry_amount ?? 0,
+          target_steps: room.target_steps,
+          max_players: 0,
+          registered_count: Math.max(1, room.current_players ?? 1),
+          scheduled_start_at: room.scheduled_start_at ?? null,
+          challenge_end_at: null,
+          challenge_duration_days: 7,
+          status: "waiting",
+          challenge_type: "unlimited_goal",
+          capacity_mode: "unlimited",
+          host_user_id: room.host_user_id || "",
+          host_username: room.host_username || "",
+          host_avatar_color: room.host_avatar_color || "#00E676",
+          host_avatar_url: room.host_avatar_url,
+          host_country_flag: room.host_country_flag,
+          current_user_registered: true,
+          eligible_to_register: false,
+          is_private: !!room.is_private,
+          requires_code: !!room.requires_code,
+          reward_pool: room.reward_pool ?? room.entry_fee,
+          selected_track_theme_id: room.selected_track_theme_id || "bg",
+          theme_name: room.theme_name || "Unlimited",
+        });
+      }
       router.push({
         pathname: "/race/matchmaking",
         params: buildMatchmakingParams({
