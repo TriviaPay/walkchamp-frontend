@@ -45,6 +45,15 @@ import {
   connectPusher,
   subscribeToChannel,
   unsubscribeFromChannel, } from "@/services/realtimeService";
+import {
+  applyParticipantProgressEvent,
+  applyLeaderboardSnapshot,
+  mergeParticipantsPreservingSteps,
+} from "@/services/liveRaceParticipantState";
+import { captureRaceRealtimeGuard } from "@/services/authSessionGeneration";
+import { mapUnlimitedDetailToLiveDetail } from "@/utils/unlimitedLiveRace";
+import { isUnlimitedGoalChallenge } from "@/utils/unlimitedGoal";
+import { isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
 import { STORAGE_KEYS, storageGet } from "@/utils/storage";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { rf, rs } from "@/utils/responsive";
@@ -81,6 +90,10 @@ interface RaceData {
   assetVersion?: number;
   width?: number;
   height?: number;
+  challengeType?: string;
+  capacityMode?: string;
+  challengeDayKey?: string | null;
+  challengeTimezone?: string | null;
 }
 
 interface RaceParticipant {
@@ -92,7 +105,12 @@ interface RaceParticipant {
   username: string;
   countryFlag: string | null;
   avatarColor: string | null;
-  isHost: boolean; }
+  isHost: boolean;
+  challengeDayKey?: string | null;
+  totalChallengeSteps?: number | null;
+  progressUpdatedAt?: string | null;
+  temporaryFromRealtime?: boolean;
+}
 
 interface RaceComment {
   id: string;
@@ -438,7 +456,14 @@ export default function LiveTrackTab() {
   const loadRaceSnapshot = useCallback(async (
     raceId: string,
     force = false,
-    options?: { gateKey?: string; minIntervalMs?: number },
+    options?: {
+      gateKey?: string;
+      minIntervalMs?: number;
+      preferUnlimited?: boolean;
+      challengeType?: string | null;
+      capacityMode?: string | null;
+      entryType?: string | null;
+    },
   ) => {
     const gateKey = options?.gateKey ?? `${raceId}:snapshot`;
     const minIntervalMs = options?.minIntervalMs ?? STEP_SYNC_CONFIG.LIVE_RACE_DETAIL_REFRESH_MS;
@@ -452,118 +477,242 @@ export default function LiveTrackTab() {
     ) {
       return;
     }
-    const [detailRes, commentsRes, reactionsRes] = await Promise.all([
-      authFetch(`/api/races/${raceId}`),
-      authFetch(`/api/races/${raceId}/comments`),
-      authFetch(`/api/races/${raceId}/reactions`),
-    ]);
 
-    if (detailRes.ok) {
-      markLiveRaceFetched(gateKey);
-      const detail = (await detailRes.json()) as {
-        race?: RaceData;
-        participants?: RaceParticipant[]; };
-      const parts = Array.isArray(detail.participants) ? detail.participants : [];
-      setRace(detail.race ?? null);
-      setParticipants(parts);
-      if (detail.race?.status === "in_progress" && user?.id) {
-        const me = findEligibleLiveRaceParticipant(parts, user);
-        if (me) {
-          const prevActiveId = store.getState().raceProgress.activeRaceId;
-          const preserveAsCompanion = !!prevActiveId && prevActiveId !== raceId;
-          const resolvedGoal =
-            typeof detail.race.targetSteps === "number" && detail.race.targetSteps > 0
-              ? detail.race.targetSteps
-              : undefined;
-          if (resolvedGoal != null) {
-            setRaceTargetSteps(resolvedGoal);
-          }
-          setActiveRace(raceId, false);
-          const challengeEndAt =
-            detail.race.type === "sponsored"
-              ? detail.race.challengeEndAt ??
-                (detail.race.startedAt
-                  ? new Date(
-                      new Date(detail.race.startedAt).getTime() + 3 * 60 * 60 * 1000,
-                    ).toISOString()
-                  : undefined)
-              : detail.race.challengeEndAt ?? undefined;
-          ensureActiveRaceInStore({
-            raceId,
-            raceStartTime: new Date(detail.race.startedAt ?? Date.now()).toISOString(),
-            userId: user.id,
-            username: user.username ?? "Runner",
-            goalSteps: resolvedGoal ?? store.getState().raceProgress.goalSteps ?? 0,
-            totalParticipants: detail.race.currentPlayers ?? parts.length,
-            bootSteps: me.currentSteps ?? 0,
-            participantConfirmed: true,
-            preserveAsCompanion,
-            isSponsored: detail.race.type === "sponsored",
-            challengeEndAt,
-          });
-          if (!raceResumedRef.current) {
-            raceResumedRef.current = true;
-            resumeLiveRace(
-              detail.race.currentPlayers ?? parts.length,
-              new Date(detail.race.startedAt ?? Date.now()),
-              me.currentSteps ?? 0,
-            );
-          }
-          void catchUpLiveRaceSteps(me.currentSteps ?? 0, true);
-        } else {
-          void suppressSpectatorLiveRaceNotifications(raceId);
+    const hintUnlimited =
+      options?.preferUnlimited === true ||
+      isUnlimitedGoalChallenge({
+        challengeType: options?.challengeType,
+        capacityMode: options?.capacityMode,
+        entryType: options?.entryType,
+      });
+
+    const fetchClassic = () => authFetch(`/api/races/${raceId}`);
+    const fetchUnlimited = () => authFetch(`/api/unlimited-challenges/${raceId}`);
+
+    let detailRace: RaceData | null = null;
+    let parts: RaceParticipant[] = [];
+    let isUnlimited = false;
+
+    if (hintUnlimited && isUnlimitedGoalFrontendEnabled()) {
+      const ulRes = await fetchUnlimited();
+      if (ulRes.ok) {
+        const mapped = mapUnlimitedDetailToLiveDetail(await ulRes.json().catch(() => null));
+        if (mapped?.race) {
+          isUnlimited = true;
+          detailRace = mapped.race as RaceData;
+          parts = mapped.participants as RaceParticipant[];
         }
-      }
-      // Apply track layout from DB — shared for all users in the race
-      if (isTrackLayoutId(detail.race?.trackLayout)) {
-        setTrackLayoutId(detail.race.trackLayout);
       }
     }
 
-    if (commentsRes.ok) {
-      const body = (await commentsRes.json()) as { comments?: RaceComment[] };
-      setComments(Array.isArray(body.comments) ? body.comments : []); }
+    if (!detailRace) {
+      const [detailRes, commentsRes, reactionsRes] = await Promise.all([
+        fetchClassic(),
+        authFetch(`/api/races/${raceId}/comments`),
+        authFetch(`/api/races/${raceId}/reactions`),
+      ]);
 
-    if (reactionsRes.ok) {
-      const body = (await reactionsRes.json()) as { reactions?: ReactionCount[] };
-      setReactionCounts(Array.isArray(body.reactions) ? normalizeCounts(body.reactions) : {}); }
-  }, [user?.id, user?.username, setActiveRace, resumeLiveRace, catchUpLiveRaceSteps]);
+      if (detailRes.ok) {
+        markLiveRaceFetched(gateKey);
+        const detail = (await detailRes.json()) as {
+          race?: RaceData;
+          participants?: RaceParticipant[];
+        };
+        detailRace = detail.race ?? null;
+        parts = Array.isArray(detail.participants) ? detail.participants : [];
+        isUnlimited = !!(
+          detailRace &&
+          isUnlimitedGoalChallenge({
+            challengeType: detailRace.challengeType,
+            capacityMode: detailRace.capacityMode,
+            entryType: detailRace.entryType,
+            type: detailRace.type,
+            maxPlayers: detailRace.maxPlayers,
+          })
+        );
+      } else if (isUnlimitedGoalFrontendEnabled()) {
+        // Classic 404 — try Unlimited detail for the same id.
+        const ulRes = await fetchUnlimited();
+        if (ulRes.ok) {
+          markLiveRaceFetched(gateKey);
+          const mapped = mapUnlimitedDetailToLiveDetail(await ulRes.json().catch(() => null));
+          if (mapped?.race) {
+            isUnlimited = true;
+            detailRace = mapped.race as RaceData;
+            parts = mapped.participants as RaceParticipant[];
+          }
+        }
+      }
+
+      if (commentsRes.ok) {
+        const body = (await commentsRes.json()) as { comments?: RaceComment[] };
+        setComments(Array.isArray(body.comments) ? body.comments : []);
+      }
+      if (reactionsRes.ok) {
+        const body = (await reactionsRes.json()) as { reactions?: ReactionCount[] };
+        setReactionCounts(Array.isArray(body.reactions) ? normalizeCounts(body.reactions) : {});
+      }
+    } else {
+      markLiveRaceFetched(gateKey);
+      // Unlimited comments/reactions still live on classic race routes when mirrored;
+      // best-effort — ignore failures.
+      const [commentsRes, reactionsRes] = await Promise.all([
+        authFetch(`/api/races/${raceId}/comments`),
+        authFetch(`/api/races/${raceId}/reactions`),
+      ]);
+      if (commentsRes.ok) {
+        const body = (await commentsRes.json()) as { comments?: RaceComment[] };
+        setComments(Array.isArray(body.comments) ? body.comments : []);
+      }
+      if (reactionsRes.ok) {
+        const body = (await reactionsRes.json()) as { reactions?: ReactionCount[] };
+        setReactionCounts(Array.isArray(body.reactions) ? normalizeCounts(body.reactions) : {});
+      }
+    }
+
+    if (!detailRace) return;
+
+    // Auth / account-switch guard after awaits.
+    if (user?.id && store.getState().auth.user?.id !== user.id) return;
+
+    setRace(detailRace);
+    setParticipants((prev) =>
+      mergeParticipantsPreservingSteps(prev, parts, {
+        raceCompleted: detailRace?.status === "completed",
+        dayAware: isUnlimited,
+      }),
+    );
+
+    if (detailRace.status === "in_progress" && user?.id) {
+      const me = findEligibleLiveRaceParticipant(parts, user);
+      if (me && !isUnlimited) {
+        const prevActiveId = store.getState().raceProgress.activeRaceId;
+        const preserveAsCompanion = !!prevActiveId && prevActiveId !== raceId;
+        const resolvedGoal =
+          typeof detailRace.targetSteps === "number" && detailRace.targetSteps > 0
+            ? detailRace.targetSteps
+            : undefined;
+        if (resolvedGoal != null) {
+          setRaceTargetSteps(resolvedGoal);
+        }
+        setActiveRace(raceId, false);
+        const challengeEndAt =
+          detailRace.type === "sponsored"
+            ? detailRace.challengeEndAt ??
+              (detailRace.startedAt
+                ? new Date(
+                    new Date(detailRace.startedAt).getTime() + 3 * 60 * 60 * 1000,
+                  ).toISOString()
+                : undefined)
+            : detailRace.challengeEndAt ?? undefined;
+        ensureActiveRaceInStore({
+          raceId,
+          raceStartTime: new Date(detailRace.startedAt ?? Date.now()).toISOString(),
+          userId: user.id,
+          username: user.username ?? "Runner",
+          goalSteps: resolvedGoal ?? store.getState().raceProgress.goalSteps ?? 0,
+          totalParticipants: detailRace.currentPlayers ?? parts.length,
+          bootSteps: me.currentSteps ?? 0,
+          participantConfirmed: true,
+          preserveAsCompanion,
+          isSponsored: detailRace.type === "sponsored",
+          challengeEndAt,
+        });
+        if (!raceResumedRef.current) {
+          raceResumedRef.current = true;
+          resumeLiveRace(
+            detailRace.currentPlayers ?? parts.length,
+            new Date(detailRace.startedAt ?? Date.now()),
+            me.currentSteps ?? 0,
+          );
+        }
+        void catchUpLiveRaceSteps(me.currentSteps ?? 0, true);
+      } else if (!me) {
+        void suppressSpectatorLiveRaceNotifications(raceId);
+      }
+      // Unlimited: daily notification owns tray — do not start classic race_live.
+    }
+    if (isTrackLayoutId(detailRace.trackLayout)) {
+      setTrackLayoutId(detailRace.trackLayout);
+    }
+  }, [user?.id, user?.username, setActiveRace, resumeLiveRace, catchUpLiveRaceSteps, setRaceTargetSteps]);
 
   const loadActiveRace = useCallback(async () => {
     setLoading(true);
     try {
       let raceId: string | null = null;
+      let preferUnlimited = false;
+      let challengeType: string | null = null;
+      let capacityMode: string | null = null;
+      let entryType: string | null = null;
       const myActiveRes = await authFetch(`/api/races/my-active`);
 
       if (myActiveRes.ok) {
-        const body = (await myActiveRes.json()) as { race?: { id?: string } | null };
-        raceId = body.race?.id ?? null; }
+        const body = (await myActiveRes.json()) as {
+          race?: {
+            id?: string;
+            challengeType?: string;
+            capacityMode?: string;
+            entryType?: string;
+          } | null;
+        };
+        raceId = body.race?.id ?? null;
+        challengeType = body.race?.challengeType ?? null;
+        capacityMode = body.race?.capacityMode ?? null;
+        entryType = body.race?.entryType ?? null;
+        preferUnlimited = isUnlimitedGoalChallenge({
+          challengeType,
+          capacityMode,
+          entryType,
+        });
+      }
 
       if (!raceId) {
         const liveRes = await authFetch(`/api/races?status=in_progress`);
         if (liveRes.ok) {
           const body = (await liveRes.json()) as { races?: Array<{ id: string }> };
-          raceId = body.races?.[0]?.id ?? null; } }
+          raceId = body.races?.[0]?.id ?? null;
+        }
+      }
 
       if (raceId) {
-        await loadRaceSnapshot(raceId); } else {
+        await loadRaceSnapshot(raceId, false, {
+          preferUnlimited,
+          challengeType,
+          capacityMode,
+          entryType,
+        });
+      } else {
         setRace(null);
         setParticipants([]);
         setComments([]);
-        setReactionCounts({}); } } catch {
+        setReactionCounts({});
+      }
+    } catch {
       setRace(null);
       setParticipants([]);
       setComments([]);
       setReactionCounts({});
     } finally {
       setLoading(false);
-      hasInitialized.current = true; } }, [loadRaceSnapshot]);
+      hasInitialized.current = true;
+    }
+  }, [loadRaceSnapshot]);
 
   useEffect(() => {
     loadActiveRace(); }, [loadActiveRace]);
 
   useFocusEffect(useCallback(() => {
     if (!activeRaceId || !isActive || !user?.id) return;
+    const unlimitedLive = isUnlimitedGoalChallenge({
+      challengeType: race?.challengeType,
+      capacityMode: race?.capacityMode,
+      entryType: race?.entryType,
+      type: race?.type,
+      maxPlayers: race?.maxPlayers,
+    });
+    // Unlimited uses daily notification ownership — do not start classic race_live.
+    if (unlimitedLive) return;
     const me = findEligibleLiveRaceParticipant(participants, user);
     if (!me) {
       void suppressSpectatorLiveRaceNotifications(activeRaceId);
@@ -609,7 +758,7 @@ export default function LiveTrackTab() {
       `live-track focus raceId=${activeRaceId} renderedSteps=${liveRaceSteps} participantNotifications=true`,
     );
     void catchUpLiveRaceSteps(me.currentSteps ?? 0, true);
-  }, [activeRaceId, isActive, user?.id, user?.username, participants, race?.startedAt, race?.currentPlayers, race?.type, race?.challengeEndAt, race?.targetSteps, targetSteps, liveRaceSteps, catchUpLiveRaceSteps, setRaceTargetSteps]));
+  }, [activeRaceId, isActive, user?.id, user?.username, participants, race?.startedAt, race?.currentPlayers, race?.type, race?.challengeEndAt, race?.targetSteps, race?.challengeType, race?.capacityMode, race?.entryType, race?.maxPlayers, targetSteps, liveRaceSteps, catchUpLiveRaceSteps, setRaceTargetSteps]));
 
   useEffect(() => {
     if (!activeRaceId || !user?.id) return;
@@ -662,15 +811,35 @@ export default function LiveTrackTab() {
       pulseOpacity.value = withTiming(0, { duration: 200 }); } }, [loading, pulseOpacity]);
 
   useEffect(() => {
-    if (!activeRaceId) return;
+    if (!activeRaceId || !user?.id) return;
+    const realtimeGuard = captureRaceRealtimeGuard({
+      userId: user.id,
+      raceId: activeRaceId,
+    });
+    if (!realtimeGuard) return;
     connectPusher();
     const channelName = CHANNELS.liveRace(activeRaceId);
     const channel = subscribeToChannel(channelName);
-    if (!channel) return;
+    const unlimitedChannel =
+      isUnlimitedGoalFrontendEnabled()
+        ? subscribeToChannel(CHANNELS.unlimitedChallenge(activeRaceId))
+        : null;
+    if (!channel && !unlimitedChannel) return;
 
     const refresh = () => {
       setTimeout(() => {
-        loadRaceSnapshot(activeRaceId).catch(() => {}); }, 250); };
+        loadRaceSnapshot(activeRaceId, false, {
+          preferUnlimited: isUnlimitedGoalChallenge({
+            challengeType: race?.challengeType,
+            capacityMode: race?.capacityMode,
+            entryType: race?.entryType,
+          }),
+          challengeType: race?.challengeType,
+          capacityMode: race?.capacityMode,
+          entryType: race?.entryType,
+        }).catch(() => {});
+      }, 250);
+    };
 
     const onStarted = refresh;
     const onJoined = refresh;
@@ -679,56 +848,134 @@ export default function LiveTrackTab() {
       setRace((prev) =>
         prev ? { ...prev, status: "completed", completedAt: prev.completedAt ?? new Date().toISOString() } : prev,
       );
-      refresh(); };
-    const onProgress = (data: { participantId?: string; userId?: string; steps?: number; rank?: number }) => {
-      if (typeof data.steps !== "number") return;
-      const nextSteps = data.steps;
-      setParticipants((prev) =>
-        prev.map((p) => {
-          const match =
-            (data.participantId && p.id === data.participantId) ||
-            (data.userId && p.userId === data.userId);
-          if (!match) return p;
-          return {
-            ...p,
-            currentSteps: Math.max(p.currentSteps, nextSteps),
-            rank: data.rank ?? p.rank,
-          };
-        }),
-      ); };
+      refresh();
+    };
+    const onProgress = (data: {
+      raceId?: string;
+      participantId?: string;
+      userId?: string;
+      steps?: number;
+      rank?: number;
+      updatedAt?: string;
+      challengeDayKey?: string;
+      leaderboard?: Array<{
+        participantId?: string;
+        id?: string;
+        userId?: string;
+        steps?: number;
+        currentSteps?: number;
+        rank?: number;
+        updatedAt?: string | null;
+      }>;
+    }) => {
+      if (!realtimeGuard.accepts(data.raceId ?? activeRaceId)) return;
+      const unlimitedLive = isUnlimitedGoalChallenge({
+        challengeType: race?.challengeType,
+        capacityMode: race?.capacityMode,
+        entryType: race?.entryType,
+        type: race?.type,
+        maxPlayers: race?.maxPlayers,
+      });
+      setParticipants((prev) => {
+        let next = prev;
+        let changed = false;
+        if (typeof data.steps === "number" && (data.userId || data.participantId)) {
+          const applied = applyParticipantProgressEvent(
+            next,
+            {
+              participantId: data.participantId,
+              userId: data.userId,
+              steps: data.steps,
+              rank: data.rank,
+              updatedAt: data.updatedAt,
+              challengeDayKey: data.challengeDayKey,
+            },
+            {
+              currentUserId: user.id,
+              targetSteps: race?.targetSteps ?? DEFAULT_TARGET_STEPS,
+              raceCompleted: race?.status === "completed",
+              dayAware: unlimitedLive,
+              expectedChallengeDayKey: race?.challengeDayKey ?? null,
+            },
+          );
+          next = applied.next;
+          changed = applied.changed;
+        }
+        if (Array.isArray(data.leaderboard) && data.leaderboard.length > 0) {
+          const board = applyLeaderboardSnapshot(next, data.leaderboard, {
+            currentUserId: user.id,
+            targetSteps: race?.targetSteps ?? DEFAULT_TARGET_STEPS,
+            raceCompleted: race?.status === "completed",
+            dayAware: unlimitedLive,
+            expectedChallengeDayKey: race?.challengeDayKey ?? null,
+          });
+          if (board.changed) {
+            next = board.next;
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    };
     const onComment = (data: RaceCommentPayload) => {
       const comment = normalizeIncomingComment(data);
       if (!comment) return;
       setComments((prev) => appendUniqueComment(prev, comment));
-      setTimeout(() => cheerScrollRef.current?.scrollToEnd({ animated: true }), 50); };
+      setTimeout(() => cheerScrollRef.current?.scrollToEnd({ animated: true }), 50);
+    };
     const onReaction = (data: { counts?: ReactionCount[] }) => {
-      if (Array.isArray(data.counts)) setReactionCounts(normalizeCounts(data.counts)); };
+      if (Array.isArray(data.counts)) setReactionCounts(normalizeCounts(data.counts));
+    };
 
-    channel.bind(EVENTS.RACE_STARTED, onStarted);
-    channel.bind("race:player-joined", onJoined);
-    channel.bind("race:player-left", onLeft);
-    channel.bind("race:participant_left", onLeft);
-    channel.bind(EVENTS.RACE_PROGRESS, onProgress);
-    channel.bind("race:comment_new", onComment);
-    channel.bind(EVENTS.RACE_COMMENT, onComment);
-    channel.bind("race:reaction_updated", onReaction);
-    channel.bind(EVENTS.RACE_COMPLETED, onCompleted);
-    channel.bind("race:winners", refresh);
+    channel?.bind(EVENTS.RACE_STARTED, onStarted);
+    channel?.bind("race:player-joined", onJoined);
+    channel?.bind("race:player-left", onLeft);
+    channel?.bind("race:participant_left", onLeft);
+    channel?.bind(EVENTS.RACE_PROGRESS, onProgress);
+    channel?.bind("race:comment_new", onComment);
+    channel?.bind(EVENTS.RACE_COMMENT, onComment);
+    channel?.bind("race:reaction_updated", onReaction);
+    channel?.bind(EVENTS.RACE_COMPLETED, onCompleted);
+    channel?.bind("race:winners", refresh);
+    unlimitedChannel?.bind("progress_updated", onProgress);
+    unlimitedChannel?.bind("participant_joined", onJoined);
+    unlimitedChannel?.bind("participant_left", onLeft);
 
     return () => {
-      channel.unbind(EVENTS.RACE_STARTED, onStarted);
-      channel.unbind("race:player-joined", onJoined);
-      channel.unbind("race:player-left", onLeft);
-      channel.unbind("race:participant_left", onLeft);
-      channel.unbind(EVENTS.RACE_PROGRESS, onProgress);
-      channel.unbind("race:comment_new", onComment);
-      channel.unbind(EVENTS.RACE_COMMENT, onComment);
-      channel.unbind("race:reaction_updated", onReaction);
-      channel.unbind(EVENTS.RACE_COMPLETED, onCompleted);
-      channel.unbind("race:winners", refresh);
-      unsubscribeFromChannel(channelName); }; }, [activeRaceId, loadRaceSnapshot]);
+      channel?.unbind(EVENTS.RACE_STARTED, onStarted);
+      channel?.unbind("race:player-joined", onJoined);
+      channel?.unbind("race:player-left", onLeft);
+      channel?.unbind("race:participant_left", onLeft);
+      channel?.unbind(EVENTS.RACE_PROGRESS, onProgress);
+      channel?.unbind("race:comment_new", onComment);
+      channel?.unbind(EVENTS.RACE_COMMENT, onComment);
+      channel?.unbind("race:reaction_updated", onReaction);
+      channel?.unbind(EVENTS.RACE_COMPLETED, onCompleted);
+      channel?.unbind("race:winners", refresh);
+      unlimitedChannel?.unbind("progress_updated", onProgress);
+      unlimitedChannel?.unbind("participant_joined", onJoined);
+      unlimitedChannel?.unbind("participant_left", onLeft);
+      unsubscribeFromChannel(channelName);
+      if (unlimitedChannel) {
+        unsubscribeFromChannel(CHANNELS.unlimitedChallenge(activeRaceId));
+      }
+    };
+  }, [
+    activeRaceId,
+    loadRaceSnapshot,
+    user?.id,
+    race?.challengeType,
+    race?.capacityMode,
+    race?.entryType,
+    race?.type,
+    race?.maxPlayers,
+    race?.targetSteps,
+    race?.status,
+    race?.challengeDayKey,
+  ]);
 
   useEffect(() => {
+    if (!user?.id) return;
     connectPusher();
     const channel = subscribeToChannel(CHANNELS.PRESENCE);
     if (!channel) return;
@@ -737,7 +984,7 @@ export default function LiveTrackTab() {
     channel.bind(EVENTS.RACE_STARTED, onRaceStarted);
     return () => {
       channel.unbind(EVENTS.RACE_STARTED, onRaceStarted);
-      unsubscribeFromChannel(CHANNELS.PRESENCE); }; }, [loadActiveRace]);
+      unsubscribeFromChannel(CHANNELS.PRESENCE); }; }, [loadActiveRace, user?.id]);
 
   const sortedPlayers = useMemo(() => {
     const sorted = [...participants].sort((a, b) => b.currentSteps - a.currentSteps);

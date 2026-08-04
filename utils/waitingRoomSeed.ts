@@ -1,5 +1,6 @@
 /**
  * Instant waiting-room UI — seed participants and room meta before the first poll.
+ * Cache keys are scoped by authenticated user so account switches cannot flash "You".
  */
 
 import type { UserProfile } from "@/store/types";
@@ -49,10 +50,18 @@ export interface WaitingRoomLiveMeta {
 export interface WaitingRoomCacheEntry {
   participants: WaitingRoomParticipant[];
   liveRoom: WaitingRoomLiveMeta | null;
+  ownerUserId: string;
+  raceId: string;
+  updatedAt: string;
 }
 
-export function waitingRoomCacheKey(raceId: string): string {
+/** @deprecated Prefer waitingRoomCacheKey(userId, raceId). Legacy unscoped key. */
+export function waitingRoomCacheKeyLegacy(raceId: string): string {
   return `waiting_room_${raceId}`;
+}
+
+export function waitingRoomCacheKey(userId: string, raceId: string): string {
+  return `waiting_room:${userId}:${raceId}`;
 }
 
 export function parseInitialParticipants(
@@ -92,16 +101,60 @@ export function buildSelfParticipant(
 }
 
 export function cacheWaitingRoomState(
+  userId: string,
   raceId: string,
-  entry: WaitingRoomCacheEntry,
+  entry: Omit<WaitingRoomCacheEntry, "ownerUserId" | "raceId" | "updatedAt"> &
+    Partial<Pick<WaitingRoomCacheEntry, "ownerUserId" | "raceId" | "updatedAt">>,
 ): void {
-  void screenCache.set(waitingRoomCacheKey(raceId), entry);
+  if (!userId || !raceId) return;
+  const payload: WaitingRoomCacheEntry = {
+    participants: entry.participants,
+    liveRoom: entry.liveRoom,
+    ownerUserId: userId,
+    raceId,
+    updatedAt: entry.updatedAt ?? new Date().toISOString(),
+  };
+  void screenCache.set(waitingRoomCacheKey(userId, raceId), payload);
+  // Drop legacy unscoped key so Account B cannot read Account A's seed.
+  void screenCache.invalidate(waitingRoomCacheKeyLegacy(raceId));
 }
 
 export function readWaitingRoomCacheSync(
+  userId: string,
   raceId: string,
 ): WaitingRoomCacheEntry | null {
-  return screenCache.getSync<WaitingRoomCacheEntry>(waitingRoomCacheKey(raceId));
+  if (!userId || !raceId) return null;
+  const scoped = screenCache.getSync<WaitingRoomCacheEntry>(
+    waitingRoomCacheKey(userId, raceId),
+  );
+  if (
+    scoped &&
+    scoped.ownerUserId === userId &&
+    scoped.raceId === raceId &&
+    Array.isArray(scoped.participants)
+  ) {
+    return scoped;
+  }
+  // One-time migrate legacy unscoped cache only if it clearly belongs to this user.
+  const legacy = screenCache.getSync<WaitingRoomCacheEntry & { ownerUserId?: string }>(
+    waitingRoomCacheKeyLegacy(raceId),
+  );
+  if (!legacy?.participants?.length) return null;
+  const self = legacy.participants.find((p) => p.isCurrentUser || p.userId === userId);
+  if (!self || self.userId !== userId) {
+    void screenCache.invalidate(waitingRoomCacheKeyLegacy(raceId));
+    return null;
+  }
+  const migrated: WaitingRoomCacheEntry = {
+    participants: legacy.participants,
+    liveRoom: legacy.liveRoom ?? null,
+    ownerUserId: userId,
+    raceId,
+    updatedAt: legacy.updatedAt ?? new Date().toISOString(),
+  };
+  void screenCache.set(waitingRoomCacheKey(userId, raceId), migrated);
+  void screenCache.invalidate(waitingRoomCacheKeyLegacy(raceId));
+  return migrated;
 }
 
 /** Navigation params for instant matchmaking render. */

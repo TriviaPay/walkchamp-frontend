@@ -264,6 +264,8 @@ export type UnlimitedLiveDetailMapped = {
     challengeDurationDays: number | null;
     prizePoolCents: number;
     hasExplicitPlayerCount?: boolean;
+    challengeTimezone?: string | null;
+    challengeDayKey?: string | null;
   };
   participants: Array<{
     id: string;
@@ -277,6 +279,9 @@ export type UnlimitedLiveDetailMapped = {
     avatarUrl?: string | null;
     avatarVersion?: number | null;
     isHost: boolean;
+    totalChallengeSteps?: number | null;
+    challengeDayKey?: string | null;
+    completedDays?: number | null;
   }>;
 };
 
@@ -316,21 +321,15 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
     pick(obj, "status", "participantStatus", "participant_status", "registrationStatus"),
   );
   const progress = asRecord(pick(obj, "progress", "stats", "liveProgress", "live_progress")) ?? {};
+  // currentSteps = challenge-day progress only. Never fall back to totalChallengeSteps.
   const currentSteps = Math.max(
     asNumber(
       pick(
         obj,
         "currentSteps",
         "current_steps",
-        "steps",
         "todaySteps",
         "today_steps",
-        "raceSteps",
-        "race_steps",
-        "stepCount",
-        "step_count",
-        "totalChallengeSteps",
-        "total_challenge_steps",
       ),
     ) ?? 0,
     asNumber(
@@ -338,14 +337,18 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
         progress,
         "currentSteps",
         "current_steps",
-        "steps",
-        "raceSteps",
-        "race_steps",
-        "stepCount",
-        "step_count",
+        "todaySteps",
+        "today_steps",
       ),
     ) ?? 0,
   );
+  const totalChallengeSteps = asNumber(
+    pick(obj, "totalChallengeSteps", "total_challenge_steps"),
+  );
+  const challengeDayKey =
+    asString(pick(obj, "challengeDayKey", "challenge_day_key", "localDate", "local_date")) ??
+    null;
+  const completedDays = asNumber(pick(obj, "completedDays", "completed_days"));
   return {
     id:
       asString(pick(obj, "participantId", "participant_id", "registrationId", "registration_id")) ??
@@ -373,14 +376,37 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
     isHost:
       asString(pick(obj, "role", "membershipRole", "membership_role"))?.toLowerCase() ===
         "host" || pick(obj, "isHost", "is_host") === true,
+    ...(totalChallengeSteps != null ? { totalChallengeSteps } : {}),
+    ...(challengeDayKey ? { challengeDayKey } : {}),
+    ...(completedDays != null ? { completedDays } : {}),
   };
 }
 
-/** Merge extra participant rows (e.g. from /api/races/:id) into an Unlimited mapped list. */
+/** Seed dummy usernames from Backend/scripts (`du` + 12 hex). */
+function isSeedDummyUsername(name: string | null | undefined): boolean {
+  return !!name && /^du[a-f0-9]{12}$/i.test(name.trim());
+}
+
+/** Prefer a human-readable label over seed `du…` codes when merging rosters. */
+function preferLiveDisplayUsername(primary: string, overlay: string): string {
+  if (!overlay || overlay === "Walker") return primary || overlay || "Walker";
+  if (!primary || primary === "Walker") return overlay;
+  if (isSeedDummyUsername(overlay) && !isSeedDummyUsername(primary)) return primary;
+  if (isSeedDummyUsername(primary) && !isSeedDummyUsername(overlay)) return overlay;
+  // Detail roster is authoritative for names when enriching from leaderboard.
+  return primary;
+}
+
+/** Merge extra participant rows into an Unlimited mapped list.
+ * Leaderboard may enrich rank / totalChallengeSteps / completedDays / challengeDayKey,
+ * but must NOT overwrite today's currentSteps with a multi-day total.
+ */
 export function mergeUnlimitedLiveParticipants(
   primary: UnlimitedLiveDetailMapped["participants"],
   extra: unknown[],
+  opts?: { preferPrimaryCurrentSteps?: boolean },
 ): UnlimitedLiveDetailMapped["participants"] {
+  const preferPrimaryCurrentSteps = opts?.preferPrimaryCurrentSteps !== false;
   const byUser = new Map<string, UnlimitedLiveDetailMapped["participants"][number]>();
   primary.forEach((p, i) => {
     if (p.userId) byUser.set(p.userId, p);
@@ -394,12 +420,28 @@ export function mergeUnlimitedLiveParticipants(
       byUser.set(mapped.userId, mapped);
       return;
     }
+    const sameDay =
+      !prev.challengeDayKey ||
+      !mapped.challengeDayKey ||
+      prev.challengeDayKey === mapped.challengeDayKey;
+    // Prefer detail (primary) currentSteps when overlaying leaderboard enrichment.
+    const currentSteps = preferPrimaryCurrentSteps
+      ? prev.currentSteps
+      : sameDay
+        ? Math.max(prev.currentSteps, mapped.currentSteps)
+        : mapped.currentSteps;
     byUser.set(mapped.userId, {
       ...prev,
       ...mapped,
-      currentSteps: Math.max(prev.currentSteps, mapped.currentSteps),
-      username: mapped.username !== "Walker" ? mapped.username : prev.username,
+      currentSteps,
+      totalChallengeSteps:
+        mapped.totalChallengeSteps ?? prev.totalChallengeSteps ?? null,
+      challengeDayKey: mapped.challengeDayKey ?? prev.challengeDayKey ?? null,
+      completedDays: mapped.completedDays ?? prev.completedDays ?? null,
+      // Keep "Dummy User 00012" / real usernames — do not let leaderboard `du…` codes win.
+      username: preferLiveDisplayUsername(prev.username, mapped.username),
       isHost: prev.isHost || mapped.isHost,
+      rank: mapped.rank ?? prev.rank,
     });
   });
   return [...byUser.values()];
@@ -407,8 +449,8 @@ export function mergeUnlimitedLiveParticipants(
 
 /**
  * Overlay classic `/api/races/:id` live fields onto Unlimited detail.
- * Keeps Unlimited challenge metadata/roster; takes race status/startedAt/steps when present
- * so Unlimited Live Race tracks like a normal live race.
+ * Status/startedAt only — do NOT merge classic race participant steps into Unlimited
+ * daily currentSteps (classic progress is a different write path).
  */
 export function overlayClassicRaceOnUnlimitedDetail(
   unlimited: UnlimitedLiveDetailMapped,
@@ -421,20 +463,8 @@ export function overlayClassicRaceOnUnlimitedDetail(
     asRecord(pick(root, "race", "data")) ??
     (typeof pick(root, "status") === "string" ? root : null);
 
-  const raceParts = (() => {
-    for (const key of ["participants", "players", "leaderboard", "standings"]) {
-      const list = root[key];
-      if (Array.isArray(list)) return list;
-      const nested = raceRec ? raceRec[key] : undefined;
-      if (Array.isArray(nested)) return nested;
-    }
-    return [] as unknown[];
-  })();
-
-  const participants =
-    raceParts.length > 0
-      ? mergeUnlimitedLiveParticipants(unlimited.participants, raceParts)
-      : unlimited.participants;
+  // Keep Unlimited roster as-is — classic race participants are not Unlimited daily progress.
+  const participants = unlimited.participants;
 
   if (!raceRec) {
     return { ...unlimited, participants };
@@ -626,6 +656,12 @@ export function mapUnlimitedDetailToLiveDetail(
       ),
       prizePoolCents: prizeCents,
       hasExplicitPlayerCount: !!waiting.race.hasExplicitPlayerCount,
+      challengeTimezone: asString(
+        pick(challenge, "challengeTimezone", "challenge_timezone", "timezone"),
+      ),
+      challengeDayKey:
+        asString(pick(challenge, "challengeDayKey", "challenge_day_key")) ??
+        asString(pick(root ?? {}, "challengeDayKey", "challenge_day_key")),
     },
     participants,
   };

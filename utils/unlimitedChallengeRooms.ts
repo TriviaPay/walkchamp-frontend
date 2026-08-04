@@ -45,6 +45,46 @@ function centsToDollars(cents: number | null): number | null {
   return cents / 100;
 }
 
+/**
+ * True only for Unlimited Daily Goal rows — never Free / Coins / Cash race rooms.
+ * Classic `/rooms/available` often shares id + visibility + scheduled_start_at;
+ * those must NOT be stamped as unlimited_goal.
+ *
+ * Prefer Unlimited-specific fields (`challengeType`, `capacityMode`, `dailyGoalSteps`)
+ * before looking at `entryType` — Live cards use entryType "$45" as a cash label.
+ */
+function isUnlimitedGoalRawRow(obj: Record<string, unknown>): boolean {
+  const challengeType = String(
+    pickRaw(obj, "challengeType", "challenge_type") ?? "",
+  )
+    .trim()
+    .toLowerCase();
+  if (challengeType === UNLIMITED_GOAL_CHALLENGE_TYPE) return true;
+
+  const capacity = String(pickRaw(obj, "capacityMode", "capacity_mode") ?? "")
+    .trim()
+    .toLowerCase();
+  if (capacity === "unlimited") return true;
+
+  // Dedicated Unlimited API rows always include dailyGoalSteps (classic uses targetSteps).
+  if (pickRaw(obj, "dailyGoalSteps", "daily_goal_steps") != null) return true;
+
+  // serializeChallenge always has durationDays + entryFeeCents together.
+  if (
+    pickRaw(obj, "durationDays", "duration_days") != null &&
+    pickRaw(obj, "entryFeeCents", "entry_fee_cents") != null
+  ) {
+    return true;
+  }
+
+  const entryType = String(pickRaw(obj, "entryType", "entry_type") ?? "")
+    .trim()
+    .toLowerCase();
+  if (entryType === UNLIMITED_GOAL_CHALLENGE_TYPE) return true;
+
+  return false;
+}
+
 function looksLikeChallengeRow(value: unknown): boolean {
   const obj = asRecord(value);
   if (!obj) return false;
@@ -58,24 +98,7 @@ function looksLikeChallengeRow(value: unknown): boolean {
     "unlimitedChallengeId",
   );
   if (id == null) return false;
-  return (
-    pickRaw(
-      obj,
-      "dailyGoalSteps",
-      "daily_goal_steps",
-      "startAtIso",
-      "startAtUtc",
-      "start_at_utc",
-      "scheduled_start_at",
-      "durationDays",
-      "duration_days",
-      "entryFeeCents",
-      "entry_fee_cents",
-      "challengeType",
-      "challenge_type",
-      "visibility",
-    ) != null
-  );
+  return isUnlimitedGoalRawRow(obj);
 }
 
 const LIST_ARRAY_KEYS = [
@@ -107,12 +130,19 @@ export function extractUnlimitedChallengeRows(payload: unknown): unknown[] {
 
   for (const key of LIST_ARRAY_KEYS) {
     const v = obj[key];
-    if (Array.isArray(v)) return v;
+    if (Array.isArray(v)) {
+      const onlyUnlimited = v.filter(looksLikeChallengeRow);
+      if (onlyUnlimited.length > 0) return onlyUnlimited;
+      continue;
+    }
     const nested = asRecord(v);
     if (nested) {
       if (looksLikeChallengeRow(nested)) return [nested];
       for (const inner of LIST_ARRAY_KEYS) {
-        if (Array.isArray(nested[inner])) return nested[inner] as unknown[];
+        if (Array.isArray(nested[inner])) {
+          const onlyUnlimited = (nested[inner] as unknown[]).filter(looksLikeChallengeRow);
+          if (onlyUnlimited.length > 0) return onlyUnlimited;
+        }
       }
       // data: { challenge: {...} }
       for (const inner of ["challenge", "unlimitedChallenge", "room"] as const) {
@@ -135,7 +165,8 @@ export function extractUnlimitedChallengeRows(payload: unknown): unknown[] {
       continue;
     }
     if (!Array.isArray(value) || value.length === 0) continue;
-    if (value.some(looksLikeChallengeRow)) return value;
+    const onlyUnlimited = value.filter(looksLikeChallengeRow);
+    if (onlyUnlimited.length > 0) return onlyUnlimited;
   }
 
   return [];
@@ -179,6 +210,8 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
 ): UnlimitedUpcomingRoom | null {
   const obj = asRecord(raw);
   if (!obj) return null;
+  // Do not stamp Free/classic race rooms as Unlimited.
+  if (!isUnlimitedGoalRawRow(obj)) return null;
 
   const host = asRecord(pickRaw(obj, "host", "hostSummary", "host_summary")) ?? {};
 
@@ -433,7 +466,7 @@ export function unlimitedUpcomingToRoomLike(
   };
 }
 
-export function mergeUpcomingRoomsById<T extends { room_id: string }>(
+export function mergeUpcomingRoomsById<T extends { room_id: string; current_user_registered?: boolean }>(
   ...lists: Array<T[] | null | undefined>
 ): T[] {
   const map = new Map<string, T>();
@@ -441,7 +474,16 @@ export function mergeUpcomingRoomsById<T extends { room_id: string }>(
     for (const room of list ?? []) {
       if (!room?.room_id) continue;
       const prev = map.get(room.room_id);
-      map.set(room.room_id, prev ? ({ ...prev, ...room } as T) : room);
+      if (!prev) {
+        map.set(room.room_id, room);
+        continue;
+      }
+      const merged = { ...prev, ...room } as T;
+      // Never let a later row clear membership once we've seen registered=true.
+      if (prev.current_user_registered === true || room.current_user_registered === true) {
+        merged.current_user_registered = true;
+      }
+      map.set(room.room_id, merged);
     }
   }
   return [...map.values()];

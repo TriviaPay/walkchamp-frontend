@@ -5,6 +5,7 @@
 
 import { STORAGE_KEYS, storageGet, storageSet } from "@/utils/storage";
 import type { UnlimitedUpcomingRoom } from "@/utils/unlimitedChallengeRooms";
+import { isUnlimitedGoalChallenge } from "@/utils/unlimitedGoal";
 
 export type HostedUnlimitedSeed = UnlimitedUpcomingRoom & {
   savedAtMs: number;
@@ -87,7 +88,15 @@ export async function loadHostedUnlimitedChallenges(opts?: {
   const now = Date.now();
   const leftIds = await loadLeftUnlimitedChallengeIds();
   const kept = rows.filter(
-    (r) => r?.room_id && isStillTrackable(r, now) && !leftIds.has(r.room_id),
+    (r) =>
+      r?.room_id &&
+      isStillTrackable(r, now) &&
+      !leftIds.has(r.room_id) &&
+      isUnlimitedGoalChallenge({
+        challenge_type: r.challenge_type,
+        capacity_mode: r.capacity_mode,
+        max_players: r.max_players,
+      }),
   );
   if (kept.length !== rows.length) {
     await storageSet(STORAGE_KEYS.HOSTED_UNLIMITED_CHALLENGES, kept);
@@ -107,6 +116,15 @@ export async function saveHostedUnlimitedChallenge(
   },
 ): Promise<void> {
   if (!room.room_id) return;
+  if (
+    !isUnlimitedGoalChallenge({
+      challenge_type: room.challenge_type,
+      capacity_mode: room.capacity_mode,
+      max_players: room.max_players,
+    })
+  ) {
+    return;
+  }
   const leftIds = await loadLeftUnlimitedChallengeIds();
   if (leftIds.has(room.room_id) && !opts?.resumeAfterLeave) {
     return;
@@ -143,6 +161,12 @@ export async function purgeHostedUnlimitedChallenge(roomId: string): Promise<voi
     STORAGE_KEYS.HOSTED_UNLIMITED_CHALLENGES,
     prev.filter((r) => r.room_id !== roomId),
   );
+}
+
+/** Wipe hosted Unlimited seeds on logout — do not mark rooms as "left". */
+export async function wipeHostedUnlimitedCacheForAccountSwitch(): Promise<void> {
+  await storageSet(STORAGE_KEYS.HOSTED_UNLIMITED_CHALLENGES, []);
+  await storageSet(STORAGE_KEYS.LEFT_UNLIMITED_CHALLENGES, []);
 }
 
 /** Wipe all locally cached Unlimited seeds (used when server has no open challenges). */

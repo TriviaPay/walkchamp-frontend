@@ -312,7 +312,19 @@ export const stepProviderManager = {
       _initializing = null;
     });
     await _initializing;
-    return this.refreshStatus();
+    const status = await this.refreshStatus();
+    if (this.usesVerifiedStepSource()) {
+      void import("@/services/raceProgressNotificationService")
+        .then((m) => m.raceProgressNotificationService.flushPendingStart())
+        .catch(() => {});
+      // Daily Walk / Unlimited tray — same retry contract as the race FGS above.
+      // Flushing here covers "Health Connect capability resolution" from a
+      // previously deferred start (queued when HC/HK wasn't selected yet).
+      void import("@/services/stepTrackingNotificationService")
+        .then((m) => m.stepTrackingNotificationService.flushPendingStart())
+        .catch(() => {});
+    }
+    return status;
   },
 
   getActiveProviderId(): StepProviderId | null {

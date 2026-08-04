@@ -139,7 +139,9 @@ export function connectPusher(): void {
 
 export function disconnectPusher(): void {
   if (!_client) return;
-  _channelRefs.clear(() => {});
+  // Always release subscriptions before disconnect — empty clear() leaked handlers
+  // when callers used disconnectPusher() without unsubscribeAll().
+  unsubscribeAll();
   _client.disconnect();
   _client = null;
 }

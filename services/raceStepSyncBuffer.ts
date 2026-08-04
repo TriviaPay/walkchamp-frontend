@@ -12,6 +12,7 @@ import {
   type RaceProgressResult,
   type RaceProgressSource,
 } from "@/services/raceProgressApi";
+import { isUnlimitedClassicProgressBlocked } from "@/services/unlimitedRaceProgressGuard";
 
 export type RaceProgressSyncedHandler = (result: RaceProgressResult & { raceId: string }) => void;
 
@@ -102,6 +103,14 @@ class RaceStepSyncBuffer {
     source: RaceProgressSource,
     options: RaceSyncBufferOptions = {},
   ): void {
+    if (isUnlimitedClassicProgressBlocked(raceId)) {
+      if (__DEV__) {
+        console.log(
+          `[RaceStepSync] skipped unlimited challengeId=${raceId} (walk sync owns progress)`,
+        );
+      }
+      return;
+    }
     const { force = false, atTarget = false, deviceTotalSteps, trackingSessionId } = options;
     if (Platform.OS === "android" && AppState.currentState !== "active") {
       this.pendingRaceId = raceId;
@@ -183,6 +192,11 @@ class RaceStepSyncBuffer {
   ): Promise<boolean> {
     const raceId = this.pendingRaceId;
     if (!raceId) return false;
+    if (isUnlimitedClassicProgressBlocked(raceId)) {
+      this.pendingRaceId = null;
+      this.pendingRaceSteps = 0;
+      return true;
+    }
 
     const steps = this.pendingRaceSteps;
     if (steps <= this.lastSentSteps && !options.atTarget) {

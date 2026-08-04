@@ -300,47 +300,14 @@ class NativeStepSensorEngine(
   }
 
   fun mergeJsWalkUpdate(todaySteps: Int, stepSource: String) {
-    // Health Connect / HealthKit from JS — reconcile only when JS value is ahead.
-    // Seed sensor baseline so TYPE_STEP_COUNTER can keep the ongoing notification
-    // updating while the app is backgrounded or closed (JS polls stop).
+    // Health Connect / HealthKit from JS is authoritative for daily totals.
+    // ALWAYS re-anchor the sensor baseline when a verified source updates —
+    // otherwise a bad TYPE_STEP_COUNTER baseline (e.g. 1592) stays locked on the
+    // notification even after Samsung Health / HC reports the real total (433).
     if (!isDeviceSensorSource(stepSource)) {
-      val next = todaySteps.coerceAtLeast(0)
-      if (next > state.todaySteps) {
-        val total = lastSensorTotal.takeIf { it >= 0f }
-        if (total != null && total >= 0f) {
-          seedDailyBaselineFromKnownSteps(next, total, stepSource)
-        } else {
-          setPendingKnownTodaySteps(next)
-          state = state.copy(
-            todaySteps = next,
-            stepSource = stepSource,
-            notificationMode = if (state.activeRaceId != null) "race_live" else "daily_steps",
-            updatedAt = System.currentTimeMillis(),
-          )
-          NativeStepState.save(context, state)
-        }
-      } else {
-        // Keep verified label, but ensure a baseline exists so hardware events
-        // can still advance the notification after JS goes idle.
-        val total = lastSensorTotal.takeIf { it >= 0f }
-        if (total != null && state.dailyBaseline == null && state.todaySteps >= 0) {
-          val baseline = (total - state.todaySteps).coerceAtLeast(0f)
-          state = state.copy(
-            dailyBaseline = baseline,
-            sensorTotal = total,
-            stepSource = stepSource,
-            notificationMode = if (state.activeRaceId != null) "race_live" else "daily_steps",
-            updatedAt = System.currentTimeMillis(),
-          )
-        } else {
-          state = state.copy(
-            stepSource = stepSource,
-            notificationMode = if (state.activeRaceId != null) "race_live" else "daily_steps",
-            updatedAt = System.currentTimeMillis(),
-          )
-        }
-        NativeStepState.save(context, state)
-      }
+      val known = todaySteps.coerceAtLeast(0)
+      val total = lastSensorTotal.takeIf { it >= 0f }
+      seedDailyBaselineFromKnownSteps(known, total, stepSource)
       return
     }
     if (todaySteps > state.todaySteps) {

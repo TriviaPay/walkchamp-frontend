@@ -113,22 +113,40 @@ export interface RaceProgressState {
 
 function recomputeDisplayToday(state: RaceProgressState): void {
   const verified = Math.max(0, Math.floor(state.verifiedTodaySteps));
-  const provisional =
+  let provisional =
     state.provisionalSensorTodaySteps == null
       ? 0
       : Math.max(0, Math.floor(state.provisionalSensorTodaySteps));
+
+  // Bad TYPE_STEP_COUNTER baseline (e.g. 1592) must not beat real HC/HK (e.g. 433).
+  const MAX_AHEAD = 250;
+  if (verified > 0 && provisional > verified + MAX_AHEAD) {
+    state.provisionalSensorTodaySteps = verified;
+    state.provisionalSensorTodayStepsAt = state.verifiedTodayStepsAt;
+    provisional = verified;
+  }
+
+  if (verified > 0) {
+    // Walk display prefers verified; small provisional lag only.
+    state.todaySteps =
+      provisional > verified && provisional - verified <= MAX_AHEAD
+        ? provisional
+        : verified;
+    state.dailyDisplaySource =
+      state.todaySteps > verified
+        ? "sensor_estimate"
+        : state.stepSource === "healthkit" || state.stepSource === "ios_healthkit"
+          ? "healthkit"
+          : "health_connect";
+    state.dailyVerificationStatus =
+      state.todaySteps > verified ? "delayed" : "verified";
+    return;
+  }
+
   state.todaySteps = Math.max(verified, provisional);
   if (provisional > verified) {
     state.dailyDisplaySource = "sensor_estimate";
-    if (state.dailyVerificationStatus === "verified") {
-      state.dailyVerificationStatus = "delayed";
-    }
-  } else if (verified > 0) {
-    state.dailyDisplaySource =
-      state.stepSource === "healthkit" || state.stepSource === "ios_healthkit"
-        ? "healthkit"
-        : "health_connect";
-    state.dailyVerificationStatus = "verified";
+    state.dailyVerificationStatus = "delayed";
   }
 }
 
@@ -393,16 +411,48 @@ const raceProgressSlice = createSlice({
               state.provisionalSensorTodaySteps == null
                 ? 0
                 : state.provisionalSensorTodaySteps;
-            if (next >= prev) {
+            // Reject sensor absolutes that wildly exceed known HC/HK totals.
+            const verified = Math.max(0, state.verifiedTodaySteps);
+            if (verified > 0 && next > verified + 250) {
+              if (__DEV__) {
+                console.log(
+                  `[StepStore] rejected inflated provisional next=${next} verified=${verified}`,
+                );
+              }
+            } else if (next >= prev) {
               state.provisionalSensorTodaySteps = next;
               state.provisionalSensorTodayStepsAt = ts;
               state.todayStepsLastUpdatedAt = ts;
               recomputeDisplayToday(state);
             }
           } else if (treatVerified) {
-            if (next >= state.verifiedTodaySteps) {
+            // HC/HK may legitimately be lower than a bad provisional — always accept
+            // equal-or-higher verified, and also accept a lower verified that re-anchors
+            // an inflated provisional day (same calendar sync).
+            if (next >= state.verifiedTodaySteps || state.verifiedTodaySteps === 0) {
               state.verifiedTodaySteps = next;
               state.verifiedTodayStepsAt = ts;
+              state.todayStepsLastUpdatedAt = ts;
+              if (stepSource) state.stepSource = stepSource;
+              // Re-anchor inflated provisional to HC.
+              if (
+                state.provisionalSensorTodaySteps != null &&
+                state.provisionalSensorTodaySteps > next + 250
+              ) {
+                state.provisionalSensorTodaySteps = next;
+                state.provisionalSensorTodayStepsAt = ts;
+              }
+              recomputeDisplayToday(state);
+            } else if (
+              state.provisionalSensorTodaySteps != null &&
+              state.provisionalSensorTodaySteps > next + 250
+            ) {
+              // Verified dipped only relative to stale store, but provisional is inflated —
+              // still re-anchor display to this HC reading when it is the latest sync.
+              state.verifiedTodaySteps = next;
+              state.verifiedTodayStepsAt = ts;
+              state.provisionalSensorTodaySteps = next;
+              state.provisionalSensorTodayStepsAt = ts;
               state.todayStepsLastUpdatedAt = ts;
               if (stepSource) state.stepSource = stepSource;
               recomputeDisplayToday(state);
@@ -651,18 +701,29 @@ const raceProgressSlice = createSlice({
         bootTodaySteps?: number;
       }>,
     ) {
+      const boot = Math.max(0, Math.floor(action.payload.bootTodaySteps ?? 0));
+      const userChanged =
+        !!state.userId && state.userId !== action.payload.userId;
       state.userId = action.payload.userId;
       if (action.payload.username !== undefined) {
         state.username = action.payload.username;
       }
-      const boot = Math.max(0, Math.floor(action.payload.bootTodaySteps ?? 0));
-      state.verifiedTodaySteps = Math.max(state.verifiedTodaySteps, boot);
-      state.verifiedTodayStepsAt = new Date().toISOString();
-      recomputeDisplayToday(state);
+      if (userChanged) {
+        // Never Math.max previous account's lanes into the new user.
+        state.verifiedTodaySteps = boot;
+        state.verifiedTodayStepsAt = new Date().toISOString();
+        state.provisionalSensorTodaySteps = null;
+        state.provisionalSensorTodayStepsAt = null;
+        state.todaySteps = boot;
+      } else {
+        state.verifiedTodaySteps = Math.max(state.verifiedTodaySteps, boot);
+        state.verifiedTodayStepsAt = new Date().toISOString();
+        recomputeDisplayToday(state);
+      }
       state.todayStepsLastUpdatedAt = new Date().toISOString();
       if (__DEV__) {
         console.log(
-          `[StepStore] initializeStepsForUserDate userId=${action.payload.userId} localDate=${action.payload.localDate} bootTodaySteps=${boot}`,
+          `[StepStore] initializeStepsForUserDate userId=${action.payload.userId} localDate=${action.payload.localDate} bootTodaySteps=${boot} userChanged=${userChanged}`,
         );
       }
     },

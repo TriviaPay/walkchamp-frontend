@@ -51,6 +51,21 @@ export function filterRaceParticipantsForDisplay<T extends RaceListParticipantLi
   );
 }
 
+/**
+ * Unlimited Live Board: show every non-left participant (including DQ) so the
+ * roster matches paid/active membership counts (e.g. 101), not a classic top-N.
+ * Still hide ghost/system hosts and users who left.
+ */
+export function filterUnlimitedParticipantsForDisplay<T extends RaceListParticipantLike>(
+  participants: T[],
+): T[] {
+  return participants.filter((p) => {
+    if (isGhostOrSystemHost(p)) return false;
+    const status = (p.status ?? "").toLowerCase();
+    return status !== "left" && status !== "removed";
+  });
+}
+
 export function sortParticipantsByLiveSteps<T extends { steps: number; id: string }>(
   rows: T[],
 ): T[] {

@@ -230,6 +230,76 @@ class RaceProgressNotificationService {
   }
 
   private raceStartISO: string | null = null;
+  /** Queued when start() runs before Health Connect / HealthKit is selected. */
+  private pendingStart: {
+    payload: RaceProgressNotificationPayload;
+    raceStartISO?: string;
+  } | null = null;
+  private pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private clearPendingRetryTimer(): void {
+    if (this.pendingRetryTimer) {
+      clearTimeout(this.pendingRetryTimer);
+      this.pendingRetryTimer = null;
+    }
+  }
+
+  private queuePendingStart(
+    payload: RaceProgressNotificationPayload,
+    raceStartISO?: string,
+  ): void {
+    this.pendingStart = { payload, raceStartISO };
+    this.clearPendingRetryTimer();
+    // Retry briefly while HC/HK initializes after login / account switch.
+    let attempts = 0;
+    const tick = () => {
+      this.pendingRetryTimer = setTimeout(() => {
+        attempts += 1;
+        void this.flushPendingStart().then((started) => {
+          if (!started && attempts < 8 && this.pendingStart) {
+            tick();
+          }
+        });
+      }, Math.min(2_000 + attempts * 500, 5_000));
+    };
+    tick();
+  }
+
+  /**
+   * Retry a previously blocked race notification once a verified provider is ready.
+   * Safe to call from step provider init / bind session.
+   */
+  async flushPendingStart(): Promise<boolean> {
+    const pending = this.pendingStart;
+    if (!pending) return false;
+    try {
+      const { stepProviderManager } = await import(
+        "@/services/steps/stepProviderManager"
+      );
+      if (!stepProviderManager.usesVerifiedStepSource()) {
+        await stepProviderManager.initialize().catch(() => undefined);
+      }
+      if (!stepProviderManager.usesVerifiedStepSource()) return false;
+    } catch {
+      return false;
+    }
+    // Confirm still the signed-in owner before starting FGS.
+    try {
+      const { store } = await import("@/store");
+      const uid = store.getState().auth.user?.id;
+      if (!uid || uid !== pending.payload.userId) {
+        this.pendingStart = null;
+        this.clearPendingRetryTimer();
+        return false;
+      }
+    } catch {
+      /* continue */
+    }
+    this.pendingStart = null;
+    this.clearPendingRetryTimer();
+    await this.start(pending.payload, pending.raceStartISO);
+    return this.activeRaceId === pending.payload.raceId;
+  }
 
   async start(payload: RaceProgressNotificationPayload, raceStartISO?: string): Promise<void> {
     if (!FEATURE_FLAGS.ENABLE_RACE_PROGRESS_NOTIFICATIONS) return;
@@ -245,15 +315,35 @@ class RaceProgressNotificationService {
         "@/services/steps/stepProviderManager"
       );
       if (!stepProviderManager.usesVerifiedStepSource()) {
+        await stepProviderManager.initialize().catch(() => undefined);
+      }
+      if (!stepProviderManager.usesVerifiedStepSource()) {
         if (__DEV__) {
           console.warn(
-            "[RaceProgressNotif] start blocked — verified step source required",
+            "[RaceProgressNotif] start deferred — verified step source not ready",
           );
         }
+        this.queuePendingStart(payload, raceStartISO);
         return;
       }
     } catch {
+      this.queuePendingStart(payload, raceStartISO);
       return;
+    }
+    // Clear any stale deferred start for a different race/user.
+    if (
+      this.pendingStart &&
+      (this.pendingStart.payload.raceId !== payload.raceId ||
+        this.pendingStart.payload.userId !== payload.userId)
+    ) {
+      this.pendingStart = null;
+      this.clearPendingRetryTimer();
+    } else if (
+      this.pendingStart?.payload.raceId === payload.raceId &&
+      this.pendingStart?.payload.userId === payload.userId
+    ) {
+      this.pendingStart = null;
+      this.clearPendingRetryTimer();
     }
     const native = getNativeModule();
     if (!native) return;
@@ -499,6 +589,8 @@ class RaceProgressNotificationService {
 
   /** Stop any active race notification (logout / global cleanup). */
   async stopAll(todaySteps?: number, reason = "cancelled"): Promise<void> {
+    this.pendingStart = null;
+    this.clearPendingRetryTimer();
     if (this.parallelRaceId) {
       await this.stopParallel(this.parallelRaceId);
     }

@@ -13,6 +13,7 @@ import { useAuth } from "@/context/AuthContext";
 import {
   connectPusher,
   subscribeToChannel,
+  unsubscribeFromChannel,
   CHANNELS,
   EVENTS,
 } from "@/services/realtimeService";
@@ -242,8 +243,9 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
     return () => sub.remove();
   }, [userStatus, isSignedIn, clearHeartbeat, refreshOnlineIds]);
 
-  // Pusher real-time presence updates
+  // Pusher real-time presence updates — only while signed in.
   useEffect(() => {
+    if (!isSignedIn) return;
     connectPusher();
     markPusherConnected(true);
     const channel = subscribeToChannel(CHANNELS.PRESENCE);
@@ -257,8 +259,9 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       channel.unbind(EVENTS.PRESENCE_UPDATED);
+      unsubscribeFromChannel(CHANNELS.PRESENCE);
     };
-  }, [refreshOnlineIds]);
+  }, [isSignedIn, refreshOnlineIds]);
 
   const value = useMemo(
     () => ({

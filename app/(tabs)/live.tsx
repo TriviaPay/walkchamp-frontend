@@ -81,21 +81,40 @@ const CASH_ENTRY_TYPES = new Set([
   "$1", "$3", "$5", "USD Entry",
 ]);
 
-/** Unlimited Daily Goal challenges (capacityMode / challengeType / entry label). */
+/** Unlimited Daily Goal challenges — strict markers only (never Free/classic). */
 export function isUnlimitedChallengeRace(
   race: Pick<LiveRace, "entryType" | "type"> & {
     challengeType?: string | null;
     capacityMode?: string | null;
     maxPlayers?: number;
+    challengeEndAt?: string | null;
+    challengeDurationDays?: number | null;
+    entryAmountCents?: number;
   },
 ): boolean {
-  if (race.challengeType === "unlimited_goal") return true;
-  if (race.capacityMode === "unlimited") return true;
-  if ((race.entryType ?? "").trim().toLowerCase() === "unlimited_goal") return true;
-  if (typeof race.maxPlayers === "number" && race.maxPlayers <= 0) {
-    // Live Unlimited cards use maxPlayers: 0 — only trust with a cash $N label.
-    const et = (race.entryType ?? "").trim();
-    if (/^\$\d+(\.\d+)?$/.test(et) || et === "USD Entry") return true;
+  const challengeType = String(race.challengeType ?? "").trim().toLowerCase();
+  const capacityMode = String(race.capacityMode ?? "").trim().toLowerCase();
+  const entryType = String(race.entryType ?? "").trim().toLowerCase();
+  if (challengeType === "unlimited_goal") return true;
+  if (capacityMode === "unlimited") return true;
+  if (entryType === "unlimited_goal") return true;
+  // Live card label is often "$45" (not unlimited_goal). Unlimited rows use
+  // maxPlayers 0/null plus a multi-day end window from the Unlimited API mapper.
+  const maxPlayers = race.maxPlayers;
+  const uncapped = maxPlayers == null || maxPlayers <= 0;
+  const hasUnlimitedWindow =
+    (typeof race.challengeDurationDays === "number" && race.challengeDurationDays > 0) ||
+    !!race.challengeEndAt;
+  const et = entryType;
+  if (
+    uncapped &&
+    hasUnlimitedWindow &&
+    race.type !== "sponsored" &&
+    et !== "free" &&
+    et !== "coins_battle" &&
+    et !== "coins battle"
+  ) {
+    return true;
   }
   return false;
 }
@@ -240,17 +259,49 @@ function filterToParam(filter: FilterType): string {
 function applyChipFilter(races: LiveRace[], filter: FilterType): LiveRace[] {
   if (filter === "Cash Challenges") return races.filter(isCashChallengeRace);
   if (filter === "Unlimited Challenges") return races.filter(isUnlimitedChallengeRace);
+  if (filter === "Sponsored Events") {
+    return races.filter((r) => r.type === "sponsored" && !isUnlimitedChallengeRace(r));
+  }
+  if (filter === "Free") {
+    return races.filter(
+      (r) =>
+        !isUnlimitedChallengeRace(r) &&
+        r.type !== "sponsored" &&
+        String(r.entryType ?? "").trim().toLowerCase() === "free",
+    );
+  }
+  if (filter === "Coins Battle") {
+    return races.filter(
+      (r) =>
+        !isUnlimitedChallengeRace(r) &&
+        String(r.entryType ?? "").trim().toLowerCase() === "coins_battle",
+    );
+  }
   return races;
 }
 
+/** Display-time tab isolation — never let Unlimited leak into other chips. */
+function racesVisibleOnTab(races: LiveRace[], filter: FilterType): LiveRace[] {
+  if (filter === "Unlimited Challenges") return races.filter(isUnlimitedChallengeRace);
+  if (filter === "All" || filter === "My Races") return races;
+  if (filter === "Cash Challenges") return races.filter(isCashChallengeRace);
+  if (filter === "Sponsored Events") {
+    return races.filter((r) => r.type === "sponsored" && !isUnlimitedChallengeRace(r));
+  }
+  // Free / Coins / any other classic tab — strip Unlimited.
+  return races.filter((r) => !isUnlimitedChallengeRace(r));
+}
+
 function shouldMergeUnlimitedLive(filter: FilterType): boolean {
+  // Only All / My Races / Unlimited tab. Never Cash or Sponsored (confuses users).
   return (
     filter === "All" ||
     filter === "My Races" ||
-    filter === "Cash Challenges" ||
     filter === "Unlimited Challenges"
   );
 }
+
+const LIVE_SCREEN_CACHE_PREFIX = "screen_live_v4_";
 
 function mergeLiveById(primary: LiveRace[], extra: LiveRace[]): LiveRace[] {
   const seen = new Set(primary.map((r) => r.id));
@@ -346,56 +397,28 @@ function mapRaceRow(r: Record<string, unknown>): LiveRace {
 
 const FINISHED_PAGE_SIZE = 15;
 
-async function fetchLiveChallenges(
+async function fetchClassicLiveChallenges(
   filter: FilterType,
-  opts?: { viewerUserId?: string | null },
-): Promise<{
-  live: LiveRace[];
-  finished: LiveRace[];
-  ok: boolean;
-}> {
+): Promise<{ live: LiveRace[]; finished: LiveRace[]; ok: boolean }> {
   const fp = filterToParam(filter);
-  const unlimitedOnly = filter === "Unlimited Challenges";
   try {
-    const unlimitedPromise = shouldMergeUnlimitedLive(filter)
-      ? import("@/services/unlimitedChallengesListApi")
-          .then((m) =>
-            m.fetchLiveUnlimitedChallenges({ viewerUserId: opts?.viewerUserId }),
-          )
-          .catch(() => ({ live: [] as LiveRace[], finished: [] as LiveRace[] }))
-      : Promise.resolve({ live: [] as LiveRace[], finished: [] as LiveRace[] });
-
-    // Unlimited tab: skip classic races — only Unlimited live + finished.
-    const [liveRes, finishedRes, unlimited] = await Promise.all([
-      unlimitedOnly
-        ? Promise.resolve(null)
-        : authFetch(`/api/races?status=in_progress&filter=${encodeURIComponent(fp)}&limit=30`),
-      unlimitedOnly
-        ? Promise.resolve(null)
-        : authFetch(
-            `/api/races?status=completed&filter=${encodeURIComponent(fp)}&limit=${FINISHED_PAGE_SIZE}&offset=0`,
-          ),
-      unlimitedPromise,
+    const [liveRes, finishedRes] = await Promise.all([
+      authFetch(`/api/races?status=in_progress&filter=${encodeURIComponent(fp)}&limit=30`),
+      authFetch(
+        `/api/races?status=completed&filter=${encodeURIComponent(fp)}&limit=${FINISHED_PAGE_SIZE}&offset=0`,
+      ),
     ]);
-
-    if (
-      (!liveRes || !liveRes.ok) &&
-      (!finishedRes || !finishedRes.ok) &&
-      unlimited.live.length === 0 &&
-      unlimited.finished.length === 0
-    ) {
+    if (!liveRes.ok && !finishedRes.ok) {
       return { live: [], finished: [], ok: false };
     }
-    const liveData =
-      liveRes && liveRes.ok
-        ? ((await liveRes.json()) as { races?: Record<string, unknown>[] })
-        : { races: [] };
-    const finishedData =
-      finishedRes && finishedRes.ok
-        ? ((await finishedRes.json()) as { races?: Record<string, unknown>[] })
-        : { races: [] };
+    const liveData = liveRes.ok
+      ? ((await liveRes.json()) as { races?: Record<string, unknown>[] })
+      : { races: [] };
+    const finishedData = finishedRes.ok
+      ? ((await finishedRes.json()) as { races?: Record<string, unknown>[] })
+      : { races: [] };
     const seenIds = new Set<string>();
-    let live = applyChipFilter(
+    const live = applyChipFilter(
       (liveData.races ?? [])
         .filter((r) => {
           if (seenIds.has(r.id as string)) return false;
@@ -406,7 +429,7 @@ async function fetchLiveChallenges(
         .filter((r) => !isUnlimitedChallengeRace(r)),
       filter,
     );
-    let finished = applyChipFilter(
+    const finished = applyChipFilter(
       (finishedData.races ?? [])
         .filter((r) => {
           if (seenIds.has(r.id as string)) return false;
@@ -417,10 +440,59 @@ async function fetchLiveChallenges(
         .filter((r) => !isUnlimitedChallengeRace(r)),
       filter,
     );
+    return { live, finished, ok: true };
+  } catch {
+    return { live: [], finished: [], ok: false };
+  }
+}
+
+async function fetchLiveChallenges(
+  filter: FilterType,
+  opts?: { viewerUserId?: string | null },
+): Promise<{
+  live: LiveRace[];
+  finished: LiveRace[];
+  ok: boolean;
+}> {
+  const unlimitedOnly = filter === "Unlimited Challenges";
+  try {
+    // Unlimited tab: ONLY Unlimited APIs — trust that payload (already mapped).
+    if (unlimitedOnly) {
+      const unlimited = await import("@/services/unlimitedChallengesListApi")
+        .then((m) =>
+          m.fetchLiveUnlimitedChallenges({ viewerUserId: opts?.viewerUserId }),
+        )
+        .catch(() => ({ live: [] as LiveRace[], finished: [] as LiveRace[] }));
+      return {
+        live: unlimited.live as LiveRace[],
+        finished: unlimited.finished as LiveRace[],
+        ok: true,
+      };
+    }
+
+    const unlimitedPromise = shouldMergeUnlimitedLive(filter)
+      ? import("@/services/unlimitedChallengesListApi")
+          .then((m) =>
+            m.fetchLiveUnlimitedChallenges({ viewerUserId: opts?.viewerUserId }),
+          )
+          .catch(() => ({ live: [] as LiveRace[], finished: [] as LiveRace[] }))
+      : Promise.resolve({ live: [] as LiveRace[], finished: [] as LiveRace[] });
+
+    const [classic, unlimited] = await Promise.all([
+      fetchClassicLiveChallenges(filter),
+      unlimitedPromise,
+    ]);
+
+    if (!classic.ok && unlimited.live.length === 0 && unlimited.finished.length === 0) {
+      return { live: [], finished: [], ok: false };
+    }
+
+    let live = classic.live;
+    let finished = classic.finished;
 
     if (shouldMergeUnlimitedLive(filter)) {
-      const ulLive = applyChipFilter(unlimited.live as LiveRace[], filter);
-      const ulFinished = applyChipFilter(unlimited.finished as LiveRace[], filter);
+      const ulLive = (unlimited.live as LiveRace[]).filter(isUnlimitedChallengeRace);
+      const ulFinished = (unlimited.finished as LiveRace[]).filter(isUnlimitedChallengeRace);
       live = mergeLiveById(live, ulLive);
       finished = mergeLiveById(finished, ulFinished);
     }
@@ -432,6 +504,8 @@ async function fetchLiveChallenges(
 }
 
 async function fetchMoreFinished(filter: FilterType, offset: number): Promise<LiveRace[]> {
+  // Unlimited finished is loaded in one shot from Unlimited APIs — no classic pagination.
+  if (filter === "Unlimited Challenges") return [];
   const fp = filterToParam(filter);
   try {
     const res = await authFetch(
@@ -439,7 +513,9 @@ async function fetchMoreFinished(filter: FilterType, offset: number): Promise<Li
     );
     if (!res.ok) return [];
     const data = await res.json() as { races?: Record<string, unknown>[] };
-    return applyChipFilter((data.races ?? []).map(mapRaceRow), filter);
+    return applyChipFilter((data.races ?? []).map(mapRaceRow), filter).filter(
+      (r) => !isUnlimitedChallengeRace(r),
+    );
   } catch {
     return [];
   }
@@ -451,11 +527,130 @@ interface MyActiveRace {
   entryType: string;
   status: string;
   currentPlayers: number;
-  maxPlayers: number;
+  maxPlayers: number | null;
   targetSteps: number;
   isHost: boolean;
   startedAt: string | null;
   type?: string;
+  creatorId?: string;
+  entryAmountCents?: number;
+  challengeType?: string | null;
+  capacityMode?: string | null;
+  challengeEndAt?: string | null;
+  createdAt?: string | null;
+  currentUserParticipating?: boolean;
+}
+
+/** Map /api/races/my-active rows into Live cards so My Races always shows what you're in. */
+function mapMyActiveToLiveRace(r: MyActiveRace): LiveRace {
+  const isUnlimited =
+    String(r.challengeType ?? "").toLowerCase() === "unlimited_goal" ||
+    String(r.capacityMode ?? "").toLowerCase() === "unlimited" ||
+    String(r.entryType ?? "").toLowerCase() === "unlimited_goal";
+  const entryCents = typeof r.entryAmountCents === "number" ? r.entryAmountCents : 0;
+  const entryDollars = entryCents / 100;
+  const status =
+    r.status === "in_progress" || r.status === "active" || r.status === "starting" || r.status === "settling"
+      ? "in_progress"
+      : r.status === "completed"
+        ? "completed"
+        : r.status || "in_progress";
+  return {
+    id: r.id,
+    title: r.title || (isUnlimited ? "Unlimited Challenge" : "My Race"),
+    type: isUnlimited ? "paid" : (r.type ?? "quick"),
+    entryType: isUnlimited
+      ? entryDollars > 0
+        ? Number.isInteger(entryDollars)
+          ? `$${entryDollars}`
+          : `$${entryDollars.toFixed(2)}`
+        : "unlimited_goal"
+      : (r.entryType ?? "Free"),
+    playerCount: Math.max(1, r.currentPlayers ?? 1),
+    maxPlayers: isUnlimited ? 0 : (r.maxPlayers ?? 10),
+    targetSteps: r.targetSteps ?? 0,
+    status,
+    prizePool: entryDollars > 0 ? entryDollars * Math.max(1, r.currentPlayers ?? 1) : 0,
+    coinEntryAmount: 0,
+    spectatorCount: 0,
+    startedAt: r.startedAt ?? null,
+    completedAt: null,
+    createdAt: r.createdAt ?? r.startedAt ?? new Date().toISOString(),
+    players: [],
+    trackLayout: "bg",
+    prizePoolCents: Math.round(entryCents * Math.max(1, r.currentPlayers ?? 1)),
+    entryAmountCents: entryCents,
+    reactionCounts: {},
+    elapsedSeconds: computeElapsed(r.startedAt ?? null, null),
+    challengeEndAt: r.challengeEndAt ?? null,
+    challengeDurationDays: 0,
+    hostUserId: r.creatorId ?? null,
+    currentUserParticipating: true,
+    challengeType: isUnlimited ? "unlimited_goal" : (r.challengeType ?? null),
+    capacityMode: isUnlimited ? "unlimited" : (r.capacityMode ?? null),
+  };
+}
+
+function mergeMyActiveIntoLiveList(
+  live: LiveRace[],
+  myActive: MyActiveRace[],
+): LiveRace[] {
+  const byId = new Map(live.map((r) => [r.id, r]));
+  for (const mine of myActive) {
+    if (!mine?.id) continue;
+    const st = String(mine.status ?? "").toLowerCase();
+    // Live My Races: in-progress / active only (not waiting room).
+    const isLiveMine =
+      st === "in_progress" ||
+      st === "active" ||
+      st === "starting" ||
+      st === "settling" ||
+      st === "running" ||
+      st === "live" ||
+      st === "started";
+    if (!isLiveMine) continue;
+
+    const existing = byId.get(mine.id);
+    if (existing) {
+      byId.set(mine.id, {
+        ...existing,
+        currentUserParticipating: true,
+        hostUserId: existing.hostUserId ?? mine.creatorId ?? null,
+        challengeType: existing.challengeType ?? mine.challengeType ?? null,
+        capacityMode: existing.capacityMode ?? mine.capacityMode ?? null,
+        entryAmountCents: existing.entryAmountCents || mine.entryAmountCents || 0,
+        challengeEndAt: existing.challengeEndAt ?? mine.challengeEndAt ?? null,
+      });
+      continue;
+    }
+    byId.set(mine.id, mapMyActiveToLiveRace(mine));
+  }
+  return [...byId.values()];
+}
+
+/** My Races tab: always show every live race the viewer is in. */
+function buildMyRacesLiveList(
+  live: LiveRace[],
+  myActive: MyActiveRace[],
+  opts: { userId?: string | null; username?: string | null; myActiveRaceIds: Set<string> },
+): LiveRace[] {
+  // 1) Start from public/unlimited live rows the user is in
+  const participatingFromLive = live.filter(
+    (r) =>
+      opts.myActiveRaceIds.has(r.id) ||
+      r.currentUserParticipating === true ||
+      (!!opts.userId && r.hostUserId === opts.userId) ||
+      isUserParticipatingInRace(r, opts),
+  );
+  // 2) Force-include /api/races/my-active (source of truth for membership)
+  const merged = mergeMyActiveIntoLiveList(participatingFromLive, myActive);
+  // 3) Keep only membership rows (my-active merge already stamped participating)
+  return merged.filter(
+    (r) =>
+      opts.myActiveRaceIds.has(r.id) ||
+      r.currentUserParticipating === true ||
+      isUserParticipatingInRace(r, opts),
+  );
 }
 
 const NON_PARTICIPATING_STATUSES = new Set([
@@ -923,11 +1118,29 @@ function RaceCardBase({
     "$3": "#A78BFA",
     "$5": colors.gold,
     "USD Entry": "#60A5FA",
+    unlimited_goal: "#38BDF8",
     coins_battle: "#F59E0B",
   };
   const isCoinsBattle = race.entryType === "coins_battle";
   const isSponsored = race.type === "sponsored";
-  const ec = isSponsored ? "#F59E0B" : (entryColor[race.entryType] ?? NEON_PURPLE);
+  const isUnlimited =
+    race.challengeType === "unlimited_goal" ||
+    race.capacityMode === "unlimited" ||
+    race.entryType === "unlimited_goal";
+  const entryBadgeLabel = isSponsored
+    ? "🏆 Sponsored"
+    : isCoinsBattle
+      ? "⚔️ Coins"
+      : isUnlimited
+        ? race.entryType && /^\$\d/.test(race.entryType)
+          ? `∞ ${race.entryType}`
+          : "∞ Unlimited"
+        : race.entryType;
+  const ec = isSponsored
+    ? "#F59E0B"
+    : isUnlimited
+      ? "#38BDF8"
+      : (entryColor[race.entryType] ?? NEON_PURPLE);
 
   const cardBorderColor = isFinished ? "#22C55EAA" : NEON_PURPLE + "60";
   const cardShadowColor = isFinished ? NEON_GREEN : NEON_PURPLE;
@@ -973,8 +1186,13 @@ function RaceCardBase({
   // Mirror backend numWinners: 2 players→1 winner, 3→2, 4+→3
   const numWin = race.playerCount <= 2 ? 1 : race.playerCount === 3 ? 2 : 3;
   const totalFreeCoins = FREE_TIER_COINS.slice(0, numWin).reduce((a, b) => a + b, 0);
-  // Sponsored events show cash prize, not coins
-  const rewardDisplay = (!isSponsored && race.entryType === "Free") ? (totalFreeCoins > 0 ? totalFreeCoins : 50) : null;
+  // Sponsored / Unlimited / cash show cash prize — never free-tier coin rewards.
+  const rewardDisplay =
+    !isSponsored && !isUnlimited && race.entryType === "Free"
+      ? totalFreeCoins > 0
+        ? totalFreeCoins
+        : 50
+      : null;
   const firstPlacePrize = prizePoolDisplay;
 
   return (
@@ -1021,7 +1239,7 @@ function RaceCardBase({
               )}
               <View style={[st.entryBadge, { borderColor: ec + "70", backgroundColor: ec + "18" }]}>
                 <Text style={[st.entryBadgeText, { color: ec }]}>
-                  {isSponsored ? "🏆 Sponsored" : isCoinsBattle ? "⚔️ Coins" : race.entryType}
+                  {entryBadgeLabel}
                 </Text>
               </View>
             </View>
@@ -1073,9 +1291,7 @@ function RaceCardBase({
           <View style={st.statValueRow}>
             <Feather name="users" size={11} color={colors.mutedForeground} />
             <Text style={[st.statValue, { color: colors.foreground }]}>
-              {race.challengeType === "unlimited_goal" ||
-              race.capacityMode === "unlimited" ||
-              race.maxPlayers <= 0
+              {isUnlimited || race.maxPlayers <= 0
                 ? `${race.playerCount} joined`
                 : `${race.playerCount}/${race.maxPlayers}`}
             </Text>
@@ -1140,9 +1356,10 @@ function RaceCardBase({
             const pct = Math.min((p.currentSteps / Math.max(1, p.targetSteps)) * 100, 100);
             const rc = [colors.gold, colors.silver, colors.bronze][i] ?? MUTED;
             const isMe = myUsername ? p.username === myUsername : false;
-            const coins = race.entryType === "Free" && p.rank <= numWin
-              ? calcFreeCoins(p.rank, p.isTied ?? false, p.tieGroupSize ?? 1)
-              : 0;
+            const coins =
+              !isUnlimited && race.entryType === "Free" && p.rank <= numWin
+                ? calcFreeCoins(p.rank, p.isTied ?? false, p.tieGroupSize ?? 1)
+                : 0;
             return (
               <View key={p.userId} style={st.playerRow}>
                 {/* Rank circle */}
@@ -1186,7 +1403,7 @@ function RaceCardBase({
                   {/* Below bar: prize on left, steps on right — finished only */}
                   {isFinished ? (
                     <View style={st.playerBelowBar}>
-                      {race.entryType === "Free" ? (
+                      {!isUnlimited && race.entryType === "Free" ? (
                         <View style={st.playerPrizeRow}>
                           {coins > 0 && (
                             <>
@@ -1548,42 +1765,104 @@ export default function LiveTab() {
 
   const load = useCallback(async () => {
     try {
-      const cacheKey = `screen_live_${activeFilter}`;
+      const cacheKey = `${LIVE_SCREEN_CACHE_PREFIX}${activeFilter}`;
 
       // ── 1. Show cached data immediately (in-memory hit is synchronous) ──────
       let cached = screenCache.getSync<{ live: LiveRace[]; finished: LiveRace[] }>(cacheKey);
       // First app launch after a kill: warm mem from disk (fast, ~20 ms)
       if (!cached) cached = await screenCache.get<{ live: LiveRace[]; finished: LiveRace[] }>(cacheKey);
-      if (cached) {
-        // Unlimited Challenges tab: keep Unlimited cards from cache (validated below).
-        // Other tabs: strip Unlimited from paint so cancelled ghosts don't flash.
-        const keepUnlimited = activeFilter === "Unlimited Challenges";
-        const liveSansUnlimited = keepUnlimited
-          ? cached.live
-          : cached.live.filter((r) => !isUnlimitedChallengeRace(r));
-        const finishedSansUnlimited = keepUnlimited
-          ? cached.finished
-          : cached.finished.filter((r) => !isUnlimitedChallengeRace(r));
-        const strippedUnlimited =
-          !keepUnlimited &&
-          (cached.live.length > liveSansUnlimited.length ||
-            cached.finished.length > finishedSansUnlimited.length);
-        setLiveChallenges(liveSansUnlimited);
-        setFinishedChallenges(finishedSansUnlimited);
-        setFinishedOffset(FINISHED_PAGE_SIZE);
-        setHasMoreFinished(finishedSansUnlimited.length >= FINISHED_PAGE_SIZE);
-        if (!strippedUnlimited) {
-          setLoading(false);
+      // Unlimited tab: also warm from All-tab cache so cards appear instantly like others.
+      if (
+        !cached &&
+        activeFilter === "Unlimited Challenges"
+      ) {
+        const allCached =
+          screenCache.getSync<{ live: LiveRace[]; finished: LiveRace[] }>(
+            `${LIVE_SCREEN_CACHE_PREFIX}All`,
+          ) ??
+          (await screenCache.get<{ live: LiveRace[]; finished: LiveRace[] }>(
+            `${LIVE_SCREEN_CACHE_PREFIX}All`,
+          ));
+        if (allCached) {
+          const ulLive = allCached.live.filter(isUnlimitedChallengeRace);
+          const ulFinished = allCached.finished.filter(isUnlimitedChallengeRace);
+          if (ulLive.length > 0 || ulFinished.length > 0) {
+            cached = { live: ulLive, finished: ulFinished };
+          }
         }
       }
+      if (cached) {
+        // Paint tab-isolated rows instantly (no wrong-tab flash, no empty wait).
+        const livePaint = racesVisibleOnTab(cached.live, activeFilter);
+        const finishedPaint = racesVisibleOnTab(cached.finished, activeFilter);
+        setLiveChallenges(livePaint);
+        setFinishedChallenges(finishedPaint);
+        setFinishedOffset(FINISHED_PAGE_SIZE);
+        setHasMoreFinished(
+          activeFilter === "Unlimited Challenges"
+            ? false
+            : finishedPaint.length >= FINISHED_PAGE_SIZE,
+        );
+        setLoading(false);
+      } else {
+        // No cache for this tab — clear previous tab's cards immediately.
+        setLiveChallenges([]);
+        setFinishedChallenges([]);
+      }
 
-      // ── 2. Fetch fresh data in the background ────────────────────────────────
-      const [{ live, finished, ok }, myRaceResult] = await Promise.all([
-        fetchLiveChallenges(activeFilter, { viewerUserId: user?.id }),
-        fetchMyActiveRaces(),
-      ]);
+      // ── 2. Fetch once, paint once (no mid-load setState — that caused show/hide) ──
+      const wantsUnlimited = shouldMergeUnlimitedLive(activeFilter);
+      const unlimitedOnly = activeFilter === "Unlimited Challenges";
+
+      let live: LiveRace[] = [];
+      let finished: LiveRace[] = [];
+      let ok = false;
+      let myRaceResult: { primary: MyActiveRace | null; all: MyActiveRace[] } = {
+        primary: null,
+        all: [],
+      };
+
+      if (unlimitedOnly) {
+        const [ulResult, mine] = await Promise.all([
+          fetchLiveChallenges(activeFilter, { viewerUserId: user?.id }),
+          fetchMyActiveRaces(),
+        ]);
+        live = ulResult.live;
+        finished = ulResult.finished;
+        ok = ulResult.ok;
+        myRaceResult = mine;
+      } else if (wantsUnlimited) {
+        const [classic, unlimited, mine] = await Promise.all([
+          fetchClassicLiveChallenges(activeFilter),
+          import("@/services/unlimitedChallengesListApi")
+            .then((m) => m.fetchLiveUnlimitedChallenges({ viewerUserId: user?.id }))
+            .catch(() => ({ live: [] as LiveRace[], finished: [] as LiveRace[] })),
+          fetchMyActiveRaces(),
+        ]);
+        myRaceResult = mine;
+        const ulLive = (unlimited.live as LiveRace[]).filter(isUnlimitedChallengeRace);
+        const ulFinished = (unlimited.finished as LiveRace[]).filter(isUnlimitedChallengeRace);
+        live = mergeLiveById(classic.live, ulLive);
+        finished = mergeLiveById(classic.finished, ulFinished);
+        ok = classic.ok || ulLive.length > 0 || ulFinished.length > 0;
+        if (ulLive.length > 0 || ulFinished.length > 0) {
+          void screenCache.set(`${LIVE_SCREEN_CACHE_PREFIX}Unlimited Challenges`, {
+            live: ulLive,
+            finished: ulFinished,
+          });
+        }
+      } else {
+        const [classic, mine] = await Promise.all([
+          fetchLiveChallenges(activeFilter, { viewerUserId: user?.id }),
+          fetchMyActiveRaces(),
+        ]);
+        live = classic.live;
+        finished = classic.finished;
+        ok = classic.ok;
+        myRaceResult = mine;
+      }
+
       const idSet = new Set(myRaceResult.all.map((r) => r.id));
-      // Unlimited my-active may not be on /api/races/my-active — include Live rows the user owns/joined.
       for (const race of [...live, ...finished]) {
         if (
           race.currentUserParticipating ||
@@ -1592,23 +1871,90 @@ export default function LiveTab() {
           idSet.add(race.id);
         }
       }
+      try {
+        const { loadHostedUnlimitedChallenges } = await import("@/utils/hostedUnlimitedCache");
+        const hosted = await loadHostedUnlimitedChallenges({ includeStarted: true });
+        for (const seed of hosted) {
+          if (seed.current_user_registered && seed.room_id) idSet.add(seed.room_id);
+        }
+      } catch { /* optional */ }
       const participation = {
         userId: user?.id,
         username: user?.username,
         myActiveRaceIds: idSet,
       };
-      const visibleLive =
-        activeFilter === "My Races" ? filterMyRaces(live, participation) : live;
-      const visibleFinished =
-        activeFilter === "My Races" ? filterMyRaces(finished, participation) : finished;
-      if (ok) {
-        setRealtimeRaceIds(live.map((race) => race.id));
+      let liveForMine = live;
+      if (activeFilter === "My Races") {
+        try {
+          const { loadHostedUnlimitedChallenges } = await import("@/utils/hostedUnlimitedCache");
+          const { mapUnlimitedUpcomingToLiveRaceFields } = await import("@/utils/unlimitedLiveRace");
+          const hosted = await loadHostedUnlimitedChallenges({ includeStarted: true });
+          const hostedLive: LiveRace[] = [];
+          for (const seed of hosted) {
+            if (!seed.current_user_registered) continue;
+            const mapped = mapUnlimitedUpcomingToLiveRaceFields({
+              ...seed,
+              status: "active",
+              current_user_registered: true,
+            });
+            if (mapped) hostedLive.push(mapped as LiveRace);
+          }
+          if (hostedLive.length > 0) {
+            liveForMine = mergeLiveById(liveForMine, hostedLive);
+          }
+        } catch { /* optional */ }
+      }
+      let visibleLive =
+        activeFilter === "My Races"
+          ? buildMyRacesLiveList(liveForMine, myRaceResult.all, participation)
+          : racesVisibleOnTab(live, activeFilter);
+      let visibleFinished =
+        activeFilter === "My Races"
+          ? filterMyRaces(finished, participation)
+          : racesVisibleOnTab(finished, activeFilter);
+
+      // If a flaky Unlimited fetch dropped rows we already showed, keep them.
+      if (
+        activeFilter === "All" ||
+        activeFilter === "Unlimited Challenges" ||
+        activeFilter === "My Races"
+      ) {
+        const prevUl = liveChallengesRef.current.filter(isUnlimitedChallengeRace);
+        const nextUl = visibleLive.filter(isUnlimitedChallengeRace);
+        if (prevUl.length > 0 && nextUl.length === 0) {
+          visibleLive = mergeLiveById(visibleLive, prevUl);
+        }
+      }
+
+      const freshIsEmpty = visibleLive.length === 0 && visibleFinished.length === 0;
+      // Only treat "had visible" as same-tab cards (not leftovers from another chip).
+      const sameTabVisible = racesVisibleOnTab(liveChallengesRef.current, activeFilter);
+      const hadVisible =
+        sameTabVisible.length > 0 ||
+        (cached?.live?.length ?? 0) > 0 ||
+        (cached?.finished?.length ?? 0) > 0;
+
+      // Never blank a tab that already correctly showed cards (refresh flicker).
+      if (freshIsEmpty && hadVisible) {
+        setLoading(false);
+        setMyRace(myRaceResult.primary);
+        setMyActiveRaceIds(idSet);
+        return;
+      }
+
+      if (ok || !freshIsEmpty) {
+        setRealtimeRaceIds(
+          (activeFilter === "My Races" ? visibleLive : live).map((race) => race.id),
+        );
         setLiveChallenges(visibleLive);
         setFinishedChallenges(visibleFinished);
-        setFinishedOffset(FINISHED_PAGE_SIZE);
-        setHasMoreFinished(finished.length >= FINISHED_PAGE_SIZE);
-        // ── 3. Persist fresh data so the next open is instant ─────────────────
         void screenCache.set(cacheKey, { live: visibleLive, finished: visibleFinished });
+        setFinishedOffset(FINISHED_PAGE_SIZE);
+        setHasMoreFinished(
+          activeFilter === "Unlimited Challenges"
+            ? false
+            : finished.length >= FINISHED_PAGE_SIZE,
+        );
       }
       setMyRace(myRaceResult.primary);
       setMyActiveRaceIds(idSet);
@@ -1645,14 +1991,22 @@ export default function LiveTab() {
   useEffect(() => { loadRef.current = load; }, [load]);
 
   // Joining, withdrawing, or forfeiting often happens on another tab/screen.
-  // Refresh immediately when the user returns, in addition to Pusher updates.
+  // Refresh immediately when the user returns — paint cache first so cards
+  // never blank until network finishes (same feel as other challenge cards).
   useFocusEffect(useCallback(() => {
     if (!hasFocusedOnceRef.current) {
       hasFocusedOnceRef.current = true;
       return;
     }
+    const cacheKey = `${LIVE_SCREEN_CACHE_PREFIX}${activeFilter}`;
+    const cached = screenCache.getSync<{ live: LiveRace[]; finished: LiveRace[] }>(cacheKey);
+    if (cached) {
+      setLiveChallenges(racesVisibleOnTab(cached.live, activeFilter));
+      setFinishedChallenges(racesVisibleOnTab(cached.finished, activeFilter));
+      setLoading(false);
+    }
     void loadRef.current();
-  }, []));
+  }, [activeFilter]));
 
   // Refresh data when app returns from the background (e.g. user locks phone, re-opens app).
   // useFocusEffect only fires on tab navigation, not on OS-level app resume.
@@ -1702,7 +2056,9 @@ export default function LiveTab() {
   useEffect(() => {
     // Only show the full spinner if there is no cached data for this filter yet.
     // When cache exists, load() shows it instantly and fetches fresh silently.
-    if (screenCache.getSync(`screen_live_${activeFilter}`) === null) setLoading(true);
+    if (screenCache.getSync(`${LIVE_SCREEN_CACHE_PREFIX}${activeFilter}`) === null) {
+      setLoading(true);
+    }
     void load();
   }, [load, activeFilter]);
 
@@ -1974,43 +2330,98 @@ export default function LiveTab() {
 
       {/* ── Content ─────────────────────────────────────────────────────── */}
       {activeFilter === "Sponsored Events" ? (
-        (scheduledLoading && liveChallenges.length === 0 && finishedChallenges.length === 0 && scheduledEvents.length === 0) ? (
-          <View style={{ paddingTop: 8 }}>
-            <SkeletonList count={5} variant="race" />
-          </View>
-        ) : (liveChallenges.length === 0 && finishedChallenges.length === 0 && scheduledEvents.filter(e => e.status !== "cancelled").length === 0) ? (
-          <View style={st.emptyBox}>
-            <Feather name="calendar" size={32} color={colors.mutedForeground} />
-            <Text style={[st.emptyText, { color: colors.mutedForeground }]}>No sponsored events right now.</Text>
-            <TouchableOpacity style={st.refreshBtn} onPress={() => { void fetchScheduledEvents(); void load(); }}>
-              <Feather name="refresh-cw" size={14} color={NEON_PURPLE} />
-              <Text style={st.refreshText}>Refresh</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingTop: 12, paddingBottom: 24, paddingHorizontal: 14 }} showsVerticalScrollIndicator={false}>
-            {liveChallenges.length > 0 && (
-              <>
-                <SectionHeader label="Live Now" sub={`${liveChallenges.length} sponsored event${liveChallenges.length !== 1 ? "s" : ""} in progress`} isFinished={false} />
-                {liveChallenges.map((r) => (
-                  <View key={r.id} style={{ marginBottom: 16 }}>
-                    <RaceCard race={r} colors={colors} isMyRace={r.id === myRace?.id || myActiveRaceIds.has(r.id)} isHost={r.id === myRace?.id ? myRace?.isHost : undefined} myUsername={user?.username} myUserId={user?.id} myActiveRaceIds={myActiveRaceIds} onAvatarPress={handleAvatarPress} />
-                  </View>
-                ))}
-              </>
-            )}
-            {finishedChallenges.length > 0 && (
-              <>
-                <SectionHeader label="Recently Finished" sub="Here are the latest sponsored event results" isFinished={true} />
-                {finishedChallenges.map((r) => (
-                  <View key={r.id} style={{ marginBottom: 16 }}>
-                    <RaceCard race={r} colors={colors} isMyRace={r.id === myRace?.id || myActiveRaceIds.has(r.id)} isHost={r.id === myRace?.id ? myRace?.isHost : undefined} myUsername={user?.username} myUserId={user?.id} myActiveRaceIds={myActiveRaceIds} onAvatarPress={handleAvatarPress} />
-                  </View>
-                ))}
-              </>
-            )}
-          </ScrollView>
-        )
+        (() => {
+          const sponsoredLive = racesVisibleOnTab(liveChallenges, "Sponsored Events");
+          const sponsoredFinished = racesVisibleOnTab(finishedChallenges, "Sponsored Events");
+          const upcomingSponsored = scheduledEvents.filter((e) => e.status !== "cancelled");
+          const empty =
+            sponsoredLive.length === 0 &&
+            sponsoredFinished.length === 0 &&
+            upcomingSponsored.length === 0;
+          if (scheduledLoading && empty) {
+            return (
+              <View style={{ paddingTop: 8 }}>
+                <SkeletonList count={5} variant="race" />
+              </View>
+            );
+          }
+          if (empty) {
+            return (
+              <View style={st.emptyBox}>
+                <Feather name="calendar" size={32} color={colors.mutedForeground} />
+                <Text style={[st.emptyText, { color: colors.mutedForeground }]}>
+                  No sponsored events right now.
+                </Text>
+              </View>
+            );
+          }
+          return (
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingTop: 12, paddingBottom: 24, paddingHorizontal: 14 }}
+              showsVerticalScrollIndicator={false}
+            >
+              {sponsoredLive.length > 0 && (
+                <>
+                  <SectionHeader
+                    label="Live Now"
+                    sub={`${sponsoredLive.length} sponsored event${sponsoredLive.length !== 1 ? "s" : ""} in progress`}
+                    isFinished={false}
+                  />
+                  {sponsoredLive.map((r) => (
+                    <View key={r.id} style={{ marginBottom: 16 }}>
+                      <RaceCard
+                        race={r}
+                        colors={colors}
+                        isMyRace={r.id === myRace?.id || myActiveRaceIds.has(r.id)}
+                        isHost={r.id === myRace?.id ? myRace?.isHost : undefined}
+                        myUsername={user?.username}
+                        myUserId={user?.id}
+                        myActiveRaceIds={myActiveRaceIds}
+                        onAvatarPress={handleAvatarPress}
+                      />
+                    </View>
+                  ))}
+                </>
+              )}
+              {upcomingSponsored.length > 0 && (
+                <>
+                  <SectionHeader
+                    label="Upcoming"
+                    sub="Scheduled sponsored events"
+                    isFinished={false}
+                  />
+                  {upcomingSponsored.map((evt, index) => (
+                    <SponsoredEventRow key={evt.id} evt={evt} index={index} />
+                  ))}
+                </>
+              )}
+              {sponsoredFinished.length > 0 && (
+                <>
+                  <SectionHeader
+                    label="Recently Finished"
+                    sub="Here are the latest sponsored event results"
+                    isFinished={true}
+                  />
+                  {sponsoredFinished.map((r) => (
+                    <View key={r.id} style={{ marginBottom: 16 }}>
+                      <RaceCard
+                        race={r}
+                        colors={colors}
+                        isMyRace={r.id === myRace?.id || myActiveRaceIds.has(r.id)}
+                        isHost={r.id === myRace?.id ? myRace?.isHost : undefined}
+                        myUsername={user?.username}
+                        myUserId={user?.id}
+                        myActiveRaceIds={myActiveRaceIds}
+                        onAvatarPress={handleAvatarPress}
+                      />
+                    </View>
+                  ))}
+                </>
+              )}
+            </ScrollView>
+          );
+        })()
       ) : loading ? (
         <View style={{ paddingTop: 8 }}>
           <SkeletonList count={5} variant="race" />
@@ -2049,10 +2460,6 @@ export default function LiveTab() {
                   Live and recently finished Unlimited Challenges will show here.
                 </Text>
               )}
-              <TouchableOpacity style={st.refreshBtn} onPress={load}>
-                <Feather name="refresh-cw" size={14} color={NEON_PURPLE} />
-                <Text style={st.refreshText}>Refresh</Text>
-              </TouchableOpacity>
             </>
           )}
         </View>

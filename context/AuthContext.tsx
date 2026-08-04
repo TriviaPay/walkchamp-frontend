@@ -159,17 +159,67 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     if (__DEV__) console.log("[Auth] logout started");
     const userId = user?.id;
+
+    // Capture refresh before wiping memory so Descope logout can still revoke.
+    const priorSession = await getStoredSession().catch(() => ({
+      session: null as string | null,
+      refresh: null as string | null,
+    }));
+
+    // Stop authenticated API traffic as the old user immediately.
+    try {
+      const { invalidateMemorySession } = require(
+        "@/services/authService",
+      ) as typeof import("@/services/authService");
+      invalidateMemorySession();
+    } catch {
+      /* ignore */
+    }
+    try {
+      const { setWalkBackendSyncPaused } = require(
+        "@/services/walkSyncCoordinator",
+      ) as typeof import("@/services/walkSyncCoordinator");
+      setWalkBackendSyncPaused(false);
+    } catch {
+      /* ignore */
+    }
+    try {
+      const { clearUnlimitedClassicProgressBlocks } = require(
+        "@/services/unlimitedRaceProgressGuard",
+      ) as typeof import("@/services/unlimitedRaceProgressGuard");
+      clearUnlimitedClassicProgressBlocks();
+    } catch {
+      /* ignore */
+    }
+
     setCrashReportingUser(null);
     cancelProactiveTokenRefresh();
     stepPollingService.stopPolling("logout");
     raceStepSyncService.cancelPending();
     // Clear in-memory screen cache so the next user never sees stale data.
     screenCache.clearAll();
+    // Clear in-memory permission *sequencing* only — never revoke OS grants.
+    // Soft reset: drop in-progress wizard flags without forcing WearableSetup again.
+    // First-launch orchestrator re-queries the OS and skips when already granted.
     try {
-      const { resetHomePermissionFlow } = require(
+      const { resetHomePermissionFlowSoft } = require(
         "@/services/permissions/homePermissionFlow",
       ) as typeof import("@/services/permissions/homePermissionFlow");
-      resetHomePermissionFlow();
+      resetHomePermissionFlowSoft();
+    } catch {
+      try {
+        const { resetHomePermissionFlow } = require(
+          "@/services/permissions/homePermissionFlow",
+        ) as typeof import("@/services/permissions/homePermissionFlow");
+        resetHomePermissionFlow();
+      } catch {
+        /* optional */
+      }
+    }
+    try {
+      void import("@/utils/hostedUnlimitedCache")
+        .then((m) => m.wipeHostedUnlimitedCacheForAccountSwitch())
+        .catch(() => {});
     } catch {
       /* optional */
     }
@@ -180,12 +230,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       /* ignore */
     }
     void clearPendingMatchPermissionAction().catch(() => {});
-    // Best-effort backend revoke before clearing local session meta.
+    // Best-effort backend revoke (use captured token — memory session already wiped).
     void (async () => {
       try {
-        const token = await getStoredSession().then((s) => s.session).catch(() => null);
         const { revokeCurrentSession } = await import("@/services/authSessionService");
-        await revokeCurrentSession(token);
+        await revokeCurrentSession(priorSession.session);
       } catch {
         await clearActiveSessionMeta().catch(() => {});
       }
@@ -201,10 +250,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void storageRemove(STORAGE_KEYS.WALLET);
     void storageRemove(STORAGE_KEYS.TRANSACTIONS);
     dynamicIconService.onLogout().catch(() => {});
-    getStoredSession()
-      .then(({ refresh }) => (refresh ? authLogout(refresh) : clearSession()))
+    Promise.resolve()
+      .then(() =>
+        priorSession.refresh
+          ? authLogout(priorSession.refresh)
+          : clearSession(),
+      )
       .catch(() => clearSession())
-      .finally(() => { if (__DEV__) console.log("[Auth] logout completed"); });
+      .finally(() => {
+        if (__DEV__) console.log("[Auth] logout completed");
+      });
   }, [dispatch, user?.id]);
 
   const updateUser = useCallback(

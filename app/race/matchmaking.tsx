@@ -1177,12 +1177,15 @@ function MatchmakingScreenContent() {
 
   const clearWaitingRoomLocalState = useCallback(() => {
     if (backendRaceId) {
-      screenCache.invalidate(waitingRoomCacheKey(backendRaceId));
+      if (user?.id) {
+        screenCache.invalidate(waitingRoomCacheKey(user.id, backendRaceId));
+      }
+      screenCache.invalidate(`waiting_room_${backendRaceId}`);
       resetLiveRaceFetchGate(backendRaceId);
       unsubscribeFromChannel(CHANNELS.liveRace(backendRaceId));
     }
     cancelRace();
-  }, [backendRaceId, cancelRace]);
+  }, [backendRaceId, cancelRace, user?.id]);
 
   const navigateToWalkInstant = useCallback(() => {
     if (exitingRef.current) return;
@@ -1404,7 +1407,9 @@ function MatchmakingScreenContent() {
 
     if (participants.length > 0) return;
 
-    const cached = readWaitingRoomCacheSync(backendRaceId);
+    const cached = user?.id
+      ? readWaitingRoomCacheSync(user.id, backendRaceId)
+      : null;
     if (cached?.participants?.length) {
       setParticipants(cached.participants);
       if (cached.liveRoom) {
@@ -1446,13 +1451,13 @@ function MatchmakingScreenContent() {
 
   const persistWaitingRoomCache = useCallback(
     (nextParticipants: RoomParticipant[], nextLiveRoom: typeof liveRoom) => {
-      if (!backendRaceId || nextParticipants.length === 0) return;
-      cacheWaitingRoomState(backendRaceId, {
+      if (!backendRaceId || !user?.id || nextParticipants.length === 0) return;
+      cacheWaitingRoomState(user.id, backendRaceId, {
         participants: nextParticipants,
         liveRoom: nextLiveRoom as WaitingRoomLiveMeta | null,
       });
     },
-    [backendRaceId],
+    [backendRaceId, user?.id],
   );
 
   // ── Server-authoritative race status check ─────────────────────────────────
@@ -1535,10 +1540,29 @@ function MatchmakingScreenContent() {
         clearInterval(countdownIntervalRef.current);
         countdownIntervalRef.current = null;
       }
-      if (isHostMode) {
-        startRaceManually();
-      } else {
-        notifyRaceStarted(playerCount, raceStartedAtRef.current ?? undefined);
+      // Unlimited uses Walk/HC daily sync — never start classic RaceContext here.
+      if (!isUnlimitedGoalRoom) {
+        if (isHostMode) {
+          startRaceManually();
+        } else {
+          notifyRaceStarted(playerCount, raceStartedAtRef.current ?? undefined);
+        }
+      } else if (backendRaceId) {
+        try {
+          const { registerUnlimitedClassicProgressBlock } = require(
+            "@/services/unlimitedRaceProgressGuard",
+          ) as typeof import("@/services/unlimitedRaceProgressGuard");
+          registerUnlimitedClassicProgressBlock(backendRaceId, {
+            challengeDayKey: undefined,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          });
+          const { setWalkBackendSyncPaused } = require(
+            "@/services/walkSyncCoordinator",
+          ) as typeof import("@/services/walkSyncCoordinator");
+          setWalkBackendSyncPaused(false);
+        } catch {
+          /* optional */
+        }
       }
       if (backendRaceId) {
         router.replace({
@@ -1922,14 +1946,16 @@ function MatchmakingScreenContent() {
   const didBindActiveRaceRef = useRef(false);
   useEffect(() => {
     if (!params.raceId || contextRaceId || didBindActiveRaceRef.current) return;
+    // Unlimited must not bind classic RaceContext (wrong step lane + walk sync pause).
+    if (isUnlimitedGoalRoom) return;
     didBindActiveRaceRef.current = true;
     setActiveRace(params.raceId, params.isHost === "true");
-  }, [params.raceId, params.isHost, contextRaceId, setActiveRace]);
+  }, [params.raceId, params.isHost, contextRaceId, setActiveRace, isUnlimitedGoalRoom]);
 
   // ── Pusher subscriptions ──────────────────────────────────────────────────
   // All handlers validate event.raceId === backendRaceId before acting.
   useEffect(() => {
-    if (!backendRaceId) return;
+    if (!backendRaceId || !user?.id) return;
     connectPusher();
     const channel = subscribeToChannel(CHANNELS.liveRace(backendRaceId));
     const unlimitedChannel =
@@ -2054,7 +2080,7 @@ function MatchmakingScreenContent() {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backendRaceId, beginCountdown, showTerminalRoomClosed, isUnlimitedGoalRoom]);
+  }, [backendRaceId, beginCountdown, showTerminalRoomClosed, isUnlimitedGoalRoom, user?.id]);
 
   // Scheduled registration events are emitted on the existing public rooms
   // channel before the race join window opens.
@@ -2237,15 +2263,18 @@ function MatchmakingScreenContent() {
 
     // Flag-on path: leave Waiting Room into Live Race even if API still says waiting
     // (common for Unlimited after scheduled start). live-detail loads the same race id.
+    // Unlimited must NOT start classic RaceContext (that pauses walk sync).
     setStart("navigating");
     if (countdownIntervalRef.current) {
       clearInterval(countdownIntervalRef.current);
       countdownIntervalRef.current = null;
     }
-    if (isHostMode) {
-      startRaceManually();
-    } else {
-      notifyRaceStarted(playerCount, raceStartedAtRef.current ?? undefined);
+    if (!isUnlimitedGoalRoom) {
+      if (isHostMode) {
+        startRaceManually();
+      } else {
+        notifyRaceStarted(playerCount, raceStartedAtRef.current ?? undefined);
+      }
     }
     router.replace({
       pathname: "/race/live-detail",
@@ -2268,6 +2297,7 @@ function MatchmakingScreenContent() {
     setStart,
     startRaceManually,
     notifyRaceStarted,
+    isUnlimitedGoalRoom,
   ]);
 
   // ── Derived values ────────────────────────────────────────────────────────

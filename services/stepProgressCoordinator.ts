@@ -20,6 +20,10 @@ import { RACE_PROGRESS_NOTIFICATION_CONFIG } from "@/config/raceProgressNotifica
 import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotificationConfig";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { isJsAuthoritativeStepSession } from "@/services/steps/jsStepOwnership";
+import {
+  resolveWalkNotificationSteps,
+  isInflatedProvisionalVsVerified,
+} from "@/services/steps/walkDisplaySteps";
 import { AppState, type AppStateStatus, Platform } from "react-native";
 import { waitForAppStartupReady, isAppStartupReady } from "@/services/appStartup";
 import { getLocalDateStr, isStepSnapshotFromBeforeToday, msUntilNextLocalMidnight } from "@/utils/timezone";
@@ -171,7 +175,8 @@ export async function resolveAuthoritativeTodaySteps(
 
   if (Platform.OS === "android") {
     const native = await stepTrackingNotificationService.getNativeStepState(userId);
-    const nativeMatchesUser = !native?.userId || native.userId === userId;
+    // Strict: native must be tagged for this user. Missing userId = previous session leak.
+    const nativeMatchesUser = !!native?.userId && native.userId === userId;
     const nativeStale = !!(native?.localDate && native.localDate !== today);
     if (nativeMatchesUser && !nativeStale) {
       accepted = filterLegacyStepIncrease(
@@ -232,14 +237,26 @@ export async function pushWalkNotificationFromCanonicalStore(
     return;
   }
 
-  let steps = Math.max(0, Math.floor(store.getState().raceProgress.todaySteps));
+  let steps = resolveWalkNotificationSteps({
+    verifiedTodaySteps: store.getState().raceProgress.verifiedTodaySteps ?? 0,
+    provisionalSensorTodaySteps:
+      store.getState().raceProgress.provisionalSensorTodaySteps,
+    todaySteps: store.getState().raceProgress.todaySteps,
+  });
   const now = Date.now();
   const cfg = STEP_TRACKING_NOTIFICATION_CONFIG;
+  const verifiedNow = Math.max(
+    0,
+    Math.floor(store.getState().raceProgress.verifiedTodaySteps ?? 0),
+  );
 
-  // Notification mirrors canonical Redux only — never reconcile provider/native on push.
-
-  // Notification display is monotonic within the day — never regress and cause flicker.
-  if (lastWalkNotificationSteps >= 0 && steps < lastWalkNotificationSteps) {
+  // Notification mirrors Walk display policy — never keep an inflated sensor lock.
+  // Allow regression when correcting down to verified HC/HK (e.g. 1592 → 433).
+  if (
+    lastWalkNotificationSteps >= 0 &&
+    steps < lastWalkNotificationSteps &&
+    !(verifiedNow > 0 && steps === verifiedNow)
+  ) {
     stepEngineLog(
       "Notification",
       `skippedReason=regression incoming=${steps} last=${lastWalkNotificationSteps}`,
@@ -919,6 +936,15 @@ function initNativeStepEventListener(): void {
       if (incomingToday <= currentToday) return;
 
       if (stepProviderManager.usesVerifiedStepSource()) {
+        const verified = Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0));
+        // Never adopt FGS sensor absolutess that wildly exceed Health Connect.
+        if (isInflatedProvisionalVsVerified(verified, incomingToday)) {
+          logger.debug(
+            "StepStore",
+            `ignored native inflate incoming=${incomingToday} verified=${verified}`,
+          );
+          return;
+        }
         updateStepProgressFromRealSource({
           todaySteps: incomingToday,
           raceSteps: typeof state.raceSteps === "number" ? state.raceSteps : undefined,
@@ -1287,6 +1313,41 @@ export function ensureActiveRaceInStore(params: {
       );
       scheduleNotificationUpdate(true);
     }
+
+    // Redux says active but the notification service may have lost its session
+    // (JS remount / deferred start never flushed). Restart rather than update-only.
+    const notifActiveId = raceProgressNotificationService.getActiveRaceId();
+    if (notifActiveId !== params.raceId) {
+      const challengeEndAtRestart =
+        params.challengeEndAt != null && params.challengeEndAt !== ""
+          ? params.challengeEndAt
+          : undefined;
+      void raceProgressNotificationService.start(
+        {
+          raceId: params.raceId,
+          userId: params.userId,
+          username: params.username,
+          raceSteps: Math.max(boot, store.getState().raceProgress.raceSteps),
+          rank: store.getState().raceProgress.rank ?? 1,
+          totalParticipants:
+            params.totalParticipants ??
+            store.getState().raceProgress.totalParticipants ??
+            1,
+          goalSteps:
+            store.getState().raceProgress.goalSteps ?? nextGoal ?? 0,
+          timeLeftSeconds: store.getState().raceProgress.timeLeftSeconds ?? 0,
+          isSponsored: resolvedSponsored,
+          ...(challengeEndAtRestart != null
+            ? { challengeEndAt: challengeEndAtRestart }
+            : {}),
+        },
+        params.raceStartTime,
+      );
+      stepCoordDebug(
+        `[StepCoordinator] ensureActiveRaceInStore restartNotif raceId=${params.raceId}`,
+      );
+    }
+
     stepCoordDebug(
       `[StepCoordinator] ensureActiveRaceInStore ok raceId=${params.raceId} raceSteps=${store.getState().raceProgress.raceSteps} goal=${store.getState().raceProgress.goalSteps} sponsored=${store.getState().raceProgress.activeRaceIsSponsored}`,
     );
@@ -1329,6 +1390,20 @@ export function setActiveRaceProgress(params: {
     );
     void suppressLiveRaceNotification(params.raceId, "not_confirmed_participant");
     return;
+  }
+  // Defense: Unlimited challenge IDs must never enter classic race lane / race FGS.
+  try {
+    const { isUnlimitedClassicProgressBlocked } = require(
+      "@/services/unlimitedRaceProgressGuard",
+    ) as typeof import("@/services/unlimitedRaceProgressGuard");
+    if (isUnlimitedClassicProgressBlocked(params.raceId)) {
+      stepCoordDebug(
+        `[StepCoordinator] setActiveRaceProgress blocked — Unlimited challengeId=${params.raceId}`,
+      );
+      return;
+    }
+  } catch {
+    /* optional */
   }
   const freshStart = params.freshStart !== false;
   const boot = freshStart ? 0 : Math.max(0, params.bootSteps ?? 0);
@@ -1573,17 +1648,24 @@ export function clearActiveRaceProgress(
 }
 
 /** Push daily-steps notification after race ends — does not stop the foreground service. */
-export async function switchDailyStepsNotification(todaySteps: number): Promise<void> {
+export async function switchDailyStepsNotification(todaySteps?: number): Promise<void> {
   const s = store.getState().raceProgress;
   if (!s.userId) return;
-  store.dispatch(
-    raceProgressActions.updateFromDeviceSource({
-      todaySteps: Math.max(0, Math.floor(todaySteps)),
-      updatedAt: new Date().toISOString(),
-    }),
-  );
+  // Never write tray display totals into Redux lanes — that previously let an
+  // inflated TYPE_STEP_COUNTER absolute (1592) overwrite / lock HC (433).
+  // Notification always resolves from verified + clamped provisional policy.
+  void todaySteps;
   await pushWalkNotificationFromCanonicalStore(true);
-  logger.debug("NotificationMode", `switch race_live -> daily_steps todaySteps=${todaySteps}`);
+  const shown = resolveWalkNotificationSteps({
+    verifiedTodaySteps: store.getState().raceProgress.verifiedTodaySteps ?? 0,
+    provisionalSensorTodaySteps:
+      store.getState().raceProgress.provisionalSensorTodaySteps,
+    todaySteps: store.getState().raceProgress.todaySteps,
+  });
+  logger.debug(
+    "NotificationMode",
+    `switch race_live -> daily_steps todaySteps=${shown}`,
+  );
 }
 
 export function updateStepProgressFromSource(params: {
@@ -1867,9 +1949,10 @@ export async function clearLocalStepStorageForAccountSwitch(
   lastWalkNotificationPushMs = 0;
 
   const reason = opts?.reason ?? "account_switch";
-  // Same-user logout: keep today's scoped daily steps so Walk restores on re-login.
-  // True account switch still wipes everything for that userId.
-  const preserveDailyProgress = reason === "logout" && !!userId;
+  // Keep today's scoped daily steps for this userId on both logout and account_switch.
+  // Race/session keys are still wiped. The next bind for THIS user can restore Walk
+  // from steps:{userId}:{date}. The OTHER account never reads these keys.
+  const preserveDailyProgress = !!userId;
 
   logger.debug(
     "AuthSwitch",
@@ -1888,9 +1971,14 @@ export async function clearLocalStepStorageForAccountSwitch(
       : Promise.resolve(),
     deleteLegacyUnscopedStepKeys(),
     storageRemove(STORAGE_KEYS.PENDING_RACE),
-    // Only drop LAST_STEP_USER_ID when this clear is still the latest session op.
-    // Re-login may have already rebound; wiping the id would look like a fresh bind.
-    stillCurrent()
+    userId
+      ? storageRemove(`${STORAGE_KEYS.PENDING_RACE}:${userId}`)
+      : Promise.resolve(),
+    // Keep LAST_STEP_USER_ID on logout so the next login can detect same-user
+    // re-login vs account switch. Clearing it made the next user inherit native
+    // daily totals (~1.6K) via mergeNative. Only clear on true account_switch
+    // after the new user id is already known (bindStepSessionToUser handles that).
+    reason === "account_switch" && stillCurrent()
       ? storageRemove(STORAGE_KEYS.LAST_STEP_USER_ID)
       : Promise.resolve(),
     clearWalkStepsOutbox(),
@@ -1907,6 +1995,31 @@ export async function clearLocalStepStorageForAccountSwitch(
   store.dispatch(walkActions.setWeeklySteps(0));
   store.dispatch(walkActions.setAllTimeSteps(0));
   store.dispatch(walkActions.setCurrentStreak(0));
+
+  try {
+    const { stopHybridLiveDailyDisplay } = await import(
+      "@/services/steps/hybridLiveDailyDisplay"
+    );
+    stopHybridLiveDailyDisplay();
+  } catch {
+    /* optional */
+  }
+  try {
+    const { resetUnlimitedProvisionalUploadState } = await import(
+      "@/services/unlimitedProvisionalProgressApi"
+    );
+    resetUnlimitedProvisionalUploadState();
+  } catch {
+    /* optional */
+  }
+  try {
+    const { clearUnlimitedClassicProgressBlocks } = await import(
+      "@/services/unlimitedRaceProgressGuard"
+    );
+    clearUnlimitedClassicProgressBlocks();
+  } catch {
+    /* optional */
+  }
 
   if (Platform.OS === "android") {
     try {
@@ -2026,25 +2139,40 @@ export async function bindStepSessionToUser(userId: string): Promise<boolean> {
   if (switched) {
     logger.debug("AuthSwitch", `oldUserId=${lastUserId} newUserId=${userId}`);
     await clearUserSessionStepState(lastUserId, "account_switch");
+  } else if (!lastUserId && Platform.OS === "android") {
+    // Fresh bind after a session gap — drop untagged native totals so Account B
+    // cannot inherit Account A's FGS daily count.
+    try {
+      const native = await stepTrackingNotificationService.getNativeStepState();
+      if (native && (!native.userId || native.userId !== userId)) {
+        await stepTrackingNotificationService.clearNativeStepStateForUser(
+          native.userId || "unknown",
+        );
+        await stepTrackingNotificationService.stop();
+      }
+    } catch {
+      /* non-fatal */
+    }
   }
   await deleteLegacyUnscopedStepKeys();
   await storageSet(STORAGE_KEYS.LAST_STEP_USER_ID, userId);
   logger.debug("StepService", `started for new user userId=${userId}`);
   const today = getLocalDateStr();
   suppressLegacyStepBumps(12_000);
-  // Prefer durable daily cache first so Walk shows prior steps immediately;
-  // then merge native/provider without waiting on slow HC.
-  const cachedBoot = switched
-    ? 0
-    : await readDailyStepsForUserDate(userId, today).catch(() => 0);
-  const bootSteps = switched
-    ? 0
-    : Math.max(
-        cachedBoot,
-        await resolveAuthoritativeTodaySteps(userId, { mergeNative: true }).catch(
-          () => cachedBoot,
-        ),
-      );
+  // Always prefer THIS account's durable daily cache (keyed by userId).
+  // Never force 0 on account switch — that wiped restored totals after A→B→A.
+  // mergeNative only when same-user re-login (avoid inheriting prior account FGS).
+  const cachedBoot = await readDailyStepsForUserDate(userId, today).catch(() => 0);
+  const bootSteps = Math.max(
+    cachedBoot,
+    await resolveAuthoritativeTodaySteps(userId, {
+      mergeNative: !switched,
+    }).catch(() => cachedBoot),
+  );
+  // Ensure Redux is empty of any prior account before boot (logout may race).
+  if (switched || store.getState().raceProgress.userId !== userId) {
+    store.dispatch(raceProgressActions.resetStepStateForLogout());
+  }
   store.dispatch(
     raceProgressActions.initializeStepsForUserDate({
       userId,
@@ -2072,6 +2200,9 @@ export type MyActiveInProgressRace = {
   isHost?: boolean;
   title?: string;
   type?: string;
+  entryType?: string;
+  challengeType?: string;
+  capacityMode?: string;
   challengeEndAt?: string | null;
 };
 
@@ -2083,7 +2214,17 @@ export async function fetchMyActiveInProgressRace(
   return races[0] ?? null;
 }
 
-/** All concurrent in-progress races for the signed-in user (sponsored + free/coins). */
+function isClassicLiveRaceRow(r: MyActiveInProgressRace): boolean {
+  const entry = String(r.entryType ?? "").toLowerCase();
+  const challenge = String(r.challengeType ?? "").toLowerCase();
+  const capacity = String(r.capacityMode ?? "").toLowerCase();
+  if (entry === "unlimited_goal" || challenge === "unlimited_goal" || capacity === "unlimited") {
+    return false;
+  }
+  return !!(r?.id && r.status === "in_progress");
+}
+
+/** All concurrent in-progress classic races (sponsored + free/coins/cash). Unlimited excluded. */
 export async function fetchMyActiveInProgressRaces(
   userId: string,
 ): Promise<MyActiveInProgressRace[]> {
@@ -2102,7 +2243,8 @@ export async function fetchMyActiveInProgressRaces(
         : body.race
           ? [body.race]
           : [];
-    return list.filter((r) => r?.id && r.status === "in_progress");
+    // Never restore Unlimited into classic RaceContext (wrong write path + 404 spam).
+    return list.filter(isClassicLiveRaceRow);
   } catch {
     return [];
   }
@@ -2363,11 +2505,13 @@ export async function restoreActiveLiveRaceNotificationForUser(
       );
     }
 
-    await storageSet(STORAGE_KEYS.PENDING_RACE, {
+    await storageSet(`${STORAGE_KEYS.PENDING_RACE}:${userId}`, {
       raceId: primary.id,
       raceStartTimeUTC: new Date(primary.startedAt ?? Date.now()).toISOString(),
       status: "in_progress",
+      userId,
     });
+    await storageRemove(STORAGE_KEYS.PENDING_RACE);
 
     logger.debug("AuthSwitch", `restored live race notification raceId=${primary.id} bootSteps=${primaryHydrated.bootSteps} companions=${secondaries.length}`);
     return { race: primary, bootSteps: primaryHydrated.bootSteps };

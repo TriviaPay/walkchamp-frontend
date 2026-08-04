@@ -80,14 +80,46 @@ interface PendingRace {
   raceStartTimeUTC: string;
   raceEndTimeUTC?: string;
   status: "in_progress" | "completed";
+  /** Owner — reject recovery when it does not match the signed-in user. */
+  userId: string;
+}
+
+function pendingRaceKey(userId: string): string {
+  return `${STORAGE_KEYS.PENDING_RACE}:${userId}`;
 }
 
 async function savePendingRace(r: PendingRace) {
-  await storageSet(STORAGE_KEYS.PENDING_RACE, r);
+  if (!r.userId) return;
+  await storageSet(pendingRaceKey(r.userId), r);
+  // Drop legacy unscoped key so Account B cannot recover Account A's race.
+  await storageRemove(STORAGE_KEYS.PENDING_RACE);
 }
 
-async function clearPendingRace() {
+async function clearPendingRace(userId?: string | null) {
+  if (userId) {
+    await storageRemove(pendingRaceKey(userId));
+  }
   await storageRemove(STORAGE_KEYS.PENDING_RACE);
+}
+
+async function loadPendingRace(userId: string): Promise<PendingRace | null> {
+  if (!userId) return null;
+  const scoped = await storageGet<PendingRace>(pendingRaceKey(userId));
+  if (scoped?.raceId && scoped.userId === userId) return scoped;
+  // One-time migrate legacy unscoped payload if it belongs to this user.
+  const legacy = await storageGet<PendingRace & { userId?: string }>(
+    STORAGE_KEYS.PENDING_RACE,
+  );
+  if (legacy?.raceId && (!legacy.userId || legacy.userId === userId)) {
+    const migrated: PendingRace = { ...legacy, userId };
+    await savePendingRace(migrated);
+    return migrated;
+  }
+  if (legacy) {
+    // Owned by someone else — do not apply; leave for their scoped recover or clear.
+    await storageRemove(STORAGE_KEYS.PENDING_RACE);
+  }
+  return null;
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -639,7 +671,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     const recover = async () => {
       try {
         await waitForAppStartupReady();
-        const pending = await storageGet<PendingRace>(STORAGE_KEYS.PENDING_RACE);
+        const pending = await loadPendingRace(user.id);
         if (!pending) return;
 
         const { raceId: pendingRaceId, raceStartTimeUTC: startStr, raceEndTimeUTC: endStr } = pending;
@@ -651,7 +683,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
         const raceData = await fetchRaceStatus(pendingRaceId);
         if (!raceData) {
-          await clearPendingRace();
+          await clearPendingRace(user.id);
           return;
         }
 
@@ -705,9 +737,9 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
               }
             }
           }
-          await clearPendingRace();
+          await clearPendingRace(user.id);
         } else if (raceData.status === "cancelled" || raceData.status === "open") {
-          await clearPendingRace();
+          await clearPendingRace(user.id);
         }
       } catch (err) {
         console.warn("[Startup] race recovery failed", err);
@@ -756,12 +788,16 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
     // Mark pending race as completed so recovery knows the end time
     if (raceIdRef.current) {
-      savePendingRace({
-        raceId: raceIdRef.current,
-        raceStartTimeUTC: raceStartTimeRef.current?.toISOString() ?? new Date().toISOString(),
-        raceEndTimeUTC: new Date().toISOString(),
-        status: "completed",
-      });
+      const uid = userProfileRef.current.userId;
+      if (uid && uid !== "user") {
+        savePendingRace({
+          raceId: raceIdRef.current,
+          raceStartTimeUTC: raceStartTimeRef.current?.toISOString() ?? new Date().toISOString(),
+          raceEndTimeUTC: new Date().toISOString(),
+          status: "completed",
+          userId: uid,
+        });
+      }
     }
 
     clearAllIntervals();
@@ -874,6 +910,22 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
   // ── startRace ─────────────────────────────────────────────────────────────────
 
   const startRace = useCallback((allParticipants: RaceParticipant[], options?: { isRejoin?: boolean; isSponsored?: boolean }) => {
+    // Unlimited challenges must never enter classic sensor / progress / pause-walk path.
+    try {
+      const { isUnlimitedClassicProgressBlocked } = require(
+        "@/services/unlimitedRaceProgressGuard",
+      ) as typeof import("@/services/unlimitedRaceProgressGuard");
+      if (isUnlimitedClassicProgressBlocked(raceIdRef.current)) {
+        if (__DEV__) {
+          console.warn(
+            `[RaceContext] startRace blocked — Unlimited challengeId=${raceIdRef.current}`,
+          );
+        }
+        return;
+      }
+    } catch {
+      /* optional */
+    }
     finishedCountRef.current = 0;
     const userFromList = allParticipants.find((p) => p.isUser);
     // Fresh races always begin at 0 — only an explicit rejoin may restore server steps.
@@ -1462,11 +1514,15 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
     // Persist pending race for recovery
     if (raceIdRef.current) {
-      savePendingRace({
-        raceId: raceIdRef.current,
-        raceStartTimeUTC: startTime.toISOString(),
-        status: "in_progress",
-      });
+      const uid = userProfileRef.current.userId;
+      if (uid && uid !== "user") {
+        savePendingRace({
+          raceId: raceIdRef.current,
+          raceStartTimeUTC: startTime.toISOString(),
+          status: "in_progress",
+          userId: uid,
+        });
+      }
     }
 
     // Subscribe to forfeit events for this race
@@ -1542,11 +1598,15 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
 
     // Persist pending race for recovery
     if (raceIdRef.current) {
-      savePendingRace({
-        raceId: raceIdRef.current,
-        raceStartTimeUTC: startTime.toISOString(),
-        status: "in_progress",
-      });
+      const uid = userProfileRef.current.userId;
+      if (uid && uid !== "user") {
+        savePendingRace({
+          raceId: raceIdRef.current,
+          raceStartTimeUTC: startTime.toISOString(),
+          status: "in_progress",
+          userId: uid,
+        });
+      }
     }
 
     // Subscribe to forfeit events for this race
@@ -1601,12 +1661,16 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     raceEndedRef.current = false;
 
     if (raceIdRef.current) {
-      savePendingRace({
-        raceId: raceIdRef.current,
-        raceStartTimeUTC: startedAt.toISOString(),
-        ...(raceEndAt ? { raceEndTimeUTC: raceEndAt.toISOString() } : {}),
-        status: "in_progress",
-      });
+      const uid = userProfileRef.current.userId;
+      if (uid && uid !== "user") {
+        savePendingRace({
+          raceId: raceIdRef.current,
+          raceStartTimeUTC: startedAt.toISOString(),
+          ...(raceEndAt ? { raceEndTimeUTC: raceEndAt.toISOString() } : {}),
+          status: "in_progress",
+          userId: uid,
+        });
+      }
     }
 
     if (raceIdRef.current) {
@@ -1769,7 +1833,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     hostModeRef.current = false;
     setRaceStartTimeUTC(null);
     // Clear pending race from storage after reset (user saw results)
-    clearPendingRace();
+    clearPendingRace(userProfileRef.current.userId);
     // Do NOT clear race step baseline here — logout/account-switch used to wipe it
     // and after re-login raceSteps became todaySteps (baseline=0). Baseline is cleared
     // only when a race truly ends (cancel / complete).

@@ -116,15 +116,32 @@ const overlaid = overlayClassicRaceOnUnlimitedDetail(detailMapped, {
   ],
 });
 assert.equal(overlaid.race.status, "in_progress");
+// Classic race participant steps must NOT overwrite Unlimited daily currentSteps.
 assert.equal(
   overlaid.participants.find((p) => p.userId === "user-a")?.currentSteps,
-  40,
+  0,
 );
 
-const merged = mergeUnlimitedLiveParticipants(detailMapped.participants, [
-  { userId: "user-a", steps: 55 },
-]);
-assert.equal(merged.find((p) => p.userId === "user-a")?.currentSteps, 55);
+const merged = mergeUnlimitedLiveParticipants(
+  [
+    { id: "a", userId: "user-a", currentSteps: 12, status: "active", rank: 1, username: "Alice", countryFlag: null, avatarColor: "#00E676", isHost: false, challengeDayKey: "2026-07-30" },
+  ],
+  [{ userId: "user-a", currentSteps: 9999, totalChallengeSteps: 9999, rank: 2, challengeDayKey: "2026-07-30" }],
+  { preferPrimaryCurrentSteps: true },
+);
+assert.equal(
+  merged.find((p) => p.userId === "user-a")?.currentSteps,
+  12,
+  "leaderboard must not overwrite detail currentSteps with multi-day total",
+);
+assert.equal(merged.find((p) => p.userId === "user-a")?.rank, 2);
+
+// totalChallengeSteps alone must not become currentSteps
+const fromTotalOnly = mergeUnlimitedLiveParticipants(
+  [{ id: "a", userId: "user-a", currentSteps: 5, status: "active", rank: 1, username: "Alice", countryFlag: null, avatarColor: "#00E676", isHost: false }],
+  [{ userId: "user-a", totalChallengeSteps: 5000, rank: 1 }],
+);
+assert.equal(fromTotalOnly.find((p) => p.userId === "user-a")?.currentSteps, 5);
 
 const forced = coerceUnlimitedRaceInProgress(detailMapped.race, { forceLive: true });
 assert.equal(forced.status, "in_progress");

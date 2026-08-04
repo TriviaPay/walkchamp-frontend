@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import {
   filterRaceParticipantsForDisplay,
+  filterUnlimitedParticipantsForDisplay,
   isGhostOrSystemHost,
   selectTopParticipantsForRaceTrack,
   LIVE_RACE_TRACK_TOP_N,
@@ -38,6 +39,20 @@ const filtered = filterRaceParticipantsForDisplay([
   { id: "4", userId: "d", username: "cara", status: "disqualified" },
   { id: "5", userId: "e", username: "dan", status: "active" },
 ]);
+assert.equal(filtered.length, 2);
+
+const unlimitedFiltered = filterUnlimitedParticipantsForDisplay([
+  { id: "1", userId: "a", username: "alice", status: "active" },
+  { id: "2", userId: "b", username: "Walk Champ Admin", status: "active" },
+  { id: "3", userId: "c", username: "bob", status: "left" },
+  { id: "4", userId: "d", username: "cara", status: "disqualified" },
+  { id: "5", userId: "e", username: "dan", status: "active" },
+]);
+// Unlimited keeps DQ so Live Board count matches membership (ghost + left still hidden).
+assert.equal(unlimitedFiltered.length, 3);
+assert.ok(unlimitedFiltered.some((p) => p.userId === "d"));
+assert.ok(!unlimitedFiltered.some((p) => p.userId === "c"));
+assert.ok(!unlimitedFiltered.some((p) => p.userId === "b"));
 assert.deepEqual(
   filtered.map((p) => p.username),
   ["alice", "dan"],

@@ -195,7 +195,69 @@ function shouldThrottle(steps: number, force = false): boolean {
   return false;
 }
 
+/** Queued when start() runs before Health Connect / HealthKit is selected, or
+ * before notification permission has resolved. Zero current steps never
+ * blocks this — only the source/permission readiness gates the queue. */
+let pendingStart: {
+  payload: WalkStepNotificationPayload;
+  opts?: { forceRestart?: boolean };
+} | null = null;
+let pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearPendingRetryTimer(): void {
+  if (pendingRetryTimer) {
+    clearTimeout(pendingRetryTimer);
+    pendingRetryTimer = null;
+  }
+}
+
 class StepTrackingNotificationService {
+  private queuePendingStart(
+    payload: WalkStepNotificationPayload,
+    opts?: { forceRestart?: boolean },
+  ): void {
+    pendingStart = { payload, opts };
+    clearPendingRetryTimer();
+    // Retry briefly while HC/HK selects or notification permission resolves
+    // (e.g. right after login / account switch / first-launch setup).
+    let attempts = 0;
+    const tick = () => {
+      pendingRetryTimer = setTimeout(() => {
+        attempts += 1;
+        void this.flushPendingStart().then((started) => {
+          if (!started && attempts < 8 && pendingStart) {
+            tick();
+          }
+        });
+      }, Math.min(2_000 + attempts * 500, 5_000));
+    };
+    tick();
+  }
+
+  /**
+   * Retry a previously deferred Daily Walk tray start once prerequisites are
+   * ready. Safe to call from step provider init / permission resolution.
+   * Never requires a positive step count — zero is a valid start value.
+   */
+  async flushPendingStart(): Promise<boolean> {
+    const pending = pendingStart;
+    if (!pending) return false;
+    try {
+      const { store } = await import("@/store");
+      const uid = store.getState().auth.user?.id;
+      if (!uid || uid !== pending.payload.userId) {
+        pendingStart = null;
+        clearPendingRetryTimer();
+        return false;
+      }
+    } catch {
+      /* continue */
+    }
+    pendingStart = null;
+    clearPendingRetryTimer();
+    return this.start(pending.payload, pending.opts);
+  }
+
   async start(
     payload: WalkStepNotificationPayload,
     opts?: { forceRestart?: boolean },
@@ -204,17 +266,29 @@ class StepTrackingNotificationService {
     await logOngoingDiagnostics("start");
 
     // Never start FGS / Live Activity without verified Health Connect / HealthKit.
+    // Source not yet selected (common right after boot/login) — queue + retry,
+    // do not permanently abort. Zero current steps is not a factor here.
     try {
       const { stepProviderManager } = await import(
         "@/services/steps/stepProviderManager"
       );
       if (!stepProviderManager.usesVerifiedStepSource()) {
-        logOngoing("abort — verified step source not connected");
+        await stepProviderManager.initialize().catch(() => undefined);
+      }
+      if (!stepProviderManager.usesVerifiedStepSource()) {
+        logOngoing("deferred — verified step source not ready, queued for retry");
+        this.queuePendingStart(payload, opts);
         return false;
       }
     } catch {
-      logOngoing("abort — could not verify step source");
+      logOngoing("deferred — could not verify step source, queued for retry");
+      this.queuePendingStart(payload, opts);
       return false;
+    }
+    // Clear any stale deferred start for a different/previous user.
+    if (pendingStart && pendingStart.payload.userId !== payload.userId) {
+      pendingStart = null;
+      clearPendingRetryTimer();
     }
 
     const native = getNativeModule(true);
@@ -258,7 +332,8 @@ class StepTrackingNotificationService {
       const granted = await hasOngoingNotificationAccess();
       logOngoing(`notificationPermission result granted=${granted}`);
       if (!granted) {
-        logOngoing("abort app notifications disabled — foreground service not started");
+        logOngoing("deferred — notification permission not resolved yet, queued for retry");
+        this.queuePendingStart(payload, opts);
         return false;
       }
       // Health Connect owns steps — do NOT prompt the system "Physical activity?"
@@ -324,10 +399,15 @@ class StepTrackingNotificationService {
           const today = new Date();
           const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
           const nativeStale = !!(native?.localDate && native.localDate !== localDate);
+          const nativeSteps = native?.todaySteps ?? 0;
+          // Allow HC/HK correction below a bad sensor baseline (1592 → 433).
+          const correctingInflatedNative =
+            steps > 0 && nativeSteps > steps + 250;
           if (
             !nativeStale &&
             native?.todaySteps != null &&
-            steps < native.todaySteps
+            steps < native.todaySteps &&
+            !correctingInflatedNative
           ) {
             logOngoing(
               `skippedReason=belowNative incoming=${steps} native=${native.todaySteps}`,
@@ -339,7 +419,10 @@ class StepTrackingNotificationService {
         // proceed with incoming steps
       }
     }
-    if (lastSteps >= 0 && steps < lastSteps) {
+    // Allow forced HC correction below lastSteps (inflated sensor lock).
+    const correctingInflated =
+      force && lastSteps >= 0 && steps > 0 && lastSteps > steps + 250;
+    if (lastSteps >= 0 && steps < lastSteps && !correctingInflated) {
       logOngoing(
         `skippedReason=regression incoming=${steps} last=${lastSteps}`,
       );
@@ -371,6 +454,10 @@ class StepTrackingNotificationService {
   }
 
   async stop(): Promise<void> {
+    // Always clear a queued deferred start — a stop() (logout/cleanup) must
+    // never let a stale retry timer start the tray for a signed-out user.
+    pendingStart = null;
+    clearPendingRetryTimer();
     if (!active) return;
     active = false;
     lastSteps = -1;
@@ -441,12 +528,11 @@ class StepTrackingNotificationService {
       if (!state || typeof state.todaySteps !== "number") return null;
       if (
         expectedUserId &&
-        state.userId &&
-        state.userId !== expectedUserId
+        (!state.userId || state.userId !== expectedUserId)
       ) {
         if (__DEV__) {
           console.log(
-            `[OngoingNotification] ignored native state — user mismatch native=${state.userId} expected=${expectedUserId}`,
+            `[OngoingNotification] ignored native state — user mismatch native=${state.userId ?? "none"} expected=${expectedUserId}`,
           );
         }
         return null;

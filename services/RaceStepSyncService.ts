@@ -43,6 +43,10 @@ class RaceStepSyncService {
     source: RaceProgressSource,
     options: RaceSyncOptions = {},
   ): void {
+    const { isUnlimitedClassicProgressBlocked } = require(
+      "@/services/unlimitedRaceProgressGuard",
+    ) as typeof import("@/services/unlimitedRaceProgressGuard");
+    if (isUnlimitedClassicProgressBlocked(raceId)) return;
     raceStepSyncBuffer.onLocalRaceStepUpdate(raceId, steps, source, options);
   }
 
@@ -52,6 +56,10 @@ class RaceStepSyncService {
     source: RaceProgressSource,
     deviceTotalSteps?: number,
   ): Promise<boolean> {
+    const { isUnlimitedClassicProgressBlocked } = require(
+      "@/services/unlimitedRaceProgressGuard",
+    ) as typeof import("@/services/unlimitedRaceProgressGuard");
+    if (isUnlimitedClassicProgressBlocked(raceId)) return true;
     raceStepSyncBuffer.onLocalRaceStepUpdate(raceId, steps, source, {
       deviceTotalSteps,
     });
@@ -65,6 +73,10 @@ class RaceStepSyncService {
     source: RaceProgressSource,
     deviceTotalSteps?: number,
   ): Promise<void> {
+    const { isUnlimitedClassicProgressBlocked } = require(
+      "@/services/unlimitedRaceProgressGuard",
+    ) as typeof import("@/services/unlimitedRaceProgressGuard");
+    if (isUnlimitedClassicProgressBlocked(raceId)) return;
     for (let attempt = 0; attempt < 2; attempt++) {
       raceStepSyncBuffer.onLocalRaceStepUpdate(raceId, steps, source, {
         atTarget: true,

@@ -49,6 +49,8 @@ export const REFRESH_KEY = "wc_refresh";
 let memSession: string | null | undefined = undefined;
 let memRefresh: string | null | undefined = undefined;
 let sessionWarmPromise: Promise<{ session: string | null; refresh: string | null }> | null = null;
+/** Bumped on logout wipe so an in-flight SecureStore warm cannot resurrect the old token. */
+let sessionGeneration = 0;
 
 function setMemorySession(session: string | null, refresh: string | null): void {
   memSession = session;
@@ -64,6 +66,7 @@ export async function saveSession(sessionToken: string, refreshToken: string) {
   }
   // Update memory first so concurrent authFetch callers see the new token
   // without waiting for SecureStore I/O.
+  sessionGeneration += 1;
   setMemorySession(sessionToken, refreshToken?.trim() ? refreshToken : null);
   await Promise.all([
     secureSet(SESSION_KEY, sessionToken),
@@ -88,10 +91,22 @@ export async function saveSession(sessionToken: string, refreshToken: string) {
 export async function clearSession() {
   const { cancelProactiveTokenRefresh } = await import("./tokenRefreshScheduler");
   cancelProactiveTokenRefresh();
+  sessionGeneration += 1;
   setMemorySession(null, null);
   sessionWarmPromise = null;
   await Promise.all([secureDelete(SESSION_KEY), secureDelete(REFRESH_KEY)]);
 }
+
+/**
+ * Immediate in-memory session wipe used at the START of logout so authFetch
+ * cannot keep attaching the old user's token while SecureStore clears async.
+ */
+export function invalidateMemorySession(): void {
+  sessionGeneration += 1;
+  setMemorySession(null, null);
+  sessionWarmPromise = null;
+}
+
 export async function getStoredSession() {
   // Fast path: warmed memory (including explicit nulls after logout).
   if (memSession !== undefined && memRefresh !== undefined) {
@@ -106,6 +121,7 @@ export async function getStoredSession() {
 
   // Single-flight warm from SecureStore on cold start / first access.
   if (!sessionWarmPromise) {
+    const genAtStart = sessionGeneration;
     sessionWarmPromise = (async () => {
       try {
         const { perf } = require("@/utils/perfLogger") as typeof import("@/utils/perfLogger");
@@ -117,6 +133,10 @@ export async function getStoredSession() {
         secureGet(SESSION_KEY),
         secureGet(REFRESH_KEY),
       ]);
+      // Logout may have wiped memory while this warm was in flight — do not resurrect.
+      if (genAtStart !== sessionGeneration) {
+        return { session: memSession ?? null, refresh: memRefresh ?? null };
+      }
       setMemorySession(session, refresh);
       return { session, refresh };
     })().finally(() => {

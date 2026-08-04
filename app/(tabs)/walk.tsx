@@ -200,11 +200,20 @@ function walkChallengeCacheKey(userId: string): string {
 }
 
 /** Instant track theme for live-detail re-entry (avoids default bg flash). */
-function liveRaceNavParams(raceId: string): { id: string; trackLayout?: string } {
+function liveRaceNavParams(
+  raceId: string,
+  userId?: string | null,
+): { id: string; trackLayout?: string } {
   const cached = screenCache.getSync<{ race?: { trackLayout?: string } }>(
-    `live-race-detail:v1:${raceId}`,
+    `live-race-detail:v1:${userId || "anon"}:${raceId}`,
   );
-  const layout = cached?.race?.trackLayout;
+  // Legacy unscoped key (pre multi-account) — read-only fallback.
+  const legacy =
+    cached ??
+    screenCache.getSync<{ race?: { trackLayout?: string } }>(
+      `live-race-detail:v1:${raceId}`,
+    );
+  const layout = legacy?.race?.trackLayout;
   if (isTrackLayoutId(layout)) return { id: raceId, trackLayout: layout };
   return { id: raceId };
 }
@@ -2075,7 +2084,9 @@ function WalkScreenContent() {
   const walkCacheReadyRef = useRef(false);
   const [walkCacheReady, setWalkCacheReady] = useState(false);
 
-  const userReady = authReady && !!sessionToken && !!user?.id && stepsHydrated;
+  // Race card hydration only needs auth — do not wait for Health Connect / steps.
+  const raceReady = authReady && !!sessionToken && !!user?.id;
+  const userReady = raceReady && stepsHydrated;
   const isAutoTrackingOn =
     stepPermissionStatus === "granted" || usingRealTracking;
   const stepsInitializing =
@@ -2298,6 +2309,18 @@ function WalkScreenContent() {
     status?: string | null;
   };
   const [registeredUpcomingRooms, setRegisteredUpcomingRooms] = useState<WalkUpcomingRoom[]>([]);
+  /** Distinguish loading from confirmed empty for Next Race / Live Race card. */
+  const [registeredUpcomingStatus, setRegisteredUpcomingStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+
+  // Drop Next Race cards immediately on logout so stale old-user rows never linger.
+  useEffect(() => {
+    if (!user?.id) {
+      setRegisteredUpcomingRooms([]);
+      setRegisteredUpcomingStatus("idle");
+    }
+  }, [user?.id]);
 
   // Group count for the compact "Groups" entry — reuse Groups screen cache only (no new API).
   const GROUPS_CACHE_KEY = "screen_groups_overview";
@@ -2355,22 +2378,55 @@ function WalkScreenContent() {
   }, []);
 
   const fetchRegisteredUpcomingRooms = useCallback(async () => {
+    const uid = user?.id;
+    if (!uid) return;
+    setRegisteredUpcomingStatus((prev) => (prev === "ready" ? prev : "loading"));
     try {
-      const [{ loadLeftUnlimitedChallengeIds, clearUnlimitedChallengeLeft }, res, unlimitedWaiting, unlimitedMine] =
-        await Promise.all([
-          import("@/utils/hostedUnlimitedCache"),
-          authFetch("/api/rooms/available?tab=upcoming"),
-          fetchAvailableUnlimitedChallenges({ viewerUserId: user?.id }),
-          fetchMyOpenUnlimitedChallenges({ viewerUserId: user?.id }),
-        ]);
+      const [
+        { loadLeftUnlimitedChallengeIds, clearUnlimitedChallengeLeft },
+        res,
+        unlimitedWaiting,
+        unlimitedMine,
+        classicActive,
+      ] = await Promise.all([
+        import("@/utils/hostedUnlimitedCache"),
+        authFetch("/api/rooms/available?tab=upcoming"),
+        fetchAvailableUnlimitedChallenges({ viewerUserId: uid }),
+        fetchMyOpenUnlimitedChallenges({ viewerUserId: uid }),
+        import("@/services/stepProgressCoordinator").then((m) =>
+          m.fetchMyActiveInProgressRaces(uid).catch(() => []),
+        ),
+      ]);
+      // Logged out (or switched) while in flight — drop stale results.
+      if (store.getState().auth.user?.id !== uid) return;
       const unlimited = mergeUpcomingRoomsById(unlimitedWaiting, unlimitedMine);
-      if (!res.ok && unlimited.length === 0) return;
+      if (!res.ok && unlimited.length === 0 && classicActive.length === 0) return;
       const leftIds = await loadLeftUnlimitedChallengeIds();
+      if (store.getState().auth.user?.id !== uid) return;
       const data = res.ok
         ? ((await res.json()) as { rooms?: WalkUpcomingRoom[] })
         : { rooms: [] as WalkUpcomingRoom[] };
       const now = Date.now();
-      const uid = user?.id;
+      const classicAsWalk: WalkUpcomingRoom[] = classicActive.map((r) => ({
+        room_id: r.id,
+        challenge_type:
+          r.entryType === "coins_battle"
+            ? "coins_battle"
+            : r.type === "sponsored"
+              ? "sponsored"
+              : r.entryType === "paid_usd" || r.entryType === "cash"
+                ? "paid_usd"
+                : "free",
+        entry_fee: 0,
+        coin_entry_amount: 0,
+        max_players: Math.max(1, r.currentPlayers ?? 10),
+        registered_count: Math.max(1, r.currentPlayers ?? 1),
+        scheduled_start_at: r.startedAt ?? new Date().toISOString(),
+        target_steps: r.targetSteps ?? 1000,
+        host_user_id: r.isHost ? uid : "",
+        current_user_registered: true,
+        status: r.status || "in_progress",
+      }));
       const unlimitedAsWalk: WalkUpcomingRoom[] = unlimited.map((u) => {
         const serverReg = !!u.current_user_registered;
         if (serverReg && leftIds.has(u.room_id)) {
@@ -2386,12 +2442,14 @@ function WalkScreenContent() {
           scheduled_start_at: u.scheduled_start_at,
           target_steps: u.target_steps,
           host_user_id: u.host_user_id,
-          // Prefer server membership over stale local left marks.
           current_user_registered: serverReg || (!leftIds.has(u.room_id) && !!u.current_user_registered),
           status: u.status,
         };
       });
-      const merged = mergeUpcomingRoomsById(data.rooms ?? [], unlimitedAsWalk);
+      const merged = mergeUpcomingRoomsById(
+        mergeUpcomingRoomsById(data.rooms ?? [], unlimitedAsWalk),
+        classicAsWalk,
+      );
       const nextRaceRooms = merged.filter((r) => {
         // Only drop leftIds when server did not confirm membership.
         const isUnlimited = isUnlimitedGoalChallenge({
@@ -2431,6 +2489,7 @@ function WalkScreenContent() {
           isUnlimited
         );
       });
+      if (store.getState().auth.user?.id !== uid) return;
       console.log(
         `[NextRace] unlimited=${unlimited.length} mine=${unlimitedMine.length} merged=${merged.length} nextRace=${nextRaceRooms.length} uid=${uid ?? "none"}`,
         unlimited.map((u) => ({
@@ -2442,30 +2501,32 @@ function WalkScreenContent() {
         })),
       );
       setRegisteredUpcomingRooms(nextRaceRooms);
+      setRegisteredUpcomingStatus("ready");
     } catch {
       /* keep previous Next Race list */
+      setRegisteredUpcomingStatus((prev) => (prev === "ready" ? prev : "error"));
     }
   }, [user?.id]);
 
-  // Wait for auth/steps hydration — early focus often runs before userReady and
-  // authFetch fails silently, leaving View All at 0 until the next focus.
+  // Wait for auth only — Live Race card must not wait for steps/HC/Pusher.
   useFocusEffect(useCallback(() => {
-    if (!userReady) return;
+    if (!raceReady) return;
     void fetchRegisteredUpcomingRooms();
     void syncGroupCountFromCache();
     void refreshAvailableChallengeCount();
   }, [
-    userReady,
+    raceReady,
     fetchRegisteredUpcomingRooms,
     syncGroupCountFromCache,
     refreshAvailableChallengeCount,
   ]));
 
-  // When Walk stays focused while userReady flips true, also refresh once.
+  // When Walk stays focused while raceReady flips true, also refresh once.
   useEffect(() => {
-    if (!userReady) return;
+    if (!raceReady) return;
+    void fetchRegisteredUpcomingRooms();
     void refreshAvailableChallengeCount();
-  }, [userReady, refreshAvailableChallengeCount]);
+  }, [raceReady, fetchRegisteredUpcomingRooms, refreshAvailableChallengeCount]);
 
   useEffect(() => {
     const ch = subscribeToChannel("public-rooms-available");
@@ -3029,6 +3090,11 @@ function WalkScreenContent() {
   }, [challengeStatuses, registeredUpcomingRooms, scheduledRoomResult, sponsoredStatus]);
 
   const nextRaceCards = useMemo((): NextRaceCard[] => {
+    // While the first active-race fetch is in flight, keep prior cards (or none)
+    // — never treat "loading" as confirmed empty.
+    if (registeredUpcomingStatus === "loading" && registeredUpcomingRooms.length === 0) {
+      return [];
+    }
     const cards: NextRaceCard[] = [];
     const coveredRaceIds = new Set<string>();
     const now = nextRaceNowMs;
@@ -3156,12 +3222,12 @@ function WalkScreenContent() {
         status === "settling" ||
         status === "in_progress";
       const hasStarted = startMs <= now || isLiveStatus;
-      // Classic: only before start. Unlimited: also while actively racing.
-      if (!isUnlimitedRoom && hasStarted) continue;
+      // Classic + Unlimited: keep Live Race card while the race is actively running.
+      if (!isUnlimitedRoom && hasStarted && !isLiveStatus) continue;
 
       const msLeft = startMs - now;
       const phase: RaceStartingSoonPhase =
-        isUnlimitedRoom && hasStarted
+        hasStarted && (isUnlimitedRoom || isLiveStatus)
           ? "racing"
           : msLeft < 10 * 60_000
             ? "join_window"
@@ -3201,19 +3267,24 @@ function WalkScreenContent() {
             openSponsoredWaitingRoom(room.room_id);
             return;
           }
-          setActiveRace(room.room_id, isHost);
-          joinRace(joinFee, isUnlimitedRoom ? 0 : room.max_players, isHost);
-          if (phase === "racing" && isUnlimitedRoom) {
+          // Live race (classic or Unlimited): go straight to Live Detail.
+          if (phase === "racing") {
             router.push({
               pathname: "/race/live-detail",
               params: {
                 id: room.room_id,
-                challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
-                capacityMode: "unlimited",
+                ...(isUnlimitedRoom
+                  ? {
+                      challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
+                      capacityMode: "unlimited",
+                    }
+                  : {}),
               },
             });
             return;
           }
+          setActiveRace(room.room_id, isHost);
+          joinRace(joinFee, isUnlimitedRoom ? 0 : room.max_players, isHost);
           navToMatchmaking({
             raceId: room.room_id,
             isHost,
@@ -3249,6 +3320,7 @@ function WalkScreenContent() {
     openChallengeWaitingRoom,
     openSponsoredWaitingRoom,
     registeredUpcomingRooms,
+    registeredUpcomingStatus,
     scheduledRoomResult,
     setActiveRace,
     sponsoredStatus,
@@ -3618,7 +3690,7 @@ function WalkScreenContent() {
     pendingRaceActionRef.current = null;
     if (!ar) return;
     if (ar.room_status === "in_progress") {
-      router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(ar.room_id) });
+      router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(ar.room_id, user?.id) });
     } else {
       navToMatchmaking({
         raceId: ar.room_id,
@@ -4433,7 +4505,7 @@ function WalkScreenContent() {
                   if (showSponsoredBlockAlert()) return;
                   const s = cs?.status;
                   if (s === "user_hosting_active" || s === "user_joined_active") {
-                    if (cs?.raceId) router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(cs.raceId) });
+                    if (cs?.raceId) router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(cs.raceId, user?.id) });
                     return;
                   }
                   if (s === "user_hosting_waiting" || s === "user_joined_waiting") {
@@ -4494,7 +4566,7 @@ function WalkScreenContent() {
                 const role = cs?.isHost ? "host" : cs?.isParticipant ? "participant" : "none";
                 if (s === "user_hosting_active" || s === "user_joined_active") {
                   if (__DEV__) console.log(`[Walk] Opening challenge: mode=${modeLabel} entry_fee=${opt.fee} status=${s} role=${role} raceId=${cs?.raceId ?? "none"} route=live-detail defaultView=race_track`);
-                  if (cs?.raceId) router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(cs.raceId) });
+                  if (cs?.raceId) router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(cs.raceId, user?.id) });
                   return;
                 }
                 if (s === "user_hosting_waiting" || s === "user_joined_waiting") {
@@ -4585,7 +4657,7 @@ function WalkScreenContent() {
               if (showSponsoredBlockAlert()) return;
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               if (premS === "user_hosting_active" || premS === "user_joined_active") {
-                if (premCs?.raceId) router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(premCs.raceId) });
+                if (premCs?.raceId) router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(premCs.raceId, user?.id) });
                 return;
               }
               if (premS === "user_hosting_waiting" || premS === "user_joined_waiting") {
@@ -4746,10 +4818,10 @@ function WalkScreenContent() {
 
             const handleSponsoredPress = () => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-              if (isRacing && ss)     { router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(ss.eventId) }); return; }
+              if (isRacing && ss)     { router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(ss.eventId, user?.id) }); return; }
               if (isJoinWin && ss)    { openSponsoredWaitingRoom(ss.eventId); return; }
               if (isRegistered && ss) { openSponsoredWaitingRoom(ss.eventId); return; }
-              if (isWatchLive && ss)  { router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(ss.eventId) }); return; }
+              if (isWatchLive && ss)  { router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(ss.eventId, user?.id) }); return; }
               router.push("/sponsored-events");
             };
 
@@ -5488,7 +5560,7 @@ function WalkScreenContent() {
           setAlreadyHostingModal(null);
           if (!info?.raceId) return;
           if (info.isActiveRace) {
-            router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(info.raceId) });
+            router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(info.raceId, user?.id) });
           } else {
             setActiveRace(info.raceId, true);
             joinRace(entryKeyToFee(info.entryKey), 10, true);

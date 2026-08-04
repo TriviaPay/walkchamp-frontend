@@ -78,7 +78,10 @@ export async function startHybridLiveDailyDisplay(): Promise<boolean> {
 
   _anchorToday = Math.max(
     0,
-    Math.floor(store.getState().raceProgress.todaySteps),
+    Math.floor(
+      store.getState().raceProgress.verifiedTodaySteps ??
+        store.getState().raceProgress.todaySteps,
+    ),
   );
   _sessionFloor = 0;
   _floored = false;
@@ -86,6 +89,8 @@ export async function startHybridLiveDailyDisplay(): Promise<boolean> {
 
   _sub = ped.watchStepCount((result) => {
     if (!stepProviderManager.usesVerifiedStepSource()) return;
+    // Never advance provisional for a stale / missing Redux user (post-logout leak).
+    if (!store.getState().raceProgress.userId) return;
 
     const raw = Math.max(0, Math.floor(result.steps));
     const since = Date.now() - _startedAt;
@@ -97,7 +102,10 @@ export async function startHybridLiveDailyDisplay(): Promise<boolean> {
       _floored = true;
       _anchorToday = Math.max(
         _anchorToday,
-        Math.floor(store.getState().raceProgress.todaySteps),
+        Math.floor(
+          store.getState().raceProgress.verifiedTodaySteps ??
+            store.getState().raceProgress.todaySteps,
+        ),
       );
       return;
     }
@@ -121,6 +129,17 @@ export async function startHybridLiveDailyDisplay(): Promise<boolean> {
     const next = Math.max(redux, _anchorToday + delta);
     if (next <= redux) return;
 
+    const verified = Math.max(
+      0,
+      Math.floor(store.getState().raceProgress.verifiedTodaySteps ?? 0),
+    );
+    // Never publish a bad sensor absolute when HC already has today's total.
+    if (verified > 0 && next > verified + 250) {
+      _anchorToday = verified;
+      _sessionFloor = raw;
+      return;
+    }
+
     updateStepProgressFromRealSource({
       todaySteps: next,
       // Provisional daily display only — never label as Health Connect verified.
@@ -129,6 +148,31 @@ export async function startHybridLiveDailyDisplay(): Promise<boolean> {
       updatedAt: new Date().toISOString(),
       fromWatch: true,
     });
+
+    // Background Unlimited provisional live path (Redis) — never walk/steps verified.
+    try {
+      const rpUser = store.getState().raceProgress.userId;
+      if (!rpUser) return;
+      const {
+        getBlockedUnlimitedChallengeIds,
+        getUnlimitedLiveContext,
+      } = require("@/services/unlimitedRaceProgressGuard") as typeof import("@/services/unlimitedRaceProgressGuard");
+      const { uploadUnlimitedProvisionalProgress } = require(
+        "@/services/unlimitedProvisionalProgressApi",
+      ) as typeof import("@/services/unlimitedProvisionalProgressApi");
+      for (const challengeId of getBlockedUnlimitedChallengeIds()) {
+        const ctx = getUnlimitedLiveContext(challengeId);
+        if (!ctx?.challengeDayKey) continue;
+        void uploadUnlimitedProvisionalProgress({
+          challengeId,
+          challengeDayKey: ctx.challengeDayKey,
+          timezone: ctx.timezone,
+          provisionalCumulativeSteps: next,
+        });
+      }
+    } catch {
+      /* optional */
+    }
   });
 
   if (__DEV__) {

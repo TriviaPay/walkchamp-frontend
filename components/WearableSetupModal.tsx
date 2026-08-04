@@ -499,10 +499,10 @@ export default function WearableSetupModal({
       <View style={[ws.iconCircle, { backgroundColor: colors.destructive + "18" }]}>
         <Feather name="alert-circle" size={36} color={colors.destructive} />
       </View>
-      <Text style={[ws.title, { color: colors.foreground }]}>Step Tracking Unavailable</Text>
+      <Text style={[ws.title, { color: colors.foreground }]}>Verified Step Tracking Unavailable</Text>
       <Text style={[ws.desc, { color: colors.mutedForeground }]}>
         {hybridDailyHcOnly()
-          ? "Health Connect is required for verified step tracking on this device."
+          ? "This device does not currently support the verified health integration required for prize-based challenges. You may still see provisional live movement when your phone’s step sensor is available, but those steps cannot be used for qualification or prizes."
           : "Step tracking is not available on this device."}
       </Text>
       {!hybridDailyHcOnly() ? (

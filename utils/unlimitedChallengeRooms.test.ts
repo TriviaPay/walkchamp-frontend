@@ -140,4 +140,43 @@ const merged = mergeUpcomingRoomsById(
 assert.equal(merged.length, 2);
 assert.equal(merged.find((r) => r.room_id === "a")?.title, "A2");
 
+// Classic Free / Cash race rooms must never normalize as Unlimited.
+assert.equal(
+  normalizeUnlimitedChallengeToUpcomingRoom({
+    id: "free-1",
+    title: "Free Walk",
+    entryType: "Free",
+    visibility: "public",
+    scheduled_start_at: "2026-08-04T05:00:00.000Z",
+    targetSteps: 5000,
+    maxPlayers: 10,
+  }),
+  null,
+);
+assert.equal(
+  normalizeUnlimitedChallengeToUpcomingRoom({
+    id: "cash-1",
+    title: "Cash Race",
+    entryType: "$5",
+    entryFeeCents: 500,
+    visibility: "public",
+    scheduled_start_at: "2026-08-04T05:00:00.000Z",
+    max_players: 10,
+  }),
+  null,
+);
+assert.equal(
+  extractUnlimitedChallengeRows({
+    rooms: [
+      {
+        id: "free-2",
+        entryType: "Free",
+        visibility: "public",
+        scheduled_start_at: "2026-08-04T05:00:00.000Z",
+      },
+    ],
+  }).length,
+  0,
+);
+
 console.log("unlimitedChallengeRooms.test.ts: ok");

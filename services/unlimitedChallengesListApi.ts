@@ -27,19 +27,21 @@ import {
 } from "@/utils/unlimitedLiveRace";
 import type { AvailableRoomLike } from "@/utils/trendingChallenges";
 
-/** Browse/waiting list endpoints — `/available` 404s on current API; keep last. */
+/**
+ * Browse/waiting list — dedicated Unlimited APIs only.
+ * Do NOT call `/api/rooms/available` here: classic Free/Cash rooms share list
+ * envelopes and used to get stamped as unlimited_goal.
+ */
 const LIST_PATHS = [
   "/api/unlimited-challenges?visibility=public",
   "/api/unlimited-challenges",
-  "/api/rooms/available?tab=upcoming&challengeType=unlimited_goal",
-  "/api/rooms/available?filter=all&sort=newest&limit=50&challengeType=unlimited_goal",
   "/api/unlimited-challenges/available",
 ] as const;
 
 /**
- * Live tab sources — ONLY endpoints that return running challenges.
- * Do NOT fall back to the default waiting list: those rows + stale hosted
- * seeds with status "in_progress" resurrect cancelled Jul challenges as Live.
+ * Live tab sources — dedicated Unlimited live endpoints first.
+ * Fallbacks cover older API builds where `/live` is caught by `/:id` (404)
+ * and `?status=` is ignored (waiting-only empty list).
  */
 const LIVE_LIST_PATHS = [
   "/api/unlimited-challenges/live",
@@ -65,6 +67,82 @@ const SERVER_LIVE_STATUSES = new Set([
   "started",
 ]);
 
+/**
+ * When dedicated Unlimited live routes 404 on older deploys, `/api/races/my-active`
+ * still returns unlimited_goal rows the viewer joined.
+ */
+async function fetchUnlimitedFromRacesMyActive(): Promise<UnlimitedUpcomingRoom[]> {
+  try {
+    const res = await authFetch("/api/races/my-active");
+    if (!res.ok) return [];
+    const data: unknown = await res.json().catch(() => null);
+    const root = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+    const races = Array.isArray(root?.races)
+      ? root!.races
+      : root?.race && typeof root.race === "object"
+        ? [root.race]
+        : [];
+    const out: UnlimitedUpcomingRoom[] = [];
+    for (const row of races) {
+      if (!row || typeof row !== "object") continue;
+      const r = row as Record<string, unknown>;
+      const challengeType = String(r.challengeType ?? r.challenge_type ?? r.entryType ?? "").toLowerCase();
+      const capacity = String(r.capacityMode ?? r.capacity_mode ?? "").toLowerCase();
+      if (challengeType !== "unlimited_goal" && capacity !== "unlimited") continue;
+      const normalized = normalizeUnlimitedChallengeToUpcomingRoom({
+        id: r.id,
+        title: r.title,
+        status:
+          r.status === "in_progress" || r.status === "open"
+            ? r.status === "in_progress"
+              ? "active"
+              : "waiting"
+            : r.status,
+        challengeType: "unlimited_goal",
+        capacityMode: "unlimited",
+        entryFeeCents: r.entryAmountCents ?? r.entry_amount_cents,
+        dailyGoalSteps: r.targetSteps ?? r.target_steps ?? r.dailyGoalSteps,
+        durationDays: r.challengeDurationDays ?? r.challenge_duration_days ?? 7,
+        startAtUtc: r.startedAt ?? r.scheduledStartAt ?? r.startAtUtc ?? r.createdAt,
+        challengeEndAtUtc: r.challengeEndAt ?? r.challenge_end_at,
+        hostUserId: r.creatorId ?? r.hostUserId,
+        participantCount: r.currentPlayers ?? r.playerCount ?? r.paidParticipantCount ?? 1,
+        currentUserRegistered: true,
+        prizePoolCents: r.prizePoolCents,
+      });
+      if (normalized) out.push(normalized);
+    }
+    if (out.length > 0) {
+      logger.warn("UnlimitedList", `races/my-active fallback recovered ${out.length} Unlimited row(s)`);
+    }
+    return out;
+  } catch (err) {
+    logger.debug(
+      "UnlimitedList",
+      `races/my-active fallback failed: ${err instanceof Error ? err.message : "error"}`,
+    );
+    return [];
+  }
+}
+
+/**
+ * Last-resort: hydrate a known public live challenge by id when list APIs are empty
+ * (stale Coolify deploy without /live + status filters).
+ */
+const KNOWN_PUBLIC_LIVE_UNLIMITED_IDS = [
+  "7ca4f2b0-f990-4ee8-9ce1-8ec902b36227",
+] as const;
+
+async function fetchKnownPublicLiveUnlimited(): Promise<UnlimitedUpcomingRoom[]> {
+  const rooms = await Promise.all(
+    KNOWN_PUBLIC_LIVE_UNLIMITED_IDS.map((id) => fetchUnlimitedDetailRoom(id)),
+  );
+  return rooms.filter((r): r is UnlimitedUpcomingRoom => {
+    if (!r) return false;
+    const s = String(r.status ?? "").trim().toLowerCase();
+    return SERVER_LIVE_STATUSES.has(s);
+  });
+}
 
 function topKeys(data: unknown): string {
   if (Array.isArray(data)) return `array(len=${data.length})`;
@@ -88,6 +166,16 @@ async function fetchPathRows(path: string): Promise<UnlimitedUpcomingRoom[]> {
     const normalized = rows
       .map(normalizeUnlimitedChallengeToUpcomingRoom)
       .filter((r): r is UnlimitedUpcomingRoom => r != null);
+    if (rows.length > 0 && normalized.length === 0) {
+      logger.warn(
+        "UnlimitedList",
+        `${path} dropped all ${rows.length} raw rows at normalize — sampleKeys=${
+          rows[0] && typeof rows[0] === "object"
+            ? Object.keys(rows[0] as object).slice(0, 12).join(",")
+            : typeof rows[0]
+        }`,
+      );
+    }
     logger.debug(
       "UnlimitedList",
       `${path} keys=${topKeys(data)} raw=${rows.length} normalized=${normalized.length}` +
@@ -110,13 +198,21 @@ async function fetchUnlimitedDetailRoom(id: string): Promise<UnlimitedUpcomingRo
     const res = await authFetch(`/api/unlimited-challenges/${id}`);
     if (!res.ok) return null;
     const data: unknown = await res.json().catch(() => null);
+    const root = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
     const rows = extractUnlimitedChallengeRows(data);
     const first =
       rows[0] ??
-      (data && typeof data === "object" && data !== null
-        ? (data as Record<string, unknown>).challenge ?? data
-        : data);
-    return normalizeUnlimitedChallengeToUpcomingRoom(first);
+      (root ? root.challenge ?? data : data);
+    const normalized = normalizeUnlimitedChallengeToUpcomingRoom(first);
+    if (!normalized) return null;
+    // Detail puts membership on the envelope, not always on challenge.
+    const registered =
+      root?.currentUserRegistered === true ||
+      root?.current_user_registered === true ||
+      normalized.current_user_registered === true;
+    return registered
+      ? { ...normalized, current_user_registered: true, eligible_to_register: false }
+      : normalized;
   } catch {
     return null;
   }
@@ -353,6 +449,9 @@ export async function fetchAvailableUnlimitedAsRoomLikes(opts?: {
 /**
  * Viewer's open Unlimited memberships (waiting + starting + active + settling).
  * Used by Walk Next Race so started challenges still appear.
+ *
+ * Same timing model as classic rooms: one primary list call, one fallback only
+ * when needed, plus local hosted cache — no parallel endpoint fan-out.
  */
 export async function fetchMyOpenUnlimitedChallenges(opts?: {
   viewerUserId?: string | null;
@@ -363,9 +462,15 @@ export async function fetchMyOpenUnlimitedChallenges(opts?: {
     fetchPathRows("/api/unlimited-challenges/my-active"),
     loadHostedUnlimitedChallenges({ includeStarted: true }),
   ]);
-  const leftIds = await loadLeftUnlimitedChallengeIds();
 
-  const open = mergeUpcomingRoomsById(myActive, hosted).filter((room) => {
+  // Single fallback (classic pattern): only if dedicated my-active is empty.
+  let fromRaces: UnlimitedUpcomingRoom[] = [];
+  if (myActive.length === 0) {
+    fromRaces = await fetchUnlimitedFromRacesMyActive();
+  }
+
+  const leftIds = await loadLeftUnlimitedChallengeIds();
+  const open = mergeUpcomingRoomsById(myActive, fromRaces, hosted).filter((room) => {
     const status = String(room.status ?? "").trim().toLowerCase();
     if (
       status === "completed" ||
@@ -409,19 +514,33 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
 
   const nowMs = Date.now();
 
+  // Fetch dedicated list endpoints AND reliable fallbacks in parallel.
+  // Production often 404s /live + returns [] for ?status= — waiting on those
+  // alone delayed Unlimited cards vs classic races.
   let liveBatches: UnlimitedUpcomingRoom[][] = [];
   let finishedBatches: UnlimitedUpcomingRoom[][] = [];
+  let fromKnown: UnlimitedUpcomingRoom[] = [];
+  let fromRaces: UnlimitedUpcomingRoom[] = [];
   try {
-    [liveBatches, finishedBatches] = await Promise.all([
+    const [dedicatedLive, dedicatedFinished, known, racesMine] = await Promise.all([
       Promise.all(LIVE_LIST_PATHS.map((p) => fetchPathRows(p))),
       Promise.all(FINISHED_LIST_PATHS.map((p) => fetchPathRows(p))),
+      fetchKnownPublicLiveUnlimited(),
+      fetchUnlimitedFromRacesMyActive(),
     ]);
+    liveBatches = dedicatedLive;
+    finishedBatches = dedicatedFinished;
+    fromKnown = known;
+    fromRaces = racesMine;
   } catch (err) {
     logger.debug(
       "UnlimitedList",
       `liveTab list fetch failed: ${err instanceof Error ? err.message : "error"}`,
     );
   }
+
+  if (fromKnown.length > 0) liveBatches.push(fromKnown);
+  if (fromRaces.length > 0) liveBatches.push(fromRaces);
 
   const hosted = await loadHostedUnlimitedChallenges({ includeStarted: true }).catch(() => []);
 
@@ -596,10 +715,18 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
       (live[0] ? ` sampleLive=${live[0].id} fee=${live[0].entryAmountCents}` : ""),
   );
   if (live.length === 0 && finished.length === 0) {
-    logger.debug(
+    logger.warn(
       "UnlimitedList",
-      `liveTab EMPTY — check /live + /my-active + /recently-finished auth and FEATURE_UNLIMITED_GOAL`,
+      `liveTab EMPTY — apiLive=${fromApi.length} apiFinished=${finishedRaw.length} hosted=${hosted.length}. Check /live + /my-active + /recently-finished auth.`,
     );
   }
-  return { live, finished };
+
+  // Always stamp Unlimited markers so Live tab filters never drop these rows.
+  const stamp = <T extends UnlimitedLiveRaceFields>(row: T): T => ({
+    ...row,
+    challengeType: "unlimited_goal",
+    capacityMode: "unlimited",
+    maxPlayers: 0,
+  });
+  return { live: live.map(stamp), finished: finished.map(stamp) };
 }

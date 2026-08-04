@@ -188,7 +188,7 @@ interface WalkContextType {
    * Call this before reading leaderboard data so the server has the freshest step count.
    * Resolves when the sync completes (or fails silently). Never throws.
    */
-  triggerSync: () => Promise<void>;
+  triggerSync: (opts?: { force?: boolean }) => Promise<void>;
   /** Re-query today's steps from the active health provider (HC / HealthKit / sensor). */
   refreshTodaySteps: (opts?: {
     rehydrateBackend?: boolean;

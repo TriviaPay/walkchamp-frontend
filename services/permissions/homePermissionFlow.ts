@@ -122,7 +122,15 @@ export function waitForHomeStepSetupPhase(): Promise<void> {
   });
 }
 
-/** Reset on logout / account switch so the next login can show HC setup again. */
+/** Soft reset on logout — clear in-progress wizard only; do not force re-prompt. */
+export function resetHomePermissionFlowSoft(): void {
+  _stepSetupInProgress = false;
+  _pendingOpenStepSetup = false;
+  _pushReadyListeners = [];
+  // Keep _stepPhaseDone and _shellReady so granted-device logins do not reopen HC.
+}
+
+/** Full reset (tests / hard restart). Prefer soft reset on account switch. */
 export function resetHomePermissionFlow(): void {
   _stepPhaseDone = false;
   _stepSetupInProgress = false;

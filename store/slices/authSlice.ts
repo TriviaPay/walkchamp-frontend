@@ -13,6 +13,11 @@ import {
 import { dbProfileToUserProfile } from "@/utils/profileMapper";
 import type { UserProfile } from "@/store/types";
 import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
+import { bumpAuthGeneration } from "@/services/authSessionGeneration";
+
+function nextAuthGeneration(state: AuthState): void {
+  state.authGeneration = bumpAuthGeneration();
+}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -24,6 +29,8 @@ interface AuthState {
   refreshToken: string | null;
   user: UserProfile | null;
   error: string | null;
+  /** Monotonic generation — stale async work must match before applying state. */
+  authGeneration: number;
 }
 
 const initialState: AuthState = {
@@ -34,6 +41,7 @@ const initialState: AuthState = {
   refreshToken: null,
   user: null,
   error: null,
+  authGeneration: 0,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -177,6 +185,7 @@ const authSlice = createSlice({
         refreshToken: string;
       }>,
     ) {
+      nextAuthGeneration(state);
       state.sessionToken = action.payload.sessionToken;
       state.refreshToken = action.payload.refreshToken;
       state.user = action.payload.user;
@@ -192,6 +201,7 @@ const authSlice = createSlice({
         refreshToken: string;
       }>,
     ) {
+      nextAuthGeneration(state);
       state.isAuthenticated = true;
       state.isLoading = false;
       state.sessionToken = action.payload.sessionToken;
@@ -217,6 +227,7 @@ const authSlice = createSlice({
     },
     // Synchronous local logout (no API call)
     localLogout(state) {
+      nextAuthGeneration(state);
       state.isAuthenticated = false;
       state.isRestoringSession = false;
       state.isLoading = false;
@@ -233,6 +244,7 @@ const authSlice = createSlice({
         state.isRestoringSession = true;
       })
       .addCase(restoreSession.fulfilled, (state, action) => {
+        nextAuthGeneration(state);
         state.isRestoringSession = false;
         state.sessionToken = action.payload.sessionToken;
         state.refreshToken = action.payload.refreshToken;
@@ -242,6 +254,7 @@ const authSlice = createSlice({
       .addCase(restoreSession.rejected, (state) => {
         // Clear hydrateFromCache leftovers — otherwise user.id remains set while
         // isAuthenticated is false and permission prompts fire on the sign-in screen.
+        nextAuthGeneration(state);
         state.isRestoringSession = false;
         state.isAuthenticated = false;
         state.isLoading = false;
@@ -256,6 +269,7 @@ const authSlice = createSlice({
         state.error = null;
       })
       .addCase(signIn.fulfilled, (state, action) => {
+        nextAuthGeneration(state);
         state.isLoading = false;
         state.sessionToken = action.payload.sessionToken;
         state.refreshToken = action.payload.refreshToken;
@@ -269,6 +283,7 @@ const authSlice = createSlice({
       })
       // signOut
       .addCase(signOut.fulfilled, (state) => {
+        nextAuthGeneration(state);
         state.isAuthenticated = false;
         state.sessionToken = null;
         state.refreshToken = null;
@@ -276,6 +291,7 @@ const authSlice = createSlice({
         state.error = null;
       })
       .addCase(signOut.rejected, (state) => {
+        nextAuthGeneration(state);
         state.isAuthenticated = false;
         state.sessionToken = null;
         state.refreshToken = null;

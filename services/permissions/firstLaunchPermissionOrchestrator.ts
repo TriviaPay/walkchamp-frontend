@@ -138,6 +138,18 @@ export async function runFirstLaunchPermissionFlow(options: {
       }
       await markPermissionEducationShown(userId);
       markHomeStepSetupPhaseDone();
+      // Activate silent tracking without opening WearableSetup.
+      try {
+        const { stepProviderManager } = await import(
+          "@/services/steps/stepProviderManager"
+        );
+        await stepProviderManager.initialize();
+        void import("@/services/raceProgressNotificationService")
+          .then((m) => m.raceProgressNotificationService.flushPendingStart())
+          .catch(() => {});
+      } catch {
+        /* non-fatal */
+      }
       return;
     }
 

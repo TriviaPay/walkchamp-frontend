@@ -336,6 +336,8 @@ const LiveBoardRow = memo(function LiveBoardRow({
   stepDelta,
   onPress,
   showDivider,
+  /** When true, always show the numeric place (never 🥇🥈🥉) — used for pinned host. */
+  forceNumericRank = false,
 }: {
   participant: LiveBoardRowParticipant;
   rank: number;
@@ -352,6 +354,7 @@ const LiveBoardRow = memo(function LiveBoardRow({
   stepDelta: number;
   onPress?: () => void;
   showDivider: boolean;
+  forceNumericRank?: boolean;
 }) {
   const isForfeited = participant.status === "forfeited";
   const ac = isForfeited ? "#FF4444" : (participant.avatarColor ?? "#00E676");
@@ -361,8 +364,14 @@ const LiveBoardRow = memo(function LiveBoardRow({
     isCompleted && !isForfeited && (participant.prizeAmount ?? 0) > 0
       ? `$${participant.prizeAmount!.toFixed(2)}`
       : null;
-  const medal = getTopThreeRankAccent(rank);
-  const rankMedals = ["🥇", "🥈", "🥉"];
+  // Medals only for true 1/2/3 in the toppers list — never on the pinned host row
+  // (otherwise host@#2 shows 🥈 above 🥇 and the board reads silver→gold→bronze).
+  const showMedalIcon =
+    !forceNumericRank &&
+    !isForfeited &&
+    (rank === 1 || rank === 2 || rank === 3);
+  const medal = showMedalIcon ? getTopThreeRankAccent(rank) : null;
+  const rankMedals = ["🥇", "🥈", "🥉"] as const;
   const rankLabelColor = isForfeited
     ? "#FF4444"
     : medal ?? mutedForeground;
@@ -385,7 +394,7 @@ const LiveBoardRow = memo(function LiveBoardRow({
       ]}
     >
       <Text style={[styles.boardMedal, { color: rankLabelColor }]}>
-        {isForfeited ? "✕" : rank <= 3 ? rankMedals[rank - 1] : String(rank)}
+        {isForfeited ? "✕" : showMedalIcon ? rankMedals[rank - 1]! : String(rank)}
       </Text>
       <View
         style={[

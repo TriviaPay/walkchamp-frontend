@@ -1,30 +1,103 @@
-# Step source of truth (frontend)
+# Step source of truth (Walk Champ)
+
+Walk Champ separates **verified daily health totals** from **provisional live movement** so daily steps, live animation, backend records, and prize settlement stay consistent.
+
+## Two lanes
+
+| Lane | Android | iOS | Purpose |
+|------|---------|-----|---------|
+| **Verified daily** | Health Connect | HealthKit | Walk tab authority, Unlimited qualification/settlement, reconciliation, prizes |
+| **Provisional live** | `TYPE_STEP_COUNTER` | `CMPedometer` | Responsive live UI (Classic races + Unlimited live experience when HC/HK is delayed) |
+
+> Health Connect / HealthKit are authoritative for verified totals, qualification, and prizes.
+> Phone sensors provide provisional live movement only and must never independently decide winners, qualification, or prizes.
+
+**Provisional is not verified.** A compatible Health Connect writer/provider may be required when HC has no step records — Samsung Health is recommended on Samsung devices but is **not** mandatory for every Android user. Sensor tracking continues for live UX even when verification is delayed or unavailable.
+
+## Mode matrix
+
+| Mode | Live display | Verified authority | Live write | Walk sync while live |
+|------|--------------|--------------------|------------|----------------------|
+| **Walk tab** | Prefer verified; may show provisional estimate | HC/HK | `POST /api/walk/steps` → `step_daily_totals` | Active |
+| **Unlimited** | `displayedLiveSteps = max(verifiedToday, provisionalToday)` | HC/HK | Verified: `/api/walk/steps`; Provisional: `/api/unlimited-challenges/:id/live-progress` (Redis only) | **Always active** |
+| **Classic Free / Coins / Cash / Sponsored** | Sensor `raceSteps` | HC/HK reconciliation at end | `POST /api/races/:id/progress` | **Paused** |
 
 ## Canonical stores
 
 | Data | Canonical source | Scope |
 |------|------------------|--------|
-| Daily walk steps (sync + notification) | Redux `raceProgress.todaySteps` via `stepProgressCoordinator` | `userId` + `localDate` |
-| Live race steps (sync + notification) | Redux `raceProgress.raceSteps` via coordinator / race sync buffer | `userId` + `raceId` |
-| Pedometer lifecycle / permissions / HC | `WalkContext` | session |
-| Race phase / UI machine | `RaceContext` | race session |
+| Daily walk steps (verified) | Redux `verifiedTodaySteps` → `POST /api/walk/steps` → `step_daily_totals` | `userId` + day key |
+| Display alias `todaySteps` | `max(verified, provisional)` | Walk UI + daily FGS (91002) |
+| Unlimited provisional live | Redis `ul:prov:{challengeId}:{userId}:{challengeDayKey}` | Never labeled verified |
+| Classic live race steps | Redux `raceSteps` → `POST /api/races/:id/progress` | `userId` + `raceId` |
+| Unlimited settlement | Verified/reconciled HC/HK only | Challenge day windows |
 
-## Hybrid lanes (required)
+## Unlimited dual-lane fields
 
-| Lane | Field | Used for |
-|------|-------|----------|
-| Verified daily | `verifiedTodaySteps` | `/api/walk/steps`, rewards authority |
-| Provisional daily | `provisionalSensorTodaySteps` | Walk UI + 91002 only |
-| Display alias | `todaySteps` = max(verified, provisional) | Compatibility UI only |
-| Live race | `raceSteps` + `liveRaceSessionId` | Provisional race upload |
-| Verified race | `verifiedRaceSteps` | HC/HK race-window query |
-| Backend accepted | `backendAcceptedLiveSteps` | Server-acked live total |
-| Backend reconciled | `backendReconciledSteps` / `finalAuthoritativeSteps` | Final result only when `reconciliationStatus === "finalized"` |
+```text
+verifiedTodaySteps      — HC/HK daily authority (qualification)
+provisionalTodaySteps   — sensor estimate for live UX
+displayedLiveSteps      — max(verified, provisional) — display/realtime only
+totalChallengeSteps     — accumulated finalized days + today's verified (not provisional)
+raceSteps               — classic race session only — never Unlimited progress
+```
 
-**Forbidden:** `max(local, verified, reconciled)` as final race authority.
+Do **not** blind-`Math.max` across different semantic fields or challenge days.
+Do **not** map `totalChallengeSteps` → today’s `currentSteps`.
+Do **not** write sensor values into `step_daily_totals` as verified.
 
+## Write paths
 
-## Dead / legacy
+### Unlimited must NOT
 
-- Redux `walkSlice` was write-only and is removed from the store.
-- React Query `useTodayWalkSteps` is for goal/cache reads only — not a competing write path.
+- Call `RaceContext.startRace()` / `resumeLiveRace` / `setActiveRace` / `ensureActiveRaceInStore`
+- Pause `POST /api/walk/steps`
+- POST the Unlimited ID to `/api/races/:id/progress`
+- Store progress in `race_participants.currentSteps`
+- Mark daily completion / prizes from provisional alone
+
+### Unlimited must
+
+- Keep Walk sync active while Live Detail is open
+- Keep TYPE_STEP_COUNTER / CMPedometer provisional tracking for live UX
+- Upload provisional via `/api/unlimited-challenges/:id/live-progress` (Redis + realtime)
+- Merge realtime by `challengeId + participantId + challengeDayKey`
+- Own ongoing notification via **daily steps FGS (91002)**, not classic `race_live`
+
+### Classic must (unchanged)
+
+- Sensor baseline → provisional race delta → progress buffer → `/api/races/:id/progress`
+- Pause walk sync while racing
+- Reconcile with HC/HK before final prizes
+
+## Realtime payload (Unlimited)
+
+Additive fields:
+
+- `displayedLiveSteps`, `provisionalTodaySteps`, `verifiedTodaySteps`
+- `progressSource`: `provisional` | `verified` | `mixed`
+- `verificationStatus`: `verified` | `syncing` | `verification_delayed` | `unavailable`
+
+Peers may animate from `displayedLiveSteps`. Qualification / badges / prizes use verified fields only.
+
+## Device capability
+
+Central resolver: `services/steps/stepTrackingCapability.ts`
+
+- HC ready without external writer → verified + provisional
+- HC available but no records → provisional continues; writer/provider may be required
+- HC unsupported → provisional only; paid challenges blocked
+- No sensor and no HC → no fake progress; paid challenges blocked
+
+## Day identity
+
+- Walk tab: user’s resolved timezone calendar day
+- Unlimited: challenge locked IANA timezone / `challengeDayKey`
+- Same-day merges are monotonic per lane; new day may accept `0`
+
+## Forbidden
+
+- Treating provisional as verified daily progress
+- Summing absolute HC/HK readings from multiple devices instead of absolute daily upsert
+- Using multi-day totals or raw boot counters as today’s Unlimited progress
+- Routing Unlimited through classic race progress

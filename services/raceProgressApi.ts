@@ -77,6 +77,23 @@ export async function postRaceProgress(
   trackingSessionId?: string,
 ): Promise<RaceProgressResult> {
   try {
+    // Unlimited challenges use POST /api/walk/steps — never classic race progress.
+    const { isUnlimitedClassicProgressBlocked } = require(
+      "@/services/unlimitedRaceProgressGuard",
+    ) as typeof import("@/services/unlimitedRaceProgressGuard");
+    if (isUnlimitedClassicProgressBlocked(raceId)) {
+      logger.debug(
+        "RaceSteps",
+        `skipped unlimited challengeId=${raceId} (walk sync owns progress)`,
+      );
+      return {
+        ok: true,
+        acceptedSteps: Math.max(0, Math.floor(steps)),
+        skipped: true,
+        code: "UNLIMITED_USES_WALK_STEPS",
+      };
+    }
+
     // Allow verified health-store sources OR live device-sensor sources.
     // Reject unknown / other legacy aliases that are not live-race approved.
     if (stepSource != null) {
