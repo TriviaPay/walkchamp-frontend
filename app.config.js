@@ -97,6 +97,11 @@ module.exports = () => {
       (process.env.NODE_ENV === "production" ? "production" : "development"),
     // Always embed so second-machine APKs / offline installs still have auth.
     descopeProjectId,
+    // Bake Unlimited flag into native extra so Live/Walk still work if Metro
+    // env inlining misses EXPO_PUBLIC_ENABLE_UNLIMITED_GOAL at runtime.
+    enableUnlimitedGoal:
+      String(process.env.EXPO_PUBLIC_ENABLE_UNLIMITED_GOAL || "").toLowerCase() ===
+      "true",
   };
   return { expo };
 };

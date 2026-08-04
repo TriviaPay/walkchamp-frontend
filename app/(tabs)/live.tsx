@@ -65,35 +65,57 @@ function calcFreeCoins(rank: number, isTied: boolean, tieGroupSize: number): num
   return FREE_TIER_COINS[rank - 1] ?? 0;
 }
 
-const FILTERS = ["All", "My Races", "Free", "Coins Battle", "Cash Challenges", "Sponsored Events"] as const;
+const FILTERS = [
+  "All",
+  "My Races",
+  "Free",
+  "Coins Battle",
+  "Cash Challenges",
+  "Unlimited Challenges",
+  "Sponsored Events",
+] as const;
 type FilterType = (typeof FILTERS)[number];
 
 const CASH_ENTRY_TYPES = new Set([
   "paid_1", "paid_3", "paid_5", "paid_usd", "cash", "usd",
-  "$1", "$3", "$5", "USD Entry", "unlimited_goal",
+  "$1", "$3", "$5", "USD Entry",
 ]);
 
-/** All paid cash entry races (any amount), excluding sponsored / free / coins. */
+/** Unlimited Daily Goal challenges (capacityMode / challengeType / entry label). */
+export function isUnlimitedChallengeRace(
+  race: Pick<LiveRace, "entryType" | "type"> & {
+    challengeType?: string | null;
+    capacityMode?: string | null;
+    maxPlayers?: number;
+  },
+): boolean {
+  if (race.challengeType === "unlimited_goal") return true;
+  if (race.capacityMode === "unlimited") return true;
+  if ((race.entryType ?? "").trim().toLowerCase() === "unlimited_goal") return true;
+  if (typeof race.maxPlayers === "number" && race.maxPlayers <= 0) {
+    // Live Unlimited cards use maxPlayers: 0 — only trust with a cash $N label.
+    const et = (race.entryType ?? "").trim();
+    if (/^\$\d+(\.\d+)?$/.test(et) || et === "USD Entry") return true;
+  }
+  return false;
+}
+
+/** All paid cash entry races (any amount), excluding sponsored / free / coins / Unlimited. */
 export function isCashChallengeRace(
   race: Pick<LiveRace, "entryType" | "type"> & {
     entryAmountCents?: number;
     challengeType?: string | null;
     capacityMode?: string | null;
+    maxPlayers?: number;
   },
 ): boolean {
   if (race.type === "sponsored") return false;
+  if (isUnlimitedChallengeRace(race)) return false;
   const et = (race.entryType ?? "").trim();
   const lower = et.toLowerCase();
   if (lower === "free" || lower === "coins_battle" || lower === "coins battle") return false;
-  if (
-    race.challengeType === "unlimited_goal" ||
-    race.capacityMode === "unlimited" ||
-    lower === "unlimited_goal"
-  ) {
-    return true;
-  }
   if (CASH_ENTRY_TYPES.has(et) || CASH_ENTRY_TYPES.has(lower)) return true;
-  // Dynamic $N labels from Unlimited / paid USD (e.g. "$30")
+  // Dynamic $N labels from paid USD (e.g. "$30")
   if (/^\$\d+(\.\d+)?$/.test(et)) return true;
   if ((race.entryAmountCents ?? 0) > 0 && lower !== "free" && lower !== "coins_battle") return true;
   return false;
@@ -205,8 +227,9 @@ function computeElapsed(startedAt: string | null, completedAt?: string | null): 
 
 function filterToParam(filter: FilterType): string {
   if (filter === "All") return "all";
-  // "My Races" reuses the normal live-races payload and filters it locally.
+  // "My Races" / Unlimited reuse the normal live-races payload and filter locally.
   if (filter === "My Races") return "all";
+  if (filter === "Unlimited Challenges") return "all";
   if (filter === "Free") return "free";
   if (filter === "Coins Battle") return "coins_battle";
   if (filter === "Cash Challenges") return "cash_challenges";
@@ -216,11 +239,17 @@ function filterToParam(filter: FilterType): string {
 
 function applyChipFilter(races: LiveRace[], filter: FilterType): LiveRace[] {
   if (filter === "Cash Challenges") return races.filter(isCashChallengeRace);
+  if (filter === "Unlimited Challenges") return races.filter(isUnlimitedChallengeRace);
   return races;
 }
 
 function shouldMergeUnlimitedLive(filter: FilterType): boolean {
-  return filter === "All" || filter === "My Races" || filter === "Cash Challenges";
+  return (
+    filter === "All" ||
+    filter === "My Races" ||
+    filter === "Cash Challenges" ||
+    filter === "Unlimited Challenges"
+  );
 }
 
 function mergeLiveById(primary: LiveRace[], extra: LiveRace[]): LiveRace[] {
@@ -326,34 +355,68 @@ async function fetchLiveChallenges(
   ok: boolean;
 }> {
   const fp = filterToParam(filter);
+  const unlimitedOnly = filter === "Unlimited Challenges";
   try {
+    const unlimitedPromise = shouldMergeUnlimitedLive(filter)
+      ? import("@/services/unlimitedChallengesListApi")
+          .then((m) =>
+            m.fetchLiveUnlimitedChallenges({ viewerUserId: opts?.viewerUserId }),
+          )
+          .catch(() => ({ live: [] as LiveRace[], finished: [] as LiveRace[] }))
+      : Promise.resolve({ live: [] as LiveRace[], finished: [] as LiveRace[] });
+
+    // Unlimited tab: skip classic races — only Unlimited live + finished.
     const [liveRes, finishedRes, unlimited] = await Promise.all([
-      authFetch(`/api/races?status=in_progress&filter=${encodeURIComponent(fp)}&limit=30`),
-      authFetch(`/api/races?status=completed&filter=${encodeURIComponent(fp)}&limit=${FINISHED_PAGE_SIZE}&offset=0`),
-      shouldMergeUnlimitedLive(filter)
-        ? import("@/services/unlimitedChallengesListApi")
-            .then((m) =>
-              m.fetchLiveUnlimitedChallenges({ viewerUserId: opts?.viewerUserId }),
-            )
-            .catch(() => ({ live: [] as LiveRace[], finished: [] as LiveRace[] }))
-        : Promise.resolve({ live: [] as LiveRace[], finished: [] as LiveRace[] }),
+      unlimitedOnly
+        ? Promise.resolve(null)
+        : authFetch(`/api/races?status=in_progress&filter=${encodeURIComponent(fp)}&limit=30`),
+      unlimitedOnly
+        ? Promise.resolve(null)
+        : authFetch(
+            `/api/races?status=completed&filter=${encodeURIComponent(fp)}&limit=${FINISHED_PAGE_SIZE}&offset=0`,
+          ),
+      unlimitedPromise,
     ]);
-    if (!liveRes.ok && !finishedRes.ok && unlimited.live.length === 0 && unlimited.finished.length === 0) {
+
+    if (
+      (!liveRes || !liveRes.ok) &&
+      (!finishedRes || !finishedRes.ok) &&
+      unlimited.live.length === 0 &&
+      unlimited.finished.length === 0
+    ) {
       return { live: [], finished: [], ok: false };
     }
-    const liveData = liveRes.ok ? await liveRes.json() as { races?: Record<string, unknown>[] } : { races: [] };
-    const finishedData = finishedRes.ok ? await finishedRes.json() as { races?: Record<string, unknown>[] } : { races: [] };
+    const liveData =
+      liveRes && liveRes.ok
+        ? ((await liveRes.json()) as { races?: Record<string, unknown>[] })
+        : { races: [] };
+    const finishedData =
+      finishedRes && finishedRes.ok
+        ? ((await finishedRes.json()) as { races?: Record<string, unknown>[] })
+        : { races: [] };
     const seenIds = new Set<string>();
-    let live = applyChipFilter((liveData.races ?? []).filter((r) => {
-      if (seenIds.has(r.id as string)) return false;
-      seenIds.add(r.id as string);
-      return true;
-    }).map(mapRaceRow), filter);
-    let finished = applyChipFilter((finishedData.races ?? []).filter((r) => {
-      if (seenIds.has(r.id as string)) return false;
-      seenIds.add(r.id as string);
-      return true;
-    }).map(mapRaceRow), filter);
+    let live = applyChipFilter(
+      (liveData.races ?? [])
+        .filter((r) => {
+          if (seenIds.has(r.id as string)) return false;
+          seenIds.add(r.id as string);
+          return true;
+        })
+        .map(mapRaceRow)
+        .filter((r) => !isUnlimitedChallengeRace(r)),
+      filter,
+    );
+    let finished = applyChipFilter(
+      (finishedData.races ?? [])
+        .filter((r) => {
+          if (seenIds.has(r.id as string)) return false;
+          seenIds.add(r.id as string);
+          return true;
+        })
+        .map(mapRaceRow)
+        .filter((r) => !isUnlimitedChallengeRace(r)),
+      filter,
+    );
 
     if (shouldMergeUnlimitedLive(filter)) {
       const ulLive = applyChipFilter(unlimited.live as LiveRace[], filter);
@@ -1492,29 +1555,23 @@ export default function LiveTab() {
       // First app launch after a kill: warm mem from disk (fast, ~20 ms)
       if (!cached) cached = await screenCache.get<{ live: LiveRace[]; finished: LiveRace[] }>(cacheKey);
       if (cached) {
-        // Never paint stale Unlimited cards from disk/mem cache — cancelled challenges
-        // were surviving here after server cancel. Classic races can still show instantly.
-        const liveSansUnlimited = cached.live.filter(
-          (r) =>
-            r.challengeType !== "unlimited_goal" &&
-            r.capacityMode !== "unlimited" &&
-            r.entryType !== "unlimited_goal",
-        );
-        const finishedSansUnlimited = cached.finished.filter(
-          (r) =>
-            r.challengeType !== "unlimited_goal" &&
-            r.capacityMode !== "unlimited" &&
-            r.entryType !== "unlimited_goal",
-        );
+        // Unlimited Challenges tab: keep Unlimited cards from cache (validated below).
+        // Other tabs: strip Unlimited from paint so cancelled ghosts don't flash.
+        const keepUnlimited = activeFilter === "Unlimited Challenges";
+        const liveSansUnlimited = keepUnlimited
+          ? cached.live
+          : cached.live.filter((r) => !isUnlimitedChallengeRace(r));
+        const finishedSansUnlimited = keepUnlimited
+          ? cached.finished
+          : cached.finished.filter((r) => !isUnlimitedChallengeRace(r));
         const strippedUnlimited =
-          cached.live.length > liveSansUnlimited.length ||
-          cached.finished.length > finishedSansUnlimited.length;
+          !keepUnlimited &&
+          (cached.live.length > liveSansUnlimited.length ||
+            cached.finished.length > finishedSansUnlimited.length);
         setLiveChallenges(liveSansUnlimited);
         setFinishedChallenges(finishedSansUnlimited);
         setFinishedOffset(FINISHED_PAGE_SIZE);
         setHasMoreFinished(finishedSansUnlimited.length >= FINISHED_PAGE_SIZE);
-        // If we hid Unlimited cards pending server truth, keep the spinner until
-        // fetch finishes — avoids empty Live for ~1 min then ghost cards reappearing.
         if (!strippedUnlimited) {
           setLoading(false);
         }
@@ -1978,11 +2035,18 @@ export default function LiveTab() {
               <Text style={[st.emptyText, { color: colors.mutedForeground }]}>
                 {activeFilter === "Cash Challenges"
                   ? "No cash challenges available right now."
-                  : "No races found."}
+                  : activeFilter === "Unlimited Challenges"
+                    ? "No Unlimited Challenges right now."
+                    : "No races found."}
               </Text>
               {activeFilter === "Cash Challenges" && (
                 <Text style={[st.emptySubText, { color: colors.mutedForeground }]}>
                   Host or join a cash challenge when one becomes available.
+                </Text>
+              )}
+              {activeFilter === "Unlimited Challenges" && (
+                <Text style={[st.emptySubText, { color: colors.mutedForeground }]}>
+                  Live and recently finished Unlimited Challenges will show here.
                 </Text>
               )}
               <TouchableOpacity style={st.refreshBtn} onPress={load}>

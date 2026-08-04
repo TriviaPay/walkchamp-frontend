@@ -514,7 +514,50 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
       { ...room, status: "active" },
       nowMs,
     );
-    if (!mapped) continue;
+    if (!mapped) {
+      // Last-resort card so active Unlimited never vanishes from Live.
+      live.push({
+        id: room.room_id,
+        title: room.title || "Unlimited Challenge",
+        type: "paid",
+        entryType:
+          room.entry_fee > 0
+            ? Number.isInteger(room.entry_fee)
+              ? `$${room.entry_fee}`
+              : `$${room.entry_fee.toFixed(2)}`
+            : "USD Entry",
+        playerCount: Math.max(1, room.registered_count ?? 1),
+        maxPlayers: 0,
+        targetSteps: room.target_steps || 0,
+        status: "in_progress",
+        prizePool: (room.entry_fee || 0) * Math.max(1, room.registered_count ?? 1),
+        prizePoolCents: Math.round(
+          (room.entry_fee || 0) * 100 * Math.max(1, room.registered_count ?? 1),
+        ),
+        entryAmountCents: Math.round((room.entry_fee || 0) * 100),
+        coinEntryAmount: 0,
+        spectatorCount: 0,
+        startedAt: room.scheduled_start_at,
+        completedAt: null,
+        createdAt: room.scheduled_start_at ?? new Date(nowMs).toISOString(),
+        players: [],
+        trackLayout: room.selected_track_theme_id || "bg",
+        reactionCounts: {},
+        elapsedSeconds: room.scheduled_start_at
+          ? Math.max(
+              0,
+              Math.floor((nowMs - new Date(room.scheduled_start_at).getTime()) / 1000),
+            )
+          : 0,
+        challengeEndAt: room.challenge_end_at,
+        challengeDurationDays: room.challenge_duration_days ?? 0,
+        hostUserId: room.host_user_id || null,
+        currentUserParticipating: !!room.current_user_registered,
+        challengeType: "unlimited_goal" as const,
+        capacityMode: "unlimited" as const,
+      });
+      continue;
+    }
     live.push(mapped);
   }
 
@@ -549,8 +592,14 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
 
   logger.debug(
     "UnlimitedList",
-    `liveTab live=${live.length} finished=${finished.length} apiLive=${fromApi.length} apiFinished=${finishedRaw.length} hostedWas=${hosted.length} serverLive=${serverLiveIds.size}` +
+    `liveTab live=${live.length} finished=${finished.length} apiLive=${fromApi.length} apiFinished=${finishedRaw.length} hostedWas=${hosted.length} serverLive=${serverLiveIds.size} flag=on` +
       (live[0] ? ` sampleLive=${live[0].id} fee=${live[0].entryAmountCents}` : ""),
   );
+  if (live.length === 0 && finished.length === 0) {
+    logger.debug(
+      "UnlimitedList",
+      `liveTab EMPTY — check /live + /my-active + /recently-finished auth and FEATURE_UNLIMITED_GOAL`,
+    );
+  }
   return { live, finished };
 }

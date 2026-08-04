@@ -54,12 +54,41 @@ export const ENABLE_CASH_CHALLENGES =
 /**
  * Unlimited Daily Goal Challenge (`unlimited_goal`) frontend surfaces.
  *
- * Off by default. Enable with:
- *   EXPO_PUBLIC_ENABLE_UNLIMITED_GOAL=true
- * Instant rollback without env rebuild: flip the hard switch below to `false`.
+ * Default: ON (product is live). Disable with:
+ *   EXPO_PUBLIC_ENABLE_UNLIMITED_GOAL=false
+ * Also baked into expo.extra.enableUnlimitedGoal via app.config.js.
+ * Instant rollback: flip the hard switch below to `false`.
  */
+function readUnlimitedGoalFlag(): boolean {
+  const env = String(process.env.EXPO_PUBLIC_ENABLE_UNLIMITED_GOAL ?? "")
+    .trim()
+    .toLowerCase();
+  if (env === "false" || env === "0" || env === "no") return false;
+  if (env === "true" || env === "1" || env === "yes") return true;
+  try {
+    // Lazy require — avoids circular imports in Node test runners.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Constants = require("expo-constants").default as {
+      expoConfig?: { extra?: { enableUnlimitedGoal?: boolean } };
+      manifest?: { extra?: { enableUnlimitedGoal?: boolean } };
+      manifest2?: { extra?: { expoClient?: { extra?: { enableUnlimitedGoal?: boolean } } } };
+    };
+    const extra =
+      Constants.expoConfig?.extra ??
+      Constants.manifest?.extra ??
+      Constants.manifest2?.extra?.expoClient?.extra;
+    if (typeof extra?.enableUnlimitedGoal === "boolean") {
+      return extra.enableUnlimitedGoal;
+    }
+  } catch {
+    /* expo-constants unavailable */
+  }
+  // Default ON so Live/Walk Unlimited still works if Metro missed env inlining.
+  return true;
+}
+
 export const ENABLE_UNLIMITED_GOAL_FRONTEND =
-  process.env.EXPO_PUBLIC_ENABLE_UNLIMITED_GOAL === "true" &&
+  readUnlimitedGoalFlag() &&
   // Local hard switch — flip to false for instant revert without env vars.
   true;
 
