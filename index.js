@@ -9,6 +9,8 @@ LogBox.ignoreLogs([
   "JavaScriptContextHolder",
   "runtime not ready",
   "Uncaught (in promise",
+  // Dev-only: Fast Refresh / remount can briefly stack expo-router linking handlers.
+  "configured linking in multiple places",
 ]);
 
 function isBenignStartupError(msg) {
@@ -18,7 +20,9 @@ function isBenignStartupError(msg) {
     msg.includes("[runtime not ready]") ||
     msg.includes("runtime not ready") ||
     // Hermes: livekit leave/abort before Event polyfill (see voiceService)
-    msg.includes("Property 'Event' doesn't exist")
+    msg.includes("Property 'Event' doesn't exist") ||
+    // Dev remount / duplicate alias deep-links (manifest fix is the real cure)
+    msg.includes("configured linking in multiple places")
   );
 }
 

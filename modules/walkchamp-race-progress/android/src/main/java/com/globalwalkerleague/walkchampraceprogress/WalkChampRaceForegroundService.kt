@@ -1067,10 +1067,20 @@ class WalkChampRaceForegroundService : Service() {
 
   private fun startSensorTrackingIfNeeded() {
     if (!isTrackingActive()) return
-    Log.d(TAG, "[WalkChampFGS] starting native step engine (Health Connect via JS only)")
     val engine = ensureSensorEngine()
-    // Re-register on every ensure — OEM batching often pauses listeners after background.
-    engine.restart()
+    // Do NOT restart on every watchdog (~15s). Unregister/re-register on Samsung A-series
+    // can stall TYPE_STEP_COUNTER delivery while the sticky FGS still looks healthy.
+    // restart() only when the listener is down or hardware samples go stale.
+    if (!engine.isListenerRegistered()) {
+      Log.d(TAG, "[WalkChampFGS] starting native step engine (listener was down)")
+      engine.start()
+      return
+    }
+    val staleMs = System.currentTimeMillis() - engine.currentState().updatedAt
+    if (staleMs >= 30_000L) {
+      Log.d(TAG, "[WalkChampFGS] sensor staleMs=$staleMs — restart listener once")
+      engine.restart()
+    }
   }
 
   private fun stopSensorTrackingIfIdle() {

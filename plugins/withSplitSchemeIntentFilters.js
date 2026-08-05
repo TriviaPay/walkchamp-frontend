@@ -13,10 +13,6 @@ function isViewBrowsableFilter(filter) {
   );
 }
 
-function cloneFilter(filter) {
-  return JSON.parse(JSON.stringify(filter));
-}
-
 function splitMultiSchemeFilters(filters) {
   const split = [];
   for (const filter of filters) {
@@ -59,22 +55,20 @@ function applySplitToManifest(androidManifest) {
     mainActivity["intent-filter"] ?? [],
   );
 
-  const deepLinkFilters = mainActivity["intent-filter"]
-    .filter(isViewBrowsableFilter)
-    .map(cloneFilter);
+  // Deep links MUST live only on MainActivity (singleTask). Mirroring VIEW /
+  // BROWSABLE onto every progress launcher alias makes React Navigation /
+  // expo-router think linking is configured in multiple places and can spawn
+  // conflicting activity entries. Aliases keep MAIN/LAUNCHER only.
   const aliases = mainApplication["activity-alias"] ?? [];
   const targetActivity = mainActivity.$["android:name"];
 
   for (const alias of aliases) {
     if (alias.$?.["android:targetActivity"] !== targetActivity) continue;
-    if (alias.$?.["android:name"] === "ViewPermissionUsageActivity") continue;
+    const name = alias.$?.["android:name"] ?? "";
+    if (name.endsWith("ViewPermissionUsageActivity")) continue;
 
     const aliasFilters = alias["intent-filter"] ?? [];
-    const nonDeepLink = aliasFilters.filter((f) => !isViewBrowsableFilter(f));
-    alias["intent-filter"] = [
-      ...nonDeepLink,
-      ...deepLinkFilters.map(cloneFilter),
-    ];
+    alias["intent-filter"] = aliasFilters.filter((f) => !isViewBrowsableFilter(f));
   }
 
   return androidManifest;
@@ -82,7 +76,8 @@ function applySplitToManifest(androidManifest) {
 
 /**
  * Runs in the finalized mod phase (after expo-dev-client + alternate icons).
- * Splits combined scheme intent-filters and mirrors exp+walkchamp onto aliases.
+ * Splits combined scheme intent-filters on MainActivity and strips mirrored
+ * deep-link VIEW filters from launcher activity-aliases.
  */
 function withSplitSchemeIntentFilters(config) {
   return withFinalizedMod(config, [

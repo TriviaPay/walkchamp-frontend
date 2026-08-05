@@ -20,8 +20,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Runs independently of React Native / Health Connect so background notifications
  * keep updating from real hardware events while the FGS is alive.
  *
- * Only emits updates when the hardware counter produces a new real value.
- * Never increments steps artificially — if no sensor event arrives, the count stays flat.
+ * Samsung A-series often freezes TYPE_STEP_COUNTER (same cumulative value, staleMs↑)
+ * while the FGS is still alive. TYPE_STEP_DETECTOR still fires per step in that
+ * window — we bridge those events into today/race totals until the counter catches up.
  */
 class NativeStepSensorEngine(
   private val context: Context,
@@ -29,6 +30,10 @@ class NativeStepSensorEngine(
 ) {
   companion object {
     private const val TAG = "StepFGS"
+    /** Counter considered frozen — start counting TYPE_STEP_DETECTOR. */
+    private const val COUNTER_STALE_MS = 5_000L
+    /** Min gap between detector-bridge increments (noise / burst protection). */
+    private const val DETECTOR_MIN_GAP_MS = 180L
   }
 
   private var sensorManager: SensorManager? = null
@@ -41,6 +46,10 @@ class NativeStepSensorEngine(
   private var pendingKnownTodaySteps: Int? = null
   private var state: NativeStepState = NativeStepState.load(context) ?: defaultState()
   private var lastDetectorFlushMs = 0L
+  /** Steps accepted from TYPE_STEP_DETECTOR while TYPE_STEP_COUNTER is frozen. */
+  private var detectorBridgeSteps = 0
+  private var lastCounterAdvanceMs = System.currentTimeMillis()
+  private var lastDetectorBridgeMs = 0L
 
   init {
     if (state.sensorTotal > 0f) {
@@ -58,16 +67,17 @@ class NativeStepSensorEngine(
           handleSensorTotal(sensorTotal)
         }
         Sensor.TYPE_STEP_DETECTOR -> {
-          // Individual steps wake OEM batching while the screen is off.
-          // Only flush the primary TYPE_STEP_COUNTER listener — never register a
-          // second temporary listener (that can stall delivery on Samsung/OEM builds).
           val now = System.currentTimeMillis()
-          if (now - lastDetectorFlushMs < 200L) return
-          lastDetectorFlushMs = now
-          try {
-            sensorManager?.flush(this)
-          } catch (_: Exception) {
+          if (now - lastDetectorFlushMs >= 200L) {
+            lastDetectorFlushMs = now
+            // Prefer waking a batched TYPE_STEP_COUNTER first.
+            try {
+              sensorManager?.flush(this)
+            } catch (_: Exception) {
+            }
           }
+          // Samsung: counter can stay flat for minutes while detector still fires.
+          maybeBridgeDetectorStep(now)
         }
       }
     }
@@ -85,6 +95,8 @@ class NativeStepSensorEngine(
   }
 
   fun isSensorSupported(): Boolean = stepCounterSensor != null
+
+  fun isListenerRegistered(): Boolean = registered.get()
 
   fun hasActivityRecognitionPermission(): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
@@ -140,11 +152,13 @@ class NativeStepSensorEngine(
     if (!needsSample) return
 
     // Blocking one-shot on a distinct listener instance. Primary listener stays registered.
-    val counter = NativeStepCounterReader.readCumulativeCounter(context, 800L)
+    // Samsung A-series often needs >1s to flush a batched TYPE_STEP_COUNTER while screen-off.
+    val timeoutMs = if (forceSample || staleMs >= 8_000L) 2_500L else 800L
+    val counter = NativeStepCounterReader.readCumulativeCounter(context, timeoutMs)
     if (counter != null) {
       Log.d(
         TAG,
-        "[StepFGS] pollHardwareNow sample counter=$counter force=$forceSample staleMs=$staleMs",
+        "[StepFGS] pollHardwareNow sample counter=$counter force=$forceSample staleMs=$staleMs timeoutMs=$timeoutMs",
       )
       handleSensorTotal(counter.toFloat())
     } else if (staleMs >= 8_000L) {
@@ -153,6 +167,12 @@ class NativeStepSensorEngine(
       try {
         sensorManager?.flush(stepListener)
       } catch (_: Exception) {
+      }
+      // One more longer sample after restart — common Samsung screen-off pattern.
+      val retry = NativeStepCounterReader.readCumulativeCounter(context, 3_000L)
+      if (retry != null) {
+        Log.d(TAG, "[StepFGS] pollHardwareNow retry sample counter=$retry")
+        handleSensorTotal(retry.toFloat())
       }
     }
   }
@@ -496,23 +516,64 @@ class NativeStepSensorEngine(
     NativeStepState.save(context, state)
   }
 
+  /**
+   * When TYPE_STEP_COUNTER is frozen (Samsung batching), each TYPE_STEP_DETECTOR
+   * event is one real step. Bridge into display totals; reconcile when counter moves.
+   */
+  private fun maybeBridgeDetectorStep(now: Long) {
+    if (lastSensorTotal < 0f) return
+    val counterStaleMs = now - lastCounterAdvanceMs
+    if (counterStaleMs < COUNTER_STALE_MS) return
+    if (now - lastDetectorBridgeMs < DETECTOR_MIN_GAP_MS) return
+    lastDetectorBridgeMs = now
+    detectorBridgeSteps += 1
+    Log.d(
+      TAG,
+      "[StepFGS] detector bridge +1 counterStaleMs=$counterStaleMs bridge=$detectorBridgeSteps frozenTotal=$lastSensorTotal",
+    )
+    applyTotalsFromHardware(
+      sensorTotal = lastSensorTotal,
+      bridgeSteps = detectorBridgeSteps,
+      forceEmit = true,
+    )
+  }
+
   private fun handleSensorTotal(sensorTotal: Float) {
     ensureCurrentDay()
 
     if (lastSensorTotal >= 0f && sensorTotal < lastSensorTotal) {
       Log.w(TAG, "[StepFGS] sensor reset detected last=$lastSensorTotal now=$sensorTotal — resetting baselines")
+      detectorBridgeSteps = 0
       resetBaselinesSafely(sensorTotal)
       return
     }
-    lastSensorTotal = sensorTotal
 
+    val prevTotal = lastSensorTotal
+    val hardwareDelta =
+      if (prevTotal >= 0f) (sensorTotal - prevTotal).toInt().coerceAtLeast(0) else 0
+    if (hardwareDelta > 0) {
+      lastCounterAdvanceMs = System.currentTimeMillis()
+      // Counter caught up — drop bridge steps already covered by hardware.
+      detectorBridgeSteps = (detectorBridgeSteps - hardwareDelta).coerceAtLeast(0)
+    }
+    lastSensorTotal = sensorTotal
+    applyTotalsFromHardware(
+      sensorTotal = sensorTotal,
+      bridgeSteps = detectorBridgeSteps,
+      forceEmit = false,
+    )
+  }
+
+  private fun applyTotalsFromHardware(
+    sensorTotal: Float,
+    bridgeSteps: Int,
+    forceEmit: Boolean,
+  ) {
     val verifiedDaily = !isDeviceSensorSource(state.stepSource)
 
-    // Always advance todaySteps from TYPE_STEP_COUNTER for live Walk UI + ongoing
-    // notification. Health Connect remains the verified sync source in JS; when HC
-    // is delayed/empty (common on Samsung), sensor keeps the display moving.
-    // Keep stepSource as health_connect/healthkit when verified — do not flip to
-    // android_step_counter (that would claim sensor is the verified daily source).
+    // Always advance todaySteps from TYPE_STEP_COUNTER (+ detector bridge when frozen)
+    // for live Walk UI + ongoing notification. Health Connect remains the verified
+    // sync source in JS. Keep stepSource as health_connect/healthkit when verified.
     var dailyBaseline = state.dailyBaseline
     if (dailyBaseline == null) {
       val known = pendingKnownTodaySteps
@@ -531,7 +592,7 @@ class NativeStepSensorEngine(
       )
     }
     val todaySteps = maxOf(
-      (sensorTotal - dailyBaseline).toInt().coerceAtLeast(0),
+      (sensorTotal - dailyBaseline).toInt().coerceAtLeast(0) + bridgeSteps.coerceAtLeast(0),
       state.todaySteps,
     )
 
@@ -546,14 +607,22 @@ class NativeStepSensorEngine(
         state = state.copy(raceBaseline = raceBaseline)
         Log.d(TAG, "[StepFGS] raceBaseline=$raceBaseline from sensorTotal=$sensorTotal")
       }
-      maxOf((sensorTotal - raceBaseline).toInt().coerceAtLeast(0), state.raceSteps)
+      maxOf(
+        (sensorTotal - raceBaseline).toInt().coerceAtLeast(0) + bridgeSteps.coerceAtLeast(0),
+        state.raceSteps,
+      )
     } else {
       state.raceSteps
     }
 
     val prevToday = state.todaySteps
     val prevRace = state.raceSteps
-    if (todaySteps == prevToday && raceSteps == prevRace && state.sensorTotal == sensorTotal) {
+    if (
+      !forceEmit &&
+      todaySteps == prevToday &&
+      raceSteps == prevRace &&
+      state.sensorTotal == sensorTotal
+    ) {
       return
     }
 
@@ -565,10 +634,10 @@ class NativeStepSensorEngine(
       sensorSupported = true,
       updatedAt = System.currentTimeMillis(),
     )
-    persistAndEmit(state, force = false)
+    persistAndEmit(state, force = forceEmit)
     Log.d(
       TAG,
-      "[WalkChampFGS] todaySteps=$todaySteps raceSteps=$raceSteps sensorTotal=$sensorTotal source=${state.stepSource} verifiedDaily=$verifiedDaily",
+      "[WalkChampFGS] todaySteps=$todaySteps raceSteps=$raceSteps sensorTotal=$sensorTotal bridge=$bridgeSteps source=${state.stepSource} verifiedDaily=$verifiedDaily",
     )
   }
 
@@ -576,6 +645,8 @@ class NativeStepSensorEngine(
     val today = NativeStepState.localDateString()
     if (state.localDate == today) return false
     Log.d(TAG, "[StepFGS] new day detected — resetting daily baseline")
+    detectorBridgeSteps = 0
+    lastCounterAdvanceMs = System.currentTimeMillis()
     val total = lastSensorTotal.takeIf { it >= 0f } ?: state.sensorTotal
     state = state.copy(
       localDate = today,

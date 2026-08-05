@@ -73,6 +73,7 @@
     <service android:name="com.globalwalkerleague.walkchampraceprogress.WalkChampRaceForegroundService" android:enabled="true" android:exported="false" android:foregroundServiceType="health" android:stopWithTask="false"/>
     <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTask" android:windowSoftInputMode="adjustPan" android:theme="@style/Theme.App.SplashScreen" android:exported="true" android:screenOrientation="portrait">
       <!-- LAUNCHER lives on progress activity-aliases only (dynamic home-screen icon). -->
+      <!-- Deep links only on MainActivity — do not duplicate VIEW on aliases. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
@@ -94,35 +95,11 @@
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="globalwalkerleague"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="exp+walkchamp"/>
-      </intent-filter>
     </activity-alias>
     <activity-alias android:name=".MainActivityWalkChampProgress25" android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_walk_champ_progress25" android:roundIcon="@mipmap/ic_launcher_walk_champ_progress25" android:targetActivity=".MainActivity">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="globalwalkerleague"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="exp+walkchamp"/>
       </intent-filter>
     </activity-alias>
     <activity-alias android:name=".MainActivityWalkChampProgress50" android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_walk_champ_progress50" android:roundIcon="@mipmap/ic_launcher_walk_champ_progress50" android:targetActivity=".MainActivity">
@@ -130,53 +107,17 @@
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="globalwalkerleague"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="exp+walkchamp"/>
-      </intent-filter>
     </activity-alias>
     <activity-alias android:name=".MainActivityWalkChampProgress75" android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_walk_champ_progress75" android:roundIcon="@mipmap/ic_launcher_walk_champ_progress75" android:targetActivity=".MainActivity">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="globalwalkerleague"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="exp+walkchamp"/>
-      </intent-filter>
     </activity-alias>
     <activity-alias android:name=".MainActivityWalkChampProgress100" android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_walk_champ_progress100" android:roundIcon="@mipmap/ic_launcher_walk_champ_progress100" android:targetActivity=".MainActivity">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="globalwalkerleague"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="exp+walkchamp"/>
       </intent-filter>
     </activity-alias>
     <activity-alias android:name="ViewPermissionUsageActivity" android:exported="true" android:permission="android.permission.START_VIEW_PERMISSION_USAGE" android:targetActivity=".MainActivity">
