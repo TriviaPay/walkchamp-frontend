@@ -41,6 +41,11 @@ import { authFetch } from "@/utils/authFetch";
 import { connectPusher, subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf, rs } from "@/utils/responsive";
+import {
+  FREE_TIER_COIN_REWARDS,
+  freeRaceAwardsCoinPrizes,
+  freeRaceCoinPrizePool,
+} from "@/utils/freeRaceRewards";
 import { PublicProfileModal } from "@/components/PublicProfileModal";
 import type { PublicProfileInitialData } from "@/components/PublicProfileModal";
 import { TrackThemeImageBackground, prefetchTrackThemes, prefetchTrackTheme } from "@/components/TrackThemeImage";
@@ -56,8 +61,14 @@ const MUTED        = "#8090A8";
 // can tell the row scrolls sideways. Capped so it never gets absurd on tablets.
 const CAROUSEL_CARD_W = Math.min(340, Math.round(Dimensions.get("window").width * 0.85));
 
-const FREE_TIER_COINS = [50, 30, 20];
-function calcFreeCoins(rank: number, isTied: boolean, tieGroupSize: number): number {
+const FREE_TIER_COINS = FREE_TIER_COIN_REWARDS;
+function calcFreeCoins(
+  rank: number,
+  isTied: boolean,
+  tieGroupSize: number,
+  targetSteps?: number,
+): number {
+  if (!freeRaceAwardsCoinPrizes(targetSteps)) return 0;
   if (isTied && tieGroupSize > 1) {
     const pool = FREE_TIER_COINS.slice(0, Math.min(tieGroupSize, FREE_TIER_COINS.length)).reduce((a, b) => a + b, 0);
     return Math.floor(pool / tieGroupSize);
@@ -1185,13 +1196,11 @@ function RaceCardBase({
 
   // Mirror backend numWinners: 2 players→1 winner, 3→2, 4+→3
   const numWin = race.playerCount <= 2 ? 1 : race.playerCount === 3 ? 2 : 3;
-  const totalFreeCoins = FREE_TIER_COINS.slice(0, numWin).reduce((a, b) => a + b, 0);
-  // Sponsored / Unlimited / cash show cash prize — never free-tier coin rewards.
+  const totalFreeCoins = freeRaceCoinPrizePool(race.playerCount, race.targetSteps);
+  // Sponsored / Unlimited / cash show cash prize. Free short goals have no coin pool.
   const rewardDisplay =
-    !isSponsored && !isUnlimited && race.entryType === "Free"
-      ? totalFreeCoins > 0
-        ? totalFreeCoins
-        : 50
+    !isSponsored && !isUnlimited && race.entryType === "Free" && totalFreeCoins > 0
+      ? totalFreeCoins
       : null;
   const firstPlacePrize = prizePoolDisplay;
 
@@ -1358,7 +1367,12 @@ function RaceCardBase({
             const isMe = myUsername ? p.username === myUsername : false;
             const coins =
               !isUnlimited && race.entryType === "Free" && p.rank <= numWin
-                ? calcFreeCoins(p.rank, p.isTied ?? false, p.tieGroupSize ?? 1)
+                ? calcFreeCoins(
+                    p.rank,
+                    p.isTied ?? false,
+                    p.tieGroupSize ?? 1,
+                    race.targetSteps,
+                  )
                 : 0;
             return (
               <View key={p.userId} style={st.playerRow}>

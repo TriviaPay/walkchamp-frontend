@@ -40,6 +40,8 @@ type Props = {
   /** Third chip — shown for all race types when provided. */
   prizePoolValue?: string | null;
   prizePoolColor?: string;
+  /** Override default "PRIZE POOL" label (e.g. "REWARDS" for short free races). */
+  prizePoolLabel?: string | null;
   styles: StyleBag;
 };
 
@@ -55,6 +57,7 @@ export const RaceClockInfoBar = memo(function RaceClockInfoBar({
   participantValue,
   prizePoolValue,
   prizePoolColor,
+  prizePoolLabel,
   styles: s,
 }: Props) {
   const now = useTickingNow(enabled && !isCompleted);
@@ -112,7 +115,7 @@ export const RaceClockInfoBar = memo(function RaceClockInfoBar({
   if (prizePoolValue != null && prizePoolValue !== "") {
     cards.push({
       icon: "🏆",
-      label: "PRIZE POOL",
+      label: prizePoolLabel?.trim() || "PRIZE POOL",
       value: prizePoolValue,
       color: prizePoolColor ?? "#FFD700",
     });

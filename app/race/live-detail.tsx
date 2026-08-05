@@ -46,6 +46,12 @@ import {
   isUnlimitedGoalChallenge,
 } from "@/utils/unlimitedGoal";
 import {
+  FREE_TIER_COIN_REWARDS,
+  freeRaceAwardsCoinPrizes,
+  freeRaceCoinPrizePool,
+  freeRaceWinnerSlots,
+} from "@/utils/freeRaceRewards";
+import {
   coerceUnlimitedRaceInProgress,
   mapUnlimitedDetailToLiveDetail,
   mergeUnlimitedLiveParticipants,
@@ -171,8 +177,8 @@ function accentColorForUser(userId: string, avatarColor?: string | null): string
   return FALLBACK_COLORS[h % FALLBACK_COLORS.length]!;
 }
 
-/** Coins awarded per rank in free races */
-const FREE_TIER_COINS = [50, 30, 20];
+/** @deprecated Prefer FREE_TIER_COIN_REWARDS — kept for local call sites. */
+const FREE_TIER_COINS = FREE_TIER_COIN_REWARDS;
 /** Pool the top-N coin tiers and split equally among N tied rank-1 winners. */
 function computeFreeWinnerCoins(tieCount: number): number {
   const pool = FREE_TIER_COINS
@@ -180,16 +186,9 @@ function computeFreeWinnerCoins(tieCount: number): number {
     .reduce((s, c) => s + c, 0);
   return Math.floor(pool / tieCount);
 }
-/** Number of prize-eligible winner slots for a given participant count.
- *  2  players → 1 winner
- *  3  players → 2 winners
- *  4+ players → 3 winners
- *  Must stay in sync with the backend numWinners() function in races.ts. */
+/** Number of prize-eligible winner slots — matches backend numWinners(). */
 function getWinnerCount(playerCount: number): number {
-  if (playerCount <= 1) return 0;
-  if (playerCount === 2) return 1;
-  if (playerCount === 3) return 2;
-  return 3;
+  return freeRaceWinnerSlots(playerCount);
 }
 const REACTIONS = ["🔥", "👏", "👑", "🏃", "🏆", "😮"];
 
@@ -1719,7 +1718,13 @@ function LivePrizeStrip({ race, colors }: { race: RaceData; colors: ReturnType<t
 
   const freeWinnerSlots = getWinnerCount(race.currentPlayers);
   const tiers = isFree
-    ? FREE_TIER_COINS.slice(0, freeWinnerSlots).map((c, i) => ({ icon: ["🥇","🥈","🥉"][i], label: `${c}`, isCoin: true }))
+    ? freeRaceAwardsCoinPrizes(race.targetSteps)
+      ? FREE_TIER_COINS.slice(0, freeWinnerSlots).map((c, i) => ({
+          icon: ["🥇", "🥈", "🥉"][i],
+          label: `${c}`,
+          isCoin: true,
+        }))
+      : [{ icon: "🎁", label: "Coins + Badges", isCoin: false }]
     : (race.prizeTiers ?? []).slice(0, getWinnerCount(race.currentPlayers) || 3).map((amt, i) => ({ icon: ["🥇","🥈","🥉"][i], label: `$${amt.toFixed(2)}`, isCoin: false }));
   if (!tiers.length) return null;
   return (
@@ -3212,6 +3217,7 @@ function LiveRaceDetailScreenContent() {
             mergedParts = mergeParticipantsPreservingSteps(prev, unlimited.participants, {
               raceCompleted: raceDone,
               dayAware: true,
+              viewerUserId: user?.id,
             });
             return mergedParts;
           });
@@ -3245,6 +3251,7 @@ function LiveRaceDetailScreenContent() {
             }
             mergedParts = mergeParticipantsPreservingSteps(prev, nextParts, {
               raceCompleted: raceDone,
+              viewerUserId: user?.id,
             });
             return mergedParts;
           });
@@ -3281,6 +3288,7 @@ function LiveRaceDetailScreenContent() {
               mergedParts = mergeParticipantsPreservingSteps(prev, unlimited.participants, {
                 raceCompleted: unlimited.race.status === "completed",
                 dayAware: true,
+                viewerUserId: user?.id,
               });
               return mergedParts;
             });
@@ -3535,7 +3543,10 @@ function LiveRaceDetailScreenContent() {
           mergedParts =
             prev.length === 0
               ? parts
-              : mergeParticipantsPreservingSteps(prev, parts, { raceCompleted: raceDone });
+              : mergeParticipantsPreservingSteps(prev, parts, {
+                  raceCompleted: raceDone,
+                  viewerUserId: user?.id,
+                });
           return mergedParts;
         });
         hydrateInProgressRace(racePayload.race, mergedParts);
@@ -4457,16 +4468,15 @@ function LiveRaceDetailScreenContent() {
       return { value: "Gift cards", color: "#FF9900" };
     }
     if (race.entryType === "free") {
-      if ((race.prizePool ?? 0) > 0) {
-        const p = race.prizePool;
-        return {
-          value: "$" + (p % 1 === 0 ? p.toFixed(0) : p.toFixed(2)),
-          color: "#FFD700",
-        };
+      // Backend only awards free-race coins when targetSteps >= 1000.
+      // Short goals (e.g. 100 steps) must not show a fake "50" pool.
+      if (freeRaceAwardsCoinPrizes(race.targetSteps)) {
+        const coinPool = freeRaceCoinPrizePool(players, race.targetSteps);
+        if (coinPool > 0) {
+          return { value: fmtCoins(coinPool), color: "#F59E0B", label: "PRIZE POOL" };
+        }
       }
-      const slots = getWinnerCount(players);
-      const coinPool = FREE_TIER_COINS.slice(0, slots).reduce((a, b) => a + b, 0);
-      return { value: fmtCoins(coinPool), color: "#F59E0B" };
+      return { value: "Coins + Badges", color: "#6EE7B7", label: "REWARDS" };
     }
     const cents =
       typeof race.prizePoolCents === "number" && race.prizePoolCents > 0
@@ -4540,9 +4550,11 @@ function LiveRaceDetailScreenContent() {
         else if (winnerByForfeit && rank === 1) badgeLabel = "Won by Forfeit 🏳️";
         else badgeLabel = rank <= winnerSlotsFin ? `${rankNum} Winner` : `${rankNum} Place`;
 
-        // Per-rank free coin amounts (combined if tied, zero for non-prize ranks)
+        // Per-rank free coin amounts (combined if tied, zero for non-prize ranks).
+        // Backend only grants free-race coins when targetSteps >= 1000.
         const freeCoins = (() => {
-          const FREE_TIERS = [50, 30, 20];
+          if (!freeRaceAwardsCoinPrizes(race.targetSteps)) return 0;
+          const FREE_TIERS = FREE_TIER_COIN_REWARDS;
           const wSlots = getWinnerCount(race.currentPlayers);
           if (rank > wSlots) return 0; // not a prize-eligible rank
           if (!tiedInGroup) return FREE_TIERS[rank - 1] ?? 0;
@@ -4666,7 +4678,13 @@ function LiveRaceDetailScreenContent() {
               { text: "Cancel" },
               { text: "Forfeit", style: "destructive", onPress: async () => {
                 try {
-                  await authFetch(`/api/races/${raceId}/leave`, {
+                  // Unlimited Challenges live in a separate table/route from Classic
+                  // race rooms — /races/:id/leave 404s on a challengeId, which would
+                  // silently leave qualificationStatus as "active" server-side.
+                  const leavePath = isUnlimitedHeader
+                    ? `/api/unlimited-challenges/${raceId}/leave`
+                    : `/api/races/${raceId}/leave`;
+                  await authFetch(leavePath, {
                     method: "POST",
                     body: JSON.stringify({ reason: "user_quit" }),
                   });
@@ -4708,6 +4726,7 @@ function LiveRaceDetailScreenContent() {
           participantValue={participantValue}
           prizePoolValue={prizePoolChip.value}
           prizePoolColor={prizePoolChip.color}
+          prizePoolLabel={"label" in prizePoolChip ? prizePoolChip.label : undefined}
           styles={{
             infoCard: s.infoCard,
             infoRow: s.infoRow,

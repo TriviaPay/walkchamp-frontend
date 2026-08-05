@@ -2407,26 +2407,36 @@ function WalkScreenContent() {
         ? ((await res.json()) as { rooms?: WalkUpcomingRoom[] })
         : { rooms: [] as WalkUpcomingRoom[] };
       const now = Date.now();
-      const classicAsWalk: WalkUpcomingRoom[] = classicActive.map((r) => ({
-        room_id: r.id,
-        challenge_type:
-          r.entryType === "coins_battle"
-            ? "coins_battle"
-            : r.type === "sponsored"
-              ? "sponsored"
-              : r.entryType === "paid_usd" || r.entryType === "cash"
+      const classicAsWalk: WalkUpcomingRoom[] = classicActive.map((r) => {
+        const entry = String(r.entryType ?? "").toLowerCase();
+        const challengeType =
+          r.type === "sponsored"
+            ? "sponsored"
+            : entry === "coins_battle" || entry.includes("coin")
+              ? "coins_battle"
+              : entry === "paid_usd" ||
+                  entry === "cash" ||
+                  entry === "usd entry" ||
+                  entry.startsWith("$") ||
+                  entry.includes("usd")
                 ? "paid_usd"
-                : "free",
-        entry_fee: 0,
-        coin_entry_amount: 0,
-        max_players: Math.max(1, r.currentPlayers ?? 10),
-        registered_count: Math.max(1, r.currentPlayers ?? 1),
-        scheduled_start_at: r.startedAt ?? new Date().toISOString(),
-        target_steps: r.targetSteps ?? 1000,
-        host_user_id: r.isHost ? uid : "",
-        current_user_registered: true,
-        status: r.status || "in_progress",
-      }));
+                : "free";
+        const entryAmountCents =
+          typeof r.entryAmountCents === "number" ? r.entryAmountCents : 0;
+        return {
+          room_id: r.id,
+          challenge_type: challengeType,
+          entry_fee: challengeType === "paid_usd" ? entryAmountCents / 100 : 0,
+          coin_entry_amount: 0,
+          max_players: Math.max(1, r.currentPlayers ?? 10),
+          registered_count: Math.max(1, r.currentPlayers ?? 1),
+          scheduled_start_at: r.startedAt ?? new Date().toISOString(),
+          target_steps: r.targetSteps ?? 1000,
+          host_user_id: r.isHost ? uid : "",
+          current_user_registered: true,
+          status: r.status || "in_progress",
+        };
+      });
       const unlimitedAsWalk: WalkUpcomingRoom[] = unlimited.map((u) => {
         const serverReg = !!u.current_user_registered;
         if (serverReg && leftIds.has(u.room_id)) {
@@ -3134,7 +3144,39 @@ function WalkScreenContent() {
       if (coveredRaceIds.has(cs.raceId)) continue;
       const s = cs.status;
       const isWaiting = s === "user_hosting_waiting" || s === "user_joined_waiting";
-      if (!isWaiting) continue;
+      const isActive = s === "user_hosting_active" || s === "user_joined_active";
+      if (!isWaiting && !isActive) continue;
+
+      // Currently participating / live — show under My Race immediately.
+      if (isActive) {
+        const liveIso =
+          cs.startedAt ?? cs.scheduledStartAt ?? new Date(now).toISOString();
+        const liveMs = new Date(liveIso).getTime();
+        cards.push({
+          key: `challenge-live:${entryKey}:${cs.raceId}`,
+          challengeType: entryKeyToReminderType(entryKey),
+          phase: "racing",
+          scheduledStartAt: liveIso,
+          registeredCount: cs.joinedCount ?? 1,
+          maxSlots: cs.maxPlayers || 10,
+          targetSteps: cs.targetSteps,
+          prizePoolCents: cs.prizePoolCents,
+          coinEntryAmount: cs.coinEntryAmount,
+          entryAmountCents: cs.entryAmountCents,
+          onPressCta: () => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+            router.push({
+              pathname: "/race/live-detail",
+              params: { id: cs.raceId! },
+            });
+          },
+          // Live cards sort ahead of future registrations.
+          sortMs: Number.isFinite(liveMs) ? liveMs : now,
+        });
+        coveredRaceIds.add(cs.raceId);
+        continue;
+      }
+
       const startIso = cs.scheduledStartAt ?? null;
       if (!startIso) continue;
       const startMs = new Date(startIso).getTime();
@@ -3309,7 +3351,12 @@ function WalkScreenContent() {
       coveredRaceIds.add(room.room_id);
     }
 
-    cards.sort((a, b) => a.sortMs - b.sortMs);
+    // Live/participating races first, then upcoming by start time.
+    cards.sort((a, b) => {
+      if (a.phase === "racing" && b.phase !== "racing") return -1;
+      if (b.phase === "racing" && a.phase !== "racing") return 1;
+      return a.sortMs - b.sortMs;
+    });
     return cards;
   }, [
     challengeStatuses,
@@ -4355,7 +4402,7 @@ function WalkScreenContent() {
               }}
             >
               <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: rs(10) }]}>
-                🏁 Next Race 🏃‍♂️
+                🏁 My Race 🏃‍♂️
               </Text>
               {nextRaceCards.length === 1 ? (
                 renderNextRaceCard(nextRaceCards[0])

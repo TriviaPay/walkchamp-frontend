@@ -58,7 +58,7 @@ type P = {
 function mergeParticipantsPreservingSteps(
   previous: P[],
   incoming: P[],
-  options?: { raceCompleted?: boolean; dayAware?: boolean },
+  options?: { raceCompleted?: boolean; dayAware?: boolean; viewerUserId?: string | null },
 ): P[] {
   const raceCompleted = options?.raceCompleted === true;
   const dayAware = options?.dayAware === true;
@@ -111,6 +111,7 @@ function mergeParticipantsPreservingSteps(
     const key = p.userId || p.id;
     if (!key || seen.has(key)) continue;
     if (p.temporaryFromRealtime) continue;
+    if (options?.viewerUserId && p.userId === options.viewerUserId) continue;
     merged.push(p);
   }
   return merged;
@@ -212,6 +213,32 @@ const keepZero = mergeParticipantsPreservingSteps(
   [{ id: "2", userId: "b", currentSteps: 10, rank: 1 }],
 );
 assert.equal(keepZero.length, 2);
+
+// Regression: a spectator's stale cached/local "me" row (from a prior bug, a stale
+// screenCache read, or leftover local state) must be dropped once a fresh, full
+// roster fetch confirms they are no longer a participant — while other missing
+// participants (a real partial-poll/Pusher scenario) are still preserved.
+const staleMeRow = mergeParticipantsPreservingSteps(
+  [
+    { id: "1", userId: "a", currentSteps: 500, rank: 1 },
+    { id: "me", userId: "viewer", currentSteps: 0, rank: 2 },
+  ],
+  [{ id: "1", userId: "a", currentSteps: 520, rank: 1 }],
+  { viewerUserId: "viewer" },
+);
+assert.equal(staleMeRow.find((p) => p.userId === "viewer"), undefined);
+assert.equal(staleMeRow.find((p) => p.userId === "a")!.currentSteps, 520);
+
+// Without viewerUserId, a missing participant (including the viewer) is still
+// preserved — existing behavior for other participants is unaffected.
+const noViewerHint = mergeParticipantsPreservingSteps(
+  [
+    { id: "1", userId: "a", currentSteps: 500, rank: 1 },
+    { id: "me", userId: "viewer", currentSteps: 0, rank: 2 },
+  ],
+  [{ id: "1", userId: "a", currentSteps: 520, rank: 1 }],
+);
+assert.equal(noViewerHint.find((p) => p.userId === "viewer")?.currentSteps, 0);
 
 assert.equal(
   mergeMonotonicParticipantSteps(100, 50, false, {

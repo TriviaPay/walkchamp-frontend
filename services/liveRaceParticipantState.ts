@@ -53,6 +53,16 @@ export type MergeParticipantsOptions = {
   raceCompleted?: boolean;
   /** When true, apply day-key aware merge (Unlimited). Classic races omit this. */
   dayAware?: boolean;
+  /**
+   * When the caller's own userId, and `incoming` is a fresh full-roster fetch
+   * (not a partial/Pusher enrichment) that no longer contains this id, drop the
+   * viewer's own stale row instead of preserving it. Otherwise a locally cached
+   * or previously-synthesized "me" row can never be purged once a spectator's
+   * device has ever held one — showing them as a participant (with a Forfeit
+   * button) forever, even after the backend confirms they never joined / left.
+   * Other participants missing from the poll are still preserved unchanged.
+   */
+  viewerUserId?: string | null;
 };
 
 export function mergeMonotonicParticipantSteps(
@@ -191,11 +201,13 @@ export function mergeParticipantsPreservingSteps<T extends RaceParticipantLike>(
     };
   });
   // Keep prior walkers missing from this poll (Pusher / partial Unlimited enrichment),
-  // except temporary realtime stubs that never appeared in membership.
+  // except temporary realtime stubs that never appeared in membership, and except
+  // the viewer's own stale row on a fresh full-roster fetch (see viewerUserId doc).
   for (const p of previous) {
     const key = p.userId || p.id;
     if (!key || seen.has(key) || (p.id && seen.has(p.id))) continue;
     if (p.temporaryFromRealtime) continue;
+    if (options?.viewerUserId && p.userId === options.viewerUserId) continue;
     merged.push(p);
   }
   return merged;

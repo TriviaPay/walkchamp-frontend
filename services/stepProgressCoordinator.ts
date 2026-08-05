@@ -2262,6 +2262,7 @@ export type MyActiveInProgressRace = {
   title?: string;
   type?: string;
   entryType?: string;
+  entryAmountCents?: number;
   challengeType?: string;
   capacityMode?: string;
   challengeEndAt?: string | null;

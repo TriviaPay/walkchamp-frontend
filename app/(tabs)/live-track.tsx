@@ -580,6 +580,7 @@ export default function LiveTrackTab() {
       mergeParticipantsPreservingSteps(prev, parts, {
         raceCompleted: detailRace?.status === "completed",
         dayAware: isUnlimited,
+        viewerUserId: user?.id,
       }),
     );
 
