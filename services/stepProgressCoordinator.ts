@@ -1421,9 +1421,19 @@ export function setActiveRaceProgress(params: {
     /* optional */
   }
   const freshStart = params.freshStart !== false;
-  const boot = freshStart ? 0 : Math.max(0, params.bootSteps ?? 0);
   const prev = store.getState().raceProgress;
   const prevActiveId = prev.activeRaceId;
+  // Same-race rejoin/continuation: never boot below an already-tracked floor for this user.
+  const continuedFloor =
+    !freshStart &&
+    prevActiveId === params.raceId &&
+    prev.userId === params.userId &&
+    typeof prev.raceSteps === "number"
+      ? Math.max(0, Math.floor(prev.raceSteps))
+      : 0;
+  const boot = freshStart
+    ? 0
+    : Math.max(0, params.bootSteps ?? 0, continuedFloor);
   // Prefer an already-known goal for the same race over RaceContext's default 1000
   // when resume/start races the notification before targetSteps was synced.
   let resolvedGoal = Math.max(0, params.goalSteps || 0);
@@ -2456,6 +2466,48 @@ export async function restoreActiveLiveRaceNotificationForUser(
         });
         if (!me) return null;
         bootSteps = Math.max(0, Math.floor(me.currentSteps ?? 0));
+        // Continue from the highest known floor: server, durable seed, native FGS, Redux.
+        // Prevents close/open or logout/login from resetting race steps to 0 when local
+        // progress existed but the server detail briefly lags or was not yet synced.
+        try {
+          const { getRaceStepSeed } = await import(
+            "@/services/steps/raceBaselineStorage"
+          );
+          const seed = await getRaceStepSeed(race.id, userId);
+          if (typeof seed === "number" && seed > 0) {
+            bootSteps = Math.max(bootSteps, seed);
+          }
+        } catch {
+          /* non-fatal */
+        }
+        try {
+          const raw = await raceProgressNotificationService.getNativeRaceState();
+          if (raw) {
+            const json = JSON.parse(raw) as {
+              raceId?: string;
+              activeRaceId?: string;
+              raceSteps?: number;
+            };
+            const nativeRaceId = json.raceId ?? json.activeRaceId;
+            if (
+              nativeRaceId === race.id &&
+              typeof json.raceSteps === "number" &&
+              json.raceSteps > 0
+            ) {
+              bootSteps = Math.max(bootSteps, Math.floor(json.raceSteps));
+            }
+          }
+        } catch {
+          /* non-fatal */
+        }
+        const rp = store.getState().raceProgress;
+        if (
+          rp.activeRaceId === race.id &&
+          rp.userId === userId &&
+          typeof rp.raceSteps === "number"
+        ) {
+          bootSteps = Math.max(bootSteps, Math.floor(rp.raceSteps));
+        }
         raceType = detail.race?.type ?? race.type;
         challengeEndAt =
           detail.race?.challengeEndAt ??

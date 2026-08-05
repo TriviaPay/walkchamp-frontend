@@ -122,7 +122,8 @@ export async function clearScopedStepStateForUser(
   const allKeys = await AsyncStorage.getAllKeys();
   const preserveDaily = opts?.preserveDailyProgress === true;
   // On same-user logout keep today's step totals so re-login can restore Walk UI.
-  // Still wipe race baselines / snapshots / outbox (session-bound).
+  // Wipe legacy raceSteps: keys / snapshots / outbox. Keep durable raceSeed: and
+  // raceBaseline: so rejoining the same live race continues from the last floor.
   const prefixes = preserveDaily
     ? [
         `baseline:${userId}:`,
@@ -139,6 +140,12 @@ export async function clearScopedStepStateForUser(
       ];
   let keysToDelete = allKeys.filter((key) =>
     prefixes.some((prefix) => key.startsWith(prefix)),
+  );
+  // Never delete continuation keys for an in-progress race.
+  keysToDelete = keysToDelete.filter(
+    (key) =>
+      !key.startsWith(`raceSeed:${userId}:`) &&
+      !key.startsWith(`raceBaseline:${userId}:`),
   );
   if (preserveDaily) {
     // Keep durable daily progress + sync watermark + lifetime stats.

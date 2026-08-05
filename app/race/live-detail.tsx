@@ -3139,6 +3139,12 @@ function LiveRaceDetailScreenContent() {
           : null,
       );
     }
+    // Always raise the floor on re-hydrate (close/open or late server steps).
+    if (preservedSteps > 0 && user?.id) {
+      void import("@/services/steps/raceBaselineStorage")
+        .then(({ setRaceStepSeed }) => setRaceStepSeed(raceId, user.id, preservedSteps))
+        .catch(() => {});
+    }
     void catchUpLiveRaceSteps(preservedSteps, true);
     stepEngineLog("LiveRace", `backendHydrated=true raceId=${raceId} participantNotifications=true`);
     for (const p of parts) {

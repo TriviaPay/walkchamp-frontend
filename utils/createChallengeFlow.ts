@@ -501,7 +501,10 @@ export function buildHostPayload(
     };
   }
 
-  const durationDays = durationDaysFromGoalType(draft.fixed.goalType);
+  // Daily fixed free/coins/cash = classic race: winners or 24h from start (not a calendar "1 day" duration room).
+  // Weekly/monthly keep multi-day challengeDurationDays + challengeEndAt.
+  const durationDays =
+    draft.fixed.goalType === "daily" ? 0 : durationDaysFromGoalType(draft.fixed.goalType);
 
   if (draft.entryType === "free") {
     const body: Record<string, unknown> = {
@@ -515,7 +518,7 @@ export function buildHostPayload(
       goalType: draft.fixed.goalType,
       challengeDurationDays: durationDays,
       ...(isScheduled ? { scheduledStartAtIso: scheduledStartAt!.toISOString() } : {}),
-      challengeEndAtIso: endAt.toISOString(),
+      ...(durationDays > 0 ? { challengeEndAtIso: endAt.toISOString() } : {}),
       startMode: draft.startMode ?? "auto_now",
     };
     return {
@@ -552,7 +555,7 @@ export function buildHostPayload(
       goalType: draft.fixed.goalType,
       challengeDurationDays: durationDays,
       ...(isScheduled ? { scheduledStartAtIso: scheduledStartAt!.toISOString() } : {}),
-      challengeEndAtIso: endAt.toISOString(),
+      ...(durationDays > 0 ? { challengeEndAtIso: endAt.toISOString() } : {}),
       startMode: draft.startMode ?? "auto_now",
     };
     return {
@@ -600,7 +603,7 @@ export function buildHostPayload(
     goalType: draft.fixed.goalType,
     challengeDurationDays: durationDays,
     ...(isScheduled ? { scheduledStartAtIso: scheduledStartAt!.toISOString() } : {}),
-    challengeEndAtIso: endAt.toISOString(),
+    ...(durationDays > 0 ? { challengeEndAtIso: endAt.toISOString() } : {}),
     startMode: draft.startMode ?? "auto_now",
   };
 

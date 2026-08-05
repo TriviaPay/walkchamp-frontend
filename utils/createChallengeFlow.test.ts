@@ -49,6 +49,10 @@ assert.deepEqual(
     assert.equal(built.body.maxPlayers, free.fixed.maxPlayers);
     assert.equal(built.body.dailyGoalSteps, undefined);
     assert.equal(built.meta.isUnlimited, false);
+    // Classic daily fixed: no calendar duration room — winners or 24h from start.
+    assert.equal(built.body.challengeDurationDays, 0);
+    assert.equal(built.body.challengeEndAtIso, undefined);
+    assert.equal(built.meta.durationDays, 0);
   }
 }
 
