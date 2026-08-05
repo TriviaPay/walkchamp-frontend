@@ -328,7 +328,14 @@ class WalkChampRaceForegroundService : Service() {
     override fun run() {
       val state = raceState ?: return
       if (!isActiveRace(state)) return
-      tickRace(state, syncBackend = false)
+      ensureWakeLock()
+      // Screen-off / app-killed OEM backup — force a counter sample every tick.
+      try {
+        ensureSensorEngine().pollHardwareNow()
+      } catch (e: Exception) {
+        Log.w(TAG, "[WalkChampFGS] race pollHardwareNow failed: ${e.message}")
+      }
+      tickRace(raceState ?: state, syncBackend = false)
       workerHandler?.postDelayed(this, NOTIFICATION_TICK_MS)
     }
   }
@@ -347,16 +354,20 @@ class WalkChampRaceForegroundService : Service() {
     }
   }
 
-  /** Native tick — keeps walk notification fresh while app is backgrounded (sensor + JS HC refresh). */
+  /** Native tick — keeps walk notification fresh while app is backgrounded/closed/locked. */
   private val walkStepRefreshRunnable = object : Runnable {
     override fun run() {
       if (!walkRunning) return
       try {
-        // Always apply latest sensor state to the daily walk tray — including while a
-        // live/sponsored race owns the primary FGS slot.
+        ensureWakeLock()
+        // When the app is fully closed + screen locked, OEM sensor batching often
+        // stops event callbacks. Actively poll TYPE_STEP_COUNTER so the tray and
+        // native backend sync keep advancing without JS/Health Connect.
+        ensureSensorEngine().pollHardwareNow()
         sensorEngine?.currentState()?.let { handleNativeStepStateUpdate(it) }
         val activeRace = raceState
         if (activeRace == null || !isActiveRace(activeRace)) {
+          // No-op when RN is dead; still useful while minimized (JS can refresh HC).
           WalkChampStepStateEmitter.emitWalkStepRefreshRequest()
         }
         Log.d(TAG, "[WalkChampFGS] walkStepRefresh tick emitted")
@@ -725,8 +736,15 @@ class WalkChampRaceForegroundService : Service() {
     val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
     wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WalkChamp:RaceFGS").apply {
       setReferenceCounted(false)
-      acquire(3 * 60 * 60 * 1000L)
+      // Long enough for a fixed race / daily walk session; renewed on every tick.
+      acquire(24 * 60 * 60 * 1000L)
     }
+  }
+
+  /** Re-acquire if the previous wake lock timed out while the FGS is still tracking. */
+  private fun ensureWakeLock() {
+    if (wakeLock?.isHeld == true) return
+    acquireWakeLock()
   }
 
   private fun releaseWakeLock() {
@@ -1630,7 +1648,9 @@ class WalkChampRaceForegroundService : Service() {
     val body = p.getString("walk_body", null) ?: return false
     val deepLink = p.getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
     val title = p.getString("walk_title", "Walk Champ") ?: "Walk Champ"
-    val stepSource = p.getString("walk_step_source", "android_step_counter") ?: "android_step_counter"
+    // Default to verified Health Connect — never flip restore to provisional sensor
+    // source or native walk backend sync will skip while the app is closed.
+    val stepSource = p.getString("walk_step_source", "health_connect") ?: "health_connect"
     val userId = p.getString("walk_user_id", null)
     val parsedSteps = parseStepsFromWalkBody(body)
     lastWalkNotification = buildCurrentWalkNotification(body, deepLink, title)
@@ -1792,7 +1812,7 @@ class WalkChampRaceForegroundService : Service() {
           val p = prefs()
           if (p.getBoolean("walk_active", false)) {
             walkRunning = true
-            val stepSource = p.getString("walk_step_source", "android_step_counter") ?: "android_step_counter"
+            val stepSource = p.getString("walk_step_source", "health_connect") ?: "health_connect"
             val userId = p.getString("walk_user_id", null)
             val body = p.getString("walk_body", "") ?: ""
             val parsedSteps = parseStepsFromWalkBody(body)
@@ -1814,6 +1834,11 @@ class WalkChampRaceForegroundService : Service() {
           startRaceLoops()
         }
         startSensorTrackingIfNeeded()
+        // Immediate poll after restore so closed/locked devices don't wait for a sensor event.
+        try {
+          ensureSensorEngine().pollHardwareNow()
+        } catch (_: Exception) {
+        }
       }
       return START_STICKY
     }
@@ -2087,8 +2112,13 @@ class WalkChampRaceForegroundService : Service() {
         startWalkLoopsIfNeeded()
       }
       startSensorTrackingIfNeeded()
+      ensureWakeLock()
+      try {
+        ensureSensorEngine().pollHardwareNow()
+      } catch (_: Exception) {
+      }
       deliverRestoreIntent()
-      // Do not call super â€” default implementation stops the service.
+      // Do not call super — default implementation stops the service.
       return
     }
     super.onTaskRemoved(rootIntent)

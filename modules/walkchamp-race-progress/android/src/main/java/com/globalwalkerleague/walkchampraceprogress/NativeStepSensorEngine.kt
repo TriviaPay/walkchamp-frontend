@@ -97,6 +97,30 @@ class NativeStepSensorEngine(
     registerSensorListener()
   }
 
+  /**
+   * Force a hardware counter sample while the app is killed / screen is locked.
+   * Many OEM builds (Samsung) batch TYPE_STEP_COUNTER until unlock even with
+   * maxReportLatencyUs=0 — flush + one-shot read keeps walk/race trays moving.
+   */
+  fun pollHardwareNow() {
+    ensureCurrentDay()
+    if (!registered.get()) {
+      registerSensorListener()
+    }
+    try {
+      sensorManager?.flush(stepListener)
+    } catch (e: Exception) {
+      Log.d(TAG, "[StepFGS] sensor flush failed: ${e.message}")
+    }
+    val counter = NativeStepCounterReader.readCumulativeCounter(context, 600L)
+    if (counter == null) {
+      Log.d(TAG, "[StepFGS] pollHardwareNow — no counter sample")
+      return
+    }
+    Log.d(TAG, "[StepFGS] pollHardwareNow counter=$counter")
+    handleSensorTotal(counter.toFloat())
+  }
+
   private fun registerSensorListener() {
     if (registered.get()) {
       Log.d(TAG, "[StepFGS] sensor listener already registered")
@@ -122,17 +146,17 @@ class NativeStepSensorEngine(
     }
     ensureSensorHandler()
     try {
-      // SENSOR_DELAY_UI (~60ms) + maxReportLatencyUs=0 avoids OEM batching so live
-      // race UI can update within ~1–3s without SENSOR_DELAY_FASTEST battery cost.
+      // SENSOR_DELAY_GAME delivers more reliably than UI when the screen is off;
+      // maxReportLatencyUs=0 asks OEMs not to batch (still flushed on poll as backup).
       sensorManager?.registerListener(
         stepListener,
         stepCounterSensor,
-        SensorManager.SENSOR_DELAY_UI,
+        SensorManager.SENSOR_DELAY_GAME,
         /* maxReportLatencyUs */ 0,
         sensorHandler,
       )
       registered.set(true)
-      Log.d(TAG, "[StepFGS] sensor listener registered TYPE_STEP_COUNTER delay=UI maxLatency=0")
+      Log.d(TAG, "[StepFGS] sensor listener registered TYPE_STEP_COUNTER delay=GAME maxLatency=0")
     } catch (e: Exception) {
       try {
         sensorManager?.registerListener(
