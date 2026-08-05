@@ -130,6 +130,19 @@ class WalkChampRaceProgressModule : Module() {
       null
     }
 
+    /**
+     * JS AppState → background/inactive: hand continuous step delivery to the native
+     * FGS so walk + live race trays keep updating while the app is minimized/closed.
+     */
+    AsyncFunction("ensureBackgroundStepTracking") {
+      val ctx = appContext.reactContext ?: return@AsyncFunction null
+      val intent = Intent(ctx, WalkChampRaceForegroundService::class.java).apply {
+        action = WalkChampRaceForegroundService.ACTION_ENSURE_BACKGROUND
+      }
+      startServiceForeground(ctx, intent)
+      null
+    }
+
     AsyncFunction("stopWalkStepNotification") {
       val ctx = appContext.reactContext ?: return@AsyncFunction null
       val intent = Intent(ctx, WalkChampRaceForegroundService::class.java).apply {

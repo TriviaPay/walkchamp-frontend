@@ -121,7 +121,11 @@ class NativeStepSensorEngine(
    * primary listener (do NOT register a second temporary listener that can break
    * delivery on some OEMs).
    */
-  fun pollHardwareNow() {
+  /**
+   * @param forceSample when true (screen-off / watchdog), take a blocking counter
+   * sample so OEM-batched TYPE_STEP_COUNTER still advances while the app is closed.
+   */
+  fun pollHardwareNow(forceSample: Boolean = false) {
     ensureCurrentDay()
     if (!registered.get()) {
       registerSensorListener()
@@ -131,22 +135,20 @@ class NativeStepSensorEngine(
     } catch (e: Exception) {
       Log.d(TAG, "[StepFGS] sensor flush failed: ${e.message}")
     }
-    // Bootstrap only: first sample when this process has never seen the counter.
-    // Avoid secondary listeners while tracking — they can stall OEM delivery.
-    if (lastSensorTotal < 0f) {
-      val counter = NativeStepCounterReader.readCumulativeCounter(context, 2_000L)
-      if (counter != null) {
-        Log.d(TAG, "[StepFGS] pollHardwareNow bootstrap counter=$counter")
-        handleSensorTotal(counter.toFloat())
-      } else {
-        Log.d(TAG, "[StepFGS] pollHardwareNow — waiting for primary listener")
-      }
-      return
-    }
-    // Screen-off stall: re-register primary listener + flush (no second listener).
     val staleMs = System.currentTimeMillis() - state.updatedAt
-    if (staleMs >= 8_000L) {
-      Log.d(TAG, "[StepFGS] pollHardwareNow stale recovery restart staleMs=$staleMs")
+    val needsSample = forceSample || lastSensorTotal < 0f || staleMs >= 4_000L
+    if (!needsSample) return
+
+    // Blocking one-shot on a distinct listener instance. Primary listener stays registered.
+    val counter = NativeStepCounterReader.readCumulativeCounter(context, 800L)
+    if (counter != null) {
+      Log.d(
+        TAG,
+        "[StepFGS] pollHardwareNow sample counter=$counter force=$forceSample staleMs=$staleMs",
+      )
+      handleSensorTotal(counter.toFloat())
+    } else if (staleMs >= 8_000L) {
+      Log.d(TAG, "[StepFGS] pollHardwareNow sample miss — restart listener staleMs=$staleMs")
       restart()
       try {
         sensorManager?.flush(stepListener)

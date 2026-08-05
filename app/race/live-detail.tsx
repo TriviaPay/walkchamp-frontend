@@ -4712,11 +4712,12 @@ function LiveRaceDetailScreenContent() {
         )}
       </View>
 
-      {/* ── Tagline: Start time ↔ Beat your friends, 5s each, crossfade both ways ── */}
+      {/* ── Tagline: Start time ↔ Beat your friends (or Spectating badge), 5s each ── */}
       <LiveTaglineRotator
         raceId={raceKeyForTagline}
         alt={taglineAlt}
         visible={!isCompleted}
+        isSpectator={!currentParticipant}
       />
 
       {/* ── Info bar ── */}

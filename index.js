@@ -11,12 +11,14 @@ LogBox.ignoreLogs([
   "Uncaught (in promise",
 ]);
 
-function isBenignStartupError(msg: string): boolean {
+function isBenignStartupError(msg) {
   return (
     msg.includes("Unable to activate keep awake") ||
     msg.includes("JavaScriptContextHolder") ||
     msg.includes("[runtime not ready]") ||
-    msg.includes("runtime not ready")
+    msg.includes("runtime not ready") ||
+    // Hermes: livekit leave/abort before Event polyfill (see voiceService)
+    msg.includes("Property 'Event' doesn't exist")
   );
 }
 

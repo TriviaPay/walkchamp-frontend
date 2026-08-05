@@ -48,6 +48,17 @@ function BeatContent() {
   );
 }
 
+function SpectatingBadge() {
+  return (
+    <View style={styles.spectatingBadge} accessibilityRole="text" accessibilityLabel="Spectating">
+      <Feather name="eye" size={13} color="#A5B4FC" />
+      <Text style={styles.spectatingText} numberOfLines={1}>
+        Spectating
+      </Text>
+    </View>
+  );
+}
+
 function altStableKey(alt: LiveTaglineAlt | null): string | null {
   if (!alt) return null;
   if (alt.kind === "ends") return `ends:${alt.label}`;
@@ -56,16 +67,20 @@ function altStableKey(alt: LiveTaglineAlt | null): string | null {
 
 /**
  * Start time (5s) ↔ Beat your friends (5s) with a real crossfade both ways.
+ * Spectators see a Spectating badge instead of the participant tagline.
  * Reanimated + memo so the live clock's 1s re-renders cannot interrupt opacity.
  */
 function LiveTaglineRotatorInner({
   raceId,
   alt,
   visible,
+  isSpectator = false,
 }: {
   raceId: string | null;
   alt: LiveTaglineAlt | null;
   visible: boolean;
+  /** When true, replace "Beat your friends…" with a Spectating badge + icon. */
+  isSpectator?: boolean;
 }) {
   const [frozen, setFrozen] = useState<LiveTaglineAlt | null>(alt);
   const frozenRef = useRef<LiveTaglineAlt | null>(alt);
@@ -83,7 +98,7 @@ function LiveTaglineRotatorInner({
     setFrozen(alt);
   }, [raceId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** 0 = Start time, 1 = Beat your friends */
+  /** 0 = Start time / ends alt, 1 = Beat your friends (or Spectating badge) */
   const progress = useSharedValue(0);
   const showAltRef = useRef(true);
   const cancelledRef = useRef(false);
@@ -94,6 +109,8 @@ function LiveTaglineRotatorInner({
   const beatStyle = useAnimatedStyle(() => ({
     opacity: progress.value,
   }));
+
+  const secondaryContent = isSpectator ? <SpectatingBadge /> : <BeatContent />;
 
   useEffect(() => {
     if (!visible || !animateKey) {
@@ -155,7 +172,7 @@ function LiveTaglineRotatorInner({
   if (!frozen) {
     return (
       <View style={styles.slot}>
-        <BeatContent />
+        {secondaryContent}
       </View>
     );
   }
@@ -176,7 +193,7 @@ function LiveTaglineRotatorInner({
         needsOffscreenAlphaCompositing={Platform.OS === "android"}
         style={[styles.layer, beatStyle]}
       >
-        <BeatContent />
+        {secondaryContent}
       </Animated.View>
     </View>
   );
@@ -229,5 +246,25 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     textAlign: "center",
     flexShrink: 1,
+  },
+  spectatingBadge: {
+    alignSelf: "center",
+    maxWidth: "100%",
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: "rgba(99, 102, 241, 0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(165, 180, 252, 0.45)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+  },
+  spectatingText: {
+    color: "#C7D2FE",
+    fontSize: 12,
+    fontWeight: "600",
+    textAlign: "center",
   },
 });

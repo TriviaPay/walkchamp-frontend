@@ -51,6 +51,9 @@ class WalkChampRaceForegroundService : Service() {
     const val ACTION_MIDNIGHT_RESET = "com.globalwalkerleague.walkchampraceprogress.MIDNIGHT_RESET"
     /** Periodic poke so OEM doze cannot silently stall closed-app step delivery. */
     const val ACTION_SENSOR_WATCHDOG = "com.globalwalkerleague.walkchampraceprogress.SENSOR_WATCHDOG"
+    /** JS AppState→background/closed handoff — native owns step delivery from here. */
+    const val ACTION_ENSURE_BACKGROUND =
+      "com.globalwalkerleague.walkchampraceprogress.ENSURE_BACKGROUND"
 
     const val EXTRA_RACE_ID = "raceId"
     const val EXTRA_BODY = "body"
@@ -83,8 +86,12 @@ class WalkChampRaceForegroundService : Service() {
     private const val WALK_STEP_REFRESH_MS = 3_000L
     /** Faster poll while screen is off — OEM step batching is most aggressive then. */
     private const val WALK_STEP_REFRESH_SCREEN_OFF_MS = 1_500L
-    private const val SENSOR_WATCHDOG_MS = 45_000L
-    private const val SENSOR_WATCHDOG_REQUEST_CODE = 99101
+    private const val SENSOR_WATCHDOG_MS = 15_000L
+    /** Bumped so legacy getService PendingIntents are superseded by getForegroundService. */
+    private const val SENSOR_WATCHDOG_REQUEST_CODE = 99102
+    private const val SENSOR_WATCHDOG_LEGACY_REQUEST_CODE = 99101
+    private const val DEFERRED_RESTORE_REQUEST_CODE = 99103
+    private const val DEFERRED_RESTORE_MS = 2_000L
     /** Poll for local-midnight rollover while FGS is alive (phone idle at 12:00 AM). */
     private const val MIDNIGHT_CHECK_MS = 60_000L
     private val SYNC_BACKOFF_STEPS = longArrayOf(5_000L, 10_000L, 30_000L, 60_000L)
@@ -332,15 +339,18 @@ class WalkChampRaceForegroundService : Service() {
   /** Sensor deltas for advancing the parallel (sponsored/companion) race tray. */
   private var lastNativeTodayStepsForDelta = -1
   private var lastNativeRaceStepsForDelta = -1
+  /** Prevents overlapping blocking counter samples from stalling the worker thread. */
+  private var hardwareSampleInFlight = false
 
   private val notificationTickRunnable = object : Runnable {
     override fun run() {
       val state = raceState ?: return
       if (!isActiveRace(state)) return
       ensureWakeLock()
+      val forceSample = !isScreenInteractive()
       // Screen-off / app-killed OEM backup — force a counter sample every tick.
       try {
-        ensureSensorEngine().pollHardwareNow()
+        pollHardwareSafe(forceSample)
       } catch (e: Exception) {
         Log.w(TAG, "[WalkChampFGS] race pollHardwareNow failed: ${e.message}")
       }
@@ -363,23 +373,25 @@ class WalkChampRaceForegroundService : Service() {
     }
   }
 
-  /** Native tick — keeps walk notification fresh while app is backgrounded/closed/locked. */
+  /** Native tick — keeps walk/race trays fresh while app is backgrounded/closed/locked. */
   private val walkStepRefreshRunnable = object : Runnable {
     override fun run() {
-      if (!walkRunning) return
+      // Run for walk AND live race — JS is suspended in background/closed.
+      if (!isTrackingActive()) return
       try {
         ensureWakeLock()
+        val forceSample = !isScreenInteractive()
         // When the app is fully closed + screen locked, OEM sensor batching often
-        // stops event callbacks. Actively poll TYPE_STEP_COUNTER so the tray and
-        // native backend sync keep advancing without JS/Health Connect.
-        ensureSensorEngine().pollHardwareNow()
+        // stops event callbacks. Force a hardware sample so trays keep advancing
+        // without JS / Health Connect.
+        pollHardwareSafe(forceSample)
         sensorEngine?.currentState()?.let { handleNativeStepStateUpdate(it) }
         val activeRace = raceState
         if (activeRace == null || !isActiveRace(activeRace)) {
           // No-op when RN is dead; still useful while minimized (JS can refresh HC).
           WalkChampStepStateEmitter.emitWalkStepRefreshRequest()
         }
-        Log.d(TAG, "[WalkChampFGS] walkStepRefresh tick emitted")
+        Log.d(TAG, "[WalkChampFGS] stepRefresh tick forceSample=$forceSample")
       } catch (e: Exception) {
         Log.w(TAG, "[WalkChampFGS] walkStepRefresh tick failed", e)
       }
@@ -387,10 +399,30 @@ class WalkChampRaceForegroundService : Service() {
     }
   }
 
-  private fun walkRefreshDelayMs(): Long {
+  private fun pollHardwareSafe(forceSample: Boolean) {
+    if (hardwareSampleInFlight) {
+      // Still flush/restart lightly without blocking.
+      try {
+        ensureSensorEngine().pollHardwareNow(forceSample = false)
+      } catch (_: Exception) {
+      }
+      return
+    }
+    hardwareSampleInFlight = true
+    try {
+      ensureSensorEngine().pollHardwareNow(forceSample = forceSample)
+    } finally {
+      hardwareSampleInFlight = false
+    }
+  }
+
+  private fun isScreenInteractive(): Boolean {
     val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
-    val interactive = pm?.isInteractive != false
-    return if (interactive) WALK_STEP_REFRESH_MS else WALK_STEP_REFRESH_SCREEN_OFF_MS
+    return pm?.isInteractive != false
+  }
+
+  private fun walkRefreshDelayMs(): Long {
+    return if (isScreenInteractive()) WALK_STEP_REFRESH_MS else WALK_STEP_REFRESH_SCREEN_OFF_MS
   }
 
   private val midnightCheckRunnable = object : Runnable {
@@ -529,13 +561,7 @@ class WalkChampRaceForegroundService : Service() {
       Log.d(TAG, "[WalkChampFGS] startForeground called notificationId=$NOTIFICATION_ID_WALK")
       Log.d(TAG, "[WalkChampFGS] service running mode=total_steps")
     } else {
-      Log.w(TAG, "[WalkChampFGS] walk FGS not promoted - notify-only fallback; stopping to avoid FGS timeout crash")
-      // startForegroundService requires startForeground or stopSelf within the OS timeout.
-      try {
-        stopForeground(STOP_FOREGROUND_REMOVE)
-      } catch (_: Exception) {
-      }
-      stopSelf()
+      onForegroundPromoteFailed(NOTIFICATION_ID_WALK, notification, "walk")
     }
   }
 
@@ -550,13 +576,39 @@ class WalkChampRaceForegroundService : Service() {
       Log.d(TAG, "[WalkChampFGS] startForeground called notificationId=$NOTIFICATION_ID_RACE")
       Log.d(TAG, "[WalkChampFGS] service running mode=live_race")
     } else {
-      Log.w(TAG, "[WalkChampFGS] race FGS not promoted - notify-only fallback; stopping to avoid FGS timeout crash")
-      try {
-        stopForeground(STOP_FOREGROUND_REMOVE)
-      } catch (_: Exception) {
-      }
-      stopSelf()
+      onForegroundPromoteFailed(NOTIFICATION_ID_RACE, notification, "race")
     }
+  }
+
+  /**
+   * When typed health FGS cannot promote: keep notify + sticky loops if we were started
+   * via plain startService (no AR). Only stopSelf when startForegroundService likely
+   * started us — otherwise closed-app tracking dies permanently.
+   */
+  private fun onForegroundPromoteFailed(
+    notificationId: Int,
+    notification: Notification,
+    mode: String,
+  ) {
+    Log.w(TAG, "[WalkChampFGS] $mode FGS not promoted")
+    try {
+      notificationManager().notify(notificationId, notification)
+    } catch (_: Exception) {
+    }
+    scheduleSensorWatchdog()
+    scheduleDeferredRestore()
+    if (!hasHealthForegroundPrerequisite()) {
+      // Module used startService (not startForegroundService) — keep process alive.
+      Log.w(TAG, "[WalkChampFGS] AR missing — notify-only sticky keep-alive (no stopSelf)")
+      return
+    }
+    // startForegroundService requires startForeground or stopSelf within the OS timeout.
+    Log.w(TAG, "[WalkChampFGS] schedule deferred restore then stopSelf")
+    try {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+    } catch (_: Exception) {
+    }
+    stopSelf()
   }
 
   private fun buildWalkNotificationFromIntent(intent: Intent): Notification {
@@ -608,16 +660,21 @@ class WalkChampRaceForegroundService : Service() {
     // still seed the daily baseline so walk tray + parallel races keep advancing.
     val mode = if (raceActive) "race_live" else "daily_steps"
     engine.updateMetadata(userId, mode, stepSource)
-    engine.setPendingKnownTodaySteps(parsedSteps.coerceAtLeast(0))
     if (isStart) {
+      engine.setPendingKnownTodaySteps(parsedSteps.coerceAtLeast(0))
       engine.seedDailyBaselineFromKnownSteps(parsedSteps.coerceAtLeast(0), stepSource = stepSource)
     } else {
-      // UPDATE_WALK must raise the floor only — never re-anchor downward and freeze.
-      engine.mergeJsWalkUpdate(parsedSteps.coerceAtLeast(0), stepSource)
+      // UPDATE while already tracking: raise floor only — never full re-seed.
+      engine.ensureDailyFloor(parsedSteps.coerceAtLeast(0), stepSource)
     }
     startSensorTrackingIfNeeded()
     startWalkLoopsIfNeeded()
     scheduleSensorWatchdog()
+    // Immediately sample so background handoff doesn't wait for the next tick.
+    try {
+      engine.pollHardwareNow(forceSample = !isScreenInteractive())
+    } catch (_: Exception) {
+    }
     Log.d(TAG, "[StepFGS] stepUpdate todaySteps=$parsedSteps source=$stepSource sensor=always_on raceActive=$raceActive")
   }
 
@@ -778,9 +835,10 @@ class WalkChampRaceForegroundService : Service() {
     workerHandler?.removeCallbacks(backendSyncRunnable)
     workerHandler?.post(notificationTickRunnable)
     workerHandler?.postDelayed(backendSyncRunnable, BACKEND_SYNC_MS)
+    // Always run the hardware poll loop for live races (JS is dead in BG/closed).
+    startWalkStepRefreshLoop()
     if (walkRunning) {
-      // Keep daily walk tray + sensor loops alive alongside the live race.
-      startWalkLoopsIfNeeded()
+      startWalkBackendSyncLoop()
     }
     startMidnightCheckLoop()
     startSensorTrackingIfNeeded()
@@ -804,12 +862,47 @@ class WalkChampRaceForegroundService : Service() {
       action = ACTION_SENSOR_WATCHDOG
     }
     val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-    return PendingIntent.getService(this, SENSOR_WATCHDOG_REQUEST_CODE, intent, flags)
+    // getForegroundService survives process death on Android 8+; getService often cannot.
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      PendingIntent.getForegroundService(this, SENSOR_WATCHDOG_REQUEST_CODE, intent, flags)
+    } else {
+      PendingIntent.getService(this, SENSOR_WATCHDOG_REQUEST_CODE, intent, flags)
+    }
+  }
+
+  private fun deferredRestorePendingIntent(): PendingIntent {
+    val intent = Intent(this, WalkChampRaceForegroundService::class.java).apply {
+      action = ACTION_RESTORE
+    }
+    val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      PendingIntent.getForegroundService(this, DEFERRED_RESTORE_REQUEST_CODE, intent, flags)
+    } else {
+      PendingIntent.getService(this, DEFERRED_RESTORE_REQUEST_CODE, intent, flags)
+    }
+  }
+
+  /** AlarmManager resurrection when promote fails or the process is swiped away. */
+  private fun scheduleDeferredRestore() {
+    if (!shouldKeepServiceAlive()) return
+    try {
+      val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+      val pi = deferredRestorePendingIntent()
+      val triggerAt = SystemClock.elapsedRealtime() + DEFERRED_RESTORE_MS
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+      } else {
+        am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+      }
+      Log.d(TAG, "[WalkChampFGS] deferredRestore scheduled in=${DEFERRED_RESTORE_MS}ms")
+    } catch (e: Exception) {
+      Log.w(TAG, "[WalkChampFGS] deferredRestore schedule failed: ${e.message}")
+    }
   }
 
   /** Re-arm a doze-safe alarm so closed/locked tracking cannot stall indefinitely. */
   private fun scheduleSensorWatchdog() {
-    if (!isTrackingActive()) {
+    if (!shouldKeepServiceAlive() && !isTrackingActive()) {
       cancelSensorWatchdog()
       return
     }
@@ -832,25 +925,71 @@ class WalkChampRaceForegroundService : Service() {
     try {
       val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
       am.cancel(sensorWatchdogPendingIntent())
+      // Cancel legacy getService PI from older APKs.
+      val legacy = Intent(this, WalkChampRaceForegroundService::class.java).apply {
+        action = ACTION_SENSOR_WATCHDOG
+      }
+      val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+      am.cancel(PendingIntent.getService(this, SENSOR_WATCHDOG_LEGACY_REQUEST_CODE, legacy, flags))
     } catch (_: Exception) {
     }
   }
 
   private fun runSensorWatchdog() {
-    if (!isTrackingActive()) {
+    if (!shouldKeepServiceAlive() && !isTrackingActive()) {
       cancelSensorWatchdog()
       return
     }
     ensureWakeLock()
     ensureWorker()
     startSensorTrackingIfNeeded()
+    startWalkStepRefreshLoop()
     try {
-      ensureSensorEngine().pollHardwareNow()
+      pollHardwareSafe(forceSample = true)
       sensorEngine?.currentState()?.let { handleNativeStepStateUpdate(it) }
     } catch (e: Exception) {
       Log.w(TAG, "[WalkChampFGS] sensorWatchdog poll failed: ${e.message}")
     }
     scheduleSensorWatchdog()
+  }
+
+  /**
+   * Called when JS AppState goes background/inactive or the task is removed.
+   * Native owns continuous walk + race step delivery from this point.
+   */
+  private fun ensureBackgroundTracking() {
+    ensureWorker()
+    ensureWakeLock()
+    val storedRace = RaceNotificationState.load(this)
+    if (raceState == null && storedRace != null && isActiveRace(storedRace)) {
+      restoreRaceFromStorage(promoteForeground = true)
+    }
+    val walkWanted = walkRunning || prefs().getBoolean("walk_active", false)
+    if (walkWanted) {
+      if (!walkRunning) {
+        restoreWalkFromStorage(promoteForeground = raceState == null || !isActiveRace(raceState!!))
+      } else {
+        walkRunning = true
+        startWalkLoopsIfNeeded()
+      }
+    }
+    if (raceState != null && isActiveRace(raceState!!)) {
+      startRaceLoops()
+      publishRaceNotification()
+    }
+    startSensorTrackingIfNeeded()
+    startWalkStepRefreshLoop()
+    scheduleSensorWatchdog()
+    try {
+      pollHardwareSafe(forceSample = true)
+      sensorEngine?.currentState()?.let { handleNativeStepStateUpdate(it) }
+    } catch (e: Exception) {
+      Log.w(TAG, "[WalkChampFGS] ensureBackground poll failed: ${e.message}")
+    }
+    Log.d(
+      TAG,
+      "[WalkChampFGS] ensureBackgroundTracking walk=$walkRunning race=${raceState?.raceId ?: "none"}",
+    )
   }
 
   private fun startMidnightCheckLoop() {
@@ -919,7 +1058,11 @@ class WalkChampRaceForegroundService : Service() {
 
   private fun isTrackingActive(): Boolean {
     val race = raceState
-    return walkRunning || (race != null && isActiveRace(race))
+    if (walkRunning || (race != null && isActiveRace(race))) return true
+    // After process death, in-memory flags are false until restore — prefs keep us alive.
+    if (prefs().getBoolean("walk_active", false)) return true
+    val stored = RaceNotificationState.load(this)
+    return stored != null && isActiveRace(stored)
   }
 
   private fun startSensorTrackingIfNeeded() {
@@ -1753,22 +1896,25 @@ class WalkChampRaceForegroundService : Service() {
   }
 
   private fun deliverRestoreIntent() {
-    if (!hasHealthForegroundPrerequisite()) {
-      Log.w(
-        TAG,
-        "[RaceNotification] skip restore startForegroundService - ACTIVITY_RECOGNITION missing",
-      )
-      return
-    }
     val restart = Intent(applicationContext, WalkChampRaceForegroundService::class.java).apply {
       action = ACTION_RESTORE
     }
+    val canHealthFgs = hasHealthForegroundPrerequisite()
     try {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && canHealthFgs) {
         ContextCompat.startForegroundService(applicationContext, restart)
       } else {
+        // Missing AR: still revive via startService + AlarmManager so sensor loops return.
+        if (!canHealthFgs) {
+          Log.w(
+            TAG,
+            "[RaceNotification] ACTIVITY_RECOGNITION missing — restore via startService + alarm",
+          )
+        }
         applicationContext.startService(restart)
       }
+      scheduleDeferredRestore()
+      scheduleSensorWatchdog()
       Log.d(TAG, "[RaceNotification] keepAlive appClosed=true restore scheduled")
     } catch (e: Exception) {
       Log.w(TAG, "[RaceService] restore foreground service failed: ${e.message}")
@@ -1776,6 +1922,8 @@ class WalkChampRaceForegroundService : Service() {
         applicationContext.startService(restart)
       } catch (_: Exception) {
       }
+      scheduleDeferredRestore()
+      scheduleSensorWatchdog()
     }
   }
 
@@ -1967,6 +2115,26 @@ class WalkChampRaceForegroundService : Service() {
         workerHandler?.post { runSensorWatchdog() }
         return START_STICKY
       }
+      ACTION_ENSURE_BACKGROUND -> {
+        ensureWorker()
+        if (!shouldKeepServiceAlive() &&
+          !prefs().getBoolean("walk_active", false) &&
+          RaceNotificationState.load(this) == null
+        ) {
+          return START_NOT_STICKY
+        }
+        // Promote first so startForeground deadline is met if we were revived.
+        if (!foregroundWalkPromoted && !foregroundRacePromoted) {
+          val storedRace = RaceNotificationState.load(this)
+          if (storedRace != null && isActiveRace(storedRace)) {
+            restoreRaceFromStorage(promoteForeground = true)
+          } else if (prefs().getBoolean("walk_active", false)) {
+            restoreWalkFromStorage(promoteForeground = true)
+          }
+        }
+        workerHandler?.post { ensureBackgroundTracking() }
+        return START_STICKY
+      }
       ACTION_CLEAR_USER_SESSION -> {
         val userId = intent.getStringExtra("userId") ?: getActiveUserId() ?: ""
         clearSessionForUser(userId)
@@ -1984,7 +2152,8 @@ class WalkChampRaceForegroundService : Service() {
           val todaySteps = intent.getIntExtra("todaySteps", 0)
           stopRaceAndSwitchToDailySteps(reason, todaySteps)
         }
-        return START_NOT_STICKY
+        // Walk daily FGS often continues after race stop — keep sticky restart.
+        return if (shouldKeepServiceAlive()) START_STICKY else START_NOT_STICKY
       }
       ACTION_UPSERT_PARALLEL_RACE -> {
         val incoming = parseStateFromIntent(intent) ?: return START_STICKY
@@ -2134,6 +2303,21 @@ class WalkChampRaceForegroundService : Service() {
         lastWalkNotification = notification
         lastWalkDisplayState = display
         walkRunning = true
+        // Persist keep-alive BEFORE promote — kill during start must still restore.
+        val stepSource =
+          intent.getStringExtra(EXTRA_STEP_SOURCE) ?: "health_connect"
+        persistWalkState(
+          body,
+          deepLink,
+          title,
+          safeSteps,
+          null,
+          stepSource,
+          intent.getStringExtra("userId"),
+          intent.getStringExtra("apiBaseUrl"),
+          intent.getStringExtra("authToken"),
+          if (dailyGoalExtra > 0) dailyGoalExtra else null,
+        )
         val nm = notificationManager()
         if (action == ACTION_START_WALK) {
           // Clear sticky chronometer left by older APKs before re-posting.
@@ -2148,7 +2332,12 @@ class WalkChampRaceForegroundService : Service() {
           if (foregroundWalkPromoted) {
             promoteWalkForegroundNow(notification)
           } else {
-            safeStartForeground(NOTIFICATION_ID_WALK, notification)
+            val ok = safeStartForeground(NOTIFICATION_ID_WALK, notification)
+            foregroundWalkPromoted = ok
+            if (!ok) {
+              scheduleDeferredRestore()
+              scheduleSensorWatchdog()
+            }
           }
           nm.notify(NOTIFICATION_ID_WALK, notification)
         }
@@ -2204,21 +2393,14 @@ class WalkChampRaceForegroundService : Service() {
     val keepAlive = shouldKeepServiceAlive()
     Log.d(TAG, "[RaceNotification] onTaskRemoved activeRace=$hasActiveRace keepAlive=$keepAlive")
     if (keepAlive) {
-      if (raceState == null && hasActiveRace) {
-        restoreRaceFromStorage(promoteForeground = true)
-      }
-      if (raceState != null && isActiveRace(raceState!!)) {
-        publishRaceNotification()
-        startRaceLoops()
-      } else if (walkRunning || restoreWalkFromStorage(promoteForeground = true)) {
-        startWalkLoopsIfNeeded()
-      }
-      startSensorTrackingIfNeeded()
-      ensureWakeLock()
+      // Flush keep-alive flags before the process may be killed.
       try {
-        ensureSensorEngine().pollHardwareNow()
+        prefs().edit().putBoolean("walk_active", walkRunning || prefs().getBoolean("walk_active", false)).commit()
       } catch (_: Exception) {
       }
+      ensureBackgroundTracking()
+      scheduleSensorWatchdog()
+      scheduleDeferredRestore()
       deliverRestoreIntent()
       // Do not call super — default implementation stops the service.
       return
@@ -2308,7 +2490,8 @@ class WalkChampRaceForegroundService : Service() {
     if (!userId.isNullOrBlank()) editor.putString("walk_user_id", userId)
     if (!apiBaseUrl.isNullOrBlank()) editor.putString("walk_api_base_url", apiBaseUrl)
     if (!authToken.isNullOrBlank()) editor.putString("walk_auth_token", authToken)
-    editor.apply()
+    // commit() so swipe-kill before apply() flush still restores walk_active.
+    editor.commit()
     // Merge monotonically into native state — never clobber race mode / baselines /
     // higher sensor totals (that froze closed-app counting after a few hundred steps).
     val existing = sensorEngine?.currentState() ?: NativeStepState.load(this)

@@ -53,6 +53,8 @@ type NativeModule = {
   clearNativeStepStateForUser?: (userId: string) => Promise<void>;
   flushRaceSyncOutbox?: () => Promise<void>;
   resetDailyStepsForNewDay?: () => Promise<boolean>;
+  /** Hand continuous walk/race step delivery to native FGS (BG/closed). */
+  ensureBackgroundStepTracking?: () => Promise<void>;
   addListener?: (
     event: string,
     handler: (state: NativeWalkStepState) => void,
@@ -451,6 +453,39 @@ class StepTrackingNotificationService {
 
   async mirrorWalkScreen(payload: WalkStepNotificationPayload): Promise<void> {
     await this.update(payload, true);
+  }
+
+  /**
+   * App going to background/closed: revive FGS + hand sensor ownership to native
+   * so steps keep updating without JS / Health Connect polls.
+   */
+  async handOffToNativeBackground(payload: WalkStepNotificationPayload): Promise<void> {
+    if (Platform.OS !== "android") return;
+    logOngoing(
+      `handOffToNativeBackground steps=${payload.todaySteps} appState=${AppState.currentState}`,
+    );
+    try {
+      await this.start(payload, { forceRestart: true });
+    } catch (err) {
+      logOngoing(`handOff start failed error=${String(err)}`);
+    }
+    await this.ensureNativeBackgroundTracking();
+  }
+
+  /** Race-only / already-running FGS: poke native sensor loops without starting walk tray. */
+  async ensureNativeBackgroundTracking(): Promise<void> {
+    if (Platform.OS !== "android") return;
+    const native = getNativeModule(true);
+    if (!native?.ensureBackgroundStepTracking) {
+      logOngoing("ensureBackgroundStepTracking unavailable — rebuild native app");
+      return;
+    }
+    try {
+      await native.ensureBackgroundStepTracking();
+      logOngoing("ensureBackgroundStepTracking complete");
+    } catch (err) {
+      logOngoing(`ensureBackgroundStepTracking failed error=${String(err)}`);
+    }
   }
 
   async stop(): Promise<void> {

@@ -61,6 +61,44 @@ let rnModule:     RnModule     | null = null;
 let clientModule: ClientModule | null = null;
 let sdkInitialized = false;
 
+/**
+ * Hermes has no DOM Event. livekit-client abortHandler does
+ * `eventOrError instanceof Event`, which throws ReferenceError on leave.
+ * Must run before require("livekit-client").
+ */
+function ensureDomEventPolyfill(): void {
+  const g = globalThis as typeof globalThis & { Event?: unknown };
+  if (typeof g.Event === "function") return;
+  try {
+    // Prefer the Event class shipped with RN WebRTC (same shim LiveKit uses).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const webrtc = require("@livekit/react-native-webrtc") as { Event?: unknown };
+    if (typeof webrtc.Event === "function") {
+      g.Event = webrtc.Event;
+      return;
+    }
+  } catch {
+    /* optional */
+  }
+  g.Event = class Event {
+    type: string;
+    bubbles: boolean;
+    cancelable: boolean;
+    currentTarget: unknown;
+    target: unknown;
+    constructor(
+      type: string,
+      init?: { bubbles?: boolean; cancelable?: boolean },
+    ) {
+      this.type = String(type);
+      this.bubbles = !!init?.bubbles;
+      this.cancelable = !!init?.cancelable;
+      this.currentTarget = null;
+      this.target = null;
+    }
+  };
+}
+
 function loadSDK(): ClientModule | null {
   if (isExpoGo)       return null;
   if (sdkInitialized) return clientModule;
@@ -69,6 +107,7 @@ function loadSDK(): ClientModule | null {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     rnModule = require("@livekit/react-native") as RnModule;
     rnModule.registerGlobals();
+    ensureDomEventPolyfill();
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     clientModule = require("livekit-client") as ClientModule;
     // Hermes + livekit UMD can still surface orphan Closing rejections during
@@ -94,6 +133,7 @@ function installLiveKitClosingRejectionGuard(): void {
     return (
       msg.includes("Cannot read property 'Closing' of undefined") ||
       msg.includes("Cannot read properties of undefined (reading 'Closing')") ||
+      msg.includes("Property 'Event' doesn't exist") ||
       msg.includes("The remote description was null") ||
       msg.includes("remote description was null")
     );

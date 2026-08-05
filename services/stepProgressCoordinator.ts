@@ -656,12 +656,9 @@ export function initStepProgressCoordinator(): void {
       return;
     }
     if (next === "background" || next === "inactive") {
-      // Seed native FGS with latest JS race/companion totals before JS suspends.
-      // Race/walk UPDATE intents now promote via startForegroundService.
-      void pushNotificationFromStore();
-      if (next === "background") {
-        void tickWalkBackgroundStepPoll("background");
-      }
+      // Hand continuous step delivery to native FGS BEFORE JS is suspended.
+      // Background/closed updates must not depend on JS timers or HC polls.
+      void handOffStepTrackingToNative(next);
     }
   });
 
@@ -721,6 +718,93 @@ function notificationBgLog(message: string): void {
 function stepCoordDebug(message: string): void {
   if (!STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) return;
   logger.debug("StepCoordinator", message);
+}
+
+/**
+ * AppState → background/inactive: seed native FGS then let it own walk + race
+ * step counting while the UI process is suspended or swiped away.
+ */
+async function handOffStepTrackingToNative(
+  reason: "background" | "inactive",
+): Promise<void> {
+  try {
+    const s = store.getState().raceProgress;
+    const raceLive = s.raceStatus === "active" && !!s.activeRaceId && !!s.userId;
+
+    // Force-revive live race FGS with last known totals before JS suspends.
+    if (raceLive) {
+      await raceProgressNotificationService.start(
+        {
+          raceId: s.activeRaceId!,
+          userId: s.userId!,
+          username: s.username ?? "Runner",
+          raceSteps: s.raceSteps,
+          rank: s.rank ?? 1,
+          totalParticipants: s.totalParticipants ?? 1,
+          goalSteps: s.goalSteps ?? 0,
+          timeLeftSeconds: s.timeLeftSeconds ?? 0,
+          raceStatus: "in_progress",
+          isSponsored: s.activeRaceIsSponsored === true,
+        },
+        s.raceStartTime ?? undefined,
+      );
+    } else {
+      await pushNotificationFromStore();
+    }
+
+    if (s.userId && Platform.OS === "android") {
+      const steps = resolveWalkNotificationSteps({
+        verifiedTodaySteps: s.verifiedTodaySteps ?? 0,
+        provisionalSensorTodaySteps: s.provisionalSensorTodaySteps,
+        todaySteps: s.todaySteps,
+      });
+      if (stepTrackingNotificationService.isActive()) {
+        // Revive walk FGS + sensor ownership (also keeps sensor alive during a race).
+        await stepTrackingNotificationService.handOffToNativeBackground({
+          userId: s.userId,
+          todaySteps: steps,
+          dailyGoal: s.dailyGoal > 0 ? s.dailyGoal : 10_000,
+        });
+      } else {
+        // JS `active` can be false after reload while native walk_active/race still
+        // persists — always poke FGS so swipe-close keep-alive is armed.
+        try {
+          const native = await stepTrackingNotificationService.getNativeStepState(
+            s.userId,
+          );
+          const nativeWantsWalk =
+            !!native &&
+            (native.walkActive === true ||
+              native.notificationMode === "daily_steps" ||
+              native.notificationMode === "total_steps" ||
+              native.notificationMode === "race_live");
+          if (nativeWantsWalk || raceLive) {
+            if (nativeWantsWalk && !raceLive) {
+              await stepTrackingNotificationService.handOffToNativeBackground({
+                userId: s.userId,
+                todaySteps: Math.max(steps, native?.todaySteps ?? 0),
+                dailyGoal: s.dailyGoal > 0 ? s.dailyGoal : 10_000,
+              });
+            } else {
+              await stepTrackingNotificationService.ensureNativeBackgroundTracking();
+            }
+          }
+        } catch {
+          if (raceLive) {
+            await stepTrackingNotificationService.ensureNativeBackgroundTracking();
+          }
+        }
+      }
+    }
+
+    // Best-effort last HC merge while JS can still run (non-blocking for native).
+    if (reason === "background" && !raceLive) {
+      void tickWalkBackgroundStepPoll("background");
+    }
+    stepEngineLog("Lifecycle", `nativeHandOff reason=${reason}`);
+  } catch (err) {
+    logger.warn("Lifecycle", "native step handoff failed", err);
+  }
 }
 
 /**

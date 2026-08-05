@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
 object NativeStepCounterReader {
   private const val TAG = "NativeStepReader"
 
-  fun readCumulativeCounter(context: Context, timeoutMs: Long = 2500L): Long? {
+  fun readCumulativeCounter(context: Context, timeoutMs: Long = 800L): Long? {
     val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
     if (sm == null) {
       Log.w(TAG, "SensorManager unavailable")
@@ -41,12 +41,20 @@ object NativeStepCounterReader {
     }
 
     try {
-      sm.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+      // FASTEST + zero batch latency — needed for screen-off / app-closed samples.
+      sm.registerListener(
+        listener,
+        sensor,
+        SensorManager.SENSOR_DELAY_FASTEST,
+        /* maxReportLatencyUs */ 0,
+      )
+      sm.flush(listener)
       latch.await(timeoutMs, TimeUnit.MILLISECONDS)
     } catch (e: Exception) {
       Log.w(TAG, "step counter read failed: ${e.message}")
     } finally {
       try {
+        // Unregister ONLY this one-shot listener — never the FGS primary listener.
         sm.unregisterListener(listener)
       } catch (_: Exception) {
       }
