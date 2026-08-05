@@ -618,30 +618,13 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       if (stepBindUserIdRef.current !== user.id) {
         return backendTodayStepsRef.current;
       }
-      // After A→B on the same phone, HC/HK still report the device total.
-      // Isolation maps that to this account's floor + post-bind delta only.
-      try {
-        const {
-          applyVerifiedAccountStepIsolation,
-        } = require("@/services/steps/verifiedAccountStepIsolation") as typeof import("@/services/steps/verifiedAccountStepIsolation");
-        const isolated = applyVerifiedAccountStepIsolation(user.id, provider);
-        if (isolated != null) {
-          if (isolated >= lastProviderPollRef.current) {
-            lastProviderPollRef.current = isolated;
-          }
-          logStepAccuracyAudit({
-            surface: "walk",
-            providerSteps: provider,
-            backendSteps: backendTodayStepsRef.current,
-            displaySteps: isolated,
-            providerId: stepProviderManager.getActiveProviderId(),
-            extra: { accountIsolated: true },
-          });
-          return isolated;
-        }
-      } catch {
-        /* optional */
-      }
+      // Account-switch isolation is only ever applied once, as the initial seed
+      // during hydrate (see accountSwitched branch below). It must NOT be
+      // consulted on every ongoing poll here: HC/HK aggregate reads can lag or
+      // briefly under-report between polls, and re-deriving floor+delta fresh
+      // from a raw (non-monotonic) reading each tick caused visible step-count
+      // flicker (e.g. 55 -> 70 -> 55 -> 70) during live races. The monotonic
+      // path below (backed by lastProviderPollRef) is always safe to use here.
       const display = resolveTodayDisplaySteps({
         providerSteps: provider,
         backendSteps: backendTodayStepsRef.current,
@@ -837,10 +820,12 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
               let isolatedDisplay: number | null = null;
               try {
                 const {
-                  applyVerifiedAccountStepIsolation,
                   beginVerifiedAccountStepIsolation,
                 } = require("@/services/steps/verifiedAccountStepIsolation") as typeof import("@/services/steps/verifiedAccountStepIsolation");
                 // Account switch: never seed UI from shared device HC total.
+                // This is a ONE-TIME seed only — isolation is never re-applied on
+                // later polls (see computeAccountAwareDisplaySteps) since raw
+                // floor+delta math isn't monotonic and caused step-count flicker.
                 if (accountSwitched) {
                   const accountFloor = Math.max(0, backendTodayStepsRef.current);
                   beginVerifiedAccountStepIsolation({
@@ -855,13 +840,6 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
                     "AuthSwitch",
                     `hydrateIsolation userId=${user.id} floor=${accountFloor} hcBaseline=${providerSteps}`,
                   );
-                } else {
-                  isolatedDisplay = applyVerifiedAccountStepIsolation(
-                    user.id,
-                    providerSteps,
-                    today,
-                  );
-                  usedAccountIsolation = isolatedDisplay != null;
                 }
               } catch {
                 isolatedDisplay = null;
@@ -1181,35 +1159,21 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         ? 0
         : backendSteps;
       const effectiveLocal = isFreshLocalDay() ? 0 : localCached;
-      let isolatedDisplay: number | null = null;
-      try {
-        const {
-          applyVerifiedAccountStepIsolation,
-        } = require("@/services/steps/verifiedAccountStepIsolation") as typeof import("@/services/steps/verifiedAccountStepIsolation");
-        isolatedDisplay = applyVerifiedAccountStepIsolation(
-          user.id,
-          providerSteps,
-        );
-      } catch {
-        isolatedDisplay = null;
-      }
-      const mergedDisplay =
-        isolatedDisplay != null
-          ? isolatedDisplay
-          : hydrateStepDisplayFromSources({
-              providerSteps,
-              backendSteps: backendTodayStepsRef.current,
-              localCachedSteps: effectiveLocal,
-              allowBackendCatchUp:
-                stepProviderManager.getActiveProviderId() === "android_legacy_sensor",
-              previousProviderSteps: providerStepsAtBindRef.current || effectiveLocal,
-            });
-      const displaySteps =
-        isolatedDisplay != null
-          ? Math.max(mergedDisplay, backendTodayStepsRef.current)
-          : isFreshLocalDay()
-            ? Math.max(mergedDisplay, todayStepsRef.current)
-            : Math.max(mergedDisplay, todayStepsRef.current, localCached);
+      // Account-switch isolation is only ever seeded once (mount hydrate above);
+      // it is never re-applied here on ongoing refresh cycles — raw floor+delta
+      // math isn't monotonic against HC/HK's aggregate reads and caused visible
+      // step-count flicker.
+      const mergedDisplay = hydrateStepDisplayFromSources({
+        providerSteps,
+        backendSteps: backendTodayStepsRef.current,
+        localCachedSteps: effectiveLocal,
+        allowBackendCatchUp:
+          stepProviderManager.getActiveProviderId() === "android_legacy_sensor",
+        previousProviderSteps: providerStepsAtBindRef.current || effectiveLocal,
+      });
+      const displaySteps = isFreshLocalDay()
+        ? Math.max(mergedDisplay, todayStepsRef.current)
+        : Math.max(mergedDisplay, todayStepsRef.current, localCached);
       if (displaySteps >= lastProviderPollRef.current) {
         lastProviderPollRef.current = displaySteps;
       }

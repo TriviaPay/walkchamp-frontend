@@ -199,22 +199,16 @@ export async function resolveAuthoritativeTodaySteps(
         ) {
           providerSteps = await mergeWalkStepsWithNative(providerSteps);
         }
-        const { applyVerifiedAccountStepIsolation } = await import(
-          "@/services/steps/verifiedAccountStepIsolation"
-        );
-        const isolated = applyVerifiedAccountStepIsolation(
-          userId,
+        // Account-switch isolation is only ever seeded once at bind time
+        // (bindStepSessionToUser) and is never re-applied here on ongoing
+        // polls — raw floor+delta math isn't monotonic against HC/HK's
+        // aggregate reads and caused step-count flicker across race/notification
+        // boot paths that call this function repeatedly.
+        const resolved = resolveTodayDisplaySteps({
           providerSteps,
-          today,
-        );
-        const resolved =
-          isolated != null
-            ? isolated
-            : resolveTodayDisplaySteps({
-                providerSteps,
-                backendSteps: accepted,
-                previousProviderSteps: accepted,
-              });
+          backendSteps: accepted,
+          previousProviderSteps: accepted,
+        });
         accepted = filterLegacyStepIncrease(accepted, resolved, {
           backendSteps: backendSynced,
         });
