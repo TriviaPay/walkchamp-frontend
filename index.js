@@ -11,6 +11,9 @@ LogBox.ignoreLogs([
   "Uncaught (in promise",
   // Dev-only: Fast Refresh / remount can briefly stack expo-router linking handlers.
   "configured linking in multiple places",
+  // LiveKit WebRTC — may retry; do not redbox the race voice UI.
+  "NegotiationError",
+  "negotiation timed out",
 ]);
 
 function isBenignStartupError(msg) {
@@ -22,7 +25,10 @@ function isBenignStartupError(msg) {
     // Hermes: livekit leave/abort before Event polyfill (see voiceService)
     msg.includes("Property 'Event' doesn't exist") ||
     // Dev remount / duplicate alias deep-links (manifest fix is the real cure)
-    msg.includes("configured linking in multiple places")
+    msg.includes("configured linking in multiple places") ||
+    msg.includes("NegotiationError") ||
+    msg.includes("negotiation timed out") ||
+    msg.includes("negotiation aborted")
   );
 }
 

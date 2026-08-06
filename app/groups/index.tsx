@@ -33,6 +33,7 @@ import { SkeletonGroupsScreen } from "@/components/SkeletonRows";
 import { useWalk } from "@/context/WalkContext";
 import { subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
 import { useUnread } from "@/context/UnreadContext";
+import { AppAlert } from "@/components/AppAlert";
 
 // ── Theme ────────────────────────────────────────────────────────────────────
 const T = {
@@ -533,11 +534,24 @@ function GroupsScreenContent() {
   }, [fetchOverview]);
 
   const handleAccept = async (invite: PendingInvite) => {
+    // Optimistically hide the invite — membership often lands even if a later notify fails
+    setPendingInvites((prev) => prev.filter((i) => i.id !== invite.id));
     try {
       const res = await authFetch(`/api/groups/invites/${invite.id}/accept`, { method: "POST" });
-      if (res.ok) { await fetchOverview(); }
-      else { Alert.alert("Error", "Could not accept invite."); }
-    } catch { Alert.alert("Error", "Network error."); }
+      let body: { error?: string; success?: boolean; alreadyAccepted?: boolean } = {};
+      try { body = await res.json(); } catch {}
+
+      await fetchOverview({ force: true });
+
+      // Success or idempotent re-accept — membership is already applied
+      if (res.ok || body.alreadyAccepted || body.error === "Invite already responded") {
+        return;
+      }
+      AppAlert.alert("Error", body.error ?? "Could not accept invite.");
+    } catch {
+      await fetchOverview({ force: true });
+      AppAlert.alert("Error", "Network error.");
+    }
   };
 
   const handleDecline = async (invite: PendingInvite) => {
@@ -553,6 +567,11 @@ function GroupsScreenContent() {
       Alert.alert("Required", "Enter a custom group type (e.g. Apartment Team, Gym Team).");
       return;
     }
+    const dailyGoalSteps = parseInt(createGoal, 10) || 10000;
+    if (dailyGoalSteps < 1000 || dailyGoalSteps > 100000) {
+      Alert.alert("Invalid Goal", "Daily goal must be between 1,000 and 100,000 steps.");
+      return;
+    }
     setCreating(true);
     try {
       const res = await authFetch(`/api/groups`, {
@@ -562,7 +581,7 @@ function GroupsScreenContent() {
           groupName: createName.trim(),
           groupType: createType,
           customGroupType: createType === "custom" ? createCustomType.trim() : undefined,
-          dailyGoalSteps: parseInt(createGoal, 10) || 10000,
+          dailyGoalSteps,
           colorThemeKey: createType === "custom" ? createColorTheme : undefined,
         }),
       });
@@ -574,7 +593,16 @@ function GroupsScreenContent() {
       } else if (res.status === 409) {
         Alert.alert("Name Taken", "A group with this name already exists. Please choose a different name.");
       } else {
-        Alert.alert("Error", "Could not create group.");
+        let message = "Could not create group.";
+        try {
+          const errBody = await res.json();
+          if (typeof errBody?.error === "string" && errBody.error !== "Invalid payload") {
+            message = errBody.error;
+          } else if (res.status === 400) {
+            message = "Invalid group details. Daily goal must be between 1,000 and 100,000 steps.";
+          }
+        } catch {}
+        Alert.alert("Error", message);
       }
     } catch {
       Alert.alert("Error", "Network error.");
@@ -641,6 +669,42 @@ function GroupsScreenContent() {
             </View>
           </View>
         </View>
+
+        {/* ── Pending Invitations (above filter chips) ─────────────────────── */}
+        {pendingInvites.length > 0 && (
+          <>
+            <Text style={[s.sectionTitle, { marginTop: 4, marginBottom: 12 }]}>
+              Pending Invitations
+            </Text>
+            {pendingInvites.map((inv) => {
+              const ic = cfg(inv.group?.groupType ?? "custom");
+              return (
+                <View key={inv.id} style={[s.inviteCard, { borderColor: ic.border }]}>
+                  <View style={[s.inviteIconWrap, { backgroundColor: ic.glow, borderColor: ic.border }]}>
+                    <Feather name={ic.icon} size={18} color={ic.start} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.inviteName}>{inv.group?.groupName ?? "Unknown Group"}</Text>
+                    <Text style={s.inviteMeta}>
+                      Invited by {inv.invitedByUsername ?? "someone"} · {timeAgo(inv.createdAt)}
+                    </Text>
+                    {inv.group?.dailyGoalSteps && (
+                      <Text style={s.inviteGoal}>Goal: {fmt(inv.group.dailyGoalSteps)} steps/day</Text>
+                    )}
+                  </View>
+                  <View style={s.inviteActions}>
+                    <TouchableOpacity onPress={() => handleAccept(inv)} style={s.inviteAcceptBtn} activeOpacity={0.8}>
+                      <Text style={s.inviteAcceptText}>Accept</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => handleDecline(inv)} style={s.inviteDeclineBtn} activeOpacity={0.8}>
+                      <Text style={s.inviteDeclineText}>Decline</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              );
+            })}
+          </>
+        )}
 
         {/* ── Filter chips ──────────────────────────────────────────────────── */}
         {filters.length > 0 && (
@@ -741,42 +805,6 @@ function GroupsScreenContent() {
           visibleGroups.map((g) => (
             <GroupCard key={g.groupId} group={g} onPress={() => openGroup(g.groupId)} />
           ))
-        )}
-
-        {/* ── Pending Invitations ───────────────────────────────────────────── */}
-        {pendingInvites.length > 0 && (
-          <>
-            <Text style={[s.sectionTitle, { marginTop: 24, marginBottom: 12 }]}>
-              Pending Invitations
-            </Text>
-            {pendingInvites.map((inv) => {
-              const ic = cfg(inv.group?.groupType ?? "custom");
-              return (
-                <View key={inv.id} style={[s.inviteCard, { borderColor: ic.border }]}>
-                  <View style={[s.inviteIconWrap, { backgroundColor: ic.glow, borderColor: ic.border }]}>
-                    <Feather name={ic.icon} size={18} color={ic.start} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.inviteName}>{inv.group?.groupName ?? "Unknown Group"}</Text>
-                    <Text style={s.inviteMeta}>
-                      Invited by {inv.invitedByUsername ?? "someone"} · {timeAgo(inv.createdAt)}
-                    </Text>
-                    {inv.group?.dailyGoalSteps && (
-                      <Text style={s.inviteGoal}>Goal: {fmt(inv.group.dailyGoalSteps)} steps/day</Text>
-                    )}
-                  </View>
-                  <View style={s.inviteActions}>
-                    <TouchableOpacity onPress={() => handleAccept(inv)} style={s.inviteAcceptBtn} activeOpacity={0.8}>
-                      <Text style={s.inviteAcceptText}>Accept</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => handleDecline(inv)} style={s.inviteDeclineBtn} activeOpacity={0.8}>
-                      <Text style={s.inviteDeclineText}>Decline</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              );
-            })}
-          </>
         )}
 
         {/* ── Create New Group CTA ──────────────────────────────────────────── */}
@@ -908,6 +936,9 @@ function GroupsScreenContent() {
                 onChangeText={setCreateGoal}
                 keyboardType="number-pad"
               />
+              <Text style={{ color: T.textMuted, fontSize: 12, marginTop: 6 }}>
+                Min 1,000 · Max 100,000
+              </Text>
 
               {(() => {
                 const isDisabled = creating || !createName.trim() || (createType === "custom" && createCustomType.trim().length < 2);

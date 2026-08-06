@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, Image, Modal, Platform, ScrollView, StyleSheet,
+  ActivityIndicator, Image, Modal, Platform, Pressable, ScrollView, StyleSheet,
   Text, TextInput, TouchableOpacity, View, RefreshControl, Dimensions,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
@@ -42,6 +42,103 @@ const T = {
   border: "rgba(0,216,255,0.22)",
   borderStrong: "rgba(0,216,255,0.45)",
 };
+
+type GroupAlertButton = {
+  text: string;
+  style?: "default" | "cancel" | "destructive";
+  onPress?: () => void;
+};
+
+type GroupAlertConfig = {
+  title: string;
+  message?: string;
+  buttons: GroupAlertButton[];
+};
+
+let _showGroupAlert: ((config: GroupAlertConfig) => void) | null = null;
+
+/** Themed alert modal matching the Groups screen (replaces native Alert). */
+function groupAlert(
+  title: string,
+  message?: string,
+  buttons?: GroupAlertButton[],
+) {
+  _showGroupAlert?.({
+    title,
+    message,
+    buttons: buttons?.length ? buttons : [{ text: "OK" }],
+  });
+}
+
+function GroupAlertHost() {
+  const [config, setConfig] = useState<GroupAlertConfig | null>(null);
+
+  useEffect(() => {
+    _showGroupAlert = (next) => setConfig(next);
+    return () => {
+      _showGroupAlert = null;
+    };
+  }, []);
+
+  const dismiss = useCallback((onPress?: () => void) => {
+    setConfig(null);
+    onPress?.();
+  }, []);
+
+  if (!config) return null;
+
+  const cancelBtn = config.buttons.find((b) => b.style === "cancel");
+  const actionBtns = config.buttons.filter((b) => b.style !== "cancel");
+  const stackButtons = config.buttons.length > 2 || config.buttons.some((b) => b.text.length > 14);
+
+  return (
+    <Modal
+      transparent
+      visible
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={() => dismiss(cancelBtn?.onPress)}
+    >
+      <View style={s.gaOverlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => dismiss(cancelBtn?.onPress)} />
+        <View style={s.gaCard}>
+          <Text style={s.gaTitle}>{config.title}</Text>
+          {!!config.message && <Text style={s.gaMessage}>{config.message}</Text>}
+          <View style={[s.gaButtons, stackButtons && s.gaButtonsStack]}>
+            {cancelBtn && (
+              <TouchableOpacity
+                style={[s.gaBtn, stackButtons ? s.gaBtnFull : s.gaBtnHalf, s.gaBtnCancel]}
+                onPress={() => dismiss(cancelBtn.onPress)}
+                activeOpacity={0.8}
+              >
+                <Text style={s.gaBtnCancelText}>{cancelBtn.text}</Text>
+              </TouchableOpacity>
+            )}
+            {actionBtns.map((btn, i) => {
+              const destructive = btn.style === "destructive";
+              return (
+                <TouchableOpacity
+                  key={`${btn.text}-${i}`}
+                  style={[
+                    s.gaBtn,
+                    stackButtons ? s.gaBtnFull : s.gaBtnHalf,
+                    destructive ? s.gaBtnDestructive : s.gaBtnPrimary,
+                  ]}
+                  onPress={() => dismiss(btn.onPress)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={destructive ? s.gaBtnDestructiveText : s.gaBtnPrimaryText}>
+                    {btn.text}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
 
 type GroupType = "friends" | "family" | "office" | "custom";
 type TabKey = "today" | "overall" | "members" | "history";
@@ -392,7 +489,7 @@ export default function GroupDetailScreen() {
           authFetch(`/api/groups/${groupId}/leaderboard?range=today&localDate=${ld}`),
           authFetch(`/api/groups/${groupId}/leaderboard?range=all_time`),
         ]);
-        if (!detailRes.ok) { Alert.alert("Error", "Failed to load group"); router.back(); return; }
+        if (!detailRes.ok) { groupAlert("Error", "Failed to load group"); router.back(); return; }
         const detail = await detailRes.json();
         const todayData = todayRes.ok ? await todayRes.json() : { leaderboard: [] };
         const overallData = overallRes.ok ? await overallRes.json() : { leaderboard: [] };
@@ -472,9 +569,16 @@ export default function GroupDetailScreen() {
   }, [group?.id, todayLB]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) {
-    return <SkeletonGroupDetailScreen />;
+    return (
+      <>
+        <SkeletonGroupDetailScreen />
+        <GroupAlertHost />
+      </>
+    );
   }
-  if (!group) return null;
+  if (!group) {
+    return <GroupAlertHost />;
+  }
 
   const theme = resolveTheme(group.groupType, group.themeKey);
   const isAdmin = group.userRole === "admin";
@@ -763,6 +867,7 @@ export default function GroupDetailScreen() {
       {selectedMember && (
         <MemberProfileModal member={selectedMember} theme={theme} onClose={() => setSelectedMember(null)} />
       )}
+      <GroupAlertHost />
     </View>
   );
 }
@@ -993,29 +1098,29 @@ function MembersTab({ members, pendingGroupInvites, isAdmin, groupId, adminUserI
   const activeCount = members.length;
 
   const handleCancelInvite = async (inviteId: string, username: string) => {
-    Alert.alert("Cancel Invite", `Cancel the invite sent to @${username}?`, [
+    groupAlert("Cancel Invite", `Cancel the invite sent to @${username}?`, [
       { text: "Keep", style: "cancel" },
       { text: "Cancel Invite", style: "destructive", onPress: async () => {
         try {
           const res = await authFetch(`/api/groups/invites/${inviteId}/cancel`, { method: "POST" });
           const data = await res.json();
-          if (!res.ok) { Alert.alert("Error", data.error ?? "Failed to cancel invite"); return; }
+          if (!res.ok) { groupAlert("Error", data.error ?? "Failed to cancel invite"); return; }
           onRefresh();
-        } catch { Alert.alert("Error", "Network error"); }
+        } catch { groupAlert("Error", "Network error"); }
       }},
     ]);
   };
 
   const handleRemove = async (targetId: string, username: string) => {
-    Alert.alert("Remove Member", `Remove @${username} from the group?`, [
+    groupAlert("Remove Member", `Remove @${username} from the group?`, [
       { text: "Cancel", style: "cancel" },
       { text: "Remove", style: "destructive", onPress: async () => {
         try {
           const res = await authFetch(`/api/groups/${groupId}/members/${targetId}/remove`, { method: "POST" });
           const data = await res.json();
-          if (!res.ok) { Alert.alert("Error", data.error ?? "Failed"); return; }
+          if (!res.ok) { groupAlert("Error", data.error ?? "Failed"); return; }
           onRefresh();
-        } catch { Alert.alert("Error", "Network error"); }
+        } catch { groupAlert("Error", "Network error"); }
       }},
     ]);
   };
@@ -1312,7 +1417,7 @@ function InviteMemberModal({ groupId, theme, onClose, onInvited }: {
 
   const handleInvite = async () => {
     const name = selected?.username ?? query.trim();
-    if (!name) { Alert.alert("Required", "Enter or select a username"); return; }
+    if (!name) { groupAlert("Required", "Enter or select a username"); return; }
     setSending(true);
     try {
       const res = await authFetch(`/api/groups/${groupId}/invite`, {
@@ -1320,11 +1425,11 @@ function InviteMemberModal({ groupId, theme, onClose, onInvited }: {
         body: JSON.stringify({ username: name }),
       });
       const data = await res.json();
-      if (!res.ok) { Alert.alert("Error", data.error ?? "Failed to send invite"); return; }
+      if (!res.ok) { groupAlert("Error", data.error ?? "Failed to send invite"); return; }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Alert.alert("Invite Sent", `An invite was sent to @${name}`);
+      groupAlert("Invite Sent", `An invite was sent to @${name}`);
       onInvited();
-    } catch { Alert.alert("Error", "Network error"); }
+    } catch { groupAlert("Error", "Network error"); }
     finally { setSending(false); }
   };
 
@@ -1455,7 +1560,7 @@ function EditGroupModal({ group, theme, onClose, onUpdated, onDeleted }: {
   const handlePickImage = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert("Permission Required", "Please allow photo library access to upload a group picture.");
+      groupAlert("Permission Required", "Please allow photo library access to upload a group picture.");
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -1477,10 +1582,10 @@ function EditGroupModal({ group, theme, onClose, onUpdated, onDeleted }: {
         setImageUri(result.imageUri);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } else {
-        Alert.alert("Upload Failed", "Could not save the group photo. Please try again.");
+        groupAlert("Upload Failed", "Could not save the group photo. Please try again.");
       }
     } catch {
-      Alert.alert("Upload Failed", "Network error. Please try again.");
+      groupAlert("Upload Failed", "Network error. Please try again.");
     } finally {
       setUploading(false);
     }
@@ -1494,15 +1599,15 @@ function EditGroupModal({ group, theme, onClose, onUpdated, onDeleted }: {
         body: JSON.stringify({ groupName: groupName.trim(), dailyGoalSteps: goal }),
       });
       const data = await res.json();
-      if (!res.ok) { Alert.alert("Error", data.error ?? "Failed to update group"); return; }
+      if (!res.ok) { groupAlert("Error", data.error ?? "Failed to update group"); return; }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       onUpdated();
-    } catch { Alert.alert("Error", "Network error"); }
+    } catch { groupAlert("Error", "Network error"); }
     finally { setSaving(false); }
   };
 
   const handleDelete = () => {
-    Alert.alert(
+    groupAlert(
       "Delete Group",
       `Permanently delete "${group.groupName}"? All members will be removed and this cannot be undone.`,
       [
@@ -1514,10 +1619,10 @@ function EditGroupModal({ group, theme, onClose, onUpdated, onDeleted }: {
             try {
               const res = await authFetch(`/api/groups/${group.id}`, { method: "DELETE" });
               const data = await res.json();
-              if (!res.ok) { Alert.alert("Error", data.error ?? "Failed to delete group"); return; }
+              if (!res.ok) { groupAlert("Error", data.error ?? "Failed to delete group"); return; }
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               onDeleted();
-            } catch { Alert.alert("Error", "Network error"); }
+            } catch { groupAlert("Error", "Network error"); }
             finally { setDeleting(false); }
           },
         },
@@ -1657,10 +1762,10 @@ function LeaveModal({ groupName, groupId, isAdmin, otherMembers, theme, onClose,
         body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (!res.ok) { Alert.alert("Error", data.message ?? data.error ?? "Failed to leave group"); return; }
+      if (!res.ok) { groupAlert("Error", data.message ?? data.error ?? "Failed to leave group"); return; }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       onLeft();
-    } catch { Alert.alert("Error", "Network error"); }
+    } catch { groupAlert("Error", "Network error"); }
     finally { setLeaving(false); }
   };
 
@@ -1912,4 +2017,69 @@ const s = StyleSheet.create({
   mpStatDivider: { width: 1, height: 36, backgroundColor: T.border },
   mpCloseBtn: { backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 12, padding: 14, alignItems: "center", borderWidth: 1, borderColor: T.border },
   mpCloseBtnText: { color: T.white, fontWeight: "700", fontSize: 15 },
+
+  gaOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.72)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 28,
+  },
+  gaCard: {
+    width: "100%",
+    maxWidth: 340,
+    backgroundColor: T.bg2,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: T.border,
+    paddingHorizontal: 22,
+    paddingTop: 24,
+    paddingBottom: 16,
+  },
+  gaTitle: {
+    color: T.white,
+    fontSize: 17,
+    fontWeight: "800",
+    textAlign: "center",
+    letterSpacing: -0.2,
+  },
+  gaMessage: {
+    color: T.secondary,
+    fontSize: 14,
+    textAlign: "center",
+    lineHeight: 21,
+    marginTop: 8,
+  },
+  gaButtons: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 20,
+  },
+  gaButtonsStack: {
+    flexDirection: "column",
+  },
+  gaBtn: {
+    paddingVertical: 13,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  gaBtnHalf: { flex: 1 },
+  gaBtnFull: { width: "100%" },
+  gaBtnCancel: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: T.border,
+  },
+  gaBtnCancelText: { color: T.secondary, fontSize: 15, fontWeight: "700" },
+  gaBtnPrimary: {
+    backgroundColor: T.green,
+  },
+  gaBtnPrimaryText: { color: "#04140F", fontSize: 15, fontWeight: "800" },
+  gaBtnDestructive: {
+    backgroundColor: T.red + "22",
+    borderWidth: 1,
+    borderColor: T.red + "66",
+  },
+  gaBtnDestructiveText: { color: T.red, fontSize: 15, fontWeight: "800" },
 });

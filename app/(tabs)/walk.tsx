@@ -4695,12 +4695,34 @@ function WalkScreenContent() {
         {/* Cash Prize Challenge — directly under Coins Battle */}
           {ENABLE_THREE_DOLLAR_CHALLENGE && (() => {
             const premOpt = RACE_OPTIONS.find((o) => o.fee === 3)!;
-            const premKey = "paid_3";
-            const premCs = challengeStatuses[premKey] ?? challengeStatuses.paid_usd;
+            // Modern cash rooms use paid_usd; fall back to legacy paid_3
+            const cashPriority = [
+              "user_hosting_active", "user_joined_active",
+              "user_hosting_waiting", "user_joined_waiting",
+              "join_available",
+            ] as const;
+            let premKey = "paid_usd";
+            let premCs = challengeStatuses.paid_usd ?? challengeStatuses.paid_3;
+            for (const st of cashPriority) {
+              if (challengeStatuses.paid_usd?.status === st) {
+                premKey = "paid_usd";
+                premCs = challengeStatuses.paid_usd;
+                break;
+              }
+              if (challengeStatuses.paid_3?.status === st) {
+                premKey = "paid_3";
+                premCs = challengeStatuses.paid_3;
+                break;
+              }
+            }
             const premS = premCs?.status;
+            const premFeeDollars = Math.max(
+              3,
+              Math.round((premCs?.entryAmountCents ?? 300) / 100),
+            );
 
             const handlePremiumPress = () => {
-              if (__DEV__) console.log("[PremiumChallenge] $3 card clicked");
+              if (__DEV__) console.log("[PremiumChallenge] cash card clicked", { premKey, premS, premFeeDollars });
               if (showSponsoredBlockAlert()) return;
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               if (premS === "user_hosting_active" || premS === "user_joined_active") {
@@ -4710,7 +4732,7 @@ function WalkScreenContent() {
               if (premS === "user_hosting_waiting" || premS === "user_joined_waiting") {
                 if (premCs?.raceId) {
                   setActiveRace(premCs.raceId, premCs.isHost);
-                  joinRace(3, premCs.maxPlayers, premCs.isHost);
+                  joinRace(premFeeDollars, premCs.maxPlayers, premCs.isHost);
                   navToMatchmaking({ raceId: premCs.raceId!, isHost: !!premCs.isHost });
                 }
                 return;
@@ -4718,7 +4740,22 @@ function WalkScreenContent() {
 
               // Same active-race guard as Free / Coins Battle / Create Challenge —
               // block before confirm entry or any payment path.
-              const otherActive = findActiveRaceForOtherChallenge(premKey);
+              // Treat paid_usd + paid_3 as the same cash card family.
+              const otherActive = (() => {
+                for (const [ek, cs] of Object.entries(challengeStatuses)) {
+                  if (
+                    ek !== "paid_usd" &&
+                    ek !== "paid_3" &&
+                    cs &&
+                    ACTIVE_OR_WAITING.includes(cs.status) &&
+                    cs.raceId &&
+                    cs.raceId !== sponsoredRacingId
+                  ) {
+                    return { entryKey: ek, cs };
+                  }
+                }
+                return null;
+              })();
               if (otherActive) {
                 if (otherActive.cs.isHost) {
                   const isActiveRace = otherActive.cs.status === "user_hosting_active";
@@ -4732,7 +4769,7 @@ function WalkScreenContent() {
                 const raceIdForJoin =
                   premS === "join_available" ? premCs?.raceId ?? null : null;
                 pendingRaceActionRef.current = raceIdForJoin
-                  ? () => handleDirectJoin(raceIdForJoin, 3, premCs!.maxPlayers, premKey)
+                  ? () => handleDirectJoin(raceIdForJoin, premFeeDollars, premCs!.maxPlayers, premKey)
                   : () => {
                       setConfirmChecks([false, false, false]);
                       setConfirmEntry({
@@ -4748,8 +4785,8 @@ function WalkScreenContent() {
               }
 
               if (premS === "join_available" && premCs?.raceId) {
-                if (__DEV__) console.log("[PremiumChallenge] join flow opened", { raceId: premCs.raceId });
-                void handleDirectJoin(premCs.raceId, 3, premCs.maxPlayers, premKey);
+                if (__DEV__) console.log("[PremiumChallenge] join flow opened", { raceId: premCs.raceId, premFeeDollars });
+                void handleDirectJoin(premCs.raceId, premFeeDollars, premCs.maxPlayers, premKey);
                 return;
               }
               if (__DEV__) console.log("[PremiumChallenge] create flow opened");

@@ -130,12 +130,16 @@ function installLiveKitClosingRejectionGuard(): void {
   closingGuardInstalled = true;
   const isClosingNoise = (reason: unknown): boolean => {
     const msg = reason instanceof Error ? reason.message : String(reason ?? "");
+    const name = reason instanceof Error ? reason.name : "";
     return (
       msg.includes("Cannot read property 'Closing' of undefined") ||
       msg.includes("Cannot read properties of undefined (reading 'Closing')") ||
       msg.includes("Property 'Event' doesn't exist") ||
       msg.includes("The remote description was null") ||
-      msg.includes("remote description was null")
+      msg.includes("remote description was null") ||
+      name === "NegotiationError" ||
+      msg.includes("negotiation timed out") ||
+      msg.includes("negotiation aborted")
     );
   };
   // RN / Hermes: prevent redbox for known LiveKit UMD teardown noise.
@@ -333,6 +337,134 @@ function waitForRoomConnected(timeoutMs = 8_000): Promise<boolean> {
   });
 }
 
+function isNegotiationTimeout(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  const name = err instanceof Error ? err.name : "";
+  return (
+    name === "NegotiationError" ||
+    msg.includes("negotiation timed out") ||
+    msg.includes("negotiation aborted")
+  );
+}
+
+const VOICE_CONNECT_OPTS = {
+  autoSubscribe: true,
+  // Default LiveKit PC timeout is 15s — too tight on cellular / after audio-session setup.
+  peerConnectionTimeout: 45_000,
+  websocketTimeout: 20_000,
+  maxRetries: 3,
+} as const;
+
+function wireRoomEventHandlers(sdk: ClientModule): void {
+  if (!activeRoom) return;
+
+  activeRoom.on(sdk.RoomEvent.ConnectionStateChanged, (state: string) => {
+    if (__DEV__) console.log("[Voice] room connected:", state);
+    onStateCb?.(state.toLowerCase());
+  });
+
+  activeRoom.on(sdk.RoomEvent.Reconnecting, () => {
+    if (__DEV__) console.log("[Voice] reconnecting...");
+    onStateCb?.("reconnecting");
+  });
+
+  activeRoom.on(sdk.RoomEvent.Reconnected, async () => {
+    if (__DEV__) console.log("[Voice] reconnected — reapplying audio route");
+    await voiceService.setAudioRoute(currentRoute).catch(() => {});
+    onStateCb?.("reconnected");
+  });
+
+  activeRoom.on(sdk.RoomEvent.Disconnected, () => {
+    if (__DEV__) console.log("[Voice] disconnect: room disconnected");
+    onStateCb?.("disconnected");
+    onSpeakingCb?.(false);
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  activeRoom.on(sdk.RoomEvent.ParticipantConnected, (participant: any) => {
+    if (__DEV__) console.log("[Voice] remote participant joined:", participant.identity);
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  activeRoom.on(sdk.RoomEvent.ParticipantDisconnected, (participant: any) => {
+    if (__DEV__) console.log("[Voice] remote participant disconnected:", participant.identity);
+    onMuteChangedCb?.(participant.identity as string, false);
+  });
+
+  activeRoom.on(
+    sdk.RoomEvent.TrackSubscribed,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (track: any, _publication: any, participant: any) => {
+      if (__DEV__ && track.kind === "audio") {
+        console.log("[Voice] remote audio track subscribed:", participant.identity);
+      }
+      if (track.kind === "audio" && participant?.identity) {
+        const id = participant.identity as string;
+        const overridden = localVolumeOverrides.get(id);
+        const vol =
+          overridden !== undefined ? overridden : muteAllRemoteLocal ? 0 : 1;
+        if (typeof track.setVolume === "function") track.setVolume(vol);
+      }
+    },
+  );
+
+  activeRoom.on(
+    sdk.RoomEvent.TrackUnsubscribed,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (track: any, _publication: any, participant: any) => {
+      if (__DEV__ && track.kind === "audio") {
+        console.log("[Voice] remote audio track unsubscribed:", participant.identity);
+      }
+    },
+  );
+
+  activeRoom.on(
+    sdk.RoomEvent.TrackMuted,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (_publication: any, participant: any) => {
+      if (__DEV__) console.log("[VoiceMute] muted:", participant.identity);
+      onMuteChangedCb?.(participant.identity as string, true);
+    },
+  );
+
+  activeRoom.on(
+    sdk.RoomEvent.TrackUnmuted,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (_publication: any, participant: any) => {
+      if (__DEV__) console.log("[VoiceMute] unmuted:", participant.identity);
+      onMuteChangedCb?.(participant.identity as string, false);
+    },
+  );
+
+  activeRoom.on(sdk.RoomEvent.ActiveSpeakersChanged, (speakers: any[]) => {
+    const ids = (speakers as any[]).map((s: any) => s.identity as string);
+    if (__DEV__) {
+      if (ids.length) console.log("[VoiceActivity] remote speaking started:", ids.join(", "));
+      else console.log("[VoiceActivity] remote speaking stopped");
+    }
+    onActiveSpeakersCb?.(ids);
+  });
+}
+
+async function connectRoomWithRetry(url: string, token: string): Promise<void> {
+  if (!activeRoom) throw new Error("No active room");
+  try {
+    await activeRoom.connect(url, token, { ...VOICE_CONNECT_OPTS });
+  } catch (err) {
+    if (!isNegotiationTimeout(err)) throw err;
+    if (__DEV__) {
+      console.log("[Voice] negotiation timed out — retrying connect once");
+    }
+    try {
+      await activeRoom.disconnect();
+    } catch {
+      /* ignore */
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    await activeRoom.connect(url, token, { ...VOICE_CONNECT_OPTS });
+  }
+}
+
 function applyVolumeToParticipant(userId: string, volume: number): void {
   const participant = findRemoteParticipant(userId);
   if (!participant) return;
@@ -510,130 +642,26 @@ export const voiceService = {
       }
 
       // ── Step 4: Create Room ──────────────────────────────────────────────────
+      // Audio-only race voice: skip video-oriented adaptiveStream/dynacast — they
+      // add renegotiation pressure on weak mobile networks.
       activeRoom = new sdk.Room({
         audioCaptureDefaults: {
           echoCancellation:  true,
           noiseSuppression:  true,
           autoGainControl:   true,
         },
-        adaptiveStream: true,
-        dynacast:       true,
+        adaptiveStream: false,
+        dynacast:       false,
       });
 
-      // ── Connection state ─────────────────────────────────────────────────────
-      activeRoom.on(sdk.RoomEvent.ConnectionStateChanged, (state: string) => {
-        if (__DEV__) console.log("[Voice] room connected:", state);
-        onStateCb?.(state.toLowerCase());
-      });
+      wireRoomEventHandlers(sdk);
 
-      activeRoom.on(sdk.RoomEvent.Reconnecting, () => {
-        if (__DEV__) console.log("[Voice] reconnecting...");
-        onStateCb?.("reconnecting");
-      });
+      // Brief pause after disconnect so the previous PeerConnection can tear down
+      // before a new offer/answer (avoids "negotiation timed out" on fast rejoin).
+      await new Promise((r) => setTimeout(r, 350));
 
-      activeRoom.on(sdk.RoomEvent.Reconnected, async () => {
-        if (__DEV__) console.log("[Voice] reconnected — reapplying audio route");
-        await voiceService.setAudioRoute(currentRoute).catch(() => {});
-        onStateCb?.("reconnected");
-      });
-
-      activeRoom.on(sdk.RoomEvent.Disconnected, () => {
-        if (__DEV__) console.log("[Voice] disconnect: room disconnected");
-        onStateCb?.("disconnected");
-        onSpeakingCb?.(false);
-      });
-
-      // ── Remote participant events ─────────────────────────────────────────────
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      activeRoom.on(sdk.RoomEvent.ParticipantConnected, (participant: any) => {
-        if (__DEV__) console.log("[Voice] remote participant joined:", participant.identity);
-      });
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      activeRoom.on(sdk.RoomEvent.ParticipantDisconnected, (participant: any) => {
-        if (__DEV__) console.log("[Voice] remote participant disconnected:", participant.identity);
-        // When a participant leaves, treat them as unmuted to clean up UI state.
-        onMuteChangedCb?.(participant.identity as string, false);
-      });
-
-      // @livekit/react-native routes audio to device output automatically —
-      // no manual attach() call is needed (unlike the web SDK).
-      activeRoom.on(
-        sdk.RoomEvent.TrackSubscribed,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (track: any, _publication: any, participant: any) => {
-          if (__DEV__) {
-            if (__DEV__) console.log("[Voice] track subscribed — kind:", track.kind, "participant:", participant.identity);
-            if (track.kind === "audio") {
-              if (__DEV__) console.log("[Voice] remote audio track subscribed:", participant.identity);
-              if (__DEV__) console.log("[Voice] remote audio playing:", participant.identity);
-            }
-          }
-          if (track.kind === "audio" && participant?.identity) {
-            const id = participant.identity as string;
-            const overridden = localVolumeOverrides.get(id);
-            const vol =
-              overridden !== undefined
-                ? overridden
-                : muteAllRemoteLocal
-                  ? 0
-                  : 1;
-            if (typeof track.setVolume === "function") track.setVolume(vol);
-          }
-        },
-      );
-
-      activeRoom.on(
-        sdk.RoomEvent.TrackUnsubscribed,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (track: any, _publication: any, participant: any) => {
-          if (__DEV__ && track.kind === "audio") {
-            if (__DEV__) console.log("[Voice] remote audio track unsubscribed:", participant.identity);
-          }
-        },
-      );
-
-      // ── Remote mute/unmute — syncs mute indicators across all participants ────
-      // LiveKit fires TrackMuted/TrackUnmuted on ALL subscriber devices when a
-      // participant mutes or unmutes their track.  We expose this via onMuteChanged
-      // so the UI can show muted badges without Pusher.
-      activeRoom.on(
-        sdk.RoomEvent.TrackMuted,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (_publication: any, participant: any) => {
-          if (__DEV__) console.log("[VoiceMute] muted:", participant.identity);
-          onMuteChangedCb?.(participant.identity as string, true);
-        },
-      );
-
-      activeRoom.on(
-        sdk.RoomEvent.TrackUnmuted,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (_publication: any, participant: any) => {
-          if (__DEV__) console.log("[VoiceMute] unmuted:", participant.identity);
-          onMuteChangedCb?.(participant.identity as string, false);
-        },
-      );
-
-      // ── Active speakers — fires on ALL subscriber devices via LiveKit SFU ─────
-      // The SFU observes audio levels and sends ActiveSpeakersChanged to every
-      // participant, so all users see who is speaking without any Pusher events.
-      activeRoom.on(sdk.RoomEvent.ActiveSpeakersChanged, (speakers: any[]) => {
-        const ids = (speakers as any[]).map((s: any) => s.identity as string);
-        if (__DEV__) {
-          if (ids.length) {
-            console.log("[VoiceActivity] remote speaking started:", ids.join(", "));
-          } else {
-            console.log("[VoiceActivity] remote speaking stopped");
-          }
-        }
-        onActiveSpeakersCb?.(ids);
-      });
-
-      // ── Step 5: Connect to LiveKit room ──────────────────────────────────────
-      await activeRoom.connect(tokenData.url, tokenData.token, {
-        autoSubscribe: true,
-      });
+      // ── Step 5: Connect to LiveKit room (retry once on negotiation timeout) ──
+      await connectRoomWithRetry(tokenData.url, tokenData.token);
 
       if (__DEV__) console.log("[Voice] room connected:", tokenData.roomName);
 
@@ -680,9 +708,11 @@ export const voiceService = {
     try {
       const sdk = loadSDK();
       if (sdk && activeRoom.state !== sdk.ConnectionState?.Connected) {
-        const ok = await waitForRoomConnected(8_000);
+        const ok = await waitForRoomConnected(20_000);
         if (!ok) return false;
       }
+      // Let the subscriber PC settle before forcing a publish renegotiation.
+      await new Promise((r) => setTimeout(r, 400));
       if (__DEV__) console.log("[Voice] local audio track created: pending");
       await activeRoom.localParticipant.setMicrophoneEnabled(true);
 
@@ -754,7 +784,7 @@ export const voiceService = {
    */
   async startPublishing(): Promise<boolean> {
     if (!activeRoom?.localParticipant) return false;
-    if (!(await waitForRoomConnected(8_000))) return false;
+    if (!(await waitForRoomConnected(20_000))) return false;
     return voiceService.publishMicrophone();
   },
 

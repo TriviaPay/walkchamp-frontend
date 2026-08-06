@@ -413,20 +413,22 @@ function PrizeSection({
         <Text style={[styles.prizeLabel, { color: accentColor }]}>{label}</Text>
         <View style={[styles.prizeRule, { backgroundColor: accentColor }]} />
       </View>
-      <View style={styles.prizeAmountWrap}>
+      <View style={[styles.prizeAmountWrap, descriptive && styles.prizeAmountWrapDescriptive]}>
         <Text
           style={[
             descriptive ? styles.prizeAmountDescriptive : styles.prizeAmount,
-            emphasis === "coins" && styles.prizeAmountCoins,
-            emphasis === "cash" && styles.prizeAmountCash,
+            // Numeric pool emphasis only — never override descriptive copy size
+            // (e.g. "Coin prize updates as players join") with hero rf(35)/rf(38).
+            !descriptive && emphasis === "coins" && styles.prizeAmountCoins,
+            !descriptive && emphasis === "cash" && styles.prizeAmountCash,
             {
               color: accentColor,
-              textShadowColor: `${accentColor}80`,
+              textShadowColor: `${accentColor}55`,
             },
           ]}
           numberOfLines={descriptive ? 2 : 1}
           adjustsFontSizeToFit
-          minimumFontScale={descriptive ? 0.7 : 0.8}
+          minimumFontScale={descriptive ? 0.65 : 0.75}
         >
           {amount}
         </Text>
@@ -538,7 +540,7 @@ export function RaceStartingSoonCard({
     challengeType === "free"
       ? "Coins + Badges"
       : challengeType === "coins"
-        ? coinsPoolText ?? "Coin prize updates as players join"
+        ? coinsPoolText ?? "Prize grows as players join"
         : prizeText;
   // Descriptive (word) rewards use a smaller two-line style; numeric pools stay large.
   const prizeDescriptive =
@@ -928,37 +930,44 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
+    width: "100%",
     minWidth: rs(130),
-    paddingHorizontal: rs(8),
+    paddingHorizontal: rs(12),
+  },
+  prizeAmountWrapDescriptive: {
+    minHeight: rs(40),
+    paddingHorizontal: rs(16),
   },
   prizeAmount: {
-    maxWidth: rs(220),
+    width: "100%",
     fontSize: rf(28),
+    lineHeight: rf(32),
     fontWeight: "900",
     letterSpacing: 0.5,
     fontVariant: ["tabular-nums"],
+    textAlign: "center",
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 7,
   },
   prizeAmountCoins: {
-    maxWidth: rs(250),
-    fontSize: rf(35),
+    fontSize: rf(30),
+    lineHeight: rf(34),
     textShadowRadius: 9,
   },
   prizeAmountCash: {
-    maxWidth: rs(250),
-    fontSize: rf(38),
+    fontSize: rf(32),
+    lineHeight: rf(36),
     textShadowRadius: 10,
   },
   prizeAmountDescriptive: {
-    maxWidth: rs(240),
-    fontSize: rf(17),
-    lineHeight: rf(21),
-    fontWeight: "900",
-    letterSpacing: 0.3,
+    width: "100%",
+    fontSize: rf(14),
+    lineHeight: rf(19),
+    fontWeight: "800",
+    letterSpacing: 0.15,
     textAlign: "center",
     textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 6,
+    textShadowRadius: 4,
   },
   prizeShimmer: {
     position: "absolute",

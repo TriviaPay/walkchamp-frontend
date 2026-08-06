@@ -380,6 +380,8 @@ class WalkChampRaceForegroundService : Service() {
       if (!isTrackingActive()) return
       try {
         ensureWakeLock()
+        // Local-device midnight: reset tray before sampling so sticky shows 0 promptly.
+        checkMidnightRollover()
         val forceSample = !isScreenInteractive()
         // When the app is fully closed + screen locked, OEM sensor batching often
         // stops event callbacks. Force a hardware sample so trays keep advancing
@@ -428,7 +430,9 @@ class WalkChampRaceForegroundService : Service() {
   private val midnightCheckRunnable = object : Runnable {
     override fun run() {
       checkMidnightRollover()
-      if (isTrackingActive()) {
+      // Keep polling across midnight even if in-memory flags briefly flap —
+      // walk_active / race prefs mean we still need the next local-day reset.
+      if (isTrackingActive() || shouldKeepServiceAlive()) {
         workerHandler?.postDelayed(this, MIDNIGHT_CHECK_MS)
       }
     }
@@ -1376,20 +1380,42 @@ class WalkChampRaceForegroundService : Service() {
     syncNativeStepState(state)
   }
 
-  /** Never regress the ongoing walk notification within the same local day. */
+  /**
+   * Never regress the ongoing walk notification within the same local day.
+   * Across local midnight, yesterday's tray body must NOT floor today's count
+   * (that kept sticky at e.g. 125 after 12:00 AM).
+   */
   private fun monotonicWalkSteps(incoming: Int): Int {
     val today = NativeStepState.localDateString()
+    val walkDate = prefs().getString("walk_local_date", null)
+    val fromEngine =
+      sensorEngine?.currentState()?.takeIf { it.localDate == today }?.todaySteps ?: 0
+    val safeIncoming = incoming.coerceAtLeast(0)
+    // New calendar day (device local time): ignore yesterday's walk_body floor.
+    if (walkDate == null || walkDate != today) {
+      return maxOf(safeIncoming, fromEngine)
+    }
     val fromPrefs = parseStepsFromWalkBody(prefs().getString("walk_body", "") ?: "")
-    val fromEngine = sensorEngine?.currentState()?.takeIf { it.localDate == today }?.todaySteps ?: 0
-    return maxOf(incoming.coerceAtLeast(0), fromPrefs, fromEngine)
+    return maxOf(safeIncoming, fromPrefs, fromEngine)
   }
 
   private fun updateWalkNotificationToSteps(
     steps: Int,
     stepSource: String? = null,
     provisional: Boolean = false,
+    /** Midnight / JS day-reset — bypass same-day monotonic and force tray to steps. */
+    forceDayReset: Boolean = false,
   ) {
-    val safeSteps = monotonicWalkSteps(steps)
+    val today = NativeStepState.localDateString()
+    if (forceDayReset) {
+      prefs().edit()
+        .putString("walk_local_date", today)
+        .putString("walk_body", formatWalkNotificationBody(steps.coerceAtLeast(0)))
+        .commit()
+      lastWalkDisplayState = null
+    }
+    val safeSteps =
+      if (forceDayReset) steps.coerceAtLeast(0) else monotonicWalkSteps(steps)
     val body = formatWalkNotificationBody(safeSteps, provisional)
     val deepLink = prefs().getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
     val title = prefs().getString("walk_title", "Walk Champ") ?: "Walk Champ"
@@ -1461,19 +1487,19 @@ class WalkChampRaceForegroundService : Service() {
 
     val p = prefs()
     val walkDate = p.getString("walk_local_date", null)
-    val raceActive = raceState != null && isActiveRace(raceState!!)
     val walkNotificationActive =
       walkRunning || p.getBoolean("walk_active", false) || lastWalkNotification != null
     val needsWalkReset =
       rolled || (walkDate != null && walkDate != today)
 
-    if (walkNotificationActive && !raceActive && needsWalkReset) {
+    // Reset daily walk tray even if a live race owns the FGS slot — race steps
+    // are separate; walk sticky + Walk screen must start fresh at local midnight.
+    if (walkNotificationActive && needsWalkReset) {
       val native = sensorEngine?.currentState() ?: NativeStepState.load(this)
       val steps = native?.takeIf { it.localDate == today }?.todaySteps ?: 0
-      updateWalkNotificationToSteps(steps)
-      p.edit().putString("walk_local_date", today).apply()
+      updateWalkNotificationToSteps(steps, forceDayReset = true)
       rolled = true
-      Log.d(TAG, "[StepFGS] midnight rollover walk notification reset steps=$steps")
+      Log.d(TAG, "[StepFGS] midnight rollover walk notification reset steps=$steps localDate=$today")
     }
 
     if (!isTrackingActive()) return rolled
