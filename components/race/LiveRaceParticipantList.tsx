@@ -3,7 +3,7 @@
  * Shared across Free / Coins / Cash / Unlimited — not Unlimited-only.
  */
 
-import React, { memo, useCallback, useMemo } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   FlatList,
   Image,
@@ -103,6 +103,12 @@ const TrackPanelRow = memo(function TrackPanelRow({
       : player.isMe
         ? RANK_CURRENT_USER_GREEN
         : player.rankColor;
+  const photoUri = player.isMe ? meAvatarUrl : player.avatarUrl;
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [photoUri]);
+  const showPhoto = !!photoUri && !avatarFailed;
 
   return (
     <View
@@ -130,20 +136,21 @@ const TrackPanelRow = memo(function TrackPanelRow({
           },
         ]}
       >
-        {(player.isMe ? meAvatarUrl : player.avatarUrl) ? (
+        <Text style={[styles.lbAvatarI, { color: avatarBorder, fontSize: rs(12) }]}>
+          {player.initial}
+        </Text>
+        {showPhoto ? (
           <Image
-            source={{ uri: (player.isMe ? meAvatarUrl : player.avatarUrl)! }}
+            source={{ uri: photoUri! }}
+            onError={() => setAvatarFailed(true)}
             style={{
+              position: "absolute",
               width: avatarSize,
               height: avatarSize,
               borderRadius: avatarSize / 2,
             }}
           />
-        ) : (
-          <Text style={[styles.lbAvatarI, { color: avatarBorder, fontSize: rs(12) }]}>
-            {player.initial}
-          </Text>
-        )}
+        ) : null}
       </View>
       <View style={styles.lbInfo}>
         <Text
@@ -275,6 +282,7 @@ export function TrackPositionParticipantList({
             style={styles.muteAllBtn}
             accessibilityRole="button"
             accessibilityLabel="Unmute all remote participants on this device"
+            disabled={!muteAllActive && remoteIds.every((id) => !isRemoteLocallyMuted(id))}
           >
             <Feather name="mic" size={12} color="#C7CDDA" />
             <Text style={styles.muteAllTxt}>Unmute All</Text>
@@ -380,6 +388,12 @@ const LiveBoardRow = memo(function LiveBoardRow({
     : isUser
       ? primary
       : ac;
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [avatarUri]);
+  const initial = isUser ? "Y" : (participant.username.charAt(0).toUpperCase() || "?");
+  const showPhoto = !!avatarUri && !avatarFailed;
 
   return (
     <TouchableOpacity
@@ -402,16 +416,14 @@ const LiveBoardRow = memo(function LiveBoardRow({
           { backgroundColor: ac + "22", borderColor: avatarBorder },
         ]}
       >
-        {avatarUri ? (
+        <Text style={[styles.boardAvatarTxt, { color: nameColor }]}>{initial}</Text>
+        {showPhoto ? (
           <Image
-            source={{ uri: avatarUri }}
-            style={[styles.boardAvatarImg, isForfeited && { opacity: 0.5 }]}
+            source={{ uri: avatarUri! }}
+            onError={() => setAvatarFailed(true)}
+            style={[styles.boardAvatarImg, StyleSheet.absoluteFillObject, isForfeited && { opacity: 0.5 }]}
           />
-        ) : (
-          <Text style={[styles.boardAvatarTxt, { color: nameColor }]}>
-            {isUser ? "Y" : participant.username.charAt(0).toUpperCase()}
-          </Text>
-        )}
+        ) : null}
       </View>
       <View style={styles.boardInfo}>
         <View style={styles.nameRow}>

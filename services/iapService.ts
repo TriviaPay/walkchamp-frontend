@@ -376,6 +376,20 @@ export function setupPurchaseListeners(callbacks: {
               onMicPassGrant();
             }
           }
+        } else if (
+          result.code === "IAP_VERIFICATION_NOT_CONFIGURED" ||
+          result.code === "DEV_IAP_DISABLED"
+        ) {
+          // Do not queue — server cannot verify store receipts yet (not a transient error).
+          iapLog("purchase verification not configured", {
+            productId: purchase.productId,
+            code: result.code,
+          });
+          onError(
+            typeof result.message === "string" && result.message.length > 0
+              ? result.message
+              : "Secure store receipt verification is not configured on this server.",
+          );
         } else {
           iapLog("purchase verification pending", {
             productId: purchase.productId,

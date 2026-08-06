@@ -441,17 +441,36 @@ function appendUniqueComment(prev: RaceComment[], comment: RaceComment): RaceCom
     (comment.clientMessageId && c.clientMessageId === comment.clientMessageId))) return prev;
   return [...prev, comment].slice(-60); }
 
+/** Keep latest occurrence per id / clientMessageId so React list keys stay unique. */
+function dedupeComments(list: RaceComment[]): RaceComment[] {
+  const seenIds = new Set<string>();
+  const seenClients = new Set<string>();
+  const out: RaceComment[] = [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const c = list[i]!;
+    if (seenIds.has(c.id)) continue;
+    if (c.clientMessageId && seenClients.has(c.clientMessageId)) continue;
+    seenIds.add(c.id);
+    if (c.clientMessageId) seenClients.add(c.clientMessageId);
+    out.push(c);
+  }
+  out.reverse();
+  return out.slice(-60);
+}
+
 function mergeOrAppendComment(prev: RaceComment[], incoming: RaceComment): RaceComment[] {
   if (incoming.clientMessageId) {
     const idx = prev.findIndex((c) => c.clientMessageId === incoming.clientMessageId);
     if (idx !== -1) {
       const next = [...prev];
       next[idx] = incoming;
-      return next;
+      return dedupeComments(next);
     }
   }
-  if (prev.some((c) => c.id === incoming.id)) return prev;
-  return [...prev, incoming].slice(-60);
+  if (prev.some((c) => c.id === incoming.id)) {
+    return dedupeComments(prev.map((c) => (c.id === incoming.id ? incoming : c)));
+  }
+  return dedupeComments([...prev, incoming]);
 }
 
 // ── Track geometry ────────────────────────────────────────────────────────────
@@ -529,6 +548,108 @@ function sampleTrack(progress: number, width: number, height: number, finishZone
   const topY = finishZoneY ?? height * DEFAULT_FINISH_ZONE_FRAC;
   const y = bottomY - (bottomY - topY) * clamped;
   return { x: width * 0.5, y, angle: -90, depth: 0.82 + clamped * 0.2 }; }
+
+function LiveChatAvatar({
+  username,
+  avatarColor,
+  avatarUrl,
+  userId,
+  avatarVersion,
+  getAvatarVersion,
+  primary,
+}: {
+  username: string;
+  avatarColor: string;
+  avatarUrl?: string | null;
+  userId?: string;
+  avatarVersion?: number | null;
+  getAvatarVersion: (userId: string, fallback?: number) => number;
+  primary: string;
+}) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const uri =
+    avatarUrl && userId
+      ? `${getApiBase()}/api/profile/avatar/${userId}?v=${getAvatarVersion(userId, avatarVersion ?? 0)}`
+      : null;
+  useEffect(() => {
+    setImgFailed(false);
+  }, [uri]);
+  const color = avatarColor || primary;
+  return (
+    <View style={[st.liveChatAv, { backgroundColor: color + "22", borderColor: color }]}>
+      <Text style={[st.liveChatAvTxt, { color }]}>
+        {username.charAt(0).toUpperCase() || "?"}
+      </Text>
+      {uri && !imgFailed ? (
+        <Image
+          source={{ uri }}
+          onError={() => setImgFailed(true)}
+          style={[st.liveChatAvImg, StyleSheet.absoluteFillObject]}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/** Letter always underneath; photo only when URI exists — onError falls back to letter. */
+function RunnerAvatarFace({
+  size,
+  avatarUrl,
+  initial,
+  rankColor,
+  isMe,
+  isForfeited,
+  fontSize,
+  onPress,
+}: {
+  size: number;
+  avatarUrl?: string | null;
+  initial: string;
+  rankColor: string;
+  isMe: boolean;
+  isForfeited: boolean;
+  fontSize: number;
+  onPress?: () => void;
+}) {
+  const [imgFailed, setImgFailed] = useState(false);
+  useEffect(() => {
+    setImgFailed(false);
+  }, [avatarUrl]);
+  const showPhoto = !!avatarUrl && !imgFailed;
+  return (
+    <TouchableOpacity
+      activeOpacity={0.75}
+      onPress={onPress}
+      style={[st.runnerAvatar, {
+        width: size, height: size, borderRadius: size / 2,
+        borderColor: rankColor,
+        borderWidth: isMe ? 3 : 2,
+        backgroundColor: "#060914E8",
+        shadowColor: rankColor,
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+      }]}
+    >
+      <Text style={[st.runnerInitial, { color: rankColor, fontSize }]}>
+        {initial}
+      </Text>
+      {showPhoto ? (
+        <Image
+          source={{ uri: avatarUrl! }}
+          onError={() => setImgFailed(true)}
+          style={{
+            position: "absolute",
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+            opacity: isForfeited ? 0.5 : 1,
+          }}
+        />
+      ) : null}
+    </TouchableOpacity>
+  );
+}
 
 // ── RunnerMarker ──────────────────────────────────────────────────────────────
 // Animated: progress drives position on the UI thread via Reanimated worklets.
@@ -671,23 +792,16 @@ const RunnerMarker = React.memo(function RunnerMarker({ player, index, width, he
           speakRingStyle,
         ]}
       />
-      <TouchableOpacity
-        activeOpacity={0.75}
+      <RunnerAvatarFace
+        size={size}
+        avatarUrl={player.isMe && meAvatarUrl ? meAvatarUrl : player.avatarUrl}
+        initial={player.initial}
+        rankColor={player.isForfeited ? "#FF4444" : player.rankColor}
+        isMe={!!player.isMe}
+        isForfeited={!!player.isForfeited}
+        fontSize={rs(14)}
         onPress={() => onPress?.(player.userId)}
-        style={[st.runnerAvatar, {
-          width: size, height: size, borderRadius: size / 2,
-          borderColor: player.isForfeited ? "#FF4444" : player.rankColor,
-          borderWidth: player.isMe ? 3 : 2, backgroundColor: "#060914E8",
-          shadowColor: player.isForfeited ? "#FF4444" : player.rankColor, }]}
-      >
-        {player.avatarUrl ? (
-          <Image source={{ uri: player.avatarUrl }} style={{ width: size, height: size, borderRadius: size / 2, opacity: player.isForfeited ? 0.5 : 1 }} />
-        ) : (
-          <Text style={[st.runnerInitial, { color: player.isForfeited ? "#FF4444" : player.rankColor, fontSize: rs(14) }]}>
-            {player.initial}
-          </Text>
-        )}
-      </TouchableOpacity>
+      />
       {/* Name + steps centered above the avatar (not left/right) to avoid overlap */}
       <View
         pointerEvents="none"
@@ -1094,9 +1208,12 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
           : typeof item.rank === "number" && item.rank > 0
             ? item.rank
             : index + 1;
-      const pAvatarUrl = item.userId
-        ? `${getApiBase()}/api/profile/avatar/${item.userId}?v=${getAvatarVersion(item.userId ?? "", item.avatarVersion ?? 0)}`
-        : (isUser ? userAvatarUrl : null);
+      const pAvatarUrl =
+        item.avatarUrl && item.userId
+          ? `${getApiBase()}/api/profile/avatar/${item.userId}?v=${getAvatarVersion(item.userId ?? "", item.avatarVersion ?? 0)}`
+          : isUser
+            ? userAvatarUrl
+            : null;
       return (
         <LiveBoardRow
           participant={{ ...item, isHost: !!item.isHost } as LiveBoardRowParticipant}
@@ -1390,16 +1507,17 @@ const rbStyles = StyleSheet.create({
 // ── CheerFeed ─────────────────────────────────────────────────────────────────
 
 function CheerFeed({ comments, colors }: { comments: RaceComment[]; colors: ReturnType<typeof useColors> }) {
+  const feed = dedupeComments(comments).slice(-30);
   return (
     <View style={[cfStyles.wrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <View style={cfStyles.header}>
         <Text style={{ fontSize: 14 }}>🎉</Text>
         <Text style={[cfStyles.title, { color: colors.foreground }]}>Cheer Feed</Text>
       </View>
-      {comments.slice(-30).length === 0 ? (
+      {feed.length === 0 ? (
         <Text style={[cfStyles.empty, { color: colors.mutedForeground }]}>No cheers yet — be the first!</Text>
-      ) : comments.slice(-30).map((c) => (
-        <View key={c.id} style={cfStyles.row}>
+      ) : feed.map((c, i) => (
+        <View key={`${c.id}-${c.clientMessageId ?? i}`} style={cfStyles.row}>
           <View style={[cfStyles.avatar, { backgroundColor: c.avatarColor + "22", borderColor: c.avatarColor }]}>
             <Text style={[cfStyles.avatarTxt, { color: c.avatarColor }]}>{c.username.charAt(0).toUpperCase()}</Text>
           </View>
@@ -2778,7 +2896,12 @@ function LiveRaceDetailScreenContent() {
         country: p.countryFlag ?? undefined,
         isHost,
         isForfeited: p.status === "forfeited",
-        avatarUrl: p.userId ? `${getApiBase()}/api/profile/avatar/${p.userId}?v=${p.avatarVersion ?? 0}` : null,
+        // Only build an image URI when the profile actually has a photo — otherwise
+        // /api/profile/avatar 404s and RN Image paints a blank/black circle over the letter.
+        avatarUrl:
+          p.avatarUrl && p.userId
+            ? `${getApiBase()}/api/profile/avatar/${p.userId}?v=${p.avatarVersion ?? 0}`
+            : null,
         avatarVersion: p.avatarVersion ?? null,
       };
     });
@@ -3593,7 +3716,7 @@ function LiveRaceDetailScreenContent() {
             const normalized = Array.isArray(body.comments)
               ? body.comments.map(normalizeIncomingComment).filter((c): c is RaceComment => c !== null)
               : [];
-            setComments(normalized);
+            setComments(dedupeComments(normalized));
           }
           if (reactionsRes.ok) {
             const body = await reactionsRes.json() as { reactions?: ReactionCount[] };
@@ -4573,14 +4696,15 @@ function LiveRaceDetailScreenContent() {
           <View key={`${w.userId}-${i}`} style={s.winnerRow}>
             <Text style={s.winnerCrown}>{rankCrown}</Text>
             <View style={[s.winnerAv, { backgroundColor: (w.avatarColor ?? "#00E676") + "25", borderColor: w.avatarColor ?? "#00E676" }]}>
-              {w.userId ? (
+              <Text style={[s.winnerAvTxt, { color: w.avatarColor ?? "#00E676" }]}>
+                {w.username.charAt(0).toUpperCase() || "?"}
+              </Text>
+              {w.avatarUrl && w.userId ? (
                 <Image
                   source={{ uri: `${getApiBase()}/api/profile/avatar/${w.userId}?v=${getAvatarVersion(w.userId, w.avatarVersion ?? 0)}` }}
-                  style={s.winnerAvImg}
+                  style={[s.winnerAvImg, StyleSheet.absoluteFillObject]}
                 />
-              ) : (
-                <Text style={[s.winnerAvTxt, { color: w.avatarColor ?? "#00E676" }]}>{w.username.charAt(0).toUpperCase()}</Text>
-              )}
+              ) : null}
             </View>
             <View style={{ flex: 1 }}>
               <Text style={s.winnerName}>@{w.username} {w.countryFlag}</Text>
@@ -5031,7 +5155,7 @@ function LiveRaceDetailScreenContent() {
             >
               {comments.length === 0 ? (
                 <Text style={[st.liveChatEmpty, { color: colors.mutedForeground }]}>No messages yet — be the first!</Text>
-              ) : comments.slice(-20).map((cheer) => {
+              ) : dedupeComments(comments).slice(-20).map((cheer, i) => {
                 const isFailed = cheer.status === "failed";
                 const retryHandler = isFailed ? () => {
                   setComments((prev) => prev.filter((c) => c.clientMessageId !== cheer.clientMessageId));
@@ -5040,20 +5164,19 @@ function LiveRaceDetailScreenContent() {
                 const RowWrapper = isFailed ? TouchableOpacity : View;
                 return (
                   <RowWrapper
-                    key={cheer.id}
+                    key={`${cheer.id}-${cheer.clientMessageId ?? i}`}
                     style={[st.liveChatRow, cheer.status === "sending" && { opacity: 0.55 }, isFailed && { opacity: 0.8 }]}
                     {...(isFailed ? { onPress: retryHandler, activeOpacity: 0.6 } : {})}
                   >
-                    <View style={[st.liveChatAv, { backgroundColor: (cheer.avatarColor ?? colors.primary) + "22", borderColor: cheer.avatarColor ?? colors.primary }]}>
-                      {cheer.userId ? (
-                        <Image
-                          source={{ uri: `${getApiBase()}/api/profile/avatar/${cheer.userId}?v=${getAvatarVersion(cheer.userId, cheer.avatarVersion ?? 0)}` }}
-                          style={st.liveChatAvImg}
-                        />
-                      ) : (
-                        <Text style={[st.liveChatAvTxt, { color: cheer.avatarColor ?? colors.primary }]}>{cheer.username.charAt(0).toUpperCase()}</Text>
-                      )}
-                    </View>
+                    <LiveChatAvatar
+                      username={cheer.username}
+                      avatarColor={cheer.avatarColor ?? colors.primary}
+                      avatarUrl={cheer.avatarUrl}
+                      userId={cheer.userId}
+                      avatarVersion={cheer.avatarVersion}
+                      getAvatarVersion={getAvatarVersion}
+                      primary={colors.primary}
+                    />
                     <View style={[st.liveChatBubble, { flex: 1 }]}>
                       <Text style={[st.liveChatName, { color: colors.primary }]}>{cheer.countryFlag} {cheer.username}</Text>
                       <Text style={[st.liveChatMsg, { color: colors.foreground }]}>{cheer.text}</Text>
@@ -5177,14 +5300,15 @@ function LiveRaceDetailScreenContent() {
 
                         <View style={micPanelSt.dot} />
 
-                        {/* ── Mute toggle ── */}
+                        {/* ── Mute toggle (icon = current mic state, same as big button) ── */}
                         <TouchableOpacity
                           style={[micPanelSt.iconBtn, micState === "muted" && micPanelSt.iconBtnMuted]}
                           onPress={selectMute}
                           activeOpacity={0.75}
+                          accessibilityLabel={micState === "muted" ? "Unmute microphone" : "Mute microphone"}
                         >
                           <Feather
-                            name={micState === "muted" ? "mic" : "mic-off"}
+                            name={micState === "muted" ? "mic-off" : "mic"}
                             size={15}
                             color={micState === "muted" ? "#F59E0B" : "#6E7284"}
                           />

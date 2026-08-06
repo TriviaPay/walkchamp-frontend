@@ -793,9 +793,10 @@ export const voiceService = {
    * Does not affect what other participants hear — purely client-side.
    */
   async setParticipantLocalVolume(userId: string, volume: number): Promise<void> {
-    if (!activeRoom) return;
     const clamped = Math.max(0, Math.min(1, volume));
+    // Always persist override so Mute / Unmute before voice joins still applies on connect.
     localVolumeOverrides.set(userId, clamped);
+    if (!activeRoom) return;
     applyVolumeToParticipant(userId, clamped);
   },
 

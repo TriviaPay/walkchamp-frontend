@@ -79,7 +79,19 @@ export function MicPassModal({ visible, onClose, onGranted }: Props) {
           },
           onError: (msg) => {
             setLoading(false);
-            setError(msg);
+            // Production API often lacks Apple/Google verify — try debug grant in __DEV__.
+            const notConfigured =
+              msg.toLowerCase().includes("not configured") ||
+              msg.toLowerCase().includes("iap_verification");
+            if (__DEV__ && notConfigured) {
+              void grantViaDevApi();
+              return;
+            }
+            setError(
+              notConfigured
+                ? `${msg} Mic Pass is App Store / Play Billing — not Stripe or Razorpay.`
+                : msg,
+            );
           },
         });
       } catch {
@@ -144,7 +156,10 @@ export function MicPassModal({ visible, onClose, onGranted }: Props) {
           await grantViaDevApi();
           return;
         }
-        setError(getIAPUnavailableMessage());
+        setError(
+          "Mic Pass uses Apple / Google in-app purchase (not Stripe or Razorpay). " +
+            getIAPUnavailableMessage(),
+        );
         setLoading(false);
         return;
       }
@@ -161,7 +176,10 @@ export function MicPassModal({ visible, onClose, onGranted }: Props) {
         await grantViaDevApi();
         return;
       }
-      setError(getIAPUnavailableMessage());
+      setError(
+        "Mic Pass uses Apple / Google in-app purchase (not Stripe or Razorpay). " +
+          getIAPUnavailableMessage(),
+      );
       setLoading(false);
     }
   };
