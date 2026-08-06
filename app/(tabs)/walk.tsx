@@ -3452,15 +3452,21 @@ function WalkScreenContent() {
             </View>
           </View>
 
-          {/* Cash Prize Challenge ($3 card) */}
+          {/* Cash Prize Challenge — paid_usd, amount comes from the room, not a fixed tier */}
           {ENABLE_THREE_DOLLAR_CHALLENGE && (() => {
             const premOpt = RACE_OPTIONS.find((o) => o.fee === 3)!;
-            const premKey = "paid_3";
+            // Cash challenges are created as paid_usd (see handleCreateChallenge). The card
+            // previously read paid_3, a tier nothing ever creates, so it never left "Host".
+            const premKey = "paid_usd";
             const premCs = challengeStatuses[premKey];
             const premS = premCs?.status;
+            // Each paid_usd room carries its own entry amount, so the fee is read off the
+            // room rather than hardcoded. Null only when no room exists (host_available).
+            const premFee = (premCs?.entryAmountCents ?? 0) / 100;
+            const premFeeLabel = premFee > 0 ? `$${premFee.toFixed(2)}` : null;
 
             const handlePremiumPress = () => {
-              if (__DEV__) console.log("[PremiumChallenge] $3 card clicked");
+              if (__DEV__) console.log("[PremiumChallenge] cash card clicked", { premKey, premFee });
               if (showSponsoredBlockAlert()) return;
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               if (premS === "user_hosting_active" || premS === "user_joined_active") {
@@ -3470,19 +3476,22 @@ function WalkScreenContent() {
               if (premS === "user_hosting_waiting" || premS === "user_joined_waiting") {
                 if (premCs?.raceId) {
                   setActiveRace(premCs.raceId, premCs.isHost);
-                  joinRace(3, premCs.maxPlayers, premCs.isHost);
+                  joinRace(premFee, premCs.maxPlayers, premCs.isHost);
                   navToMatchmaking({ raceId: premCs.raceId!, isHost: !!premCs.isHost });
                 }
                 return;
               }
               if (premS === "join_available" && premCs?.raceId) {
-                if (__DEV__) console.log("[PremiumChallenge] join flow opened", { raceId: premCs.raceId });
-                void handleDirectJoin(premCs.raceId, 3, premCs.maxPlayers, premKey);
+                if (__DEV__) console.log("[PremiumChallenge] join flow opened", { raceId: premCs.raceId, premFee });
+                void handleDirectJoin(premCs.raceId, premFee, premCs.maxPlayers, premKey);
                 return;
               }
-              if (__DEV__) console.log("[PremiumChallenge] create flow opened");
-              setConfirmChecks([false, false, false]);
-              setConfirmEntry({ fee: 3, label: "$3 Premium Challenge", gradients: premOpt.gradientColors });
+              // Host: route to the create sheet in USD mode so the user picks the amount.
+              // The old path sent a fixed $3 through setupModal, which feeToEntryType mapped
+              // to paid_3 — creating rooms in the dead tier this card could never surface.
+              if (__DEV__) console.log("[PremiumChallenge] create flow opened (usd mode)");
+              setChallengeEntryMode("usd");
+              openCreateChallengeModal();
             };
 
             const premStatusLabel =
@@ -3508,7 +3517,7 @@ function WalkScreenContent() {
                     <Text style={styles.raceCardLabel}>Cash Prize Challenge</Text>
                     <Text style={styles.raceCardSub}>Skill-based walking challenge · Prize rewards</Text>
                     <View style={{ flexDirection: "row", gap: 5, marginTop: 5, flexWrap: "wrap" }}>
-                      {["$3 entry", "Step goal"].map((chip) => (
+                      {[premFeeLabel ? `${premFeeLabel} entry` : "Custom entry", "Step goal"].map((chip) => (
                         <View key={chip} style={{ backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2 }}>
                           <Text style={{ color: "#FFF", fontSize: 10, fontWeight: "700" }}>{chip}</Text>
                         </View>

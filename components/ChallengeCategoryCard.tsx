@@ -16,6 +16,12 @@ export interface ChallengeStatus {
   joinedCount: number;
   maxPlayers: number;
   targetSteps?: number;
+  /**
+   * Entry fee of the room this card points at, in cents. Cash (paid_usd) rooms carry a
+   * per-room amount rather than a fixed tier, so the card prices itself from this.
+   * Null/absent when no room exists yet (host_available).
+   */
+  entryAmountCents?: number | null;
   canHost: boolean;
   canJoin: boolean;
   isActive: boolean;
