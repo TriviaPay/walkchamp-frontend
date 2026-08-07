@@ -21,6 +21,8 @@ export interface ChallengeStatus {
   scheduledStartAt?: string | null;
   /** Actual race start when the challenge is already live. */
   startedAt?: string | null;
+  /** Challenge / race end when the available API includes it. */
+  challengeEndAt?: string | null;
   entryAmountCents?: number;
   coinEntryAmount?: number;
   prizePoolCents?: number;
@@ -211,7 +213,7 @@ const cStyles = StyleSheet.create({
   cardShellMb:   { borderRadius: 18, overflow: "hidden", marginBottom: 10 },
   activeOtherWrap: { marginBottom: 10 },
 
-  gradient:  { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 18, paddingVertical: 18 },
+  gradient:  { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 18, paddingVertical: 18, minHeight: 82 },
   freeGradient: {
     overflow: "hidden",
     borderWidth: 1,
@@ -249,7 +251,7 @@ const cStyles = StyleSheet.create({
   textBlock: { flex: 1 },
   title:     { fontSize: 17, fontWeight: "800", color: "#FFF" },
   sub:       { fontSize: 12, color: "rgba(255,255,255,0.78)", marginTop: 2 },
-  rightBlock:{ alignItems: "flex-end", gap: 6 },
+  rightBlock:{ alignItems: "flex-end", justifyContent: "center", alignSelf: "center", gap: 6 },
 
   actionRow: {
     flexDirection: "row",

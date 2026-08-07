@@ -24,7 +24,10 @@ export type RaceStartingSoonChallengeType = "free" | "coins" | "cash" | "sponsor
 export type RaceStartingSoonCardProps = {
   challengeType: RaceStartingSoonChallengeType;
   phase: RaceStartingSoonPhase;
+  /** Race start from API (`startedAt` when live, else `scheduledStartAt`). */
   scheduledStartAt: string | null;
+  /** Race end from API only (`challengeEndAt` / `endsAt`) — never invent on client. */
+  endsAt?: string | null;
   registeredCount: number;
   maxSlots: number;
   targetSteps?: number;
@@ -36,6 +39,11 @@ export type RaceStartingSoonCardProps = {
   coinEntryAmount?: number;
   /** Cash entry fee in cents. */
   entryAmountCents?: number;
+  /**
+   * When true (My Race / already in the room), live CTA is "View Race".
+   * Defaults true — this card is only shown for the user's own races.
+   */
+  isParticipant?: boolean;
   onPressCta: () => void;
   /** Optional outer wrapper style (e.g. carousel card width). */
   style?: StyleProp<ViewStyle>;
@@ -205,12 +213,17 @@ function daysToGoMessage(totalMs: number): string {
   return `${days} days to go`;
 }
 
+function formatCashUsd(cents: number): string {
+  return `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}`;
+}
+
 function prizePoolLabel(
   challengeType: RaceStartingSoonChallengeType,
   opts: {
     prizePoolCents?: number;
     prizePerWinnerCents?: number;
     coinEntryAmount?: number;
+    entryAmountCents?: number;
     registeredCount: number;
     maxSlots: number;
   },
@@ -226,16 +239,40 @@ function prizePoolLabel(
       return "Coins";
     }
     case "cash": {
-      if (opts.prizePoolCents != null && opts.prizePoolCents > 0) {
-        return `$${(opts.prizePoolCents / 100).toFixed(opts.prizePoolCents % 100 === 0 ? 0 : 2)}`;
-      }
-      return "$";
+      const fromApi =
+        opts.prizePoolCents != null && opts.prizePoolCents > 0
+          ? opts.prizePoolCents
+          : 0;
+      const fromEntries =
+        opts.entryAmountCents && opts.entryAmountCents > 0
+          ? opts.entryAmountCents * Math.max(1, opts.registeredCount)
+          : 0;
+      const cents = fromApi > 0 ? fromApi : fromEntries;
+      if (cents > 0) return formatCashUsd(cents);
+      return "$0";
     }
     case "sponsored": {
       const usd = getSponsoredPrizePerWinnerUsd(opts.prizePerWinnerCents);
       return `$${usd}`;
     }
   }
+}
+
+function formatRaceClock(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const date = d.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  const time = d.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  return `${date}, ${time}`;
 }
 
 function TimeBox({
@@ -456,6 +493,7 @@ export function RaceStartingSoonCard({
   challengeType,
   phase,
   scheduledStartAt,
+  endsAt,
   registeredCount,
   maxSlots,
   targetSteps = SPONSORED_DEFAULT_TARGET_STEPS,
@@ -463,6 +501,7 @@ export function RaceStartingSoonCard({
   prizePerWinnerCents,
   coinEntryAmount,
   entryAmountCents,
+  isParticipant = true,
   onPressCta,
   style,
 }: RaceStartingSoonCardProps) {
@@ -498,15 +537,26 @@ export function RaceStartingSoonCard({
     prizePoolCents,
     prizePerWinnerCents,
     coinEntryAmount,
+    entryAmountCents,
     registeredCount,
     maxSlots,
   });
 
   const title = isLive ? "LIVE NOW ⚡" : "Race Starting Soon! 🚀";
   const subtitle = isLive
-    ? "Your race is live. Join now!"
+    ? isParticipant
+      ? "Your race is live. Open it now!"
+      : "Your race is live. Join now!"
     : "You're registered.\nGet ready for the challenge.";
-  const ctaLabel = isLive ? "Join Race" : urgent ? "Join Waiting Room" : "Open Waiting Room";
+  const ctaLabel = isLive
+    ? isParticipant
+      ? "View Race"
+      : "Join Race"
+    : urgent
+      ? "Join Waiting Room"
+      : "Open Waiting Room";
+  const startClock = formatRaceClock(scheduledStartAt);
+  const endClock = formatRaceClock(endsAt);
   const progressMsg = !isLive && !parts.expired
     ? daysToGoMessage(parts.totalMs)
     : "Almost time! Keep your steps going";
@@ -606,9 +656,30 @@ export function RaceStartingSoonCard({
           </View>
         </View>
 
-        <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
-          {title}
-        </Text>
+        <View style={styles.titleRow}>
+          <Text
+            style={styles.title}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
+          >
+            {title}
+          </Text>
+          {(startClock || endClock) && (
+            <View style={styles.raceWindowTimes}>
+              {startClock ? (
+                <Text style={styles.raceWindowText} numberOfLines={1}>
+                  Starts {startClock}
+                </Text>
+              ) : null}
+              {endClock ? (
+                <Text style={styles.raceWindowText} numberOfLines={1}>
+                  Ends {endClock}
+                </Text>
+              ) : null}
+            </View>
+          )}
+        </View>
         <Text style={styles.subtitle} numberOfLines={2}>
           {subtitle}
         </Text>
@@ -807,12 +878,32 @@ const styles = StyleSheet.create({
     fontSize: rf(10),
     fontWeight: "800",
   },
-  title: {
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: rs(8),
     minHeight: rf(22),
+  },
+  title: {
+    flexShrink: 1,
     color: "#FFF",
     fontSize: rf(20),
     fontWeight: "900",
     letterSpacing: 0.2,
+  },
+  raceWindowTimes: {
+    flexShrink: 0,
+    alignItems: "flex-end",
+    gap: rs(2),
+    maxWidth: "58%",
+  },
+  raceWindowText: {
+    color: "rgba(209,250,229,0.88)",
+    fontSize: rf(9),
+    fontWeight: "700",
+    letterSpacing: 0.1,
+    textAlign: "right",
   },
   subtitle: {
     minHeight: rf(28),

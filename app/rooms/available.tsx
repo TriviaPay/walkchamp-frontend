@@ -35,7 +35,7 @@ import AlreadyRegisteredModal, { type RegisteredRaceInfo } from "@/components/Al
 import { JoinProgressOverlay } from "@/components/RaceJoinBadge";
 import JoinWithCodeModal, { type JoinWithCodeResult } from "@/components/JoinWithCodeModal";
 import { PublicProfileModal, type PublicProfileInitialData } from "@/components/PublicProfileModal";
-import { TRACK_LAYOUT_OPTIONS } from "@/constants/trackLayouts";
+import { resolveRoomTrackCode } from "@/constants/trackLayouts";
 import { TrackThemeImage } from "@/components/TrackThemeImage";
 import type { TrackThemeImageSet } from "@/utils/trackThemeMedia";
 import CoinIcon from "@/components/CoinIcon";
@@ -90,6 +90,8 @@ interface UpcomingRoom {
   challenge_duration_days: number;
   challenge_end_at: string | null;
   selected_track_theme_id: string;
+  theme_code?: string;
+  trackLayout?: string;
   theme_name: string;
   imageSet?: TrackThemeImageSet | null;
   imageUrl?: string | null;
@@ -130,6 +132,8 @@ interface Room {
   country_label: string;
   theme_name: string;
   selected_track_theme_id?: string;
+  theme_code?: string;
+  trackLayout?: string;
   imageSet?: TrackThemeImageSet | null;
   imageUrl?: string | null;
   assetVersion?: number;
@@ -276,10 +280,7 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
   const isCash = !isCoins && room.entry_fee > 0;
   const accent = isCash ? CASH_BLUE : isCoins ? GOLD : GREEN;
 
-  const trackCode =
-    room.selected_track_theme_id?.trim() ||
-    TRACK_LAYOUT_OPTIONS.find((t) => t.label === room.theme_name)?.id ||
-    "bg";
+  const trackCode = resolveRoomTrackCode(room);
 
   const prizePoolDollars = isCash ? room.reward_pool : 0;
   const prizePoolCoins = isCoins ? (room.coin_entry_amount ?? 0) * room.current_players : 0;
@@ -1182,7 +1183,7 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
   const isHost      = !isSponsored && !!currentUserId && currentUserId === room.host_user_id;
   const accent      = isSponsored ? "#7C3AFF" : isCash ? CASH_BLUE : isCoins ? GOLD : GREEN;
 
-  const trackCode = room.selected_track_theme_id?.trim() || "bg";
+  const trackCode = resolveRoomTrackCode(room);
 
   const prizePoolDollars = isCash ? Math.round(room.entry_fee * room.registered_count) : 0;
   const prizePoolCoins   = isCoins ? room.coin_entry_amount * room.registered_count : 0;
@@ -2435,7 +2436,7 @@ function AvailableRoomsScreenContent() {
           is_private: !!room.is_private,
           requires_code: !!room.requires_code,
           reward_pool: room.reward_pool ?? room.entry_fee,
-          selected_track_theme_id: room.selected_track_theme_id || "bg",
+          selected_track_theme_id: resolveRoomTrackCode(room),
           theme_name: room.theme_name || "Unlimited",
         });
       }
@@ -2451,6 +2452,9 @@ function AvailableRoomsScreenContent() {
           initialMaxPlayers: isUnlimitedJoin ? null : room.max_players,
           initialTargetSteps: room.target_steps,
           initialDailyGoalSteps: isUnlimitedJoin ? room.target_steps : undefined,
+          initialCoinEntryAmount:
+            room.challenge_type === "coins_battle" ? room.coin_entry_amount : undefined,
+          initialTrackLayout: resolveRoomTrackCode(room),
         }),
       });
     } catch {
@@ -2578,6 +2582,9 @@ function AvailableRoomsScreenContent() {
         initialMaxPlayers: isUnlimitedRoom ? null : room.max_players,
         initialTargetSteps: room.target_steps,
         initialDailyGoalSteps: isUnlimitedRoom ? room.target_steps : undefined,
+        initialCoinEntryAmount:
+          room.challenge_type === "coins_battle" ? room.coin_entry_amount : undefined,
+        initialTrackLayout: resolveRoomTrackCode(room),
       }),
     });
   }, [user]);

@@ -92,7 +92,17 @@ const CASH_ENTRY_TYPES = new Set([
   "$1", "$3", "$5", "USD Entry",
 ]);
 
-/** Unlimited Daily Goal challenges — strict markers only (never Free/classic). */
+/** Classic cash entry types — never classify these as Unlimited. */
+function isClassicCashEntryType(entryType: string): boolean {
+  const et = entryType.trim();
+  const lower = et.toLowerCase();
+  if (CASH_ENTRY_TYPES.has(et) || CASH_ENTRY_TYPES.has(lower)) return true;
+  if (lower === "paid_usd" || lower === "usd entry") return true;
+  if (/^\$\d+(\.\d+)?$/.test(et)) return true;
+  return false;
+}
+
+/** Unlimited Daily Goal challenges — strict markers only (never Free/classic cash). */
 export function isUnlimitedChallengeRace(
   race: Pick<LiveRace, "entryType" | "type"> & {
     challengeType?: string | null;
@@ -109,6 +119,13 @@ export function isUnlimitedChallengeRace(
   if (challengeType === "unlimited_goal") return true;
   if (capacityMode === "unlimited") return true;
   if (entryType === "unlimited_goal") return true;
+  // Classic cash / free / coins must never match the Unlimited heuristic
+  // (cash rooms often have challengeEndAt for the race window).
+  if (race.type === "sponsored") return false;
+  if (entryType === "free" || entryType === "coins_battle" || entryType === "coins battle") {
+    return false;
+  }
+  if (isClassicCashEntryType(entryType)) return false;
   // Live card label is often "$45" (not unlimited_goal). Unlimited rows use
   // maxPlayers 0/null plus a multi-day end window from the Unlimited API mapper.
   const maxPlayers = race.maxPlayers;
@@ -116,17 +133,7 @@ export function isUnlimitedChallengeRace(
   const hasUnlimitedWindow =
     (typeof race.challengeDurationDays === "number" && race.challengeDurationDays > 0) ||
     !!race.challengeEndAt;
-  const et = entryType;
-  if (
-    uncapped &&
-    hasUnlimitedWindow &&
-    race.type !== "sponsored" &&
-    et !== "free" &&
-    et !== "coins_battle" &&
-    et !== "coins battle"
-  ) {
-    return true;
-  }
+  if (uncapped && hasUnlimitedWindow) return true;
   return false;
 }
 
@@ -312,7 +319,8 @@ function shouldMergeUnlimitedLive(filter: FilterType): boolean {
   );
 }
 
-const LIVE_SCREEN_CACHE_PREFIX = "screen_live_v4_";
+/** Bump when Live membership/filter rules change so stale Unlimited cards drop. */
+const LIVE_SCREEN_CACHE_PREFIX = "screen_live_v5_";
 
 function mergeLiveById(primary: LiveRace[], extra: LiveRace[]): LiveRace[] {
   const seen = new Set(primary.map((r) => r.id));
@@ -1134,10 +1142,18 @@ function RaceCardBase({
   };
   const isCoinsBattle = race.entryType === "coins_battle";
   const isSponsored = race.type === "sponsored";
-  const isUnlimited =
-    race.challengeType === "unlimited_goal" ||
-    race.capacityMode === "unlimited" ||
-    race.entryType === "unlimited_goal";
+  const isUnlimited = isUnlimitedChallengeRace(race);
+  const isCash = !isUnlimited && isCashChallengeRace(race);
+  const cashBadgeLabel =
+    typeof race.entryAmountCents === "number" && race.entryAmountCents > 0
+      ? `$${
+          race.entryAmountCents % 100 === 0
+            ? (race.entryAmountCents / 100).toFixed(0)
+            : (race.entryAmountCents / 100).toFixed(2)
+        }`
+      : race.entryType && /^\$\d/.test(race.entryType)
+        ? race.entryType
+        : "Cash";
   const entryBadgeLabel = isSponsored
     ? "🏆 Sponsored"
     : isCoinsBattle
@@ -1146,7 +1162,9 @@ function RaceCardBase({
         ? race.entryType && /^\$\d/.test(race.entryType)
           ? `∞ ${race.entryType}`
           : "∞ Unlimited"
-        : race.entryType;
+        : isCash
+          ? cashBadgeLabel
+          : race.entryType;
   const ec = isSponsored
     ? "#F59E0B"
     : isUnlimited
@@ -1927,18 +1945,34 @@ export default function LiveTab() {
           ? filterMyRaces(finished, participation)
           : racesVisibleOnTab(finished, activeFilter);
 
-      // If a flaky Unlimited fetch dropped rows we already showed, keep them.
+      // If a flaky Unlimited fetch dropped LIVE rows, keep only still-live ones.
+      // Never re-inject finished/cancelled Unlimited that the new filter removed.
       if (
         activeFilter === "All" ||
         activeFilter === "Unlimited Challenges" ||
         activeFilter === "My Races"
       ) {
-        const prevUl = liveChallengesRef.current.filter(isUnlimitedChallengeRace);
+        const prevUlLive = liveChallengesRef.current.filter(
+          (r) =>
+            isUnlimitedChallengeRace(r) &&
+            r.status !== "completed" &&
+            String(r.status).toLowerCase() !== "cancelled" &&
+            String(r.status).toLowerCase() !== "cancelled_by_platform",
+        );
         const nextUl = visibleLive.filter(isUnlimitedChallengeRace);
-        if (prevUl.length > 0 && nextUl.length === 0) {
-          visibleLive = mergeLiveById(visibleLive, prevUl);
+        if (prevUlLive.length > 0 && nextUl.length === 0) {
+          visibleLive = mergeLiveById(visibleLive, prevUlLive);
         }
       }
+      // Finished: drop any Unlimited the viewer did not host/join (API is global).
+      visibleFinished = visibleFinished.filter((r) => {
+        if (!isUnlimitedChallengeRace(r)) return true;
+        if (r.status !== "completed") return false;
+        return (
+          r.currentUserParticipating === true ||
+          (!!user?.id && !!r.hostUserId && r.hostUserId === user.id)
+        );
+      });
 
       const freshIsEmpty = visibleLive.length === 0 && visibleFinished.length === 0;
       // Only treat "had visible" as same-tab cards (not leftovers from another chip).
@@ -2134,6 +2168,12 @@ export default function LiveTab() {
       };
       const onCompleted = () => {
         const completedRace = liveChallengesRef.current.find((r) => r.id === raceId);
+        // Unlimited: never optimistically mark FINISHED with empty players —
+        // reload from API so only true server completions appear.
+        if (completedRace && isUnlimitedChallengeRace(completedRace)) {
+          void loadRef.current();
+          return;
+        }
         setLiveChallenges((prev) => prev.filter((r) => r.id !== raceId));
         if (completedRace) {
           const updated = { ...completedRace, status: "completed", completedAt: new Date().toISOString() };

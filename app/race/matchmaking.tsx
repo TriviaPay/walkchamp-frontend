@@ -71,6 +71,7 @@ import {
 } from "@/services/realtimeService";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf, rs } from "@/utils/responsive";
+import { isTrackLayoutId } from "@/constants/trackLayouts";
 import { CashChallengeRefundBreakdown } from "@/components/CashChallengePaymentBreakdown";
 import { fetchCashChallengePaymentQuote, formatUsdFromDollars, refundBreakdownFromQuote, buildOptimisticRefundQuote, type CashChallengePaymentQuote } from "@/services/cashChallengeApi";
 import {
@@ -259,6 +260,93 @@ function firstNonEmpty(...candidates: unknown[]): string | null {
   return null;
 }
 
+/** Labels used when profile username is missing — must not drive avatar initials (e.g. "H" from Host). */
+function isPlaceholderUsername(name: string | null | undefined): boolean {
+  const n = (name ?? "").trim().toLowerCase();
+  return (
+    !n ||
+    n === "host" ||
+    n === "player" ||
+    n === "walker" ||
+    n === "you" ||
+    n === "unknown"
+  );
+}
+
+/** Prefer real usernames; skip Host/Player placeholders. */
+function firstRealUsername(...candidates: unknown[]): string | null {
+  for (const candidate of candidates) {
+    const cleaned = cleanString(candidate);
+    if (cleaned && !isPlaceholderUsername(cleaned)) return cleaned;
+  }
+  return null;
+}
+
+/**
+ * Fill missing host/joiner usernames + avatars from /api/auth/profile/:id
+ * so scheduled future rooms match open Free/Cash waiting rooms.
+ */
+async function hydrateWaitingRoomProfiles(
+  participants: RoomParticipant[],
+): Promise<RoomParticipant[]> {
+  const needIds = [
+    ...new Set(
+      participants
+        .filter((p) => !!p.userId && isPlaceholderUsername(p.username))
+        .map((p) => p.userId),
+    ),
+  ];
+  if (needIds.length === 0) return participants;
+
+  type PublicProfileLite = {
+    username?: string | null;
+    avatarUrl?: string | null;
+    avatarColor?: string | null;
+    country?: string | null;
+    countryFlag?: string | null;
+    avatarVersion?: number | null;
+  };
+
+  const profiles = await Promise.all(
+    needIds.map(async (userId) => {
+      try {
+        // Same endpoint as PublicProfileModal — real username/avatar for scheduled rooms.
+        const res = await authFetch(`/api/users/${userId}/public-profile`);
+        if (!res.ok) return [userId, null] as const;
+        const data = (await res.json()) as PublicProfileLite;
+        return [userId, data] as const;
+      } catch {
+        return [userId, null] as const;
+      }
+    }),
+  );
+  const byId = new Map(profiles);
+
+  return participants.map((p) => {
+    const profile = byId.get(p.userId);
+    if (!profile) return p;
+    const nextUsername =
+      firstRealUsername(
+        isPlaceholderUsername(p.username) ? null : p.username,
+        profile.username,
+      ) ?? p.username;
+    return {
+      ...p,
+      username: nextUsername,
+      avatarUrl: firstNonEmpty(p.avatarUrl, profile.avatarUrl),
+      avatarColor:
+        firstNonEmpty(p.avatarColor, profile.avatarColor) ?? p.avatarColor,
+      country: firstNonEmpty(p.country, profile.country) ?? p.country,
+      countryFlag:
+        firstNonEmpty(p.countryFlag, profile.countryFlag) ?? p.countryFlag,
+      avatarVersion:
+        typeof profile.avatarVersion === "number"
+          ? Math.max(p.avatarVersion ?? 0, profile.avatarVersion)
+          : p.avatarVersion,
+    };
+  });
+}
+
 function coerceRoomParticipant(
   value: unknown,
   currentUserId?: string,
@@ -274,13 +362,13 @@ function coerceRoomParticipant(
     id: String(raw.id ?? `registration-${userIdStr}`),
     userId: userIdStr,
     username:
-      firstNonEmpty(
+      firstRealUsername(
         raw.displayName,
         raw.fullName,
         raw.username,
         profile?.displayName,
         profile?.username,
-      ) ?? "Player",
+      ) ?? "",
     country: cleanString(raw.country) ?? cleanString(profile?.country),
     countryFlag:
       cleanString(raw.countryFlag) ??
@@ -374,7 +462,10 @@ function normalizeWaitingRoomParticipants(
     byUserId.set(participant.userId, {
       ...existing,
       ...participant,
-      username: firstNonEmpty(participant.username, existing.username) ?? "Player",
+      username:
+        firstRealUsername(participant.username, existing.username) ??
+        firstNonEmpty(participant.username, existing.username) ??
+        "",
       avatarUrl: firstNonEmpty(participant.avatarUrl, existing.avatarUrl),
       avatarColor: cleanString(participant.avatarColor) ?? cleanString(existing.avatarColor),
       country: cleanString(participant.country) ?? cleanString(existing.country),
@@ -429,13 +520,13 @@ function normalizeWaitingRoomParticipants(
       id: existing?.id ?? `host-${hostIdStr}`,
       userId: hostIdStr,
       username:
-        firstNonEmpty(
+        firstRealUsername(
           existing?.username,
           nestedHost?.username,
           race?.hostUsername,
           race?.host_username,
           isCurrentUser ? currentUser?.username : null,
-        ) ?? "Host",
+        ) ?? "",
       country: firstNonEmpty(
         existing?.country,
         nestedHost?.country,
@@ -812,6 +903,7 @@ function MatchmakingScreenContent() {
     initialCurrentPlayers?: string;
     initialScheduledStartAt?: string;
     initialDailyGoalSteps?: string;
+    initialTrackLayout?: string;
     dummyRace?: string;
   }>();
 
@@ -996,7 +1088,12 @@ function MatchmakingScreenContent() {
           : undefined,
       entryType: params.initialEntryType,
       coinEntryAmount: params.initialCoinEntryAmount ? Number(params.initialCoinEntryAmount) : 0,
-      coinPrizePool: 0,
+      // Until race start, API coinPrizePool is often 0 — seed entry × joined like Available Rooms.
+      coinPrizePool: (() => {
+        const entry = params.initialCoinEntryAmount ? Number(params.initialCoinEntryAmount) : 0;
+        const joined = params.initialCurrentPlayers ? Number(params.initialCurrentPlayers) : 1;
+        return entry > 0 ? entry * Math.max(1, joined) : 0;
+      })(),
       isPrivate: params.initialIsPrivate === "true",
       inviteCode: params.initialInviteCode || null,
       challengeType: unlimitedSeed ? UNLIMITED_GOAL_CHALLENGE_TYPE : undefined,
@@ -1008,6 +1105,11 @@ function MatchmakingScreenContent() {
       ? params.initialScheduledStartAt
       : null),
   );
+  const [trackLayoutId, setTrackLayoutId] = useState<string | null>(() => {
+    const seeded =
+      typeof params.initialTrackLayout === "string" ? params.initialTrackLayout.trim() : "";
+    return isTrackLayoutId(seeded) ? seeded : null;
+  });
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [copiedCode, setCopiedCode] = useState(false);
   const [selectedParticipant, setSelectedParticipant] = useState<RoomParticipant | null>(null);
@@ -1424,6 +1526,12 @@ function MatchmakingScreenContent() {
           ),
         });
       }
+      // Stale cache may still have Host/"H" placeholders — refresh names in background.
+      void hydrateWaitingRoomProfiles(cached.participants).then((hydrated) => {
+        if (hydrated.some((p, i) => p.username !== cached.participants[i]?.username || p.avatarUrl !== cached.participants[i]?.avatarUrl)) {
+          setParticipants(hydrated);
+        }
+      });
       return;
     }
 
@@ -1569,6 +1677,7 @@ function MatchmakingScreenContent() {
           pathname: "/race/live-detail",
           params: {
             id: backendRaceId,
+            ...(trackLayoutId ? { trackLayout: trackLayoutId } : null),
             ...(isUnlimitedGoalRoom
               ? { challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE, capacityMode: "unlimited" }
               : null),
@@ -1586,6 +1695,7 @@ function MatchmakingScreenContent() {
       setStart,
       fetchRaceStartState,
       isUnlimitedGoalRoom,
+      trackLayoutId,
     ],
   );
 
@@ -1712,6 +1822,14 @@ function MatchmakingScreenContent() {
           challengeEndAt?: string | null;
           challenge_end_at?: string | null;
           challengeDurationDays?: number;
+          coinEntryAmount?: number;
+          coinPrizePool?: number;
+          trackLayout?: string | null;
+          track_layout?: string | null;
+          theme_code?: string | null;
+          canStart?: boolean;
+          roomExpiresAt?: string | null;
+          cancellationReason?: string | null;
         };
 
         const unlimitedCapacity =
@@ -1799,7 +1917,10 @@ function MatchmakingScreenContent() {
           entryType: dataRace.entryType,
           entryAmountCents: dataRace.entryAmountCents,
           coinEntryAmount: dataRace.coinEntryAmount,
-          coinPrizePool: dataRace.coinPrizePool,
+          coinPrizePool:
+            typeof dataRace.coinPrizePool === "number" && dataRace.coinPrizePool > 0
+              ? dataRace.coinPrizePool
+              : (Number(dataRace.coinEntryAmount) || 0) * Math.max(1, resolvedPlayerCount),
           isPrivate: dataRace.isPrivate,
           inviteCode: dataRace.inviteCode ?? null,
           minimumParticipants: minParticipants,
@@ -1821,6 +1942,14 @@ function MatchmakingScreenContent() {
           capacityMode: unlimitedCapacity ? "unlimited" : dataRace.capacityMode,
         };
         setLiveRoom(nextLiveRoom);
+        const apiTrack =
+          (typeof dataRace.trackLayout === "string" && dataRace.trackLayout.trim()) ||
+          (typeof dataRace.track_layout === "string" && dataRace.track_layout.trim()) ||
+          (typeof dataRace.theme_code === "string" && dataRace.theme_code.trim()) ||
+          "";
+        if (isTrackLayoutId(apiTrack)) {
+          setTrackLayoutId(apiTrack);
+        }
         const apiSchedule =
           (typeof dataRace.scheduledStartAt === "string" && dataRace.scheduledStartAt) ||
           (typeof dataRace.scheduled_start_at === "string" && dataRace.scheduled_start_at) ||
@@ -1887,10 +2016,12 @@ function MatchmakingScreenContent() {
           isHostMode,
         );
         // Never slice(0, 0) for unlimited — that wiped the host from the list.
-        const nextParticipants =
+        const capped =
           unlimitedCapacity || nextLiveRoom.maxPlayers <= 0
             ? normalized
             : normalized.slice(0, nextLiveRoom.maxPlayers);
+        // Scheduled/future rooms often omit hostUsername — hydrate like Free/Cash rooms.
+        const nextParticipants = await hydrateWaitingRoomProfiles(capped);
         setParticipants(nextParticipants);
         setParticipantsLoading(false);
         setParticipantsError(null);
@@ -2555,7 +2686,11 @@ function MatchmakingScreenContent() {
   // ── Render ────────────────────────────────────────────────────────────────
   const targetSteps = liveRoom?.targetSteps ?? RACE_DEFAULTS.RACE_TARGET;
   const coinEntry = liveRoom?.coinEntryAmount ?? 0;
-  const coinPool = liveRoom?.coinPrizePool ?? (coinEntry * realPlayerCount);
+  // API keeps coinPrizePool at 0 until start — `??` would not fall through on 0.
+  const coinPool =
+    liveRoom?.coinPrizePool && liveRoom.coinPrizePool > 0
+      ? liveRoom.coinPrizePool
+      : coinEntry * realPlayerCount;
   const cashEntry = liveRoom?.entryAmountCents != null ? liveRoom.entryAmountCents / 100 : raceEntryFee;
 
   // Same pattern as Live Race: manual bottom inset (SafeAreaView bottom can be 0 on Android).

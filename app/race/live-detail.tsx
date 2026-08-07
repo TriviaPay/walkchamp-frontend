@@ -1922,6 +1922,12 @@ export default function LiveRaceDetailScreen() {
   );
 }
 
+/** Avoid GO_BACK when opened cold / with empty stack (e.g. from Live → View Results). */
+function leaveLiveDetail() {
+  if (router.canGoBack()) router.back();
+  else router.replace("/(tabs)/live");
+}
+
 function LiveRaceDetailScreenContent() {
   const {
     id: raceId,
@@ -4518,7 +4524,7 @@ function LiveRaceDetailScreenContent() {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 8, padding: 24, backgroundColor: "#050711" }}>
         <Text style={{ color: "#FFFFFF", fontSize: 18, fontWeight: "800" }}>Race not found</Text>
-        <TouchableOpacity style={{ borderRadius: 14, paddingHorizontal: 24, paddingVertical: 12, backgroundColor: "#00E676" }} onPress={() => router.back()}>
+        <TouchableOpacity style={{ borderRadius: 14, paddingHorizontal: 24, paddingVertical: 12, backgroundColor: "#00E676" }} onPress={leaveLiveDetail}>
           <Text style={{ color: "#000", fontWeight: "700" }}>Go Back</Text>
         </TouchableOpacity>
       </View>
@@ -4534,7 +4540,7 @@ function LiveRaceDetailScreenContent() {
         </Text>
         <TouchableOpacity
           style={{ marginTop: 8, borderRadius: 14, paddingHorizontal: 28, paddingVertical: 13, backgroundColor: "#00E676" }}
-          onPress={() => router.back()}
+          onPress={leaveLiveDetail}
         >
           <Text style={{ color: "#000", fontWeight: "700", fontSize: 15 }}>Back to Races</Text>
         </TouchableOpacity>
@@ -4785,7 +4791,7 @@ function LiveRaceDetailScreenContent() {
           style={s.backBtn}
           onPress={() => {
             // Navigate immediately — do not await voice/step teardown (was causing multi-second lag).
-            router.back();
+            leaveLiveDetail();
           }}
         >
           <Feather name="chevron-left" size={25} color="#fff" />
@@ -4823,7 +4829,7 @@ function LiveRaceDetailScreenContent() {
                   void suppressLiveRaceNotification(raceId, "user_forfeit");
                   stopRaceStepTracking("user_forfeit");
                 }
-                router.back();
+                leaveLiveDetail();
               }},
             ]) }>
             <LinearGradient colors={["#FF3333", "#BB0000"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.leaveBtn}>

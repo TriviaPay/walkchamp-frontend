@@ -108,6 +108,12 @@ export function resolveTrackThemeImageSource(
   variant: TrackThemeImageVariant,
 ): ImageSource | number {
   const code = String(media?.code ?? media?.trackLayout ?? "bg").trim() || "bg";
+  // Free bundled themes: use local assets so Create picker / Available Rooms / race
+  // track always match (R2 placeholders can otherwise flash Neon Finish).
+  if (hasBundledAsset(code)) {
+    return localFallbackForCode(code);
+  }
+
   const remote = pickRemoteUrl(media, variant);
   if (remote) {
     return {
@@ -118,18 +124,14 @@ export function resolveTrackThemeImageSource(
 
   // Live races only send trackLayout — synthesize the public theme image URL
   // so premium themes still load after local PNGs were removed.
-  if (!hasBundledAsset(code)) {
-    const uri = trackThemeImageUri(
-      code,
-      media?.assetVersion != null ? Number(media.assetVersion) : undefined,
-    );
-    return {
-      uri,
-      cacheKey: cacheKeyFor(code, uri, media?.assetVersion),
-    };
-  }
-
-  return localFallbackForCode(code);
+  const uri = trackThemeImageUri(
+    code,
+    media?.assetVersion != null ? Number(media.assetVersion) : undefined,
+  );
+  return {
+    uri,
+    cacheKey: cacheKeyFor(code, uri, media?.assetVersion),
+  };
 }
 
 export function trackThemeCodeOf(

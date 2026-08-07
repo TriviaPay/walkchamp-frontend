@@ -4,10 +4,11 @@
 import React, { memo, useMemo } from "react";
 import { StyleSheet, type StyleProp, type ViewStyle, type ImageStyle } from "react-native";
 import { Image, ImageBackground } from "expo-image";
-import { LOCAL_TRACK_FALLBACKS } from "@/constants/trackLayouts";
+import { getTrackBackground } from "@/constants/trackLayouts";
 import {
   resolveTrackThemeImageSource,
   isRemoteTrackThemeSource,
+  trackThemeCodeOf,
   type TrackThemeImageVariant,
   type TrackThemeMediaFields,
 } from "@/utils/trackThemeMedia";
@@ -38,6 +39,9 @@ export const TrackThemeImage = memo(function TrackThemeImage({
     [media, code, variant],
   );
   const remote = isRemoteTrackThemeSource(source);
+  const placeholder = remote
+    ? getTrackBackground(trackThemeCodeOf(media ?? { code, trackLayout: code }))
+    : undefined;
   return (
     <Image
       source={source}
@@ -46,7 +50,7 @@ export const TrackThemeImage = memo(function TrackThemeImage({
       cachePolicy="memory-disk"
       priority={variant === "full" ? "high" : "normal"}
       recyclingKey={remote ? source.cacheKey ?? source.uri : undefined}
-      placeholder={remote ? LOCAL_TRACK_FALLBACKS.bg : undefined}
+      placeholder={placeholder}
       placeholderContentFit={contentFit}
       transition={remote ? 120 : 0}
     />
@@ -75,6 +79,9 @@ export const TrackThemeImageBackground = memo(function TrackThemeImageBackground
     [media, code, variant],
   );
   const remote = isRemoteTrackThemeSource(source);
+  const placeholder = remote
+    ? getTrackBackground(trackThemeCodeOf(media ?? { code, trackLayout: code }))
+    : undefined;
   return (
     <ImageBackground
       source={source}
@@ -84,7 +91,7 @@ export const TrackThemeImageBackground = memo(function TrackThemeImageBackground
       cachePolicy="memory-disk"
       priority={variant === "full" ? "high" : "normal"}
       recyclingKey={remote ? source.cacheKey ?? source.uri : undefined}
-      placeholder={remote ? LOCAL_TRACK_FALLBACKS.bg : undefined}
+      placeholder={placeholder}
       placeholderContentFit={contentFit}
       transition={remote ? 120 : 0}
     >

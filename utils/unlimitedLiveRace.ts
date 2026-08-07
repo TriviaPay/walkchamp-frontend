@@ -114,15 +114,16 @@ export function isUnlimitedTerminalExcludedFromLive(status: string | null | unde
   );
 }
 
-/** Ended challenges eligible for Live "Recently Finished". */
+/** Ended challenges eligible for Live "Recently Finished".
+ *  Only true completions — cancelled / platform-cancelled must not appear as FINISHED. */
 export function isUnlimitedFinishedForLiveTab(status: string | null | undefined): boolean {
   const raw = (status ?? "").trim().toLowerCase();
+  if (isUnlimitedTerminalExcludedFromLive(raw)) return false;
   return (
     raw === "completed" ||
     raw === "finished" ||
     raw === "ended" ||
-    raw === "closed" ||
-    isUnlimitedTerminalExcludedFromLive(raw)
+    raw === "closed"
   );
 }
 
@@ -483,6 +484,7 @@ export function overlayClassicRaceOnUnlimitedDetail(
     const normalized = normalizeUnlimitedLiveStatus(apiStatus, {
       startAt: startedAt ?? unlimited.race.scheduledStartAt,
       endAt: completedAt ?? unlimited.race.challengeEndAt,
+      requireServerLive: true,
     });
     // Prefer classic race live/completed when Unlimited detail is still "waiting".
     if (
@@ -493,11 +495,6 @@ export function overlayClassicRaceOnUnlimitedDetail(
     ) {
       status = normalized;
     }
-  } else if (status === "waiting" && startedAt) {
-    status = normalizeUnlimitedLiveStatus(status, {
-      startAt: startedAt,
-      endAt: unlimited.race.challengeEndAt,
-    });
   }
 
   const currentPlayers =
@@ -540,6 +537,7 @@ export function coerceUnlimitedRaceInProgress(
     startAt: race.startedAt ?? race.scheduledStartAt,
     endAt: race.challengeEndAt,
     nowMs: opts?.nowMs,
+    requireServerLive: true,
   });
   if (status === race.status) return race;
   return {
@@ -581,9 +579,12 @@ export function mapUnlimitedDetailToLiveDetail(
     waiting.race.scheduledStartAt ??
     asString(pick(challenge, "startAtUtc", "start_at_utc", "startedAt", "started_at"));
 
+  // Trust server status for detail — do not invent FINISHED from endAt alone
+  // (that produced 0-step "Race Finished" screens for still-open challenges).
   const status = normalizeUnlimitedLiveStatus(waiting.race.status, {
     startAt,
     endAt,
+    requireServerLive: true,
   });
 
   const entryCents = waiting.race.entryAmountCents ?? 0;

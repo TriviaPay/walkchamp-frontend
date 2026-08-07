@@ -199,6 +199,11 @@ function walkChallengeCacheKey(userId: string): string {
   return `screen_walk_challenges:${userId}`;
 }
 
+/** User-scoped cache for Walk "View All" live count (stale-while-revalidate). */
+function walkAvailableCountCacheKey(userId: string): string {
+  return `screen_walk_available_count:${userId}`;
+}
+
 /** Instant track theme for live-detail re-entry (avoids default bg flash). */
 function liveRaceNavParams(
   raceId: string,
@@ -290,6 +295,19 @@ function showRaceOptionInJoinSection(fee: number): boolean {
 
 function isPaidCashFee(fee: number): boolean {
   return fee > 0;
+}
+
+/** Cash prize pool = entry fees × participants (API prizePoolCents when present). */
+function cashPrizePoolCents(
+  prizePoolCents: number | undefined,
+  entryAmountCents: number | undefined,
+  registeredCount: number,
+): number | undefined {
+  if (typeof prizePoolCents === "number" && prizePoolCents > 0) return prizePoolCents;
+  if (typeof entryAmountCents === "number" && entryAmountCents > 0) {
+    return entryAmountCents * Math.max(1, registeredCount);
+  }
+  return prizePoolCents;
 }
 
 /** Host payload entry type for cash amounts — variable $3–$25 uses paid_usd. */
@@ -2116,13 +2134,12 @@ function WalkScreenContent() {
     const cached = screenCache.getSync<Record<string, ChallengeStatus>>(cacheKey);
     if (cached) {
       setChallengeStatuses(cached);
-      walkCacheReadyRef.current = true;
-      setWalkCacheReady(true);
     } else {
       setChallengeStatuses({});
-      walkCacheReadyRef.current = false;
-      setWalkCacheReady(false);
     }
+    // Show Join-a-Challenge / My Race immediately (Host defaults) — refresh in background.
+    walkCacheReadyRef.current = true;
+    setWalkCacheReady(true);
     if (__DEV__) {
       console.log(
         `[WalkScreen] mounted userId=${user.id} localDate=${getTodayKey()} authReady=${authReady} tokenExists=${!!sessionToken}`,
@@ -2234,6 +2251,14 @@ function WalkScreenContent() {
     }, []),
   );
 
+  // Challenge cards must not wait for Health Connect / step hydration.
+  useFocusEffect(useCallback(() => {
+    if (!raceReady) return;
+    void loadChallengeStatuses();
+    const pollInterval = setInterval(loadChallengeStatuses, STEP_SYNC_CONFIG.WALK_CHALLENGE_POLL_MS);
+    return () => clearInterval(pollInterval);
+  }, [raceReady, loadChallengeStatuses]));
+
   useFocusEffect(useCallback(() => {
     if (!userReady) {
       if (__DEV__) {
@@ -2260,13 +2285,9 @@ function WalkScreenContent() {
       dispatch(fetchTrackThemes());
       dispatch(fetchCoinBalance());
     }
-    loadChallengeStatuses();
-    const pollInterval = setInterval(loadChallengeStatuses, STEP_SYNC_CONFIG.WALK_CHALLENGE_POLL_MS);
-    return () => clearInterval(pollInterval);
   }, [
     authReady,
     dispatch,
-    loadChallengeStatuses,
     refetchDbWalk,
     refreshTodayRank,
     refreshTodaySteps,
@@ -2304,6 +2325,8 @@ function WalkScreenContent() {
     max_players: number;
     registered_count: number;
     scheduled_start_at: string | null;
+    /** API end time when provided (`challenge_end_at` / `ends_at`). */
+    challenge_end_at?: string | null;
     current_user_registered: boolean;
     host_user_id: string;
     status?: string | null;
@@ -2328,7 +2351,12 @@ function WalkScreenContent() {
     const cached = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(GROUPS_CACHE_KEY);
     return cached?.summary?.total_groups ?? cached?.groups?.length ?? 0;
   });
-  const [availableChallengeCount, setAvailableChallengeCount] = useState(0);
+  const [availableChallengeCount, setAvailableChallengeCount] = useState(() => {
+    const uid = user?.id;
+    if (!uid) return 0;
+    const cached = screenCache.getSync<{ count?: number }>(walkAvailableCountCacheKey(uid));
+    return typeof cached?.count === "number" && cached.count > 0 ? cached.count : 0;
+  });
   const viewAllBlinkAnim = useRef(new Animated.Value(1)).current;
   const groupsFadeAnim = useRef(new Animated.Value(0)).current;
   const groupsExploreScale = useRef(new Animated.Value(1)).current;
@@ -2359,11 +2387,29 @@ function WalkScreenContent() {
   }, [availableChallengeCount, viewAllBlinkAnim]);
 
   const refreshAvailableChallengeCount = useCallback(async () => {
+    const uid = user?.id;
     try {
-      const count = await fetchAvailableChallengeCount({ viewerUserId: user?.id });
+      const count = await fetchAvailableChallengeCount({ viewerUserId: uid });
       setAvailableChallengeCount(count);
+      if (uid) {
+        void screenCache.set(walkAvailableCountCacheKey(uid), { count });
+      }
     } catch {
-      /* keep previous count */
+      /* keep previous / cached count */
+    }
+  }, [user?.id]);
+
+  // Restore View All count from cache as soon as user id is known (before network).
+  useEffect(() => {
+    if (!user?.id) {
+      setAvailableChallengeCount(0);
+      return;
+    }
+    const cached = screenCache.getSync<{ count?: number }>(
+      walkAvailableCountCacheKey(user.id),
+    );
+    if (typeof cached?.count === "number" && cached.count > 0) {
+      setAvailableChallengeCount(cached.count);
     }
   }, [user?.id]);
 
@@ -2430,7 +2476,9 @@ function WalkScreenContent() {
           coin_entry_amount: 0,
           max_players: Math.max(1, r.currentPlayers ?? 10),
           registered_count: Math.max(1, r.currentPlayers ?? 1),
-          scheduled_start_at: r.startedAt ?? new Date().toISOString(),
+          // API times only — never invent "now" on the client.
+          scheduled_start_at: r.startedAt ?? null,
+          challenge_end_at: r.challengeEndAt ?? null,
           target_steps: r.targetSteps ?? 1000,
           host_user_id: r.isHost ? uid : "",
           current_user_registered: true,
@@ -2450,6 +2498,7 @@ function WalkScreenContent() {
           max_players: u.max_players,
           registered_count: u.registered_count,
           scheduled_start_at: u.scheduled_start_at,
+          challenge_end_at: u.challenge_end_at ?? null,
           target_steps: u.target_steps,
           host_user_id: u.host_user_id,
           current_user_registered: serverReg || (!leftIds.has(u.room_id) && !!u.current_user_registered),
@@ -3032,7 +3081,8 @@ function WalkScreenContent() {
     key: string;
     challengeType: RaceStartingSoonChallengeType;
     phase: RaceStartingSoonPhase;
-    scheduledStartAt: string;
+    scheduledStartAt: string | null;
+    endsAt?: string | null;
     registeredCount: number;
     maxSlots: number;
     targetSteps?: number;
@@ -3100,11 +3150,9 @@ function WalkScreenContent() {
   }, [challengeStatuses, registeredUpcomingRooms, scheduledRoomResult, sponsoredStatus]);
 
   const nextRaceCards = useMemo((): NextRaceCard[] => {
-    // While the first active-race fetch is in flight, keep prior cards (or none)
-    // — never treat "loading" as confirmed empty.
-    if (registeredUpcomingStatus === "loading" && registeredUpcomingRooms.length === 0) {
-      return [];
-    }
+    // End times come from API only (challengeEndAt / challenge_end_at) — no client invent.
+    // Never block My Race on the upcoming-rooms fetch — challengeStatuses (often
+    // cache-hydrated) must render immediately. Upcoming rooms merge in when ready.
     const cards: NextRaceCard[] = [];
     const coveredRaceIds = new Set<string>();
     const now = nextRaceNowMs;
@@ -3149,18 +3197,24 @@ function WalkScreenContent() {
 
       // Currently participating / live — show under My Race immediately.
       if (isActive) {
-        const liveIso =
-          cs.startedAt ?? cs.scheduledStartAt ?? new Date(now).toISOString();
-        const liveMs = new Date(liveIso).getTime();
+        // Prefer API startedAt; fall back to scheduledStartAt. Never invent "now".
+        const liveIso = cs.startedAt ?? cs.scheduledStartAt ?? null;
+        const liveMs = liveIso ? new Date(liveIso).getTime() : NaN;
+        const joined = cs.joinedCount ?? 1;
+        const challengeType = entryKeyToReminderType(entryKey);
         cards.push({
           key: `challenge-live:${entryKey}:${cs.raceId}`,
-          challengeType: entryKeyToReminderType(entryKey),
+          challengeType,
           phase: "racing",
           scheduledStartAt: liveIso,
-          registeredCount: cs.joinedCount ?? 1,
+          endsAt: cs.challengeEndAt ?? null,
+          registeredCount: joined,
           maxSlots: cs.maxPlayers || 10,
           targetSteps: cs.targetSteps,
-          prizePoolCents: cs.prizePoolCents,
+          prizePoolCents:
+            challengeType === "cash"
+              ? cashPrizePoolCents(cs.prizePoolCents, cs.entryAmountCents, joined)
+              : cs.prizePoolCents,
           coinEntryAmount: cs.coinEntryAmount,
           entryAmountCents: cs.entryAmountCents,
           onPressCta: () => {
@@ -3177,22 +3231,28 @@ function WalkScreenContent() {
         continue;
       }
 
-      const startIso = cs.scheduledStartAt ?? null;
+      const startIso = cs.scheduledStartAt ?? cs.startedAt ?? null;
       if (!startIso) continue;
       const startMs = new Date(startIso).getTime();
       if (!(startMs > now)) continue;
       const msLeft = startMs - now;
       const phase: RaceStartingSoonPhase =
         msLeft < 10 * 60_000 ? "join_window" : "registered";
+      const joined = cs.joinedCount ?? 1;
+      const challengeType = entryKeyToReminderType(entryKey);
       cards.push({
         key: `challenge:${entryKey}:${cs.raceId}`,
-        challengeType: entryKeyToReminderType(entryKey),
+        challengeType,
         phase,
         scheduledStartAt: startIso,
-        registeredCount: cs.joinedCount ?? 1,
+        endsAt: cs.challengeEndAt ?? null,
+        registeredCount: joined,
         maxSlots: cs.maxPlayers || 10,
         targetSteps: cs.targetSteps,
-        prizePoolCents: cs.prizePoolCents,
+        prizePoolCents:
+          challengeType === "cash"
+            ? cashPrizePoolCents(cs.prizePoolCents, cs.entryAmountCents, joined)
+            : cs.prizePoolCents,
         coinEntryAmount: cs.coinEntryAmount,
         entryAmountCents: cs.entryAmountCents,
         onPressCta: () => openChallengeWaitingRoom(entryKey, cs),
@@ -3214,14 +3274,21 @@ function WalkScreenContent() {
       const phase: RaceStartingSoonPhase =
         msLeft < 10 * 60_000 ? "join_window" : "registered";
       const maxPlayers = srr.maxPlayers ?? 10;
+      const joined = srr.joinedCount ?? 1;
+      const challengeType = entryKeyToReminderType(entryKey);
       cards.push({
         key: `scheduled:${srr.raceId}`,
-        challengeType: entryKeyToReminderType(entryKey),
+        challengeType,
         phase,
         scheduledStartAt: srr.scheduledStartAt,
-        registeredCount: srr.joinedCount ?? 1,
+        endsAt: null,
+        registeredCount: joined,
         maxSlots: maxPlayers,
         targetSteps: srr.targetSteps,
+        prizePoolCents:
+          challengeType === "cash"
+            ? cashPrizePoolCents(undefined, srr.entryAmountCents, joined)
+            : undefined,
         coinEntryAmount: srr.coinEntryAmount,
         entryAmountCents: srr.entryAmountCents,
         onPressCta: () => {
@@ -3230,7 +3297,7 @@ function WalkScreenContent() {
             raceId: srr.raceId!,
             isHost: srr.isHost ?? true,
             isParticipant: true,
-            joinedCount: srr.joinedCount ?? 1,
+            joinedCount: joined,
             maxPlayers,
             targetSteps: srr.targetSteps,
             scheduledStartAt: srr.scheduledStartAt,
@@ -3289,20 +3356,24 @@ function WalkScreenContent() {
           : room.coin_entry_amount > 0
             ? -1
             : 0;
+      const registeredCount = room.registered_count ?? 1;
+      const entryAmountCents =
+        room.entry_fee > 0 ? Math.round(room.entry_fee * 100) : undefined;
       cards.push({
         key: `upcoming:${room.room_id}`,
         challengeType,
         phase,
         scheduledStartAt: room.scheduled_start_at,
-        registeredCount: room.registered_count ?? 1,
+        endsAt: room.challenge_end_at ?? null,
+        registeredCount,
         maxSlots: isUnlimitedRoom ? 0 : room.max_players || 10,
         targetSteps: room.target_steps,
         prizePoolCents:
-          room.entry_fee > 0
-            ? Math.round(room.entry_fee * 100 * Math.max(1, room.registered_count))
+          challengeType === "cash"
+            ? cashPrizePoolCents(undefined, entryAmountCents, registeredCount)
             : undefined,
         coinEntryAmount: room.coin_entry_amount,
-        entryAmountCents: room.entry_fee > 0 ? Math.round(room.entry_fee * 100) : undefined,
+        entryAmountCents,
         onPressCta: () => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
           if (challengeType === "sponsored") {
@@ -3367,7 +3438,6 @@ function WalkScreenContent() {
     openChallengeWaitingRoom,
     openSponsoredWaitingRoom,
     registeredUpcomingRooms,
-    registeredUpcomingStatus,
     scheduledRoomResult,
     setActiveRace,
     sponsoredStatus,
@@ -4043,7 +4113,7 @@ function WalkScreenContent() {
             scheduled_start_at: scheduledStartAt,
             challenge_duration_days: unlimitedChallenge?.durationDays ?? meta.durationDays,
             challenge_end_at: meta.endAt?.toISOString() ?? null,
-            selected_track_theme_id: "bg",
+            selected_track_theme_id: draft.trackLayout || "bg",
             theme_name: "Unlimited",
             is_private: !!isPrivateRoom,
             requires_code: !!isPrivateRoom,
@@ -4084,6 +4154,17 @@ function WalkScreenContent() {
             : (data.race?.maxPlayers ?? meta.maxPlayers ?? draft.fixed.maxPlayers),
           joinedCount: 1,
         });
+        // Instant View All badge — don't wait for the 3-list count fetch.
+        // Server reconcile via refreshAvailableChallengeCount() still wins.
+        if (!isPrivateRoom) {
+          setAvailableChallengeCount((n) => {
+            const next = n + 1;
+            if (user?.id) {
+              void screenCache.set(walkAvailableCountCacheKey(user.id), { count: next });
+            }
+            return next;
+          });
+        }
         setChallengeModal(false);
         setChallengeCreating(false);
         void loadChallengeStatuses();
@@ -4117,6 +4198,8 @@ function WalkScreenContent() {
           initialDailyGoalSteps: meta.isUnlimited ? draft.unlimited.dailyGoalSteps : undefined,
           initialDurationDays: meta.isUnlimited ? draft.unlimited.durationDays : undefined,
           initialScheduledStartAt: meta.scheduledStartAt?.toISOString() ?? undefined,
+          initialTrackLayout:
+            data.race?.trackLayout ?? draft.trackLayout ?? undefined,
         }),
       });
 
@@ -4379,6 +4462,7 @@ function WalkScreenContent() {
               challengeType={card.challengeType}
               phase={card.phase}
               scheduledStartAt={card.scheduledStartAt}
+              endsAt={card.endsAt}
               registeredCount={card.registeredCount}
               maxSlots={card.maxSlots}
               targetSteps={card.targetSteps}
@@ -4386,6 +4470,7 @@ function WalkScreenContent() {
               prizePerWinnerCents={card.prizePerWinnerCents}
               coinEntryAmount={card.coinEntryAmount}
               entryAmountCents={card.entryAmountCents}
+              isParticipant
               onPressCta={card.onPressCta}
               style={width != null ? { width, marginBottom: 0 } : undefined}
             />
@@ -4812,30 +4897,33 @@ function WalkScreenContent() {
               >
                 <LinearGradient
                   colors={premOpt.gradientColors}
-                  style={styles.raceCardGradient}
+                  style={styles.cashPrizeCardGradient}
                   start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
                 >
-                  <View style={[styles.raceCardIcon, { backgroundColor: "rgba(255,255,255,0.18)" }]}>
-                    <Feather name="award" size={22} color="#FFF" />
-                  </View>
-                  <View style={[styles.raceCardText, { flex: 1 }]}>
-                    <Text style={styles.raceCardLabel}>Cash Prize Challenge</Text>
-                    <Text style={styles.raceCardSub}>Skill-based walking challenge</Text>
-                    <View style={{ flexDirection: "row", gap: 4, marginTop: 5, alignItems: "center", flexShrink: 1 }}>
-                      {["$3–$25", "Step Goal", "Prize rewards"].map((chip) => (
-                        <View key={chip} style={{ backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, flexShrink: 1 }}>
-                          <Text numberOfLines={1} style={{ color: "#FFF", fontSize: 9, fontWeight: "700" }}>{chip}</Text>
-                        </View>
-                      ))}
+                  {/* Same row height as Free / Coins — badge always vertically centered with title. */}
+                  <View style={styles.cashPrizeMainRow}>
+                    <View style={[styles.raceCardIcon, { backgroundColor: "rgba(255,255,255,0.18)" }]}>
+                      <Feather name="award" size={22} color="#FFF" />
+                    </View>
+                    <View style={styles.raceCardText}>
+                      <Text style={styles.raceCardLabel}>Cash Prize Challenge</Text>
+                      <Text style={styles.raceCardSub}>Skill-based walking challenge</Text>
+                    </View>
+                    <View style={styles.cashPrizeBadgeCol}>
+                      <RaceJoinBadge
+                        status={premCs?.status}
+                        joinedCount={premCs?.joinedCount}
+                        maxPlayers={premCs?.maxPlayers ?? 10}
+                        label={premStatusLabel}
+                      />
                     </View>
                   </View>
-                  <View style={styles.raceCardRight}>
-                    <RaceJoinBadge
-                      status={premCs?.status}
-                      joinedCount={premCs?.joinedCount}
-                      maxPlayers={premCs?.maxPlayers ?? 10}
-                      label={premStatusLabel}
-                    />
+                  <View style={styles.cashPrizeChipsRow}>
+                    {["$3–$25", "Step Goal", "Prize rewards"].map((chip) => (
+                      <View key={chip} style={styles.cashPrizeChip}>
+                        <Text numberOfLines={1} style={styles.cashPrizeChipText}>{chip}</Text>
+                      </View>
+                    ))}
                   </View>
                 </LinearGradient>
                 <JoinProgressOverlay isJoining={joiningEntryKey === premKey} />
@@ -5905,8 +5993,41 @@ const styles = StyleSheet.create({
   raceCardText: { flex: 1 },
   raceCardLabel: { fontSize: rf(17), fontWeight: "800", color: "#FFF" },
   raceCardSub: { fontSize: rf(12), color: "rgba(255,255,255,0.78)", marginTop: 2 },
-  raceCardRight: { alignItems: "flex-end", gap: 6 },
+  raceCardRight: { alignItems: "flex-end", justifyContent: "center", alignSelf: "center", gap: 6 },
   raceCardPool: { fontSize: rf(11), fontWeight: "700", color: "rgba(255,255,255,0.85)" },
+  /** Cash card: main row matches Free/Coins; chips below so Host/Racing stay aligned. */
+  cashPrizeCardGradient: {
+    paddingHorizontal: rs(18),
+    paddingTop: rs(18),
+    paddingBottom: rs(14),
+    gap: rs(8),
+  },
+  cashPrizeMainRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+  },
+  cashPrizeBadgeCol: {
+    alignItems: "flex-end",
+    justifyContent: "center",
+    alignSelf: "center",
+  },
+  cashPrizeChipsRow: {
+    flexDirection: "row",
+    flexWrap: "nowrap",
+    gap: 4,
+    alignItems: "center",
+    marginLeft: rs(46) + 14,
+    paddingRight: rs(4),
+  },
+  cashPrizeChip: {
+    backgroundColor: "rgba(255,255,255,0.18)",
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    flexShrink: 1,
+  },
+  cashPrizeChipText: { color: "#FFF", fontSize: 9, fontWeight: "700" },
   statusBadgePill: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "rgba(255,255,255,0.22)", borderRadius: 8, paddingHorizontal: rs(8), paddingVertical: 4, borderWidth: 1, borderColor: "rgba(255,255,255,0.35)" },
   statusBadgePillText: { fontSize: rf(10), fontWeight: "800", color: "#FFF" },
   activeDot: { width: 6, height: 6, borderRadius: 3 },

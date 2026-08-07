@@ -680,11 +680,24 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
     live.push(mapped);
   }
 
-  // Finished list — completed + cancelled_by_platform (ended challenges).
+  // Finished list — server-completed only (never cancelled → fake FINISHED).
+  // recently-finished / ?status=completed return ALL public completed Unlimited;
+  // Live "Today" must only show ones this viewer hosted or joined — otherwise
+  // other people's multi-day challenges that end today flood the section.
   const finishedRaw = mergeUpcomingRoomsById(...finishedBatches);
+  const liveIds = new Set(live.map((r) => r.id));
+  const viewerId = opts?.viewerUserId ?? null;
   for (const room of finishedRaw) {
+    if (liveIds.has(room.room_id)) continue; // still live on another path — don't double-list
+    if (isUnlimitedTerminalExcludedFromLive(room.status)) continue;
     if (!isUnlimitedFinishedForLiveTab(room.status)) continue;
-    // Map cancelled → completed for Live "Recently Finished" display.
+    const isMine =
+      room.current_user_registered === true ||
+      (!!viewerId && !!room.host_user_id && room.host_user_id === viewerId);
+    if (!isMine) continue;
+    // Skip empty shells (no joiners) — not real finished races for Live.
+    if ((room.registered_count ?? 0) <= 0) continue;
+    // Keep real status; mapper requires completed — do not rewrite cancelled→completed.
     const mapped = mapUnlimitedUpcomingToLiveRaceFields(
       { ...room, status: "completed" },
       nowMs,

@@ -174,6 +174,8 @@ export function buildMatchmakingParams(options: {
   initialPrizePoolCents?: number;
   initialDailyGoalSteps?: number;
   initialDurationDays?: number;
+  /** Selected race track theme code (e.g. bg, daylightStadium). */
+  initialTrackLayout?: string;
 }): Record<string, string> {
   const params: Record<string, string> = {
     raceId: options.raceId,
@@ -221,6 +223,9 @@ export function buildMatchmakingParams(options: {
   }
   if (options.initialDurationDays != null) {
     params.initialDurationDays = String(options.initialDurationDays);
+  }
+  if (options.initialTrackLayout?.trim()) {
+    params.initialTrackLayout = options.initialTrackLayout.trim();
   }
 
   return params;

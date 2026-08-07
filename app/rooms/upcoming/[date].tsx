@@ -37,6 +37,7 @@ import {
   type RaceLeaveResponse,
 } from "@/services/refundApi";
 import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
+import { resolveRoomTrackCode } from "@/constants/trackLayouts";
 import {
   isAlreadyLeftLeaveError,
   isUnlimitedCashChallenge,
@@ -69,6 +70,8 @@ interface UpcomingRoom {
   challenge_duration_days: number;
   challenge_end_at: string | null;
   selected_track_theme_id: string;
+  theme_code?: string;
+  trackLayout?: string;
   theme_name: string;
   imageSet?: TrackThemeImageSet | null;
   imageUrl?: string | null;
@@ -186,7 +189,7 @@ function DetailCard({
   const isHost      = !isSponsored && !!currentUserId && currentUserId === room.host_user_id;
   const accent      = isSponsored ? "#7C3AFF" : isCash ? CASH_BLUE : isCoins ? GOLD : GREEN;
 
-  const trackCode = room.selected_track_theme_id?.trim() || "bg";
+  const trackCode = resolveRoomTrackCode(room);
 
   const entryLabel = isSponsored ? "Sponsored" : isCash ? `$${room.entry_fee.toFixed(2)}` : isCoins ? `${room.coin_entry_amount.toLocaleString()} coins` : "Free";
   const entryColor = isSponsored ? "#C47BFF" : isCash ? GOLD : isCoins ? GOLD : GREEN;
@@ -743,6 +746,13 @@ export default function UpcomingRoomsByDateScreen() {
         isHost: !!user?.id && user.id === room.host_user_id,
         user,
         initialScheduledStartAt: room.scheduled_start_at,
+        initialCurrentPlayers: room.registered_count ?? 1,
+        initialEntryType: room.challenge_type,
+        initialMaxPlayers: room.max_players,
+        initialTargetSteps: room.target_steps,
+        initialCoinEntryAmount:
+          room.challenge_type === "coins_battle" ? room.coin_entry_amount : undefined,
+        initialTrackLayout: resolveRoomTrackCode(room),
       }),
     });
   }, [user]);
