@@ -186,7 +186,7 @@ function StepProgress({
 }
 
 const CHALLENGE_TYPE_PILLS = {
-  unlimited: ["Unlimited", "Daily Goal", "Equal Prize Split"] as const,
+  unlimited: ["Unlimited Players", "Daily Goal", "Equal Prize Split"] as const,
   fixed: ["2–10 Players", "Up to 3 Winners"] as const,
 };
 
@@ -821,8 +821,8 @@ export function CreateChallengeFlow({
                       }}
                       accessibilityLabel={
                         unlimitedSelected
-                          ? "Unlimited Players, selected"
-                          : "Unlimited Players, not selected"
+                          ? "Daily Goal Challenge, selected"
+                          : "Daily Goal Challenge, not selected"
                       }
                       disabled={!unlimitedEnabled}
                       onPress={() => {
@@ -901,7 +901,7 @@ export function CreateChallengeFlow({
                                     },
                                   ]}
                                 >
-                                  Unlimited Players
+                                  Daily Goal Challenge
                                 </Text>
                                 <View style={styles.newBadge}>
                                   <Text style={styles.newBadgeText}>NEW</Text>
@@ -974,8 +974,8 @@ export function CreateChallengeFlow({
                       accessibilityState={{ selected: fixedSelected }}
                       accessibilityLabel={
                         fixedSelected
-                          ? "Fixed Players, selected"
-                          : "Fixed Players, not selected"
+                          ? "24-Hour Sprint, selected"
+                          : "24-Hour Sprint, not selected"
                       }
                       onPress={() => {
                         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -1024,7 +1024,7 @@ export function CreateChallengeFlow({
                               style={[styles.formatIconSm, !fixedSelected && { opacity: 0.72 }]}
                             >
                               <Feather
-                                name="users"
+                                name="clock"
                                 size={15}
                                 color={fixedSelected ? roomTheme.iconColor : chrome.textMuted}
                               />
@@ -1038,7 +1038,7 @@ export function CreateChallengeFlow({
                                   },
                                 ]}
                               >
-                                Fixed Players
+                                ⚡ 24-Hour Sprint
                               </Text>
                               <Text
                                 style={[

@@ -1849,22 +1849,45 @@ class WalkChampRaceForegroundService : Service() {
   /**
    * Show (or update) the daily-steps foreground notification.
    * Replaces the race notification as the active foreground notification.
+   *
+   * Never regress the tray below the same-day floor (prefs / sensor engine).
+   * Race-stop often passes a stale low todaySteps (session delta) while Walk/HC
+   * already showed hundreds — overwriting walk_body froze the ongoing notification.
    */
   private fun switchToDailyStepsNotification(todaySteps: Int) {
-    val steps = todaySteps.coerceAtLeast(0)
+    val steps = monotonicWalkSteps(todaySteps.coerceAtLeast(0))
     val body = formatWalkNotificationBody(steps)
-    val notification = buildCurrentWalkNotification(body, "walkchamp://walk", "Walk Champ")
+    val goal = prefs().getInt("walk_daily_goal", 10_000).coerceAtLeast(1)
+    val pct = NotificationVisuals.clampPercent(steps, goal)
+    val notification = buildCurrentWalkNotification(body, "walkchamp://walk", "Walk Champ", steps, goal)
     lastWalkNotification = notification
+    lastWalkDisplayState = WalkNotificationDisplayState(
+      steps = steps,
+      goal = goal,
+      percentage = pct,
+      remainingSteps = NotificationVisuals.remainingSteps(steps, goal),
+      isTracking = true,
+      visualType = if (pct >= 100) {
+        NotificationVisualType.GOAL_COMPLETED
+      } else {
+        NotificationVisualType.DAILY_WALK
+      },
+    )
     walkRunning = true
-    Log.d(TAG, "[NotificationMode] switch -> daily_steps todaySteps=$steps")
+    Log.d(TAG, "[NotificationMode] switch -> daily_steps todaySteps=$steps incoming=${todaySteps.coerceAtLeast(0)}")
     Log.d(TAG, "[DailyStepsNotification] update todaySteps=$steps")
     safeStartForeground(NOTIFICATION_ID_WALK, notification)
     postOngoingNotification(NOTIFICATION_ID_WALK, notification)
     val walkSource =
       prefs().getString("walk_step_source", null)
         ?: sensorEngine?.currentState()?.stepSource
-        ?: "android_step_counter"
+        ?: "health_connect"
     persistWalkState(body, "walkchamp://walk", "Walk Champ", steps, null, walkSource)
+    // Raise native sensor floor so later provisional ticks cannot pin the tray at ~2.
+    try {
+      ensureSensorEngine().ensureDailyFloor(steps, walkSource)
+    } catch (_: Exception) {
+    }
     startWalkLoopsIfNeeded()
   }
 

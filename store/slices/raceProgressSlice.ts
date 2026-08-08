@@ -398,18 +398,32 @@ const raceProgressSlice = createSlice({
                 stepSource === "ios_healthkit"));
 
           if (treatProvisional) {
-            const prev =
-              state.provisionalSensorTodaySteps == null
-                ? Math.max(0, state.verifiedTodaySteps)
-                : state.provisionalSensorTodaySteps;
+            const isFirstProvisionalReading = state.provisionalSensorTodaySteps == null;
+            const prev = isFirstProvisionalReading
+              ? Math.max(0, state.verifiedTodaySteps)
+              : state.provisionalSensorTodaySteps;
             const verified = Math.max(0, state.verifiedTodaySteps);
             // Reject yesterday-style absolutes (huge jump from near HC), but allow
             // live session growth past +250 so the ongoing notification keeps moving
             // while Health Connect lags.
+            //
+            // Skip these checks for the very first provisional reading of a fresh
+            // session/day: `prev` is only a synthetic stand-in for `verified` (0
+            // before HC/HK has caught up) at that point, not an actually-observed
+            // sensor value. Without this, the sensor's honest first tick (e.g. 451
+            // steps already walked before this app launch) got flagged as a "huge
+            // jump" and rejected — and since rejection never advances `prev`, every
+            // later tick was rejected too, permanently pinning the Walk screen at 0
+            // while the native notification (which reads the sensor directly)
+            // already showed the real count.
+            const SANE_DAILY_STEP_CEILING = 100_000;
+            const implausible = next > SANE_DAILY_STEP_CEILING;
             const hugeJumpFromVerified =
-              next > verified + 250 && prev <= verified + 50;
-            const spikeFromPrev = next > prev + 500;
-            if (hugeJumpFromVerified || spikeFromPrev) {
+              !isFirstProvisionalReading &&
+              next > verified + 250 &&
+              prev <= verified + 50;
+            const spikeFromPrev = !isFirstProvisionalReading && next > prev + 500;
+            if (implausible || hugeJumpFromVerified || spikeFromPrev) {
               if (__DEV__) {
                 console.log(
                   `[StepStore] rejected inflated provisional next=${next} verified=${verified} prev=${prev}`,

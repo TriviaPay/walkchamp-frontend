@@ -70,7 +70,7 @@ import {
 } from "@/services/stepProgressCoordinator";
 import { activateStepTracking, type StepTrackingEnableResult } from "@/services/stepTrackingStartup";
 import { mergeWalkStepsWithNative } from "@/services/stepDisplayMerge";
-import { waitForAppStartupReady, isAppStartupReady } from "@/services/appStartup";
+import { waitForAppStartupReady } from "@/services/appStartup";
 import { subscribeMidnightRollover } from "@/services/walkMidnightEvents";
 import { isWalkBackendSyncPaused } from "@/services/walkSyncCoordinator";
 import {
@@ -439,22 +439,50 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+  const lastTrayMirrorStepsRef = useRef(-1);
+  const lastTrayMirrorAtRef = useRef(0);
   useEffect(() => {
     todayStepsRef.current = todaySteps;
     if (syncingFromReduxRef.current) return;
-    if (!isAppStartupReady()) return;
     if (!stepsSourceReady && todaySteps === 0) return;
-    const rawSource = stepProviderManager.toWalkSyncSource();
-    const stepSource =
-      rawSource === "android_health_connect"
-        ? "health_connect"
-        : rawSource === "ios_healthkit"
-          ? "healthkit"
-          : rawSource === "android_step_counter"
-            ? "android_step_counter"
-            : "backend";
-    updateStepProgressFromRealSource({ todaySteps, stepSource });
-  }, [todaySteps, stepsSourceReady]);
+    let cancelled = false;
+    void (async () => {
+      // todaySteps may arrive before cold-start gate opens — wait, then sync so
+      // Redux + Daily Walk tray catch the Walk screen total (not stay stuck at ~2).
+      await waitForAppStartupReady();
+      if (cancelled || syncingFromReduxRef.current) return;
+      const rawSource = stepProviderManager.toWalkSyncSource();
+      const stepSource =
+        rawSource === "android_health_connect"
+          ? "health_connect"
+          : rawSource === "ios_healthkit"
+            ? "healthkit"
+            : rawSource === "android_step_counter"
+              ? "android_step_counter"
+              : stepProviderManager.usesVerifiedStepSource()
+                ? "health_connect"
+                : "backend";
+      const verifiedLane =
+        stepSource === "health_connect" || stepSource === "healthkit";
+      updateStepProgressFromRealSource({
+        todaySteps,
+        stepSource,
+        dailyLane: verifiedLane ? "verified" : undefined,
+      });
+      // Force tray when Walk UI is ahead of last mirror (race-end stale body / missed push).
+      const now = Date.now();
+      const aheadOfMirror = todaySteps > lastTrayMirrorStepsRef.current + 5;
+      const mirrorStale = now - lastTrayMirrorAtRef.current > 5_000;
+      if (todaySteps > 0 && (aheadOfMirror || (mirrorStale && todaySteps !== lastTrayMirrorStepsRef.current))) {
+        await pushWalkNotificationFromCanonicalStore(true, user?.id);
+        lastTrayMirrorStepsRef.current = todaySteps;
+        lastTrayMirrorAtRef.current = now;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [todaySteps, stepsSourceReady, user?.id]);
 
   useEffect(() => {
     todayDailyGoalRef.current = todayDailyGoal;
@@ -776,6 +804,25 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           lastSyncedStepsRef.current = 0;
           backendTodayStepsRef.current = 0;
         }
+        // Native FGS/notification already tracked today's total (monotonic floor,
+        // persisted across app restarts) and answers instantly — Health Connect's
+        // first cold read can take a while. Seed the Walk UI from it now so the
+        // screen never sits at 0 for a minute+ while the notification already
+        // shows the real count (same-day only; never adopt a stale native total).
+        if (!rolled && Platform.OS === "android" && stepProviderManager.usesVerifiedStepSource()) {
+          try {
+            const native = await stepTrackingNotificationService.getNativeStepState(user.id);
+            if (native && native.localDate === today) {
+              const nativeToday = Math.max(0, Math.floor(native.todaySteps ?? 0));
+              if (nativeToday > displaySteps) {
+                displaySteps = nativeToday;
+              }
+            }
+          } catch {
+            /* optional — fall through to HC/backend hydrate below */
+          }
+        }
+
         const cachedAtStart = displaySteps;
         // Unblock Walk tab immediately; backend/provider reconcile continues below.
         setStepsHydrated(true);

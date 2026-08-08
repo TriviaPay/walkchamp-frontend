@@ -98,6 +98,10 @@ import {
 } from "@/services/raceVerificationApi";
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import {
+  emitChallengeLeft,
+  emitChallengeStatusesRefresh,
+} from "@/utils/challengeLocalEvents";
 import { FEATURE_FLAGS, isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
 import {
   filterRaceParticipantsForDisplay,
@@ -2016,6 +2020,7 @@ function LiveRaceDetailScreenContent() {
     recordFinishedRaceStepsForWalk,
     userRaceSteps,
     stopRaceStepTracking,
+    cancelRace,
     raceVerification,
     racePhase,
     raceId: contextRaceId,
@@ -2261,6 +2266,9 @@ function LiveRaceDetailScreenContent() {
   // Reason the race ended — captured from the race:completed Pusher event so
   // we can show forfeit-specific messaging without a DB round-trip.
   const [forfeitReason, setForfeitReason] = useState<string | null>(null);
+  /** True while others forfeit / leave and we wait for race:completed (avoids LIVE vs winner flicker). */
+  const [pendingMatchEnd, setPendingMatchEnd] = useState(false);
+  const forfeitInFlightRef = useRef(false);
   // Coins Battle win: show a "You won X coins!" banner when race:completed fires
   const [coinWinAmount, setCoinWinAmount] = useState<number | null>(null);
   const [pendingCoinWinAmount, setPendingCoinWinAmount] = useState<number | null>(null);
@@ -3991,6 +3999,7 @@ function LiveRaceDetailScreenContent() {
       results?: Array<{ userId?: string; prizeCoins?: number; currentSteps?: number }>;
     }) => {
       flushFinalSteps();
+      setPendingMatchEnd(false);
       const meResult = currentUserId ? data?.results?.find((r) => r.userId === currentUserId) : undefined;
       finalizeLiveRaceRef.current(
         meResult?.currentSteps ?? localStepsRef.current,
@@ -3999,6 +4008,7 @@ function LiveRaceDetailScreenContent() {
       void refreshResultStatus();
       if (data?.endedReason) setForfeitReason(data.endedReason);
       setRace((prev) => prev ? { ...prev, status: "completed", completedAt: prev.completedAt ?? new Date().toISOString() } : prev);
+      emitChallengeStatusesRefresh("race_completed");
       if (data?.challengeType === "coins_battle" && Array.isArray(data.results)) {
         // Store prizes for ALL participants so the finished card can show each person's prize
         const map = new Map<string, number>();
@@ -4193,6 +4203,7 @@ function LiveRaceDetailScreenContent() {
       if (typeof data.count === "number") setSpectatorCount(data.count); };
 
     const onStarted = () => {
+      emitChallengeStatusesRefresh("race_started");
       if (raceAlreadyStartedRef.current || raceRef.current?.status === "in_progress") {
         raceAlreadyStartedRef.current = true;
         void fetchRaceDetailsRef.current(true);
@@ -4275,15 +4286,56 @@ function LiveRaceDetailScreenContent() {
     };
 
     const refreshParticipants = () => refresh(true);
+
+    const stillRacing = (p: RaceParticipant) => {
+      const s = (p.status ?? "").toLowerCase();
+      return s !== "forfeited" && s !== "left" && s !== "quit" && s !== "disqualified";
+    };
+
+    const markParticipantOut = (uid: string, status: "forfeited" | "left") => {
+      if (!uid) {
+        refreshParticipants();
+        return;
+      }
+      setParticipants((prev) => {
+        let changed = false;
+        const next = prev.map((p) => {
+          if (p.userId !== uid && p.id !== uid) return p;
+          if (p.status === status) return p;
+          changed = true;
+          return { ...p, status };
+        });
+        if (!changed) return prev;
+        const racing = next.filter(stillRacing);
+        // 0 left racing → all out; 1 left → winner-by-forfeit pending server settle.
+        if (racing.length <= 1) setPendingMatchEnd(true);
+        return next;
+      });
+      // Background reconcile (gated); UI already updated optimistically.
+      refreshParticipants();
+    };
+
+    const onParticipantForfeited = (data: { userId?: string }) => {
+      markParticipantOut(data?.userId ?? "", "forfeited");
+    };
+    const onParticipantLeft = (data?: { userId?: string; participantId?: string }) => {
+      const uid = data?.userId ?? data?.participantId ?? "";
+      if (!uid) {
+        refreshParticipants();
+        return;
+      }
+      markParticipantOut(uid, "left");
+    };
+
     const bindRaceEvents = (ch: NonNullable<typeof channel>) => {
       ch.bind("race:started",          onStarted);
       ch.bind("race:player-joined",    refreshParticipants);
-      ch.bind("race:player-left",           refreshParticipants);
-      ch.bind("race:participant_left",      refreshParticipants);
-      ch.bind("race:participant-forfeited", refreshParticipants);
+      ch.bind("race:player-left",           onParticipantLeft);
+      ch.bind("race:participant_left",      onParticipantLeft);
+      ch.bind("race:participant-forfeited", onParticipantForfeited);
       // Unlimited join/leave also emit room:participant_* on the live-race channel.
       ch.bind("room:participant_joined", refreshParticipants);
-      ch.bind("room:participant_left", refreshParticipants);
+      ch.bind("room:participant_left", onParticipantLeft);
       ch.bind("race:progress_updated", onProgress);
       ch.bind("race:comment_new",      onComment);
       ch.bind("race:reaction_updated", onReaction);
@@ -4328,7 +4380,7 @@ function LiveRaceDetailScreenContent() {
     if (unlimitedChannel) {
       unlimitedChannel.bind("progress_updated", onUnlimitedProgress);
       unlimitedChannel.bind("participant_joined", refreshParticipants);
-      unlimitedChannel.bind("participant_left", refreshParticipants);
+      unlimitedChannel.bind("participant_left", onParticipantLeft);
       unlimitedChannel.bind("challenge_started", onStarted);
       unlimitedChannel.bind("challenge_completed", onCompleted);
       unlimitedChannel.bind("challenge_cancelled", onCompleted);
@@ -4338,11 +4390,11 @@ function LiveRaceDetailScreenContent() {
       if (channel && onVerificationEvent) {
         channel.unbind("race:started",          onStarted);
         channel.unbind("race:player-joined",    refreshParticipants);
-        channel.unbind("race:player-left",           refreshParticipants);
-        channel.unbind("race:participant_left",      refreshParticipants);
-        channel.unbind("race:participant-forfeited", refreshParticipants);
+        channel.unbind("race:player-left",           onParticipantLeft);
+        channel.unbind("race:participant_left",      onParticipantLeft);
+        channel.unbind("race:participant-forfeited", onParticipantForfeited);
         channel.unbind("room:participant_joined", refreshParticipants);
-        channel.unbind("room:participant_left", refreshParticipants);
+        channel.unbind("room:participant_left", onParticipantLeft);
         channel.unbind("race:progress_updated", onProgress);
         channel.unbind("race:comment_new",      onComment);
         channel.unbind("race:reaction_updated", onReaction);
@@ -4360,7 +4412,7 @@ function LiveRaceDetailScreenContent() {
       if (unlimitedChannel) {
         unlimitedChannel.unbind("progress_updated", onUnlimitedProgress);
         unlimitedChannel.unbind("participant_joined", refreshParticipants);
-        unlimitedChannel.unbind("participant_left", refreshParticipants);
+        unlimitedChannel.unbind("participant_left", onParticipantLeft);
         unlimitedChannel.unbind("challenge_started", onStarted);
         unlimitedChannel.unbind("challenge_completed", onCompleted);
         unlimitedChannel.unbind("challenge_cancelled", onCompleted);
@@ -4638,7 +4690,14 @@ function LiveRaceDetailScreenContent() {
   };
 
   // ── Race Finished banner (shared) ─────────────────────────────────────────
-  const allForfeited    = forfeitReason === "all_forfeited";
+  const everyoneForfeitedLocal =
+    participants.length > 0 &&
+    participants.every((p) => {
+      const s = (p.status ?? "").toLowerCase();
+      return s === "forfeited" || s === "left" || s === "quit";
+    });
+  const allForfeited =
+    forfeitReason === "all_forfeited" || (isCompleted && everyoneForfeitedLocal);
   const winnerByForfeit = forfeitReason === "winner_by_forfeit";
   const sponsoredMeQualified =
     !!currentParticipant &&
@@ -4647,12 +4706,30 @@ function LiveRaceDetailScreenContent() {
       currentParticipant.isWinner === true ||
       (currentParticipant.prizeAmount ?? 0) > 0
     );
+  const MatchEndingBanner =
+    pendingMatchEnd && !isCompleted ? (
+      <View style={[s.finishedBanner, { borderColor: "#F59E0B55" }]}>
+        <View style={s.finishedBannerHeader}>
+          <Text style={{ fontSize: 22 }}>⏳</Text>
+          <Text style={s.finishedBannerTitle}>Match ending…</Text>
+        </View>
+        <Text style={{ color: "#9CA3AF", fontSize: 13, paddingHorizontal: 4, paddingBottom: 4 }}>
+          {everyoneForfeitedLocal
+            ? "All players are out. Finalizing the result…"
+            : "A player left the race. Declaring the winner…"}
+        </Text>
+      </View>
+    ) : null;
   const FinishedBanner = isCompleted && !bannerDismissed ? (
     <View style={[s.finishedBanner]}>
       <View style={s.finishedBannerHeader}>
         <Text style={{ fontSize: 22 }}>{allForfeited ? "🚩" : "🏆"}</Text>
         <Text style={s.finishedBannerTitle}>
-          {allForfeited ? "No Winners — All Forfeited" : "Race Finished"}
+          {allForfeited
+            ? "No Winners — All Forfeited"
+            : winnerByForfeit
+              ? "Won by Forfeit"
+              : "Race Finished"}
         </Text>
         <TouchableOpacity onPress={() => setBannerDismissed(true)} style={s.bannerClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
           <Feather name="x" size={18} color="#888" />
@@ -4673,7 +4750,12 @@ function LiveRaceDetailScreenContent() {
           Match ended — all participants forfeited. No winners were declared.
         </Text>
       )}
-      {winners.map((w, i) => {
+      {!allForfeited && winnerByForfeit && winners.length === 0 && (
+        <Text style={{ color: "#9CA3AF", fontSize: 13, paddingHorizontal: 4, paddingBottom: 4 }}>
+          Opponent forfeited. Confirming the winner…
+        </Text>
+      )}
+      {!allForfeited && winners.map((w, i) => {
         const rank = w.displayRank ?? w.rank ?? (i + 1);
         const rankNum = rank === 1 ? "#1" : rank === 2 ? "#2" : `#${rank}`;
         const tiedInGroup = w.isTied && (w.tieGroupSize ?? 1) > 1;
@@ -4770,6 +4852,7 @@ function LiveRaceDetailScreenContent() {
       )}
     </View>
   ) : null;
+  const OutcomeBanner = FinishedBanner ?? MatchEndingBanner;
 
   return (
     <SafeAreaView
@@ -4797,7 +4880,12 @@ function LiveRaceDetailScreenContent() {
           <Feather name="chevron-left" size={25} color="#fff" />
         </TouchableOpacity>
         <View style={s.hCenter}>
-          {isActive  && <Text style={[s.hLive, isSponsored && s.hLiveSponsored]}>LIVE </Text>}
+          {isActive && !pendingMatchEnd && (
+            <Text style={[s.hLive, isSponsored && s.hLiveSponsored]}>LIVE </Text>
+          )}
+          {isActive && pendingMatchEnd && (
+            <Text style={[s.hLive, isSponsored && s.hLiveSponsored, { color: "#F59E0B" }]}>ENDING </Text>
+          )}
           {isCompleted && <Text style={[s.hLive, isSponsored && s.hLiveSponsored, { color: "#FFD700" }]}>FINISHED </Text>}
           <Text
             style={[s.hTitle, isSponsored && s.hTitleSponsored]}
@@ -4810,26 +4898,42 @@ function LiveRaceDetailScreenContent() {
         </View>
         {currentParticipant && isActive && currentParticipant.status !== "forfeited" ? (
           <TouchableOpacity activeOpacity={0.85} onPress={() =>
-            AppAlert.alert("Forfeit Race?", "Forfeiting counts as a loss. The remaining player will be declared the winner immediately.", [
+            AppAlert.alert(
+              "Forfeit Race?",
+              "Forfeiting counts as a loss. Remaining players keep racing until the match settles.",
+              [
               { text: "Cancel" },
-              { text: "Forfeit", style: "destructive", onPress: async () => {
-                try {
-                  // Unlimited Challenges live in a separate table/route from Classic
-                  // race rooms — /races/:id/leave 404s on a challengeId, which would
-                  // silently leave qualificationStatus as "active" server-side.
-                  const leavePath = isUnlimitedHeader
-                    ? `/api/unlimited-challenges/${raceId}/leave`
-                    : `/api/races/${raceId}/leave`;
-                  await authFetch(leavePath, {
-                    method: "POST",
-                    body: JSON.stringify({ reason: "user_quit" }),
-                  });
-                } catch { /* best-effort */ }
+              { text: "Forfeit", style: "destructive", onPress: () => {
+                if (forfeitInFlightRef.current) return;
+                forfeitInFlightRef.current = true;
+
+                // Optimistic local exit — never wait on the leave API for UI.
+                if (user?.id) {
+                  setParticipants((prev) =>
+                    prev.map((p) =>
+                      p.userId === user.id || p.id === user.id
+                        ? { ...p, status: "forfeited" }
+                        : p,
+                    ),
+                  );
+                }
                 if (raceId) {
                   void suppressLiveRaceNotification(raceId, "user_forfeit");
                   stopRaceStepTracking("user_forfeit");
+                  emitChallengeLeft(raceId);
                 }
+                cancelRace();
+                setActiveRace(null, false);
+                emitChallengeStatusesRefresh("user_forfeit");
                 leaveLiveDetail();
+
+                const leavePath = isUnlimitedHeader
+                  ? `/api/unlimited-challenges/${raceId}/leave`
+                  : `/api/races/${raceId}/leave`;
+                void authFetch(leavePath, {
+                  method: "POST",
+                  body: JSON.stringify({ reason: "user_quit" }),
+                }).catch(() => { /* best-effort */ });
               }},
             ]) }>
             <LinearGradient colors={["#FF3333", "#BB0000"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.leaveBtn}>
@@ -4903,7 +5007,7 @@ function LiveRaceDetailScreenContent() {
             selectedView === "race_track" ? "yes" : "no-hide-descendants"
           }
         >
-          {FinishedBanner}
+          {OutcomeBanner}
 
           <View style={{ flex: 1, position: "relative" }}>
           <View
@@ -5063,7 +5167,7 @@ function LiveRaceDetailScreenContent() {
               setProfileUserId(p.userId);
             }}
             colors={colors}
-            listHeader={FinishedBanner}
+            listHeader={OutcomeBanner}
             listFooter={
               race.entryType === "free" ||
               race.type === "sponsored" ||

@@ -1781,6 +1781,11 @@ function MatchmakingScreenContent() {
         }
       }
       if (backendRaceId) {
+        void import("@/utils/challengeLocalEvents")
+          .then(({ emitChallengeStatusesRefresh }) =>
+            emitChallengeStatusesRefresh("race_starting"),
+          )
+          .catch(() => {});
         router.replace({
           pathname: "/race/live-detail",
           params: {
@@ -1865,29 +1870,44 @@ function MatchmakingScreenContent() {
         let unlimitedMappedCount: number | null = null;
         let unlimitedHasExplicitCount = false;
 
-        // Scheduled/future rooms: roster lives on GET /api/races/:id (folded from
-        // scheduled_room_registrations). Prefer that path — Unlimited detail is the
-        // wrong source and can leave the player grid empty while the count looks right.
+        // Classic scheduled/future rooms: roster lives on GET /api/races/:id
+        // (folded from scheduled_room_registrations).
+        //
+        // Unlimited / Daily Goal challenges ALWAYS have a midnight schedule, but
+        // they live in `unlimited_challenges`, NOT `race_rooms`. Diverting them
+        // through /api/races/:id 404s → "Could not refresh registered players"
+        // and an empty grid even when people have joined. Always use the
+        // unlimited detail endpoint for those rooms.
         const looksScheduled =
           !!scheduledStartAt ||
           !!params.initialScheduledStartAt;
 
-        if (!looksScheduled) {
-          // Open / Unlimited: try Unlimited detail first (shadow race rows can undercount).
+        const tryUnlimitedDetail = async (): Promise<boolean> => {
           const ulRes = await authFetch(`/api/unlimited-challenges/${backendRaceId}`);
-          if (ulRes.ok) {
-            const mapped = mapUnlimitedDetailToWaitingRoom(await ulRes.json());
-            if (mapped) {
-              usedUnlimitedEndpoint = true;
-              racePayload = mapped.race as WaitingRoomRacePayload;
-              rawParticipantCollections = [mapped.participants];
-              unlimitedMappedCount = mapped.race.currentPlayers;
-              unlimitedHasExplicitCount = !!mapped.race.hasExplicitPlayerCount;
-            }
+          if (!ulRes.ok) return false;
+          const mapped = mapUnlimitedDetailToWaitingRoom(await ulRes.json());
+          if (!mapped) return false;
+          usedUnlimitedEndpoint = true;
+          racePayload = mapped.race as WaitingRoomRacePayload;
+          rawParticipantCollections = [mapped.participants];
+          unlimitedMappedCount = mapped.race.currentPlayers;
+          unlimitedHasExplicitCount = !!mapped.race.hasExplicitPlayerCount;
+          if (__DEV__) {
+            console.log(
+              `[WaitingRoom] unlimited roster raceId=${backendRaceId} rows=${mapped.participants.length} count=${mapped.race.currentPlayers}`,
+            );
           }
+          return true;
+        };
+
+        if (isUnlimitedGoalRoom) {
+          await tryUnlimitedDetail();
+        } else if (!looksScheduled) {
+          // Open classic / mis-tagged id: Unlimited detail first (shadow race rows can undercount).
+          await tryUnlimitedDetail();
         }
 
-        if (!racePayload || looksScheduled) {
+        if (!racePayload || (looksScheduled && !isUnlimitedGoalRoom)) {
           const res = await authFetch(`/api/races/${backendRaceId}`);
           if (res.ok) {
             const data = await res.json();
@@ -1921,28 +1941,33 @@ function MatchmakingScreenContent() {
           }
         }
 
-        // Unlimited returned OK but empty — fall back to race GET (e.g. mis-tagged id).
+        // Race GET 404 / empty — last chance Unlimited detail (nav params may omit capacityMode).
         if (
-          racePayload &&
-          usedUnlimitedEndpoint &&
-          rawParticipantCollections.every(
-            (c) => !Array.isArray(c) || c.length === 0,
-          )
+          !racePayload ||
+          (usedUnlimitedEndpoint &&
+            rawParticipantCollections.every(
+              (c) => !Array.isArray(c) || c.length === 0,
+            ))
         ) {
-          const res = await authFetch(`/api/races/${backendRaceId}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.race) {
-              racePayload = data.race as WaitingRoomRacePayload;
-              rawParticipantCollections = [
-                data.participants,
-                data.registrations,
-                data.registeredParticipants,
-                data.race?.participants,
-                data.race?.registrations,
-                data.race?.registeredParticipants,
-              ];
-              usedUnlimitedEndpoint = false;
+          if (!usedUnlimitedEndpoint || !racePayload) {
+            await tryUnlimitedDetail();
+          } else if (!isUnlimitedGoalRoom) {
+            // Unlimited returned OK but empty — fall back to race GET (e.g. mis-tagged id).
+            const res = await authFetch(`/api/races/${backendRaceId}`);
+            if (res.ok) {
+              const data = await res.json();
+              if (data.race) {
+                racePayload = data.race as WaitingRoomRacePayload;
+                rawParticipantCollections = [
+                  data.participants,
+                  data.registrations,
+                  data.registeredParticipants,
+                  data.race?.participants,
+                  data.race?.registrations,
+                  data.race?.registeredParticipants,
+                ];
+                usedUnlimitedEndpoint = false;
+              }
             }
           }
         }

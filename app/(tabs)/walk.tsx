@@ -99,7 +99,10 @@ import { fetchAvailableChallengeCount } from "@/services/trendingChallengesApi";
 import { fetchAvailableUnlimitedChallenges, fetchMyOpenUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
 import { mergeUpcomingRoomsById } from "@/utils/unlimitedChallengeRooms";
 import { saveHostedUnlimitedChallenge } from "@/utils/hostedUnlimitedCache";
-import { CHALLENGE_LEFT_EVENT } from "@/utils/challengeLocalEvents";
+import {
+  CHALLENGE_LEFT_EVENT,
+  CHALLENGE_STATUSES_REFRESH_EVENT,
+} from "@/utils/challengeLocalEvents";
 import { PremiumStepSlider } from "@/components/PremiumStepSlider";
 import {
   USD_FIXED_ENTRY_DOLLARS,
@@ -2214,9 +2217,7 @@ function WalkScreenContent() {
 
   // Initial load handled by useFocusEffect below (avoids duplicate fetch on mount + focus).
 
-  // When a race ends (racePhase → "idle"), immediately clear any stale HOSTING /
-  // JOINED status so the challenge cards revert to "Host / Join" without waiting
-  // for the next 5-second poll.  Then trigger a fresh fetch in the background.
+  // When race phase changes, refresh challenge chips immediately (no 20s poll wait).
   const prevRacePhaseRef = useRef<string>(racePhase);
   useEffect(() => {
     const prev = prevRacePhaseRef.current;
@@ -2227,6 +2228,14 @@ function WalkScreenContent() {
     ) {
       setChallengeStatuses({});
       loadChallengeStatuses();
+    } else if (
+      racePhase === "in_race" ||
+      racePhase === "finished" ||
+      racePhase === "waiting" ||
+      racePhase === "countdown"
+    ) {
+      // Race starting / live / just finished — chips must flip without waiting on poll.
+      if (prev !== racePhase) void loadChallengeStatuses();
     }
     if (
       (racePhase === "finished" || racePhase === "idle") &&
@@ -2622,6 +2631,7 @@ function WalkScreenContent() {
             isRegistered: boolean; isActive: boolean; joinWindowOpen: boolean;
             canRegister: boolean;
             scheduledStartAt: string | null;
+            endsAt?: string | null;
             registeredCount: number; maxSlots: number;
             targetSteps?: number;
             prizePoolCents?: number;
@@ -2642,6 +2652,7 @@ function WalkScreenContent() {
               targetSteps: ev.targetSteps,
               prizePoolCents: ev.prizePoolCents,
               prizePerWinnerCents: ev.prizePerWinnerCents,
+              endsAt: ev.endsAt ?? null,
             };
             break;
           }
@@ -2653,6 +2664,7 @@ function WalkScreenContent() {
                 kind: "join_window",
                 eventId: ev.id,
                 scheduledStartAt: ev.scheduledStartAt,
+                endsAt: ev.endsAt ?? null,
                 registeredCount: ev.registeredCount,
                 maxSlots: ev.maxSlots,
                 targetSteps: ev.targetSteps,
@@ -2670,6 +2682,7 @@ function WalkScreenContent() {
                 kind: "registered",
                 eventId: ev.id,
                 scheduledStartAt: ev.scheduledStartAt!,
+                endsAt: ev.endsAt ?? null,
                 registeredCount: ev.registeredCount,
                 maxSlots: ev.maxSlots,
                 targetSteps: ev.targetSteps,
@@ -2945,7 +2958,7 @@ function WalkScreenContent() {
     modalDismissed?: boolean;
   } | null>(null);
 
-  // Waiting Room Leave → drop from Next Race immediately (incl. local create seed).
+  // Waiting Room Leave / live forfeit → drop from Next Race immediately (incl. local create seed).
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener(
       CHALLENGE_LEFT_EVENT,
@@ -2966,10 +2979,23 @@ function WalkScreenContent() {
           }
           return changed ? next : prev;
         });
+        // Reconcile with server ASAP so "match completed" / join chips aren't stale.
+        void loadChallengeStatuses();
       },
     );
     return () => sub.remove();
-  }, []);
+  }, [loadChallengeStatuses]);
+
+  // Live detail / other screens request an immediate chip refetch (start, forfeit, complete).
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(
+      CHALLENGE_STATUSES_REFRESH_EVENT,
+      () => {
+        void loadChallengeStatuses();
+      },
+    );
+    return () => sub.remove();
+  }, [loadChallengeStatuses]);
 
   // Drop local Next Race seed once Available/Unlimited upcoming list has the room.
   useEffect(() => {
@@ -2993,11 +3019,13 @@ function WalkScreenContent() {
         targetSteps?: number;
         prizePoolCents?: number;
         prizePerWinnerCents?: number;
+        endsAt?: string | null;
       }
     | {
         kind: "join_window";
         eventId: string;
         scheduledStartAt: string | null;
+        endsAt?: string | null;
         registeredCount: number;
         maxSlots: number;
         targetSteps?: number;
@@ -3008,6 +3036,7 @@ function WalkScreenContent() {
         kind: "registered";
         eventId: string;
         scheduledStartAt: string;
+        endsAt?: string | null;
         registeredCount: number;
         maxSlots: number;
         targetSteps?: number;
@@ -3179,6 +3208,7 @@ function WalkScreenContent() {
           challengeType: "sponsored",
           phase,
           scheduledStartAt: sponsoredStatus.scheduledStartAt,
+          endsAt: sponsoredStatus.endsAt ?? null,
           registeredCount: sponsoredStatus.registeredCount ?? 0,
           maxSlots: sponsoredStatus.maxSlots ?? 10,
           targetSteps: sponsoredStatus.targetSteps,

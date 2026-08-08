@@ -212,6 +212,7 @@ export type UnlimitedWaitingRoomMapped = {
     challengeType: string;
     capacityMode: "unlimited";
     startedAt: string | null;
+    hostUserId: string | null;
     /** True when a dedicated count field (or prize-derived count) was found. */
     hasExplicitPlayerCount?: boolean;
   };
@@ -327,6 +328,9 @@ export function mapUnlimitedDetailToWaitingRoom(
       challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
       capacityMode: "unlimited",
       startedAt: asString(pick(challenge, "startedAt", "started_at")),
+      hostUserId: asString(
+        pick(challenge, "hostUserId", "host_user_id", "creatorId", "creator_id"),
+      ),
       hasExplicitPlayerCount,
     },
     participants,

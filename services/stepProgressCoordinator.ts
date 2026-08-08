@@ -137,16 +137,16 @@ function isVerifiedSource(source: StepProgressSource | string | undefined): bool
 
 function scheduleWalkNotificationUpdate(force = false): void {
   if (!isAppStartupReady()) return;
-  if (pendingWalkNotification && !force) return;
+  // Trailing-edge coalesce: always reschedule so the latest Redux total is pushed.
+  if (walkNotificationTimer) clearTimeout(walkNotificationTimer);
   pendingWalkNotification = true;
 
-  if (walkNotificationTimer) clearTimeout(walkNotificationTimer);
-
   const delay = force ? 0 : STEP_TRACKING_NOTIFICATION_CONFIG.DEBOUNCE_MS;
+  const pushForced = force;
   walkNotificationTimer = setTimeout(() => {
     pendingWalkNotification = false;
     walkNotificationTimer = null;
-    void pushWalkNotificationFromCanonicalStore();
+    void pushWalkNotificationFromCanonicalStore(pushForced);
   }, delay);
 }
 
@@ -366,7 +366,11 @@ export async function pushWalkNotificationFromCanonicalStore(
     return;
   }
 
+  // Same-step throttle only applies to unforced pushes. After race→walk switch,
+  // native may have overwritten the tray with a stale low count while JS still
+  // thinks lastWalkNotificationSteps matches — force must always re-poke native.
   if (
+    !force &&
     steps === lastWalkNotificationSteps &&
     now - lastWalkNotificationPushMs < cfg.LOCAL_UPDATE_MS
   ) {
@@ -651,7 +655,15 @@ export function updateStepProgressFromRealSource(input: {
   if (resolvedTodaySteps !== undefined) {
     const s = store.getState().raceProgress;
     store.dispatch(walkActions.setTodaySteps(s.todaySteps));
-    scheduleWalkNotificationUpdate(false);
+    // Verified HC/HK catch-up (or large jumps) must force the tray — debounce-only
+    // pushes were skipping after race-end when lastSteps already matched Redux.
+    const jump =
+      lastWalkNotificationSteps >= 0
+        ? Math.abs(s.todaySteps - lastWalkNotificationSteps)
+        : s.todaySteps;
+    scheduleWalkNotificationUpdate(
+      dailyLane === "verified" || jump >= 25 || allowTodayDecrease,
+    );
   }
 
   if (input.raceSteps !== undefined) {
@@ -1831,9 +1843,13 @@ export function clearActiveRaceProgress(
   options?: { preserveWalkDisplay?: number; raceId?: string },
 ): void {
   const s = store.getState().raceProgress;
-  const todaySteps = s.todaySteps;
   const raceIdToStop = options?.raceId ?? s.activeRaceId;
   const companionId = s.companionRaceId;
+  const walkFloor = resolveWalkNotificationSteps({
+    verifiedTodaySteps: s.verifiedTodaySteps ?? 0,
+    provisionalSensorTodaySteps: s.provisionalSensorTodaySteps,
+    todaySteps: Math.max(s.todaySteps, options?.preserveWalkDisplay ?? 0),
+  });
 
   store.dispatch(
     raceProgressActions.clearActiveRace({
@@ -1845,20 +1861,27 @@ export function clearActiveRaceProgress(
   if (companionId) activeChallengeSync.unregister(companionId);
 
   void (async () => {
+    // Re-read at stop time — Walk/HC may have advanced while the race was ending.
+    const latest = store.getState().raceProgress;
+    const walkSteps = resolveWalkNotificationSteps({
+      verifiedTodaySteps: latest.verifiedTodaySteps ?? 0,
+      provisionalSensorTodaySteps: latest.provisionalSensorTodaySteps,
+      todaySteps: Math.max(
+        latest.todaySteps,
+        walkFloor,
+        options?.preserveWalkDisplay ?? 0,
+      ),
+    });
     if (companionId) {
       await raceProgressNotificationService.stopParallel(companionId);
     }
     if (raceIdToStop) {
-      await raceProgressNotificationService.stop(raceIdToStop, status, todaySteps);
+      await raceProgressNotificationService.stop(raceIdToStop, status, walkSteps);
       stepEngineLog(
         "RaceComplete",
         `dismissedNotification=true raceId=${raceIdToStop} status=${status}`,
       );
     }
-    const walkSteps = Math.max(
-      todaySteps,
-      options?.preserveWalkDisplay ?? 0,
-    );
     if (s.userId) {
       await switchDailyStepsNotification(walkSteps);
     }
@@ -1869,20 +1892,29 @@ export function clearActiveRaceProgress(
 export async function switchDailyStepsNotification(todaySteps?: number): Promise<void> {
   const s = store.getState().raceProgress;
   if (!s.userId) return;
-  // Never write tray display totals into Redux lanes — that previously let an
-  // inflated TYPE_STEP_COUNTER absolute (1592) overwrite / lock HC (433).
-  // Notification always resolves from verified + clamped provisional policy.
-  void todaySteps;
-  await pushWalkNotificationFromCanonicalStore(true);
-  const shown = resolveWalkNotificationSteps({
-    verifiedTodaySteps: store.getState().raceProgress.verifiedTodaySteps ?? 0,
-    provisionalSensorTodaySteps:
-      store.getState().raceProgress.provisionalSensorTodaySteps,
-    todaySteps: store.getState().raceProgress.todaySteps,
+  // Prefer live resolved total (verified + provisional). Optional todaySteps arg is
+  // only a floor when callers captured a higher Walk-UI value before Redux caught up.
+  const resolved = resolveWalkNotificationSteps({
+    verifiedTodaySteps: s.verifiedTodaySteps ?? 0,
+    provisionalSensorTodaySteps: s.provisionalSensorTodaySteps,
+    todaySteps: Math.max(
+      s.todaySteps,
+      Math.max(0, Math.floor(todaySteps ?? 0)),
+    ),
   });
+  // Invalidate same-step throttle so we always re-sync native after race teardown
+  // (native SWITCH_TO_WALK may have briefly written a stale low body).
+  lastWalkNotificationSteps = -1;
+  await stepTrackingNotificationService.mirrorWalkScreen({
+    userId: s.userId,
+    todaySteps: resolved,
+    dailyGoal: s.dailyGoal > 0 ? s.dailyGoal : 10_000,
+  });
+  lastWalkNotificationSteps = resolved;
+  lastWalkNotificationPushMs = Date.now();
   logger.debug(
     "NotificationMode",
-    `switch race_live -> daily_steps todaySteps=${shown}`,
+    `switch race_live -> daily_steps todaySteps=${resolved}`,
   );
 }
 

@@ -547,7 +547,7 @@ export function RaceStartingSoonCard({
     ? isParticipant
       ? "Your race is live. Open it now!"
       : "Your race is live. Join now!"
-    : "You're registered.\nGet ready for the challenge.";
+    : null;
   const ctaLabel = isLive
     ? isParticipant
       ? "View Race"
@@ -680,9 +680,11 @@ export function RaceStartingSoonCard({
             </View>
           )}
         </View>
-        <Text style={styles.subtitle} numberOfLines={2}>
-          {subtitle}
-        </Text>
+        {subtitle ? (
+          <Text style={styles.subtitle} numberOfLines={2}>
+            {subtitle}
+          </Text>
+        ) : null}
 
         <View style={styles.midRow}>
           <View style={styles.countdownIconWrap}>
