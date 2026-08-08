@@ -139,7 +139,12 @@ function installLiveKitClosingRejectionGuard(): void {
       msg.includes("remote description was null") ||
       name === "NegotiationError" ||
       msg.includes("negotiation timed out") ||
-      msg.includes("negotiation aborted")
+      msg.includes("negotiation aborted") ||
+      msg.includes("unable to set offer") ||
+      msg.includes("unable to set answer") ||
+      msg.includes("ERROR_CONTENT") ||
+      msg.includes("Failed to apply the description") ||
+      msg.includes("Session error code")
     );
   };
   // RN / Hermes: prevent redbox for known LiveKit UMD teardown noise.
@@ -343,7 +348,13 @@ function isNegotiationTimeout(err: unknown): boolean {
   return (
     name === "NegotiationError" ||
     msg.includes("negotiation timed out") ||
-    msg.includes("negotiation aborted")
+    msg.includes("negotiation aborted") ||
+    // Android PeerConnection setRemoteDescription / setLocalDescription failures
+    msg.includes("unable to set offer") ||
+    msg.includes("unable to set answer") ||
+    msg.includes("ERROR_CONTENT") ||
+    msg.includes("Failed to apply the description") ||
+    msg.includes("Session error code")
   );
 }
 

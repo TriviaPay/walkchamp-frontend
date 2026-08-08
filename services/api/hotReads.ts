@@ -5,13 +5,17 @@
 
 import { authFetch } from "@/utils/authFetch";
 import { runCoalesced } from "@/utils/apiRequestCoordinator";
+import { getTodayKey } from "@/utils/format";
+import { profileMePath } from "@/utils/profileApi";
 
 export async function fetchProfileMe<T = unknown>(options?: {
   coalesceKey?: string;
 }): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const key = options?.coalesceKey ?? "GET:/api/profile/me";
+  // Include localDate in the coalesce key so midnight rollover does not reuse UTC-day data.
+  const localDate = getTodayKey();
+  const key = options?.coalesceKey ?? `GET:/api/profile/me?localDate=${localDate}`;
   return runCoalesced(key, async () => {
-    const res = await authFetch("/api/profile/me");
+    const res = await authFetch(profileMePath());
     let data: T | null = null;
     try {
       data = (await res.json()) as T;

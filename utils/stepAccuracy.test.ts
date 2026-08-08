@@ -267,6 +267,16 @@ assert.equal(
 
 assert.equal(
   shouldAcceptStepUpdateCore(
+    { userId: "user-a", todaySteps: 0, updatedAt: "2026-07-22T10:01:00.000Z" },
+    baseCurrent,
+    { allowTodayDecrease: true },
+  ),
+  true,
+  "allow verified HC/HK to re-anchor inflated todaySteps down to 0",
+);
+
+assert.equal(
+  shouldAcceptStepUpdateCore(
     { userId: "user-a", raceSteps: 100, updatedAt: "2026-07-22T10:01:00.000Z" },
     baseCurrent,
   ),

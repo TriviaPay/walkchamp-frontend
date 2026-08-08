@@ -30,14 +30,26 @@ export function resolveLiveRaceDisplaySteps(
 /**
  * Display daily walk steps = max(context, canonical raceProgress.todaySteps).
  * Documented in docs/STEP_SOURCE_OF_TRUTH.md — temporary defensive merge.
+ *
+ * When `preferVerifiedContext` is set (HC/HK ready), drop only yesterday-style
+ * Redux absolutes (≥1000 ahead of context) — not live provisional sensor growth.
  */
 export function resolveDisplayTodaySteps(
   contextTodaySteps: number | null | undefined,
   canonicalTodaySteps: number | null | undefined,
+  opts?: { preferVerifiedContext?: boolean; maxCanonicalAhead?: number },
 ): number {
   const ctx = Number.isFinite(contextTodaySteps as number)
-    ? (contextTodaySteps as number)
+    ? Math.max(0, Math.floor(contextTodaySteps as number))
     : 0;
   const canon = Math.max(0, Math.floor(Number(canonicalTodaySteps) || 0));
+  const staleAbsoluteFloor = opts?.maxCanonicalAhead ?? 1000;
+  if (
+    opts?.preferVerifiedContext &&
+    canon >= 1000 &&
+    canon > ctx + staleAbsoluteFloor
+  ) {
+    return ctx;
+  }
   return Math.max(ctx, canon);
 }

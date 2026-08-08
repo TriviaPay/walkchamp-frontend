@@ -1388,6 +1388,9 @@ class WalkChampRaceForegroundService : Service() {
   private fun monotonicWalkSteps(incoming: Int): Int {
     val today = NativeStepState.localDateString()
     val walkDate = prefs().getString("walk_local_date", null)
+    // Force the engine to roll its day before trusting its todaySteps as a floor —
+    // it may still be holding yesterday's total if no sensor tick has fired yet today.
+    sensorEngine?.checkAndRollDailyDay()
     val fromEngine =
       sensorEngine?.currentState()?.takeIf { it.localDate == today }?.todaySteps ?: 0
     val safeIncoming = incoming.coerceAtLeast(0)

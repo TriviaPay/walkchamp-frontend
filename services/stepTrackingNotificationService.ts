@@ -402,9 +402,8 @@ class StepTrackingNotificationService {
           const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
           const nativeStale = !!(native?.localDate && native.localDate !== localDate);
           const nativeSteps = native?.todaySteps ?? 0;
-          // Allow HC/HK correction below a bad sensor baseline (1592 → 433).
-          const correctingInflatedNative =
-            steps > 0 && nativeSteps > steps + 250;
+          // Allow HC/HK correction below a bad sensor baseline (incl. down to 0).
+          const correctingInflatedNative = nativeSteps > steps + 250;
           if (
             !nativeStale &&
             native?.todaySteps != null &&
@@ -421,9 +420,9 @@ class StepTrackingNotificationService {
         // proceed with incoming steps
       }
     }
-    // Allow forced HC correction below lastSteps (inflated sensor lock).
+    // Allow forced HC correction below lastSteps (inflated sensor lock / day reset).
     const correctingInflated =
-      force && lastSteps >= 0 && steps > 0 && lastSteps > steps + 250;
+      force && lastSteps >= 0 && lastSteps > steps + 250;
     if (lastSteps >= 0 && steps < lastSteps && !correctingInflated) {
       logOngoing(
         `skippedReason=regression incoming=${steps} last=${lastSteps}`,

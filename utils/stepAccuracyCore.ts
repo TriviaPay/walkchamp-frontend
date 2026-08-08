@@ -173,6 +173,13 @@ export function shouldAcceptStepUpdateCore(
     todayStepsLastUpdatedAt: string | null;
     raceStepsLastUpdatedAt: string | null;
   },
+  opts?: {
+    /**
+     * Health Connect / HealthKit may re-anchor an inflated sensor absolute
+     * (e.g. yesterday's total still in Redux) down to today's real total — including 0.
+     */
+    allowTodayDecrease?: boolean;
+  },
 ): boolean {
   if (incoming.userId && current.userId && incoming.userId !== current.userId) {
     return false;
@@ -189,7 +196,8 @@ export function shouldAcceptStepUpdateCore(
   if (incoming.raceSteps !== undefined && raceMs > 0 && incomingMs < raceMs) return false;
   if (
     incoming.todaySteps !== undefined &&
-    incoming.todaySteps < current.todaySteps
+    incoming.todaySteps < current.todaySteps &&
+    !opts?.allowTodayDecrease
   ) {
     return false;
   }

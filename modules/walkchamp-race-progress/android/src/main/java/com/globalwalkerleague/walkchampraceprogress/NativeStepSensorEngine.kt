@@ -280,6 +280,11 @@ class NativeStepSensorEngine(
     sensorTotal: Float? = null,
     stepSource: String? = null,
   ) {
+    // Roll the day first — otherwise a stale in-memory state.todaySteps from
+    // yesterday (FGS alive since before midnight, no sensor tick yet today)
+    // gets treated as a valid "never regress" floor and clamps today's real
+    // value back up to yesterday's total, permanently, for the rest of the day.
+    ensureCurrentDay()
     val total = sensorTotal ?: lastSensorTotal.takeIf { it >= 0f }
     val source = stepSource ?: state.stepSource
     val verified = !isDeviceSensorSource(source)
@@ -328,6 +333,9 @@ class NativeStepSensorEngine(
    * already-valid baseline (re-seeding every RESTORE freezes closed-app counting).
    */
   fun ensureDailyFloor(knownTodaySteps: Int, stepSource: String? = null) {
+    // Same reasoning as seedDailyBaselineFromKnownSteps — must not trust
+    // state.todaySteps as today's floor until we've confirmed it's actually today.
+    ensureCurrentDay()
     val floor = maxOf(knownTodaySteps.coerceAtLeast(0), state.todaySteps)
     val source = stepSource ?: state.stepSource
     if (state.dailyBaseline == null || lastSensorTotal < 0f) {
@@ -440,6 +448,7 @@ class NativeStepSensorEngine(
   fun mergeJsWalkUpdate(todaySteps: Int, stepSource: String) {
     // Health Connect / HealthKit from JS is authoritative for daily totals when higher.
     // Never re-anchor downward — that freezes closed-app sensor continuation.
+    ensureCurrentDay()
     if (!isDeviceSensorSource(stepSource)) {
       val known = maxOf(todaySteps.coerceAtLeast(0), state.todaySteps)
       val total = lastSensorTotal.takeIf { it >= 0f }

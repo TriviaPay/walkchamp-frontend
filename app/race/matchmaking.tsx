@@ -111,7 +111,11 @@ import {
 import { screenCache } from "@/utils/screenCache";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { usePresence } from "@/context/PresenceContext";
-import { normalizeUserId } from "@/utils/presenceIds";
+import {
+  extractOnlineIdsFromPayload,
+  normalizeUserId,
+  toOnlineIdSet,
+} from "@/utils/presenceIds";
 import {
   cancellationCopy,
   getWaitingRoomBanner,
@@ -452,14 +456,16 @@ function normalizeWaitingRoomParticipants(
 
   const byUserId = new Map<string, RoomParticipant>();
   active.forEach((participant) => {
-    const existing = byUserId.get(participant.userId);
+    const key =
+      normalizeUserId(participant.userId) || String(participant.userId);
+    const existing = byUserId.get(key);
     if (!existing) {
-      byUserId.set(participant.userId, participant);
+      byUserId.set(key, participant);
       return;
     }
     // Merge duplicates without dropping populated fields (e.g. a valid avatar
     // must never be overwritten by a null from a leaner record).
-    byUserId.set(participant.userId, {
+    byUserId.set(key, {
       ...existing,
       ...participant,
       username:
@@ -482,11 +488,11 @@ function normalizeWaitingRoomParticipants(
   // must always occupy a slot — even when a far-future scheduled race has not
   // yet materialized them in the server participant list. Only injected when the
   // server list omits them; a richer server record (with registeredAt) wins.
-  const selfKey = currentUser?.id ? String(currentUser.id) : "";
-  if (selfKey && currentUser && !byUserId.has(selfKey) && ![...byUserId.keys()].some((k) => normalizeUserId(k) === normalizeUserId(selfKey))) {
+  const selfKey = currentUser?.id ? normalizeUserId(currentUser.id) : "";
+  if (selfKey && currentUser && !byUserId.has(selfKey)) {
     byUserId.set(selfKey, {
-      id: `self-${selfKey}`,
-      userId: selfKey,
+      id: `self-${currentUser.id}`,
+      userId: String(currentUser.id),
       username: firstNonEmpty(currentUser.username) ?? "You",
       country: cleanString(currentUser.country),
       countryFlag: cleanString(currentUser.countryFlag),
@@ -508,17 +514,13 @@ function normalizeWaitingRoomParticipants(
 
   if (hostId) {
     const hostIdStr = String(hostId);
-    const existing =
-      byUserId.get(hostIdStr) ??
-      [...byUserId.entries()].find(
-        ([k]) => normalizeUserId(k) === normalizeUserId(hostIdStr),
-      )?.[1];
+    const hostKey = normalizeUserId(hostIdStr) || hostIdStr;
+    const existing = byUserId.get(hostKey);
     const isCurrentUser =
-      !!selfKey &&
-      normalizeUserId(hostIdStr) === normalizeUserId(selfKey);
-    byUserId.set(hostIdStr, {
+      !!selfKey && hostKey === selfKey;
+    byUserId.set(hostKey, {
       id: existing?.id ?? `host-${hostIdStr}`,
-      userId: hostIdStr,
+      userId: existing?.userId ?? hostIdStr,
       username:
         firstRealUsername(
           existing?.username,
@@ -1128,6 +1130,8 @@ function MatchmakingScreenContent() {
   const [inviteStatuses, setInviteStatuses] = useState<Record<string, InviteStatus>>({});
   /** Users currently on this race's Pusher presence channel (in Waiting Room now). */
   const [racePresenceIds, setRacePresenceIds] = useState<Set<string>>(new Set());
+  /** Heartbeat-based online IDs for this race (works for scheduled registrations). */
+  const [raceApiOnlineIds, setRaceApiOnlineIds] = useState<Set<string>>(new Set());
   const [friendsOnlineIds, setFriendsOnlineIds] = useState<Set<string>>(new Set());
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [loadingFriends, setLoadingFriends] = useState(false);
@@ -1142,13 +1146,14 @@ function MatchmakingScreenContent() {
       if (!id) return false;
       if (isUserOnline(id)) return true;
       if (racePresenceIds.has(id)) return true;
+      if (raceApiOnlineIds.has(id)) return true;
       if (friendsOnlineIds.has(id)) return true;
       // Open lobby (no schedule): joined players are in-room together → show online.
       // Scheduled rooms keep true presence so absent registrants stay grey.
       if (!scheduledStartAt) return true;
       return false;
     },
-    [isUserOnline, racePresenceIds, friendsOnlineIds, scheduledStartAt],
+    [isUserOnline, racePresenceIds, raceApiOnlineIds, friendsOnlineIds, scheduledStartAt],
   );
 
   // Shared global presence (same source as Chat) + mark this device online.
@@ -1207,6 +1212,61 @@ function MatchmakingScreenContent() {
       channel.unbind("pusher:member_removed", syncMembers);
       unsubscribeFromChannel(channelName);
       setRacePresenceIds(new Set());
+    };
+  }, [backendRaceId, user?.id]);
+
+  // Heartbeat online list for this race — includes scheduled_room_registrations.
+  // Pusher presence alone can miss registrants who are online but not subscribed yet.
+  useEffect(() => {
+    if (!backendRaceId) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await authFetch(`/api/presence/races/${backendRaceId}/online`);
+        if (cancelled) return;
+        if (!res.ok) {
+          if (__DEV__) {
+            console.log(
+              `[WaitingRoom] race presence status=${res.status} raceId=${backendRaceId}`,
+            );
+          }
+          return;
+        }
+        const data: unknown = await res.json();
+        const next = toOnlineIdSet(extractOnlineIdsFromPayload(data));
+        const selfId = normalizeUserId(user?.id);
+        if (selfId) next.add(selfId);
+        if (cancelled) return;
+        if (__DEV__) {
+          console.log(
+            `[WaitingRoom] race presence online=${next.size} raceId=${backendRaceId}`,
+          );
+        }
+        setRaceApiOnlineIds((prev) => {
+          if (prev.size === next.size) {
+            let same = true;
+            for (const id of next) {
+              if (!prev.has(id)) {
+                same = false;
+                break;
+              }
+            }
+            if (same) return prev;
+          }
+          return next;
+        });
+      } catch {
+        /* non-fatal */
+      }
+    };
+    void poll();
+    const interval = setInterval(() => {
+      void poll();
+    }, 5_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      setRaceApiOnlineIds(new Set());
     };
   }, [backendRaceId, user?.id]);
 
@@ -1757,9 +1817,15 @@ function MatchmakingScreenContent() {
         let unlimitedMappedCount: number | null = null;
         let unlimitedHasExplicitCount = false;
 
-        // Always try Unlimited detail first. /api/races/:id often returns a
-        // shadow race with currentPlayers=1 while registrations live on Unlimited.
-        {
+        // Scheduled/future rooms: roster lives on GET /api/races/:id (folded from
+        // scheduled_room_registrations). Prefer that path — Unlimited detail is the
+        // wrong source and can leave the player grid empty while the count looks right.
+        const looksScheduled =
+          !!scheduledStartAt ||
+          !!params.initialScheduledStartAt;
+
+        if (!looksScheduled) {
+          // Open / Unlimited: try Unlimited detail first (shadow race rows can undercount).
           const ulRes = await authFetch(`/api/unlimited-challenges/${backendRaceId}`);
           if (ulRes.ok) {
             const mapped = mapUnlimitedDetailToWaitingRoom(await ulRes.json());
@@ -1773,7 +1839,7 @@ function MatchmakingScreenContent() {
           }
         }
 
-        if (!racePayload) {
+        if (!racePayload || looksScheduled) {
           const res = await authFetch(`/api/races/${backendRaceId}`);
           if (res.ok) {
             const data = await res.json();
@@ -1786,6 +1852,50 @@ function MatchmakingScreenContent() {
               data.race?.registrations,
               data.race?.registeredParticipants,
             ];
+            usedUnlimitedEndpoint = false;
+            unlimitedMappedCount = null;
+            unlimitedHasExplicitCount = false;
+            if (__DEV__) {
+              const n = [
+                data.participants,
+                data.registrations,
+                data.registeredParticipants,
+              ].reduce(
+                (sum: number, c) => sum + (Array.isArray(c) ? c.length : 0),
+                0,
+              );
+              console.log(
+                `[WaitingRoom] race roster raceId=${backendRaceId} status=${String((data.race as { status?: string } | undefined)?.status ?? "")} rows=${n} registeredCount=${String((data.race as { registeredCount?: number } | undefined)?.registeredCount ?? "")}`,
+              );
+            }
+          } else if (!racePayload) {
+            // keep unlimited payload if race GET failed
+          }
+        }
+
+        // Unlimited returned OK but empty — fall back to race GET (e.g. mis-tagged id).
+        if (
+          racePayload &&
+          usedUnlimitedEndpoint &&
+          rawParticipantCollections.every(
+            (c) => !Array.isArray(c) || c.length === 0,
+          )
+        ) {
+          const res = await authFetch(`/api/races/${backendRaceId}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.race) {
+              racePayload = data.race as WaitingRoomRacePayload;
+              rawParticipantCollections = [
+                data.participants,
+                data.registrations,
+                data.registeredParticipants,
+                data.race?.participants,
+                data.race?.registrations,
+                data.race?.registeredParticipants,
+              ];
+              usedUnlimitedEndpoint = false;
+            }
           }
         }
 
@@ -2053,6 +2163,7 @@ function MatchmakingScreenContent() {
       params.initialCapacityMode,
       params.initialEntryType,
       params.initialDailyGoalSteps,
+      params.initialScheduledStartAt,
       useDummyWaitingRoom,
     ],
   );
@@ -2496,10 +2607,11 @@ function MatchmakingScreenContent() {
   const sortedParticipants = useMemo(() => {
     const deduped = new Map<string, RoomParticipant>();
     participants.forEach((participant) => {
-      if (!participant.userId || deduped.has(participant.userId)) return;
+      const key = normalizeUserId(participant.userId);
+      if (!key || deduped.has(key)) return;
       const status = participant.status?.trim().toLowerCase();
       if (status && NON_ACTIVE_REGISTRATION_STATUSES.has(status)) return;
-      deduped.set(participant.userId, participant);
+      deduped.set(key, participant);
     });
     const ordered = [...deduped.values()].sort((a, b) => {
       if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
@@ -2584,6 +2696,14 @@ function MatchmakingScreenContent() {
           }
           return next;
         });
+      } else if (__DEV__) {
+        // 403 = not host; 409 = room not open/scheduled — both leave the Online tab empty.
+        console.log(
+          `[WaitingRoom] online-invite-candidates status=${res.status} raceId=${backendRaceId}`,
+        );
+        if (res.status === 403) {
+          setOnlineCandidates([]);
+        }
       }
       candidatesLoadedRef.current = true;
     } catch { /* silent */ }

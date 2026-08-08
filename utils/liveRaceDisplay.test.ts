@@ -21,5 +21,18 @@ assert.equal(resolveLiveRaceDisplaySteps(undefined, 7), 7);
 
 assert.equal(resolveDisplayTodaySteps(100, 50), 100);
 assert.equal(resolveDisplayTodaySteps(40, 90), 90);
+assert.equal(
+  resolveDisplayTodaySteps(0, 9953, { preferVerifiedContext: true }),
+  0,
+);
+assert.equal(
+  resolveDisplayTodaySteps(100, 200, { preferVerifiedContext: true }),
+  200,
+);
+// Live provisional ahead of HC must still win (ongoing notification / Walk live).
+assert.equal(
+  resolveDisplayTodaySteps(5, 320, { preferVerifiedContext: true }),
+  320,
+);
 
 console.log("liveRaceDisplay.test.ts: ok");

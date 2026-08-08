@@ -123,45 +123,60 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
       setOnlineUserIds(new Set());
       return;
     }
+    const next = new Set<string>();
+    if (selfId) next.add(selfId);
+
     try {
-      const res = await authFetch("/api/presence/online-ids", {
+      // Scoped friends presence — legacy /online-ids returns 410 by default.
+      const friendsOnlineRes = await authFetch("/api/presence/friends/online", {
         timeoutMs: PRESENCE_TIMEOUT,
       });
-      if (!res.ok) return;
-      const data: unknown = await res.json();
-      const next = toOnlineIdSet(extractOnlineIdsFromPayload(data));
-      if (selfId) next.add(selfId);
-
-      // Friends flagged online — same source Chat conversation dots use.
-      try {
-        const friendsRes = await authFetch("/api/friends", {
-          timeoutMs: PRESENCE_TIMEOUT,
-        });
-        if (friendsRes.ok) {
-          const friendsData = (await friendsRes.json()) as {
-            friends?: { id?: string; userId?: string; isOnline?: boolean }[];
-          };
-          for (const f of friendsData.friends ?? []) {
-            if (!f.isOnline) continue;
-            const id = normalizeUserId(f.userId ?? f.id);
-            if (id) next.add(id);
-          }
+      if (friendsOnlineRes.ok) {
+        const data: unknown = await friendsOnlineRes.json();
+        for (const id of extractOnlineIdsFromPayload(data)) {
+          const n = normalizeUserId(id);
+          if (n) next.add(n);
         }
-      } catch {
-        // optional enrichment
       }
-
-      setOnlineUserIds(next);
     } catch {
-      if (selfId) {
-        setOnlineUserIds((prev) => {
-          if (prev.has(selfId)) return prev;
-          const copy = new Set(prev);
-          copy.add(selfId);
-          return copy;
-        });
-      }
+      // optional
     }
+
+    try {
+      const legacyRes = await authFetch("/api/presence/online-ids", {
+        timeoutMs: PRESENCE_TIMEOUT,
+      });
+      if (legacyRes.ok) {
+        const data: unknown = await legacyRes.json();
+        for (const id of extractOnlineIdsFromPayload(data)) {
+          const n = normalizeUserId(id);
+          if (n) next.add(n);
+        }
+      }
+    } catch {
+      // optional — 410 is expected when legacy endpoint is retired
+    }
+
+    // Friends flagged online — same source Chat conversation dots use.
+    try {
+      const friendsRes = await authFetch("/api/friends", {
+        timeoutMs: PRESENCE_TIMEOUT,
+      });
+      if (friendsRes.ok) {
+        const friendsData = (await friendsRes.json()) as {
+          friends?: { id?: string; userId?: string; isOnline?: boolean }[];
+        };
+        for (const f of friendsData.friends ?? []) {
+          if (!f.isOnline) continue;
+          const id = normalizeUserId(f.userId ?? f.id);
+          if (id) next.add(id);
+        }
+      }
+    } catch {
+      // optional enrichment
+    }
+
+    setOnlineUserIds(next);
   }, [isSignedIn, selfId]);
 
   const isUserOnline = useCallback(

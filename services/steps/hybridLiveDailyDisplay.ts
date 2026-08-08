@@ -76,12 +76,11 @@ export async function startHybridLiveDailyDisplay(): Promise<boolean> {
 
   stopHybridLiveDailyDisplay();
 
+  // Anchor ONLY from verified HC/HK — never from display todaySteps (FGS/sensor
+  // absolutes like yesterday's 9953 must not become the live floor).
   _anchorToday = Math.max(
     0,
-    Math.floor(
-      store.getState().raceProgress.verifiedTodaySteps ??
-        store.getState().raceProgress.todaySteps,
-    ),
+    Math.floor(store.getState().raceProgress.verifiedTodaySteps ?? 0),
   );
   _sessionFloor = 0;
   _floored = false;
@@ -94,19 +93,17 @@ export async function startHybridLiveDailyDisplay(): Promise<boolean> {
 
     const raw = Math.max(0, Math.floor(result.steps));
     const since = Date.now() - _startedAt;
+    const verified = Math.max(
+      0,
+      Math.floor(store.getState().raceProgress.verifiedTodaySteps ?? 0),
+    );
 
     // Discard the first subscribe burst (classic Android phantom).
     if (!_floored && since < 4_000) {
       if (raw <= 0) return;
       _sessionFloor = raw;
       _floored = true;
-      _anchorToday = Math.max(
-        _anchorToday,
-        Math.floor(
-          store.getState().raceProgress.verifiedTodaySteps ??
-            store.getState().raceProgress.todaySteps,
-        ),
-      );
+      _anchorToday = verified;
       return;
     }
     if (!_floored) {
@@ -114,35 +111,26 @@ export async function startHybridLiveDailyDisplay(): Promise<boolean> {
       _floored = true;
     }
 
-    const redux = Math.max(
-      0,
-      Math.floor(store.getState().raceProgress.todaySteps),
-    );
-    // If HC/backend/FGS moved the canonical total ahead, re-anchor so we don't
-    // double-count sensor deltas on top of an already-raised floor.
-    if (redux > _anchorToday) {
-      _anchorToday = redux;
+    // Re-anchor only from verified HC growth — not from inflated display totals.
+    if (verified > _anchorToday) {
+      _anchorToday = verified;
       _sessionFloor = raw;
     }
 
     const delta = Math.max(0, raw - _sessionFloor);
-    const next = Math.max(redux, _anchorToday + delta);
-    if (next <= redux) return;
-
-    const verified = Math.max(
-      0,
-      Math.floor(store.getState().raceProgress.verifiedTodaySteps ?? 0),
-    );
-    // Never publish a bad sensor absolute when HC already has today's total.
-    if (verified > 0 && next > verified + 250) {
-      _anchorToday = verified;
+    // Single-tick spike (sensor glitch / bad absolute) — re-floor and skip.
+    if (delta > 500) {
       _sessionFloor = raw;
+      _anchorToday = Math.max(_anchorToday, verified);
       return;
     }
+    const next = _anchorToday + delta;
+    if (next <= verified) return;
 
     updateStepProgressFromRealSource({
       todaySteps: next,
       // Provisional daily display only — never label as Health Connect verified.
+      // Session deltas may lead HC so the ongoing notification keeps updating.
       stepSource: "android_step_counter",
       dailyLane: "provisional",
       updatedAt: new Date().toISOString(),

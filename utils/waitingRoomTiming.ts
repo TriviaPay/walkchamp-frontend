@@ -70,13 +70,24 @@ export function resolveRoomExpiresAt(opts: {
   return null;
 }
 
+function readNonNegativeInt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) {
+    const n = Number(value);
+    if (n >= 0) return Math.floor(n);
+  }
+  return null;
+}
+
 export function resolveRacePlayerCount(race: Record<string, unknown> | null | undefined): number {
   if (!race) return 0;
-  const candidates = [
+  // Future/scheduled rooms keep currentPlayers at 0 until start — never let that
+  // zero win over registeredCount / participantCount.
+  const registrationFirst = [
     race.registered_count,
     race.registeredCount,
-    race.currentPlayers,
-    race.current_players,
     race.participantCount,
     race.participant_count,
     race.joinedCount,
@@ -84,14 +95,17 @@ export function resolveRacePlayerCount(race: Record<string, unknown> | null | un
     race.playersJoined,
     race.players_joined,
   ];
-  for (const value of candidates) {
-    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-      return Math.floor(value);
-    }
-    if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) {
-      const n = Number(value);
-      if (n >= 0) return Math.floor(n);
-    }
+  for (const value of registrationFirst) {
+    const n = readNonNegativeInt(value);
+    if (n != null && n > 0) return n;
+  }
+  const current =
+    readNonNegativeInt(race.currentPlayers) ??
+    readNonNegativeInt(race.current_players);
+  if (current != null) return current;
+  for (const value of registrationFirst) {
+    const n = readNonNegativeInt(value);
+    if (n != null) return n;
   }
   return 0;
 }

@@ -185,6 +185,7 @@ import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows"
 import { subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
 import { useTodayWalkSteps } from "@/hooks/useTodayWalkSteps";
 import { getTodayKey } from "@/utils/format";
+import { localDateKeyOffset, profileMePath } from "@/utils/profileApi";
 import {
   deleteProfileAvatar,
   profileAvatarImageUri,
@@ -768,7 +769,7 @@ interface ServerProfileStats {
 
 async function fetchProfileStats(): Promise<ServerProfileStats | null> {
   try {
-    const res = await authFetch(`/api/profile/me`);
+    const res = await authFetch(profileMePath());
     if (!res.ok) return null;
     const json = await res.json();
     const stats     = json.data?.stats ?? null;
@@ -787,7 +788,7 @@ async function fetchProfileStats(): Promise<ServerProfileStats | null> {
 
 async function fetchProfileData(): Promise<{ fullName: string; username: string; country: string; countryFlag: string; countryCode?: string; avatarColor?: string } | null> {
   try {
-    const res = await authFetch(`/api/profile/me`);
+    const res = await authFetch(profileMePath());
     if (!res.ok) return null;
     const json = await res.json();
     return json.data?.profile ?? null;
@@ -1105,7 +1106,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
     if (!apiFetchAllowed("walk_profile_modal", 90_000)) return;
     markApiFetched("walk_profile_modal");
     void (async () => {
-      const res = await authFetch("/api/profile/me").catch(() => null);
+      const res = await authFetch(profileMePath()).catch(() => null);
       if (!res?.ok) return;
       const json = await res.json().catch(() => ({}));
       const stats = json.data?.stats ?? null;
@@ -1121,16 +1122,15 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
         // Always build a guaranteed 7-day window (oldest→newest), filling gaps
         // with 0 so the chart is never empty. Today's bar uses the local step
         // count when it exceeds what the server has (session not yet synced).
-        const todayKey = new Date().toISOString().slice(0, 10);
+        // Keys must be local calendar days — UTC keys mis-label "today" for IST.
+        const todayKey = getTodayKey();
         const backendDays: { date: string; steps: number }[] =
           Array.isArray(json.data?.last7Days) ? json.data.last7Days : [];
         const backendMap = new Map(
           backendDays.map((d: { date: string; steps: number }) => [d.date, d.steps])
         );
         const complete7Days = Array.from({ length: 7 }, (_, i) => {
-          const d = new Date();
-          d.setDate(d.getDate() - (6 - i)); // i=0 → 6 days ago, i=6 → today
-          const key = d.toISOString().slice(0, 10);
+          const key = localDateKeyOffset(-(6 - i)); // i=0 → 6 days ago, i=6 → today
           const serverSteps = backendMap.get(key) ?? 0;
           return {
             date: key,
@@ -1896,15 +1896,22 @@ function WalkScreenContent() {
       ? Math.max(0, Math.floor(s.raceProgress.todaySteps))
       : 0,
   );
-  const liveTodaySteps = resolveDisplayTodaySteps(contextTodaySteps, canonicalTodaySteps);
+  const { guardRewardAction, verificationLevel } = useStepSourceGuard({
+    onSetupRequired: () => requestHomeStepSetup(),
+  });
+  const liveTodaySteps = resolveDisplayTodaySteps(
+    contextTodaySteps,
+    canonicalTodaySteps,
+    {
+      preferVerifiedContext:
+        stepsSourceReady && verificationLevel === "verified",
+    },
+  );
   const [purchaseConfirmModal, setPurchaseConfirmModal] = useState<{ code: string; name: string; price: number } | null>(null);
   const [showCoinsInfo, setShowCoinsInfo] = useState(false);
   const [showCoinStore, setShowCoinStore] = useState(false);
   const showCoinStoreRef = useRef(showCoinStore);
   showCoinStoreRef.current = showCoinStore;
-  const { guardRewardAction, verificationLevel } = useStepSourceGuard({
-    onSetupRequired: () => requestHomeStepSetup(),
-  });
   const [walkFocused, setWalkFocused] = useState(true);
 
   const handleCloseCoinStore = useCallback(() => {

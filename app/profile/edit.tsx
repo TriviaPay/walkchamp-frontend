@@ -15,6 +15,7 @@ import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { authFetch } from "@/utils/authFetch";
+import { profileMePath } from "@/utils/profileApi";
 import { screenCache } from "@/utils/screenCache";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { PROFILE_ME_CACHE_KEY } from "@/hooks/useAvatarCache";
@@ -39,7 +40,7 @@ interface ProfileData {
 
 async function fetchProfileMe(): Promise<ProfileData | null> {
   try {
-    const res = await authFetch(`/api/profile/me`);
+    const res = await authFetch(profileMePath());
     if (!res.ok) return null;
     const json = await res.json();
     return json.data?.profile ?? null;

@@ -258,16 +258,25 @@ export function hydrateStepDisplayFromSources(params: {
   const verified =
     params.verifiedSource ?? stepProviderManager.usesVerifiedStepSource();
 
-  if (isFreshLocalDay() && provider === 0 && backend === 0) {
+  // HC/HK already answered 0 for today — never revive yesterday from cache.
+  if (verified && provider === 0 && backend === 0) {
     stepEngineLog(
       "StepEngine",
-      `hydrate freshDay keepZero=true ignoredLocal=${local}`,
+      `hydrate verifiedZero keepZero=true ignoredLocal=${local}`,
     );
     return 0;
   }
 
   if (verified && provider === 0) {
-    if (isFreshLocalDay() && backend === 0) return 0;
+    // Backend may still be ahead of a slow HC read — allow that catch-up only.
+    // Inflated local cache (e.g. 9953 vs backend 0/small) is treated as stale.
+    if (local > backend + 250) {
+      stepEngineLog(
+        "StepEngine",
+        `hydrate verified dropInflatedLocal=${local} backend=${backend}`,
+      );
+      return backend;
+    }
     const fallback = Math.max(backend, local);
     if (fallback > 0) {
       stepEngineLog(
@@ -279,10 +288,10 @@ export function hydrateStepDisplayFromSources(params: {
   }
 
   if (provider === 0 && backend === 0 && local > 0) {
-    if (isFreshLocalDay()) {
+    if (isFreshLocalDay() || verified) {
       stepEngineLog(
         "StepEngine",
-        `hydrate freshDay dropLocalCache=${local}`,
+        `hydrate dropLocalCache=${local} verified=${verified}`,
       );
       return 0;
     }

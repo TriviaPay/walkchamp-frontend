@@ -20,6 +20,16 @@ assert.equal(resolveRacePlayerCount({ registered_count: 2 }), 2);
 assert.equal(resolveRacePlayerCount({ currentPlayers: 3 }), 3);
 assert.equal(resolveRacePlayerCount({ current_players: 4 }), 4);
 assert.equal(resolveRacePlayerCount({}), 0);
+// Scheduled rooms: currentPlayers stays 0 — use registered/participant counts.
+assert.equal(
+  resolveRacePlayerCount({ currentPlayers: 0, participantCount: 5 }),
+  5,
+);
+assert.equal(
+  resolveRacePlayerCount({ currentPlayers: 0, registeredCount: 3 }),
+  3,
+);
+assert.equal(resolveRacePlayerCount({ currentPlayers: 0 }), 0);
 
 assert.equal(resolveWaitingRoomMode(null, now), "open_window");
 assert.equal(

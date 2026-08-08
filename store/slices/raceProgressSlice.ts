@@ -113,40 +113,31 @@ export interface RaceProgressState {
 
 function recomputeDisplayToday(state: RaceProgressState): void {
   const verified = Math.max(0, Math.floor(state.verifiedTodaySteps));
-  let provisional =
+  const provisional =
     state.provisionalSensorTodaySteps == null
       ? 0
       : Math.max(0, Math.floor(state.provisionalSensorTodaySteps));
 
-  // Bad TYPE_STEP_COUNTER baseline (e.g. 1592) must not beat real HC/HK (e.g. 433).
-  const MAX_AHEAD = 250;
-  if (verified > 0 && provisional > verified + MAX_AHEAD) {
-    state.provisionalSensorTodaySteps = verified;
-    state.provisionalSensorTodayStepsAt = state.verifiedTodayStepsAt;
-    provisional = verified;
-  }
-
-  if (verified > 0) {
-    // Walk display prefers verified; small provisional lag only.
-    state.todaySteps =
-      provisional > verified && provisional - verified <= MAX_AHEAD
-        ? provisional
-        : verified;
-    state.dailyDisplaySource =
-      state.todaySteps > verified
-        ? "sensor_estimate"
-        : state.stepSource === "healthkit" || state.stepSource === "ios_healthkit"
-          ? "healthkit"
-          : "health_connect";
-    state.dailyVerificationStatus =
-      state.todaySteps > verified ? "delayed" : "verified";
-    return;
-  }
-
+  // Display = max(verified, accepted provisional). Do NOT clamp provisional here —
+  // ingest already rejects yesterday-style absolutes. Clamping on every recompute
+  // froze the ongoing notification after ~250 live steps while HC lagged.
   state.todaySteps = Math.max(verified, provisional);
   if (provisional > verified) {
     state.dailyDisplaySource = "sensor_estimate";
     state.dailyVerificationStatus = "delayed";
+  } else if (verified > 0) {
+    state.dailyDisplaySource =
+      state.stepSource === "healthkit" || state.stepSource === "ios_healthkit"
+        ? "healthkit"
+        : "health_connect";
+    state.dailyVerificationStatus = "verified";
+  } else {
+    state.dailyDisplaySource =
+      state.stepSource === "healthkit" || state.stepSource === "ios_healthkit"
+        ? "healthkit"
+        : "health_connect";
+    state.dailyVerificationStatus =
+      state.verifiedTodayStepsAt != null ? "verified" : "pending";
   }
 }
 
@@ -409,58 +400,47 @@ const raceProgressSlice = createSlice({
           if (treatProvisional) {
             const prev =
               state.provisionalSensorTodaySteps == null
-                ? 0
+                ? Math.max(0, state.verifiedTodaySteps)
                 : state.provisionalSensorTodaySteps;
-            // Reject sensor absolutes that wildly exceed known HC/HK totals.
             const verified = Math.max(0, state.verifiedTodaySteps);
-            if (verified > 0 && next > verified + 250) {
+            // Reject yesterday-style absolutes (huge jump from near HC), but allow
+            // live session growth past +250 so the ongoing notification keeps moving
+            // while Health Connect lags.
+            const hugeJumpFromVerified =
+              next > verified + 250 && prev <= verified + 50;
+            const spikeFromPrev = next > prev + 500;
+            if (hugeJumpFromVerified || spikeFromPrev) {
               if (__DEV__) {
                 console.log(
-                  `[StepStore] rejected inflated provisional next=${next} verified=${verified}`,
+                  `[StepStore] rejected inflated provisional next=${next} verified=${verified} prev=${prev}`,
                 );
               }
-            } else if (next >= prev) {
-              state.provisionalSensorTodaySteps = next;
+            } else if (next >= prev || next >= verified) {
+              state.provisionalSensorTodaySteps = Math.max(next, verified);
               state.provisionalSensorTodayStepsAt = ts;
               state.todayStepsLastUpdatedAt = ts;
               recomputeDisplayToday(state);
             }
           } else if (treatVerified) {
-            // HC/HK may legitimately be lower than a bad provisional — always accept
-            // equal-or-higher verified, and also accept a lower verified that re-anchors
-            // an inflated provisional day (same calendar sync).
-            if (next >= state.verifiedTodaySteps || state.verifiedTodaySteps === 0) {
-              state.verifiedTodaySteps = next;
-              state.verifiedTodayStepsAt = ts;
-              state.todayStepsLastUpdatedAt = ts;
-              if (stepSource) state.stepSource = stepSource;
-              // Re-anchor inflated provisional to HC.
-              if (
-                state.provisionalSensorTodaySteps != null &&
-                state.provisionalSensorTodaySteps > next + 250
-              ) {
-                state.provisionalSensorTodaySteps = next;
-                state.provisionalSensorTodayStepsAt = ts;
-              }
-              recomputeDisplayToday(state);
-            } else if (
+            // HC/HK is daily authority — always accept (incl. 0 after midnight) and
+            // re-anchor any inflated provisional TYPE_STEP_COUNTER absolute.
+            state.verifiedTodaySteps = next;
+            state.verifiedTodayStepsAt = ts;
+            state.todayStepsLastUpdatedAt = ts;
+            if (stepSource && !treatStepSourceAsProvisionalOnly(stepSource)) {
+              state.stepSource = stepSource;
+            }
+            if (
               state.provisionalSensorTodaySteps != null &&
               state.provisionalSensorTodaySteps > next + 250
             ) {
-              // Verified dipped only relative to stale store, but provisional is inflated —
-              // still re-anchor display to this HC reading when it is the latest sync.
-              state.verifiedTodaySteps = next;
-              state.verifiedTodayStepsAt = ts;
-              state.provisionalSensorTodaySteps = next;
-              state.provisionalSensorTodayStepsAt = ts;
-              state.todayStepsLastUpdatedAt = ts;
-              if (stepSource) state.stepSource = stepSource;
-              recomputeDisplayToday(state);
+              state.provisionalSensorTodaySteps = next > 0 ? next : null;
+              state.provisionalSensorTodayStepsAt = next > 0 ? ts : null;
             }
+            recomputeDisplayToday(state);
           } else if (next >= state.todaySteps) {
-            // Legacy / unknown — keep prior monotonic todaySteps behavior.
+            // Legacy / unknown — display only; never promote into verified lane.
             state.todaySteps = next;
-            state.verifiedTodaySteps = Math.max(state.verifiedTodaySteps, next);
             state.todayStepsLastUpdatedAt = ts;
           }
         }
@@ -715,9 +695,25 @@ const raceProgressSlice = createSlice({
         state.provisionalSensorTodaySteps = null;
         state.provisionalSensorTodayStepsAt = null;
         state.todaySteps = boot;
-      } else {
-        state.verifiedTodaySteps = Math.max(state.verifiedTodaySteps, boot);
+      } else if (boot === 0 && state.verifiedTodaySteps > 250) {
+        // Fresh HC/API day boot — drop a leftover sensor absolute in verified lane.
+        state.verifiedTodaySteps = 0;
         state.verifiedTodayStepsAt = new Date().toISOString();
+        state.provisionalSensorTodaySteps = null;
+        state.provisionalSensorTodayStepsAt = null;
+        state.todaySteps = 0;
+      } else {
+        // Boot is cache/native guess — never promote above a known lower verified.
+        if (state.verifiedTodayStepsAt == null || state.verifiedTodaySteps === 0) {
+          state.verifiedTodaySteps = Math.max(state.verifiedTodaySteps, boot);
+          state.verifiedTodayStepsAt = new Date().toISOString();
+        } else if (
+          boot > 0 &&
+          boot <= state.verifiedTodaySteps + 250
+        ) {
+          state.verifiedTodaySteps = Math.max(state.verifiedTodaySteps, boot);
+          state.verifiedTodayStepsAt = new Date().toISOString();
+        }
         recomputeDisplayToday(state);
       }
       state.todayStepsLastUpdatedAt = new Date().toISOString();

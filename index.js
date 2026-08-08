@@ -14,6 +14,10 @@ LogBox.ignoreLogs([
   // LiveKit WebRTC — may retry; do not redbox the race voice UI.
   "NegotiationError",
   "negotiation timed out",
+  "unable to set offer",
+  "ERROR_CONTENT",
+  "Session error code",
+  "Failed to apply the description",
 ]);
 
 function isBenignStartupError(msg) {
@@ -28,7 +32,13 @@ function isBenignStartupError(msg) {
     msg.includes("configured linking in multiple places") ||
     msg.includes("NegotiationError") ||
     msg.includes("negotiation timed out") ||
-    msg.includes("negotiation aborted")
+    msg.includes("negotiation aborted") ||
+    // Android WebRTC SDP apply failures (LiveKit retries / reconnect handles these)
+    msg.includes("unable to set offer") ||
+    msg.includes("unable to set answer") ||
+    msg.includes("ERROR_CONTENT") ||
+    msg.includes("Failed to apply the description") ||
+    msg.includes("Session error code")
   );
 }
 

@@ -53,7 +53,13 @@ function loadPedometer(): PedometerAPI | null {
 }
 
 function todayKey(): string {
-  return new Date().toISOString().slice(0, 10);
+  // Must match Walk sync / getTodayKey — local calendar day, not UTC.
+  const d = new Date();
+  return (
+    `${d.getFullYear()}-` +
+    `${String(d.getMonth() + 1).padStart(2, "0")}-` +
+    `${String(d.getDate()).padStart(2, "0")}`
+  );
 }
 
 // ── Module state ───────────────────────────────────────────────────────────────

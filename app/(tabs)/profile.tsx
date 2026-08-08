@@ -34,6 +34,7 @@ import { BadgePill } from "@/components/BadgePill";
 import { formatDistance, stepsToDistance, formatWalletAmount } from "@/utils/format";
 import { getStoredSession } from "@/services/authService";
 import { authFetch } from "@/utils/authFetch";
+import { profileMePath } from "@/utils/profileApi";
 import {
   getNotificationPreferences,
   setNotificationPreferences,
@@ -199,7 +200,7 @@ function applyProfileMeData(
 
 async function fetchProfileMeFull(): Promise<ProfileMeResponse | null> {
   try {
-    const res = await authFetch(`/api/profile/me`);
+    const res = await authFetch(profileMePath());
     if (!res.ok) return null;
     const json = await res.json();
     const data = json.data ?? {};
