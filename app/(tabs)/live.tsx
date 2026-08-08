@@ -1215,12 +1215,19 @@ function RaceCardBase({
   // Mirror backend numWinners: 2 players→1 winner, 3→2, 4+→3
   const numWin = race.playerCount <= 2 ? 1 : race.playerCount === 3 ? 2 : 3;
   const totalFreeCoins = freeRaceCoinPrizePool(race.playerCount, race.targetSteps);
-  // Sponsored / Unlimited / cash show cash prize. Free short goals have no coin pool.
-  const rewardDisplay =
+  // Single reward block beside the challenge heading (all types, live + finished).
+  // Never also show Prize Pool in the stats row or footer — that duplicated it next to Started/Ended.
+  const headingReward: { kind: "coins" | "text"; value: string | number; sub?: string } | null =
     !isSponsored && !isUnlimited && race.entryType === "Free" && totalFreeCoins > 0
-      ? totalFreeCoins
-      : null;
-  const firstPlacePrize = prizePoolDisplay;
+      ? { kind: "coins", value: totalFreeCoins, sub: "coins total" }
+      : isCoinsBattle && race.coinEntryAmount > 0
+        ? {
+            kind: "text",
+            value: `${(race.coinEntryAmount * Math.max(1, race.playerCount)).toLocaleString()} coins`,
+          }
+        : prizePoolDisplay
+          ? { kind: "text", value: prizePoolDisplay.replace(/\s*pool$/i, "").trim() }
+          : null;
 
   return (
     <View
@@ -1276,31 +1283,34 @@ function RaceCardBase({
             </View>
           </View>
 
-          {/* Title row */}
+          {/* Title row — reward sits beside the heading for every challenge type */}
           <View style={st.cardTitleRow}>
             <View style={st.cardTitleWrap}>
               <Text style={[st.cardTitle, { color: colors.foreground }]} numberOfLines={1}>{race.title}</Text>
             </View>
-            {/* Reward badge — top-right, finished only */}
-            {isFinished && (rewardDisplay !== null || firstPlacePrize) && (
+            {headingReward ? (
               <View style={st.winnerBlock}>
-                <Text style={[st.winnerLabel, { color: colors.mutedForeground }]}>Reward</Text>
-                {rewardDisplay !== null ? (
+                <Text style={[st.winnerLabel, { color: colors.mutedForeground }]}>REWARD</Text>
+                {headingReward.kind === "coins" ? (
                   <>
                     <View style={st.winnerCoinRow}>
                       <Image
                         source={require("../../assets/images/game-coin.png")}
                         style={{ width: 18, height: 18 }}
                       />
-                      <Text style={st.winnerCoinNum}>{rewardDisplay}</Text>
+                      <Text style={st.winnerCoinNum}>{headingReward.value}</Text>
                     </View>
-                    <Text style={[st.winnerCoinsSub, { color: colors.mutedForeground }]}>coins total</Text>
+                    {headingReward.sub ? (
+                      <Text style={[st.winnerCoinsSub, { color: colors.mutedForeground }]}>
+                        {headingReward.sub}
+                      </Text>
+                    ) : null}
                   </>
-                ) : firstPlacePrize ? (
-                  <Text style={st.winnerPrize}>{firstPlacePrize}</Text>
-                ) : null}
+                ) : (
+                  <Text style={st.winnerPrize}>{headingReward.value}</Text>
+                )}
               </View>
-            )}
+            ) : null}
           </View>
         </LinearGradient>
       </TrackThemeImageBackground>
@@ -1358,18 +1368,6 @@ function RaceCardBase({
             </>
           )}
         </View>
-        {prizePoolDisplay && (!isFinished || isCoinsBattle || isSponsored) && (
-          <>
-            <View style={[st.statDiv, { backgroundColor: colors.border }]} />
-            <View style={st.statItem}>
-              <View style={st.statValueRow}>
-                <Text style={{ fontSize: 11 }}>🏆</Text>
-                <Text style={[st.statValue, st.prizeStatValue, { color: colors.gold }]}>{prizePoolDisplay}</Text>
-              </View>
-                <Text style={[st.statLabel, { color: colors.gold + "AA" }]}>Prize Pool</Text>
-            </View>
-          </>
-        )}
       </View>
 
       {challengeEndsLabel ? (
@@ -1512,7 +1510,7 @@ function RaceCardBase({
         </View>
       )}
 
-      {/* ── Reactions + Prize footer (live only) ────────────────────────── */}
+      {/* ── Reactions footer (live only) — prize stays beside the title only ─ */}
       {!isFinished && (
         <View style={[st.reactFooter, { borderBottomColor: colors.border }]}>
           <View style={st.reactRow}>
@@ -1522,9 +1520,6 @@ function RaceCardBase({
               </Text>
             ))}
           </View>
-          {prizePoolDisplay && (
-            <Text style={[st.footerPrize, st.prizeFooterValue, { color: colors.gold }]}>🏆 Prize Pool {prizePoolDisplay}</Text>
-          )}
         </View>
       )}
 
@@ -2611,8 +2606,8 @@ const st = StyleSheet.create({
   cardHeroGrad:     { flex: 1, justifyContent: "space-between", padding: rs(12) },
   cardTopRow:       { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   cardTopLeft:      { flexDirection: "row", alignItems: "center", gap: 7, flex: 1 },
-  cardTitleRow:     { flexDirection: "row", alignItems: "flex-end", gap: 8 },
-  cardTitleWrap:    { flex: 1 },
+  cardTitleRow:     { flexDirection: "row", alignItems: "center", gap: 10 },
+  cardTitleWrap:    { flex: 1, minWidth: 0 },
   cardTitle:        { fontSize: rf(17), fontWeight: "900", letterSpacing: -0.3 },
 
   // Badges
@@ -2630,8 +2625,8 @@ const st = StyleSheet.create({
   dateMonth:        { fontSize: rf(9), fontWeight: "900", color: MUTED, letterSpacing: 0.5 },
   dateDay:          { fontSize: rf(16), fontWeight: "900", color: "#FFFFFF", lineHeight: 18 },
 
-  // WINNER block
-  winnerBlock:      { alignItems: "flex-end" },
+  // Reward beside challenge heading
+  winnerBlock:      { alignItems: "flex-end", flexShrink: 0, maxWidth: "42%" },
   winnerLabel:      { fontSize: rf(9), fontWeight: "900", letterSpacing: 0.8, textTransform: "uppercase" },
   winnerCoinRow:    { flexDirection: "row", alignItems: "center", gap: 3, marginTop: 2 },
   winnerCoinNum:    { fontSize: rf(16), fontWeight: "900", color: "#FFD700" },

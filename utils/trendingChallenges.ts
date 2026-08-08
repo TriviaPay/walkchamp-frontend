@@ -23,8 +23,7 @@ import {
   type TrendingThemeKey,
 
 } from "@/constants/trendingChallengeThemes";
-
-
+import { resolveRacePlayerCount } from "@/utils/waitingRoomTiming";
 
 export const TRENDING_MAX_CARDS = 20;
 
@@ -410,7 +409,8 @@ export function mapRoomToTrendingChallenge(
     title: room.title?.trim() || "Public Challenge",
     challengeFormat: format,
     prizePoolDisplay: formatTrendingPrizePool(room),
-    participantCount: room.current_players ?? room.registered_count ?? 0,
+    // Prefer registered_count for scheduled/upcoming (current_players stays 0 until start).
+    participantCount: resolveRacePlayerCount(room as Record<string, unknown>),
     startsAtUtc: room.scheduled_start_at!,
     endsAtUtc: resolveTrendingEndsAtUtc(room),
     timezone,
@@ -477,7 +477,22 @@ export function mergeAvailableRoomLists(
 
       const prev = map.get(room.room_id);
 
-      map.set(room.room_id, prev ? { ...prev, ...room } : room);
+      if (!prev) {
+        map.set(room.room_id, room);
+        continue;
+      }
+
+      // Don't let a later payload wipe counts with null/undefined (common when
+      // active rooms omit registered_count and send current_players: 0).
+      const merged: AvailableRoomLike = { ...prev };
+      for (const [key, value] of Object.entries(room) as Array<
+        [keyof AvailableRoomLike, AvailableRoomLike[keyof AvailableRoomLike]]
+      >) {
+        if (value !== undefined && value !== null) {
+          (merged as Record<string, unknown>)[key as string] = value;
+        }
+      }
+      map.set(room.room_id, merged);
 
     }
 

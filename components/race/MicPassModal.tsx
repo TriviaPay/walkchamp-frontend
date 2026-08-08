@@ -116,7 +116,8 @@ export function MicPassModal({ visible, onClose, onGranted }: Props) {
     try {
       const session = await getValidSession();
       if (!session) throw new Error("Not authenticated");
-      const res = await fetch(`${getApiBase()}/api/purchases/verify`, {
+      const apiBase = getApiBase();
+      const res = await fetch(`${apiBase}/api/purchases/verify`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -129,13 +130,26 @@ export function MicPassModal({ visible, onClose, onGranted }: Props) {
           purchase_token: "dev_token",
         }),
       });
-      const data = (await res.json()) as { success?: boolean; message?: string };
+      const data = (await res.json()) as {
+        success?: boolean;
+        message?: string;
+        code?: string;
+      };
       if (!res.ok || !data.success) {
-        throw new Error(
+        const msg =
           typeof data.message === "string"
             ? data.message
-            : "Could not unlock Mic Pass on this server.",
-        );
+            : "Could not unlock Mic Pass on this server.";
+        // Debug app → production API: ENABLE_DEV_IAP_PURCHASES is off by design.
+        if (
+          data.code === "DEV_PURCHASES_DISABLED" ||
+          msg.toLowerCase().includes("development purchases are disabled")
+        ) {
+          throw new Error(
+            `${msg} This debug build uses ${apiBase} (production). Dev Mic Pass unlocks need a staging API with ENABLE_DEV_IAP_PURCHASES=true, or a Play Store / Test Track build.`,
+          );
+        }
+        throw new Error(msg);
       }
       onGranted();
     } catch (e: unknown) {

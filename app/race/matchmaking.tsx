@@ -981,12 +981,43 @@ function MatchmakingScreenContent() {
     () => parseInitialParticipants(params.initialParticipants) ?? [],
   );
   const participantsRef = useRef(participants);
+  /** Users who just left — suppress poll re-adding them while BE registration lags. */
+  const recentlyLeftIdsRef = useRef<Map<string, number>>(new Map());
   const [participantsLoading, setParticipantsLoading] = useState(true);
   const [participantsError, setParticipantsError] = useState<string | null>(null);
 
   useEffect(() => {
     participantsRef.current = participants;
   }, [participants]);
+
+  const markParticipantLeftLocally = useCallback((rawUserId: string | null | undefined) => {
+    const id = normalizeUserId(rawUserId);
+    if (!id) return;
+    // Idempotent — leave + cancel-registration can both emit for the same user.
+    if (recentlyLeftIdsRef.current.has(id)) {
+      recentlyLeftIdsRef.current.set(id, Date.now());
+      return;
+    }
+    const wasPresent = participantsRef.current.some(
+      (p) => normalizeUserId(p.userId) === id,
+    );
+    recentlyLeftIdsRef.current.set(id, Date.now());
+    if (wasPresent) {
+      setParticipants((prev) =>
+        prev.filter((p) => normalizeUserId(p.userId) !== id),
+      );
+      setLiveRoom((prev) =>
+        prev && prev.currentPlayers > 0
+          ? { ...prev, currentPlayers: Math.max(0, prev.currentPlayers - 1) }
+          : prev,
+      );
+    }
+    setInviteStatuses((prev) =>
+      prev[id] || (rawUserId && prev[rawUserId])
+        ? { ...prev, [id]: "idle", ...(rawUserId ? { [rawUserId]: "idle" as const } : {}) }
+        : prev,
+    );
+  }, []);
 
   // Frontend-only dummy Waiting Room (~100 participants) when flag + params allow.
   const dummyWaitingSeededRef = useRef(false);
@@ -1389,6 +1420,13 @@ function MatchmakingScreenContent() {
             body = (await res.json().catch(() => ({}))) as CashChallengeLeaveResponse;
             if (!res.ok) {
               if (isAlreadyLeftLeaveError(res.status, body)) {
+                // Still clear scheduled registration so roster / Joined count drop.
+                if (!isUnlimitedGoalRoom && (status === "scheduled" || !!scheduledStartAt)) {
+                  void authFetch(`/api/rooms/${backendRaceId}/cancel-registration`, {
+                    method: "POST",
+                    timeoutMs: 12_000,
+                  }).catch(() => {});
+                }
                 return { ok: true as const, body: { ...body, success: true, participationStatus: "left" } };
               }
               return {
@@ -1396,6 +1434,15 @@ function MatchmakingScreenContent() {
                 error: body.error ?? "Could not leave this challenge.",
                 body,
               };
+            }
+            // Fixed-cash scheduled leave refunds race_participants / currentPlayers but does
+            // NOT cancel scheduled_room_registrations or decrement registeredCount. Without
+            // this follow-up, Waiting Room still shows the leaver and Trending Joined stays stale.
+            if (!isUnlimitedGoalRoom && (status === "scheduled" || !!scheduledStartAt)) {
+              void authFetch(`/api/rooms/${backendRaceId}/cancel-registration`, {
+                method: "POST",
+                timeoutMs: 12_000,
+              }).catch(() => {});
             }
             return { ok: true as const, body };
           }
@@ -1456,6 +1503,7 @@ function MatchmakingScreenContent() {
       refreshWallet,
       isUsdCashPaidRoom,
       isUnlimitedGoalRoom,
+      scheduledStartAt,
     ],
   );
 
@@ -1961,19 +2009,25 @@ function MatchmakingScreenContent() {
         // Prefer backend registered/current count — never derive from avatar-list length.
         const seededNavCount = Number(params.initialCurrentPlayers) || 0;
         const priorLiveCount = liveRoomRef.current?.currentPlayers ?? 0;
+        const registrationCount = resolveRacePlayerCount(dataRace as Record<string, unknown>);
         const resolvedFromPayload = Math.max(
-          resolveRacePlayerCount(dataRace as Record<string, unknown>),
+          registrationCount,
           typeof dataRace.currentPlayers === "number" ? dataRace.currentPlayers : 0,
           unlimitedMappedCount ?? 0,
           0,
         );
         // Preview-only Unlimited payloads often omit totals — keep nav/list seed then.
+        // When API has a real registration/current count, never floor back up to a
+        // stale seed/prior (that kept Joined high after someone left).
+        const hasExplicitCount =
+          unlimitedHasExplicitCount ||
+          registrationCount > 0 ||
+          (typeof dataRace.registeredCount === "number" && dataRace.registeredCount >= 0) ||
+          (typeof (dataRace as { registered_count?: number }).registered_count === "number");
         const resolvedPlayerCount = Math.max(
           resolvedFromPayload,
-          unlimitedHasExplicitCount || resolvedFromPayload > 1
-            ? 0
-            : Math.max(seededNavCount, priorLiveCount),
-          1,
+          hasExplicitCount ? 0 : Math.max(seededNavCount, priorLiveCount),
+          hasExplicitCount ? 0 : 1,
         );
 
         if (usedUnlimitedEndpoint && dataRace.id) {
@@ -2131,7 +2185,29 @@ function MatchmakingScreenContent() {
             ? normalized
             : normalized.slice(0, nextLiveRoom.maxPlayers);
         // Scheduled/future rooms often omit hostUsername — hydrate like Free/Cash rooms.
-        const nextParticipants = await hydrateWaitingRoomProfiles(capped);
+        const hydrated = await hydrateWaitingRoomProfiles(capped);
+        // Drop users who just left if BE registration row hasn't cancelled yet.
+        const leftCutoff = Date.now() - 90_000;
+        for (const [uid, at] of recentlyLeftIdsRef.current) {
+          if (at < leftCutoff) recentlyLeftIdsRef.current.delete(uid);
+        }
+        const nextParticipants = hydrated.filter((p) => {
+          const id = normalizeUserId(p.userId);
+          return !id || !recentlyLeftIdsRef.current.has(id);
+        });
+        // Align displayed count with filtered roster when API still overcounts.
+        if (
+          nextParticipants.length > 0 &&
+          nextLiveRoom.currentPlayers > nextParticipants.length &&
+          recentlyLeftIdsRef.current.size > 0
+        ) {
+          nextLiveRoom.currentPlayers = nextParticipants.length;
+          setLiveRoom((prev) =>
+            prev
+              ? { ...prev, currentPlayers: nextParticipants.length }
+              : { ...nextLiveRoom },
+          );
+        }
         setParticipants(nextParticipants);
         setParticipantsLoading(false);
         setParticipantsError(null);
@@ -2264,16 +2340,36 @@ function MatchmakingScreenContent() {
 
     // race:player-left
     const onLeft = (data: { userId: string }) => {
-      setParticipants((prev) => prev.filter((p) => p.userId !== data.userId));
-      setLiveRoom((prev) =>
-        prev && prev.currentPlayers > 1
-          ? { ...prev, currentPlayers: prev.currentPlayers - 1 }
-          : prev,
-      );
-      // Reset invite status so host can re-invite the player who left
-      setInviteStatuses((prev) =>
-        prev[data.userId] ? { ...prev, [data.userId]: "idle" } : prev,
-      );
+      markParticipantLeftLocally(data.userId);
+    };
+
+    const onParticipantLeft = (data: {
+      userId?: string;
+      removedUserId?: string;
+      raceId?: string;
+      room_id?: string;
+      currentPlayers?: number;
+      registered_count?: number;
+    }) => {
+      const leftId = data.userId ?? data.removedUserId;
+      if (leftId) {
+        markParticipantLeftLocally(leftId);
+      } else {
+        // Payload sometimes only has room_id — refresh from server.
+        refreshRoomFromServer(data);
+      }
+      if (
+        typeof data.currentPlayers === "number" ||
+        typeof data.registered_count === "number"
+      ) {
+        const next =
+          data.registered_count ?? data.currentPlayers ?? undefined;
+        if (typeof next === "number") {
+          setLiveRoom((prev) =>
+            prev ? { ...prev, currentPlayers: Math.max(0, next) } : prev,
+          );
+        }
+      }
     };
 
     if (channel) {
@@ -2287,13 +2383,13 @@ function MatchmakingScreenContent() {
       channel.bind("race:player-joined", refreshRoomFromServer);
       channel.bind("coins_battle.joined", refreshRoomFromServer);
       channel.bind("room:registered", refreshRoomFromServer);
-      channel.bind("room:registration_cancelled", refreshRoomFromServer);
       channel.bind("room:participant_joined", refreshRoomFromServer);
-      channel.bind("room:participant_left", refreshRoomFromServer);
+      channel.bind("room:participant_left", onParticipantLeft);
+      channel.bind("room:registration_cancelled", onParticipantLeft);
     }
     if (unlimitedChannel) {
       unlimitedChannel.bind("participant_joined", refreshRoomFromServer);
-      unlimitedChannel.bind("participant_left", refreshRoomFromServer);
+      unlimitedChannel.bind("participant_left", onParticipantLeft);
       unlimitedChannel.bind("challenge_cancelled", onCancelled);
     }
 
@@ -2309,20 +2405,20 @@ function MatchmakingScreenContent() {
         channel.unbind("race:player-joined", refreshRoomFromServer);
         channel.unbind("coins_battle.joined", refreshRoomFromServer);
         channel.unbind("room:registered", refreshRoomFromServer);
-        channel.unbind("room:registration_cancelled", refreshRoomFromServer);
+        channel.unbind("room:registration_cancelled", onParticipantLeft);
         channel.unbind("room:participant_joined", refreshRoomFromServer);
-        channel.unbind("room:participant_left", refreshRoomFromServer);
+        channel.unbind("room:participant_left", onParticipantLeft);
         unsubscribeFromChannel(CHANNELS.liveRace(backendRaceId));
       }
       if (unlimitedChannel) {
         unlimitedChannel.unbind("participant_joined", refreshRoomFromServer);
-        unlimitedChannel.unbind("participant_left", refreshRoomFromServer);
+        unlimitedChannel.unbind("participant_left", onParticipantLeft);
         unlimitedChannel.unbind("challenge_cancelled", onCancelled);
         unsubscribeFromChannel(CHANNELS.unlimitedChallenge(backendRaceId));
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backendRaceId, beginCountdown, showTerminalRoomClosed, isUnlimitedGoalRoom, user?.id]);
+  }, [backendRaceId, beginCountdown, showTerminalRoomClosed, isUnlimitedGoalRoom, user?.id, markParticipantLeftLocally]);
 
   // Scheduled registration events are emitted on the existing public rooms
   // channel before the race join window opens.
@@ -2679,8 +2775,25 @@ function MatchmakingScreenContent() {
     try {
       const res = await authFetch(`/api/races/${backendRaceId}/online-invite-candidates`);
       if (res.ok) {
-        const data = await res.json() as { candidates: OnlineCandidate[] };
-        const list = data.candidates ?? [];
+        const data = (await res.json()) as {
+          candidates?: OnlineCandidate[];
+          users?: OnlineCandidate[];
+        } | OnlineCandidate[];
+        // BE returns `{ candidates: [...] }`; accept a few alternate shapes defensively.
+        const rawList = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.candidates)
+            ? data.candidates
+            : Array.isArray(data?.users)
+              ? data.users
+              : [];
+        const list = rawList.filter((c) => !!normalizeUserId(c?.userId));
+        if (__DEV__) {
+          const friendCount = list.filter((c) => c.isFriend).length;
+          console.log(
+            `[WaitingRoom] online-invite-candidates ok raceId=${backendRaceId} count=${list.length} friends=${friendCount}`,
+          );
+        }
         setOnlineCandidates(list);
         // Sync local invite statuses with server truth:
         // reset anyone who is no longer pending server-side
@@ -2696,14 +2809,14 @@ function MatchmakingScreenContent() {
           }
           return next;
         });
-      } else if (__DEV__) {
-        // 403 = not host; 409 = room not open/scheduled — both leave the Online tab empty.
-        console.log(
-          `[WaitingRoom] online-invite-candidates status=${res.status} raceId=${backendRaceId}`,
-        );
-        if (res.status === 403) {
-          setOnlineCandidates([]);
+      } else {
+        // 403 = not host; 409 = room not open/scheduled; 404 = bad race id.
+        if (__DEV__) {
+          console.log(
+            `[WaitingRoom] online-invite-candidates status=${res.status} raceId=${backendRaceId}`,
+          );
         }
+        setOnlineCandidates([]);
       }
       candidatesLoadedRef.current = true;
     } catch { /* silent */ }
@@ -2784,9 +2897,11 @@ function MatchmakingScreenContent() {
   useEffect(() => {
     if (!invitePanelOpen || !backendRaceId) return;
     loadOnlineCandidates(); // immediate first load
+    // Friends are needed for Online-tab fallback (online friends not returned by candidates).
+    void loadFriends();
     const id = setInterval(loadOnlineCandidates, 5_000);
     return () => clearInterval(id);
-  }, [invitePanelOpen, backendRaceId, loadOnlineCandidates]);
+  }, [invitePanelOpen, backendRaceId, loadOnlineCandidates, loadFriends]);
 
   // Poll friends every 5s when Friends tab is open
   useEffect(() => {
@@ -2799,9 +2914,65 @@ function MatchmakingScreenContent() {
   // ── Invite list derived values (computed before render, stable references) ─
   const isOnlineTab = inviteTab === "online";
   const inviteListLoading = isOnlineTab ? loadingCandidates : loadingFriends;
-  const inviteList = isOnlineTab ? onlineCandidates.filter((c) => !c.isFriend) : friendsList;
   // Set of userIds already in the room — used to show "Joined" badge on the invite panel
-  const participantIds = new Set(participants.map((p) => p.userId));
+  const participantIds = new Set(
+    participants
+      .map((p) => normalizeUserId(p.userId))
+      .filter((id): id is string => !!id),
+  );
+  // Online tab: show ALL invite-eligible online people (including friends).
+  // Already-joined users stay in the list so the UI can show "Joined ✓"
+  // (BE currently omits them from candidates — we re-add online room members).
+  const inviteList: Array<OnlineCandidate | FriendItem> = (() => {
+    if (!isOnlineTab) return friendsList;
+    const selfId = normalizeUserId(user?.id);
+    const byId = new Map<string, OnlineCandidate | FriendItem>();
+    for (const c of onlineCandidates) {
+      const id = normalizeUserId(c.userId);
+      if (!id || (selfId && id === selfId)) continue;
+      byId.set(id, c);
+    }
+    // Fallback if candidates is empty/sparse: surface online friends for invite.
+    for (const f of friendsList) {
+      const id = normalizeUserId(f.userId);
+      if (!id || byId.has(id) || (selfId && id === selfId)) continue;
+      const online =
+        Boolean(f.isOnline) ||
+        friendsOnlineIds.has(id) ||
+        isUserOnline(id);
+      if (!online) continue;
+      byId.set(id, {
+        userId: f.userId,
+        username: f.username,
+        avatarUrl: f.avatarUrl,
+        avatarColor: f.avatarColor,
+        avatarVersion: f.avatarVersion,
+        country: f.country,
+        countryFlag: f.countryFlag,
+        isFriend: true,
+        status: "online",
+        inviteStatus: "none",
+      });
+    }
+    // BE excludes joined/registered users from candidates — put online room
+    // members back so the invite sheet can show Joined ✓ instead of hiding them.
+    for (const p of participants) {
+      const id = normalizeUserId(p.userId);
+      if (!id || byId.has(id) || (selfId && id === selfId) || p.isCurrentUser) continue;
+      if (!isParticipantOnline(p)) continue;
+      byId.set(id, {
+        userId: p.userId,
+        username: p.username,
+        avatarUrl: p.avatarUrl ?? null,
+        avatarColor: p.avatarColor ?? "#00E676",
+        country: p.country ?? null,
+        countryFlag: p.countryFlag ?? null,
+        status: "online",
+        inviteStatus: "none",
+      });
+    }
+    return Array.from(byId.values());
+  })();
 
   // ── Render ────────────────────────────────────────────────────────────────
   const targetSteps = liveRoom?.targetSteps ?? RACE_DEFAULTS.RACE_TARGET;
@@ -3293,13 +3464,14 @@ function MatchmakingScreenContent() {
                       {isOnlineTab ? "No online players available." : "No friends to invite."}
                     </Text>
                   ) : inviteList.map((person) => {
-                    const status = inviteStatuses[person.userId] ?? "idle";
-                    const hasJoined = participantIds.has(person.userId);
+                    const personKey = normalizeUserId(person.userId) || person.userId;
+                    const status = inviteStatuses[person.userId] ?? inviteStatuses[personKey] ?? "idle";
+                    const hasJoined = participantIds.has(personKey);
                     const isOnline = isOnlineTab
                       ? true
                       : Boolean((person as FriendItem).isOnline) ||
                         isUserOnline(person.userId) ||
-                        racePresenceIds.has(normalizeUserId(person.userId));
+                        racePresenceIds.has(personKey);
                     return (
                       <View key={`${inviteTab}-${person.userId}`} style={styles.sheetRow}>
                         <View style={styles.avatarWrap}>

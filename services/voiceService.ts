@@ -113,6 +113,15 @@ function loadSDK(): ClientModule | null {
     // Hermes + livekit UMD can still surface orphan Closing rejections during
     // abort/negotiate teardown. Swallow only that known noise.
     installLiveKitClosingRejectionGuard();
+    // Quiet LiveKit's console.error for disconnect-before-connected races
+    // (common when Mic Pass modal / rejoin tears down a half-open room).
+    try {
+      const level = (clientModule as { LogLevel?: { warn?: number } }).LogLevel?.warn;
+      const setLevel = (clientModule as { setLogLevel?: (l: unknown) => void }).setLogLevel;
+      if (typeof setLevel === "function" && level != null) setLevel(level);
+    } catch {
+      /* optional */
+    }
     if (__DEV__) {
       if (__DEV__) console.log("[VoiceSDK] provider: livekit");
       if (__DEV__) console.log("[VoiceSDK] runtime supported: true");
@@ -144,7 +153,9 @@ function installLiveKitClosingRejectionGuard(): void {
       msg.includes("unable to set answer") ||
       msg.includes("ERROR_CONTENT") ||
       msg.includes("Failed to apply the description") ||
-      msg.includes("Session error code")
+      msg.includes("Session error code") ||
+      msg.includes("cannot send signal request before connected") ||
+      msg.includes("before connected")
     );
   };
   // RN / Hermes: prevent redbox for known LiveKit UMD teardown noise.
@@ -164,6 +175,29 @@ function installLiveKitClosingRejectionGuard(): void {
     }
     if (typeof prev === "function") prev(event);
   };
+
+  // LiveKit also console.error's "cannot send signal request before connected"
+  // during half-open disconnect — demote that noise in Metro.
+  if (__DEV__) {
+    const originalError = console.error.bind(console);
+    console.error = (...args: unknown[]) => {
+      const first = args[0];
+      const text =
+        typeof first === "string"
+          ? first
+          : first instanceof Error
+            ? first.message
+            : String(first ?? "");
+      if (
+        text.includes("cannot send signal request before connected") ||
+        text.includes("before connected")
+      ) {
+        console.log("[VoiceSDK] ignored LiveKit disconnect-before-connected:", ...args);
+        return;
+      }
+      originalError(...args);
+    };
+  }
 }
 
 // ── Audio session helpers ─────────────────────────────────────────────────────
@@ -457,6 +491,31 @@ function wireRoomEventHandlers(sdk: ClientModule): void {
   });
 }
 
+/**
+ * Disconnect without racing LiveKit's signal client.
+ * Calling disconnect() while still Connecting tries to send leave/offer and
+ * logs: "cannot send signal request before connected".
+ */
+async function safeDisconnectRoom(room: {
+  state?: string;
+  disconnect?: () => Promise<void> | void;
+} | null): Promise<void> {
+  if (!room?.disconnect) return;
+  const state = String(room.state ?? "").toLowerCase();
+  if (!state || state === "disconnected") return;
+  try {
+    await room.disconnect();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e ?? "");
+    if (
+      msg.includes("cannot send signal request before connected") ||
+      msg.includes("before connected")
+    ) {
+      return;
+    }
+  }
+}
+
 async function connectRoomWithRetry(url: string, token: string): Promise<void> {
   if (!activeRoom) throw new Error("No active room");
   try {
@@ -466,11 +525,7 @@ async function connectRoomWithRetry(url: string, token: string): Promise<void> {
     if (__DEV__) {
       console.log("[Voice] negotiation timed out — retrying connect once");
     }
-    try {
-      await activeRoom.disconnect();
-    } catch {
-      /* ignore */
-    }
+    await safeDisconnectRoom(activeRoom);
     await new Promise((r) => setTimeout(r, 500));
     await activeRoom.connect(url, token, { ...VOICE_CONNECT_OPTS });
   }
@@ -979,11 +1034,10 @@ export const voiceService = {
     if (!activeRoom) return;
     muteAllRemoteLocal = false;
     localVolumeOverrides.clear();
-    try {
-      await activeRoom.disconnect();
-    } catch {}
+    const room = activeRoom;
+    activeRoom = null;
+    await safeDisconnectRoom(room);
     if (__DEV__) console.log("[Voice] disconnect:", reason);
-    activeRoom          = null;
     currentRoute        = "speaker";
     currentSpeakerMode  = true;
     onStateCb           = null;
@@ -1004,7 +1058,7 @@ export const voiceService = {
     onSpeakingCb        = null;
     onActiveSpeakersCb  = null;
     onMuteChangedCb     = null;
-    roomToDisconnect.disconnect().catch(() => {});
+    void safeDisconnectRoom(roomToDisconnect);
     stopVoiceAudioSession().catch(() => {});
     if (__DEV__) console.log("[Voice] disconnect:", reason);
   },
