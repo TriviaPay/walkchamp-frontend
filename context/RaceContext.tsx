@@ -1649,6 +1649,22 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     initialUserSteps = 0,
     raceEndAt?: Date | null,
   ) => {
+    // Unlimited challenges must never enter classic sensor / progress / pause-walk path.
+    try {
+      const { isUnlimitedClassicProgressBlocked } = require(
+        "@/services/unlimitedRaceProgressGuard",
+      ) as typeof import("@/services/unlimitedRaceProgressGuard");
+      if (isUnlimitedClassicProgressBlocked(raceIdRef.current)) {
+        if (__DEV__) {
+          console.warn(
+            `[RaceContext] resumeLiveRace blocked — Unlimited challengeId=${raceIdRef.current}`,
+          );
+        }
+        return;
+      }
+    } catch {
+      /* optional */
+    }
     if (matchmakingRef.current) {
       clearInterval(matchmakingRef.current);
       matchmakingRef.current = null;

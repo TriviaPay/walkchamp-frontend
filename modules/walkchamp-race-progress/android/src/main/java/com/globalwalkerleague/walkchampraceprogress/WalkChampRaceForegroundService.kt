@@ -1128,6 +1128,11 @@ class WalkChampRaceForegroundService : Service() {
   }
 
   private fun shouldSyncRaceProgress(state: RaceNotificationState, force: Boolean): Boolean {
+    // Unlimited Daily Goal uses /api/walk/steps + live-progress — never classic race progress.
+    if (state.unlimitedDailyMode) {
+      Log.d(TAG, "[LiveRaceSync] skip unlimitedDailyMode raceId=${state.raceId}")
+      return false
+    }
     if (force) return true
     val now = System.currentTimeMillis()
     val lastSync = lastBackendSyncMs
@@ -1176,6 +1181,10 @@ class WalkChampRaceForegroundService : Service() {
   ): Boolean {
     var state = stateOverride ?: raceState ?: return false
     if (!isActiveRace(state)) return false
+    if (state.unlimitedDailyMode) {
+      Log.d(TAG, "[LiveRaceSync] skip POST /races/progress unlimitedDailyMode raceId=${state.raceId}")
+      return false
+    }
 
     state = mergeNativeRaceStepsIntoState(state).withComputedTimeLeft()
     if (state.raceSteps != raceState?.raceSteps || state.timeLeftSeconds != raceState?.timeLeftSeconds) {

@@ -29,6 +29,11 @@ data class RaceNotificationState(
   val raceStepsAtSensorBaseline: Int = 0,
   /** Explicit sponsored flag — drives notification title (do not infer from end time alone). */
   val isSponsored: Boolean = false,
+  /**
+   * Unlimited Daily Goal — tray uses race_live UI but must NOT POST /api/races/:id/progress.
+   * Verified steps go through /api/walk/steps; provisional through Unlimited live-progress.
+   */
+  val unlimitedDailyMode: Boolean = false,
 ) {
   fun toNotificationBody(): String = formatCompactRaceBody(
     raceSteps = raceSteps,
@@ -89,6 +94,7 @@ data class RaceNotificationState(
         else -> 0L
       },
       isSponsored = isSponsored || incoming.isSponsored,
+      unlimitedDailyMode = unlimitedDailyMode || incoming.unlimitedDailyMode,
       lastUpdatedAt = maxOf(lastUpdatedAt, incoming.lastUpdatedAt),
       apiBaseUrl = incoming.apiBaseUrl.ifBlank { apiBaseUrl },
       authToken = incoming.authToken.ifBlank { authToken },
@@ -148,6 +154,7 @@ data class RaceNotificationState(
     put("sensorCounterBaseline", sensorCounterBaseline)
     put("raceStepsAtSensorBaseline", raceStepsAtSensorBaseline)
     put("isSponsored", isSponsored)
+    put("unlimitedDailyMode", unlimitedDailyMode)
   }
 
   companion object {
@@ -180,6 +187,7 @@ data class RaceNotificationState(
         sensorCounterBaseline = json.optLong("sensorCounterBaseline", 0L),
         raceStepsAtSensorBaseline = json.optInt("raceStepsAtSensorBaseline", 0),
         isSponsored = json.optBoolean("isSponsored", false),
+        unlimitedDailyMode = json.optBoolean("unlimitedDailyMode", false),
       ).takeIf { it.raceId.isNotBlank() }
     }
 
@@ -240,6 +248,12 @@ data class RaceNotificationState(
         is String -> v.equals("true", ignoreCase = true) || v == "1"
         else -> false
       }
+      val unlimitedFlag = when (val v = payload["unlimitedDailyMode"]) {
+        is Boolean -> v
+        is Number -> v.toInt() != 0
+        is String -> v.equals("true", ignoreCase = true) || v == "1"
+        else -> false
+      }
       return RaceNotificationState(
         raceId = raceId,
         userId = userId,
@@ -259,6 +273,7 @@ data class RaceNotificationState(
         sensorCounterBaseline = sensorBaseline,
         raceStepsAtSensorBaseline = raceStepsAtBaseline,
         isSponsored = sponsoredFlag,
+        unlimitedDailyMode = unlimitedFlag,
       )
     }
 

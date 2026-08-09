@@ -68,11 +68,16 @@ import {
   resolveUnlimitedResultStatus,
   resolvePrizePoolEligibilityStatus,
 } from "@/utils/unlimitedResults";
+import { isUnlimitedPrizeLost, UNLIMITED_COPY } from "@/utils/unlimitedLiveUiCopy";
 import { fetchUnlimitedDailyHistory } from "@/services/unlimitedResultsApi";
 import {
   dayRowsFromDailyHistory,
   type UnlimitedDayRow,
 } from "@/utils/unlimitedDayProgress";
+import {
+  mergeUnlimitedSelfHydrateSteps,
+  resolveUnlimitedLiveDayContext,
+} from "@/utils/unlimitedLiveDayContext";
 import {
   pickUnlimitedRealtimeDisplaySteps,
   resolveUnlimitedDisplayedLiveSteps,
@@ -211,6 +216,79 @@ function getWinnerCount(playerCount: number): number {
   return freeRaceWinnerSlots(playerCount);
 }
 const REACTIONS = ["🔥", "👏", "👑", "🏃", "🏆", "😮"];
+
+/**
+ * Instant first paint for Live Race — full UI shell from nav params / self user
+ * while detail API loads in the background. Avoids SkeletonLiveDetail delay.
+ */
+function buildInstantLiveRaceShell(opts: {
+  raceId: string;
+  unlimited: boolean;
+  trackLayout?: string | null;
+  challengeType?: string | null;
+  capacityMode?: string | null;
+  title?: string | null;
+  targetSteps?: number | null;
+  durationDays?: number | null;
+  userId?: string | null;
+  username?: string | null;
+}): { race: RaceData; participants: RaceParticipant[] } {
+  const unlimited = opts.unlimited;
+  const target =
+    typeof opts.targetSteps === "number" && opts.targetSteps > 0
+      ? opts.targetSteps
+      : unlimited
+        ? 10_000
+        : 1_000;
+  const entryType =
+    opts.challengeType ||
+    (unlimited ? "unlimited_goal" : "free");
+  const race: RaceData = {
+    id: opts.raceId,
+    title:
+      (opts.title && String(opts.title).trim()) ||
+      (unlimited ? "Unlimited Challenge" : "Live Race"),
+    status: "in_progress",
+    entryType,
+    entryAmountCents: 0,
+    entryAmountDollars: 0,
+    targetSteps: target,
+    currentPlayers: 1,
+    maxPlayers: unlimited ? null : 10,
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    creatorId: opts.userId ?? "",
+    prizePool: 0,
+    prizeTiers: [],
+    spectatorCount: 0,
+    capacityMode: opts.capacityMode ?? (unlimited ? "unlimited" : null),
+    challengeType: opts.challengeType ?? (unlimited ? "unlimited_goal" : null),
+    trackLayout: isTrackLayoutId(opts.trackLayout) ? opts.trackLayout : "bg",
+    challengeDurationDays:
+      typeof opts.durationDays === "number" && opts.durationDays > 0
+        ? opts.durationDays
+        : unlimited
+          ? 7
+          : null,
+    hasExplicitPlayerCount: false,
+  };
+  const participants: RaceParticipant[] = opts.userId
+    ? [
+        {
+          id: opts.userId,
+          userId: opts.userId,
+          currentSteps: 0,
+          status: "active",
+          rank: 1,
+          username: opts.username?.trim() || "You",
+          countryFlag: null,
+          avatarColor: "#00E676",
+          isHost: true,
+        },
+      ]
+    : [];
+  return { race, participants };
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1266,6 +1344,19 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
             ...item,
             isHost: !!item.isHost,
             durationDays: isUnlimited ? race.challengeDurationDays : undefined,
+            qualificationStatus: isUnlimited
+              ? (item as RaceParticipant).qualificationStatus
+              : undefined,
+            prizePoolEligibilityStatus: isUnlimited
+              ? (item as RaceParticipant).prizePoolEligibilityStatus
+              : undefined,
+            showUnlimitedLostChip: isUnlimited
+              ? isUnlimitedPrizeLost({
+                  qualificationStatus: (item as RaceParticipant).qualificationStatus,
+                  prizePoolEligibilityStatus: (item as RaceParticipant)
+                    .prizePoolEligibilityStatus,
+                })
+              : false,
           } as LiveBoardRowParticipant}
           rank={rank}
           isUser={isUser}
@@ -1987,12 +2078,18 @@ function LiveRaceDetailScreenContent() {
     challengeType: paramChallengeType,
     capacityMode: paramCapacityMode,
     dummyRace: paramDummyRace,
+    title: paramTitle,
+    targetSteps: paramTargetSteps,
+    durationDays: paramDurationDays,
   } = useLocalSearchParams<{
     id: string;
     trackLayout?: string;
     challengeType?: string;
     capacityMode?: string;
     dummyRace?: string;
+    title?: string;
+    targetSteps?: string;
+    durationDays?: string;
   }>();
   const { user, sessionToken } = useAuth();
   const unlimitedHint =
@@ -2020,6 +2117,25 @@ function LiveRaceDetailScreenContent() {
           liveRaceDetailCacheKey(raceId, user?.id),
         )
       : null;
+  const parsedTargetSteps = Number(paramTargetSteps);
+  const parsedDurationDays = Number(paramDurationDays);
+  const instantShell = useMemo(() => {
+    if (initialCache?.race || !raceId || typeof raceId !== "string") return null;
+    return buildInstantLiveRaceShell({
+      raceId,
+      unlimited: unlimitedHint && isUnlimitedGoalFrontendEnabled(),
+      trackLayout: initialTrackLayout,
+      challengeType: paramChallengeType,
+      capacityMode: paramCapacityMode,
+      title: paramTitle,
+      targetSteps: Number.isFinite(parsedTargetSteps) ? parsedTargetSteps : null,
+      durationDays: Number.isFinite(parsedDurationDays) ? parsedDurationDays : null,
+      userId: user?.id,
+      username: user?.username,
+    });
+    // First-paint shell only — do not rebuild on every user/roster refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [raceId]);
 
   // ── Mic Pass / voice-chat state ─────────────────────────────────────────────
   // NOTE: Mic Pass is purely social — it has zero effect on steps, race
@@ -2150,7 +2266,9 @@ function LiveRaceDetailScreenContent() {
   }, [refreshTodaySteps, triggerSync]);
   const [finalRaceSteps, setFinalRaceSteps] = useState<number | null>(null);
   // Declared above finalizeLiveRace so the callback can read race.targetSteps safely.
-  const [race, setRace] = useState<RaceData | null>(initialCache?.race ?? null);
+  const [race, setRace] = useState<RaceData | null>(
+    initialCache?.race ?? instantShell?.race ?? null,
+  );
   const { status: resultStatus, refresh: refreshResultStatus } = useRaceResultStatus(
     typeof raceId === "string" ? raceId : null,
     {
@@ -2319,10 +2437,16 @@ function LiveRaceDetailScreenContent() {
   const rs = (n: number) => Math.round(n * rsFactor);
 
   // ── Shared race state ─────────────────────────────────────────────────────
-  const [participants,   setParticipants]   = useState<RaceParticipant[]>(initialCache?.participants ?? []);
+  const [participants,   setParticipants]   = useState<RaceParticipant[]>(
+    initialCache?.participants?.length
+      ? initialCache.participants
+      : instantShell?.participants ?? [],
+  );
   const [comments,       setComments]       = useState<RaceComment[]>([]);
   const [reactionCounts, setReactionCounts] = useState<ReactionCount[]>([]);
-  const [loading,        setLoading]        = useState(!initialCache?.race);
+  // Never block the full Live Race chrome on network — paint cache/shell instantly.
+  const [loading,        setLoading]        = useState(false);
+  const [detailMissing,  setDetailMissing]  = useState(false);
   const [cheerText,      setCheerText]      = useState("");
   const [cheerToast,     setCheerToast]     = useState<string | null>(null);
   const [spectatorCount, setSpectatorCount] = useState(0);
@@ -2660,12 +2784,21 @@ function LiveRaceDetailScreenContent() {
   // Unlimited: block classic progress POSTs and keep walk sync active for the whole screen life.
   useEffect(() => {
     if (!raceId || !isUnlimitedHeader) return;
+    const liveDay = resolveUnlimitedLiveDayContext({
+      participantChallengeDayKey: currentParticipant?.challengeDayKey,
+      participantTimezone: currentParticipant?.timezone,
+      raceChallengeDayKey: race?.challengeDayKey,
+      raceChallengeTimezone: race?.challengeTimezone,
+      deviceTimezone: getDeviceTimezone(),
+      formattedDeviceDayKey:
+        formatChallengeDayKey(
+          Date.now(),
+          currentParticipant?.timezone ?? race?.challengeTimezone ?? getDeviceTimezone(),
+        ) ?? undefined,
+    });
     registerUnlimitedClassicProgressBlock(raceId, {
-      challengeDayKey:
-        race?.challengeDayKey ??
-        formatChallengeDayKey(Date.now(), race?.challengeTimezone) ??
-        undefined,
-      timezone: race?.challengeTimezone ?? undefined,
+      challengeDayKey: liveDay?.challengeDayKey,
+      timezone: liveDay?.timezone,
     });
     setWalkBackendSyncPaused(false);
     // Drop classic RaceContext sensor tracking only — do NOT clearActiveRaceProgress
@@ -2728,22 +2861,25 @@ function LiveRaceDetailScreenContent() {
         // Before the viewer's own day starts, keep the ordinary daily walk tray.
         void switchDailyStepsNotification(0, race?.targetSteps);
       }
-      const dayKey =
-        race?.challengeDayKey ??
-        formatChallengeDayKey(Date.now(), race?.challengeTimezone) ??
-        "";
+      const dayKey = liveDay?.challengeDayKey ?? "";
+      const dayTz =
+        liveDay?.timezone ||
+        Intl.DateTimeFormat().resolvedOptions().timeZone;
       const provisional = Math.max(
         0,
         Math.floor(rp.provisionalSensorTodaySteps ?? 0),
       );
       const verified = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
-      if (dayKey && provisional > 0 && !(verified > 0 && provisional > verified + 250)) {
+      if (
+        unlimitedViewerDayStarted &&
+        dayKey &&
+        provisional > 0 &&
+        !(verified > 0 && provisional > verified + 250)
+      ) {
         void uploadUnlimitedProvisionalProgress({
           challengeId: raceId,
           challengeDayKey: dayKey,
-          timezone:
-            race?.challengeTimezone ||
-            Intl.DateTimeFormat().resolvedOptions().timeZone,
+          timezone: dayTz,
           provisionalCumulativeSteps: Math.max(verified, provisional),
         });
       }
@@ -2796,17 +2932,33 @@ function LiveRaceDetailScreenContent() {
         } else {
           void switchDailyStepsNotification(notifSteps, race?.targetSteps);
         }
-        const dayKey =
-          race?.challengeDayKey ??
-          formatChallengeDayKey(Date.now(), race?.challengeTimezone) ??
-          "";
-        if (dayKey && provisional > verified && provisional <= verified + 250) {
+        const tickDay = resolveUnlimitedLiveDayContext({
+          participantChallengeDayKey: currentParticipant?.challengeDayKey,
+          participantTimezone: currentParticipant?.timezone,
+          raceChallengeDayKey: race?.challengeDayKey,
+          raceChallengeTimezone: race?.challengeTimezone,
+          deviceTimezone: getDeviceTimezone(),
+          formattedDeviceDayKey:
+            formatChallengeDayKey(
+              Date.now(),
+              currentParticipant?.timezone ?? race?.challengeTimezone ?? getDeviceTimezone(),
+            ) ?? undefined,
+        });
+        const dayKey = tickDay?.challengeDayKey ?? "";
+        const dayTz =
+          tickDay?.timezone ||
+          Intl.DateTimeFormat().resolvedOptions().timeZone;
+        // Upload when provisional leads verified (same gate as first upload).
+        if (
+          unlimitedViewerDayStarted &&
+          dayKey &&
+          provisional > 0 &&
+          !(verified > 0 && provisional > verified + 250)
+        ) {
           void uploadUnlimitedProvisionalProgress({
             challengeId: raceId,
             challengeDayKey: dayKey,
-            timezone:
-              race?.challengeTimezone ||
-              Intl.DateTimeFormat().resolvedOptions().timeZone,
+            timezone: dayTz,
             provisionalCumulativeSteps: Math.max(verified, provisional),
           });
         }
@@ -2825,6 +2977,8 @@ function LiveRaceDetailScreenContent() {
     racePhase,
     contextRaceId,
     stopRaceStepTracking,
+    currentParticipant?.challengeDayKey,
+    currentParticipant?.timezone,
     race?.challengeDayKey,
     race?.challengeTimezone,
     race?.targetSteps,
@@ -3484,7 +3638,11 @@ function LiveRaceDetailScreenContent() {
               ? 0
               : serverToday;
           const localDisplay = localOk ? unlimitedDailySteps : 0;
-          const steps = Math.max(0, Math.floor(Math.max(localDisplay, safeServer)));
+          const steps = mergeUnlimitedSelfHydrateSteps({
+            viewerDayStarted: unlimitedViewerDayStarted,
+            localDailySteps: localDisplay,
+            serverTodaySteps: safeServer,
+          });
           batchEntries.push({ userId: p.userId, steps, instant: true, allowRollback: true });
           prevStepsMapRef.current[p.userId] = steps;
           continue;
@@ -3999,6 +4157,7 @@ function LiveRaceDetailScreenContent() {
         racePhase === "in_race" &&
         (contextRaceId === raceId ||
           store.getState().raceProgress.activeRaceId === raceId);
+      let confirmedMissing = false;
       if (preferUnlimitedDetail) {
         racePayload = await fetchUnlimitedLiveDetailPayload(raceId, {
           currentUserId: user?.id,
@@ -4014,17 +4173,21 @@ function LiveRaceDetailScreenContent() {
             race: data.race as RaceData,
             participants: Array.isArray(data.participants) ? data.participants : [],
           };
+        } else if (detailRes.status === 404 && preferUnlimitedDetail) {
+          confirmedMissing = true;
         } else if (!preferUnlimitedDetail) {
           racePayload = await fetchUnlimitedLiveDetailPayload(raceId, {
             currentUserId: user?.id,
             currentUsername: user?.username,
             forceLive,
           });
+          if (!racePayload && detailRes.status === 404) confirmedMissing = true;
         }
       }
 
       if (racePayload?.race) {
         markLiveRaceFetched(`${raceId}:detail`);
+        setDetailMissing(false);
         const parts = racePayload.participants;
         setRace(racePayload.race);
         if (racePayload.race.status === "in_progress" || racePayload.race.status === "completed") {
@@ -4068,7 +4231,13 @@ function LiveRaceDetailScreenContent() {
           participants: mergedParts,
         });
         setLoading(false);
+      } else if (confirmedMissing) {
+        // Explicit 404 from the expected endpoint — drop the instant shell.
+        setDetailMissing(true);
+        setRace(null);
+        setLoading(false);
       }
+      // Transient network errors: keep shell/cache painted; focus/poll will retry.
 
       // Unlimited chat uses dedicated endpoints (classic /races/:id/comments 403s —
       // membership is checked against race_participants, not unlimited participants).
@@ -4162,13 +4331,20 @@ function LiveRaceDetailScreenContent() {
         if (cached.race.status === "in_progress" || cached.race.status === "completed") {
           raceAlreadyStartedRef.current = true;
         }
+        setDetailMissing(false);
+        setLoading(false);
+      } else if (instantShell?.race) {
+        // Keep painting the shell — never flash SkeletonLiveDetail while API loads.
+        setRace(instantShell.race);
+        setParticipants(instantShell.participants);
         setLoading(false);
       } else {
-        setLoading(true);
+        // No cache/shell (rare) — still avoid skeleton; fetch fills race.
+        setLoading(false);
       }
     }
-    fetchRace().finally(() => setLoading(false));
-  }, [raceId, sessionToken, fetchRace, resetForRace, useDummyRace]);
+    void fetchRace().finally(() => setLoading(false));
+  }, [raceId, sessionToken, fetchRace, resetForRace, useDummyRace, instantShell, user?.id]);
 
   useEffect(() => {
     return () => {
@@ -4942,10 +5118,11 @@ function LiveRaceDetailScreenContent() {
   }, [raceId, isActive, isUnlimitedHeader]);
 
   // ── Loading / not found ───────────────────────────────────────────────────
-  if (loading) {
+  // Full-screen skeleton only if we somehow have nothing to paint (should be rare).
+  if (loading && !race) {
     return <SkeletonLiveDetail />;
   }
-  if (!race) {
+  if (!race || detailMissing) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 8, padding: 24, backgroundColor: "#050711" }}>
         <Text style={{ color: "#FFFFFF", fontSize: 18, fontWeight: "800" }}>Race not found</Text>
@@ -5408,8 +5585,10 @@ function LiveRaceDetailScreenContent() {
         <UnlimitedCurrentDayCard
           schedule={unlimitedViewerSchedule}
           todaySteps={unlimitedDailySteps}
-          onPressProgress={() => setShowUnlimitedDayProgress(true)}
+          onPressInfo={() => setShowUnlimitedDayProgress(true)}
           eligibility={unlimitedEligibility}
+          historyRows={unlimitedHistoryRows}
+          qualificationStatus={currentParticipant?.qualificationStatus}
           onPressViewResults={goToUnlimitedResults}
         />
       ) : null}
@@ -5420,11 +5599,6 @@ function LiveRaceDetailScreenContent() {
           schedule={unlimitedViewerSchedule}
           todaySteps={unlimitedDailySteps}
           historyRows={unlimitedHistoryRows}
-          qualificationStatus={currentParticipant?.qualificationStatus}
-          prizePoolEligibilityStatus={
-            currentParticipant?.prizePoolEligibilityStatus ?? race.prizePoolEligibilityStatus
-          }
-          resultStatus={unlimitedResultStatus}
         />
       ) : null}
 
@@ -5649,12 +5823,38 @@ function LiveRaceDetailScreenContent() {
             <View style={st.progBarBg}>
               <Animated.View style={[st.progBarFill, progressBarStyle]} />
             </View>
-            <Text style={[st.progSub, { fontSize: Math.max(8, rs(9)) }]}>
-              {myPlayer
-                ? `Rank #${myPlayer.rank} · ${formatSteps(Math.max(0, race.targetSteps - mySteps))} steps to goal`
-                : "Waiting for live race data"}
+            <Text
+              style={[
+                st.progSub,
+                {
+                  fontSize: Math.max(8, rs(9)),
+                  ...(isUnlimitedHeader && unlimitedEligibility === "not_eligible"
+                    ? { color: "#FF6B6B", fontWeight: "700" as const }
+                    : null),
+                },
+              ]}
+            >
+              {isUnlimitedHeader && unlimitedEligibility === "not_eligible"
+                ? UNLIMITED_COPY.lostAfterMiss
+                : myPlayer
+                  ? isUnlimitedHeader
+                    ? (() => {
+                        const myRank = myPlayer.rank ?? 0;
+                        const sorted = [...participants].sort(
+                          (a, b) => (b.currentSteps ?? 0) - (a.currentSteps ?? 0),
+                        );
+                        const myIdx = sorted.findIndex((p) => p.userId === myPlayer.userId);
+                        const aboveSteps =
+                          myIdx > 0 ? sorted[myIdx - 1]?.currentSteps ?? mySteps : mySteps;
+                        const gap = Math.max(0, aboveSteps - mySteps + (myIdx > 0 ? 1 : 0));
+                        return myIdx > 0
+                          ? `Rank #${myRank} · ${formatSteps(gap)} steps to next rank`
+                          : `Rank #${myRank} · Leading`;
+                      })()
+                    : `Rank #${myPlayer.rank} · ${formatSteps(Math.max(0, race.targetSteps - mySteps))} steps to goal`
+                  : "Waiting for live race data"}
             </Text>
-            {isActive ? (
+            {isActive && !(isUnlimitedHeader && unlimitedEligibility === "not_eligible") ? (
               <Text style={[st.progSub, { fontSize: Math.max(8, rs(9)), marginTop: 2, opacity: 0.85 }]}>
                 {isUnlimitedHeader
                   ? unlimitedHcPending
@@ -5669,7 +5869,7 @@ function LiveRaceDetailScreenContent() {
                   ? unlimitedHcPending
                     ? " · Sensor live; prizes use Health Connect / HealthKit"
                     : unlimitedVerifiedSteps > 0
-                      ? " · Synced via /api/walk/steps"
+                      ? " · Walk sync verifying"
                       : " · Walk with Health Connect enabled to verify"
                   : raceVerification
                     ? raceVerification.status === "verification_delayed" ||

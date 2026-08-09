@@ -329,6 +329,10 @@ export type LiveBoardRowParticipant = {
   /** Unlimited Daily Goal Challenge only — backend-authoritative per-participant day (may differ across timezones). */
   dayNumber?: number | null;
   durationDays?: number | null;
+  /** Unlimited only — show red Lost chip when not prize-eligible. */
+  qualificationStatus?: string | null;
+  prizePoolEligibilityStatus?: string | null;
+  showUnlimitedLostChip?: boolean;
 };
 
 const LiveBoardRow = memo(function LiveBoardRow({
@@ -368,6 +372,11 @@ const LiveBoardRow = memo(function LiveBoardRow({
   forceNumericRank?: boolean;
 }) {
   const isForfeited = participant.status === "forfeited";
+  const showLostChip =
+    !isForfeited &&
+    (participant.showUnlimitedLostChip === true ||
+      (participant.prizePoolEligibilityStatus ?? "").toLowerCase() === "not_eligible" ||
+      (participant.qualificationStatus ?? "").toLowerCase() === "disqualified");
   const ac = isForfeited ? "#FF4444" : (participant.avatarColor ?? "#00E676");
   const nameColor = isForfeited ? "#FF4444" : isUser ? primary : foreground;
   const pct = targetSteps > 0 ? Math.min((participant.currentSteps / targetSteps) * 100, 100) : 0;
@@ -464,6 +473,16 @@ const LiveBoardRow = memo(function LiveBoardRow({
               ]}
             >
               <Text style={[styles.tagTxt, { color: "#FF4444" }]}>FORFEITED</Text>
+            </View>
+          )}
+          {showLostChip && (
+            <View
+              style={[
+                styles.tag,
+                { backgroundColor: "#FF4444", borderColor: "#FF4444" },
+              ]}
+            >
+              <Text style={[styles.tagTxt, { color: "#FFFFFF" }]}>Lost</Text>
             </View>
           )}
           {!isForfeited && participant.isTied && (

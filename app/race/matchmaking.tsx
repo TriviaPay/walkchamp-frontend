@@ -1805,14 +1805,54 @@ function MatchmakingScreenContent() {
           const { registerUnlimitedClassicProgressBlock } = require(
             "@/services/unlimitedRaceProgressGuard",
           ) as typeof import("@/services/unlimitedRaceProgressGuard");
+          const { resolveUnlimitedLiveDayContext } = require(
+            "@/utils/unlimitedLiveDayContext",
+          ) as typeof import("@/utils/unlimitedLiveDayContext");
+          const { formatChallengeDayKey } = require(
+            "@/utils/challengeDayKey",
+          ) as typeof import("@/utils/challengeDayKey");
+          const deviceTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          const me = participantsRef.current.find(
+            (p) => p.isCurrentUser || p.userId === user?.id,
+          );
+          const liveDay = resolveUnlimitedLiveDayContext({
+            participantChallengeDayKey:
+              (me as { challengeDayKey?: string } | undefined)?.challengeDayKey,
+            participantTimezone:
+              (me as { timezone?: string } | undefined)?.timezone,
+            raceChallengeTimezone: unlimitedChallengeTimezone ?? deviceTz,
+            deviceTimezone: deviceTz,
+            formattedDeviceDayKey:
+              formatChallengeDayKey(Date.now(), deviceTz) ?? undefined,
+          });
           registerUnlimitedClassicProgressBlock(backendRaceId, {
-            challengeDayKey: undefined,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            challengeDayKey: liveDay?.challengeDayKey,
+            timezone: liveDay?.timezone ?? deviceTz,
           });
           const { setWalkBackendSyncPaused } = require(
             "@/services/walkSyncCoordinator",
           ) as typeof import("@/services/walkSyncCoordinator");
           setWalkBackendSyncPaused(false);
+          // Boot the same live-race tray as classic so tracking feels continuous
+          // before Live Detail mounts (classic progress POSTs stay blocked).
+          if (user?.id) {
+            const { ensureActiveRaceInStore } = require(
+              "@/services/stepProgressCoordinator",
+            ) as typeof import("@/services/stepProgressCoordinator");
+            ensureActiveRaceInStore({
+              raceId: backendRaceId,
+              raceStartTime: new Date(
+                raceStartedAtRef.current ?? Date.now(),
+              ).toISOString(),
+              userId: user.id,
+              username: user.username ?? "Runner",
+              goalSteps: liveRoom?.targetSteps ?? 0,
+              totalParticipants: playerCount,
+              bootSteps: 0,
+              participantConfirmed: true,
+              unlimitedDailyMode: true,
+            });
+          }
         } catch {
           /* optional */
         }
@@ -1823,13 +1863,77 @@ function MatchmakingScreenContent() {
             emitChallengeStatusesRefresh("race_starting"),
           )
           .catch(() => {});
+        // Warm Live Detail cache so the next screen paints instantly (no skeleton).
+        if (user?.id) {
+          try {
+            const { screenCache } = require("@/utils/screenCache") as typeof import("@/utils/screenCache");
+            // Must match live-detail.tsx liveRaceDetailCacheKey.
+            const cacheKey = `live-race-detail:v1:${user.id}:${backendRaceId}`;
+            const roster = participantsRef.current.map((p, i) => ({
+              id: p.userId || `p-${i}`,
+              userId: p.userId,
+              currentSteps: 0,
+              status: "active",
+              rank: i + 1,
+              username: p.isCurrentUser ? "You" : p.username,
+              countryFlag: p.countryFlag ?? null,
+              avatarColor: p.avatarColor ?? "#00E676",
+              avatarUrl: p.avatarUrl ?? null,
+              isHost: !!p.isHost,
+            }));
+            void screenCache.set(cacheKey, {
+              race: {
+                id: backendRaceId,
+                title: isUnlimitedGoalRoom
+                  ? `Unlimited · ${(liveRoom?.targetSteps ?? 0).toLocaleString()} steps/day`
+                  : "Live Race",
+                status: "in_progress",
+                entryType: isUnlimitedGoalRoom
+                  ? UNLIMITED_GOAL_CHALLENGE_TYPE
+                  : liveRoom?.entryType ?? "free",
+                entryAmountCents: liveRoom?.entryAmountCents ?? 0,
+                entryAmountDollars: (liveRoom?.entryAmountCents ?? 0) / 100,
+                targetSteps: liveRoom?.targetSteps ?? 1000,
+                currentPlayers: Math.max(roster.length, playerCount, 1),
+                maxPlayers: isUnlimitedGoalRoom ? null : liveRoom?.maxPlayers ?? 10,
+                startedAt: new Date().toISOString(),
+                completedAt: null,
+                creatorId: user.id,
+                prizePool: 0,
+                prizeTiers: [],
+                spectatorCount: 0,
+                capacityMode: isUnlimitedGoalRoom ? "unlimited" : null,
+                challengeType: isUnlimitedGoalRoom
+                  ? UNLIMITED_GOAL_CHALLENGE_TYPE
+                  : liveRoom?.entryType ?? null,
+                trackLayout: trackLayoutId || "bg",
+                challengeDurationDays: isUnlimitedGoalRoom
+                  ? unlimitedDurationDays ?? 7
+                  : null,
+                challengeTimezone: unlimitedChallengeTimezone,
+              },
+              participants: roster,
+            });
+          } catch {
+            /* optional */
+          }
+        }
         router.replace({
           pathname: "/race/live-detail",
           params: {
             id: backendRaceId,
             ...(trackLayoutId ? { trackLayout: trackLayoutId } : null),
             ...(isUnlimitedGoalRoom
-              ? { challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE, capacityMode: "unlimited" }
+              ? {
+                  challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
+                  capacityMode: "unlimited",
+                  ...(liveRoom?.targetSteps
+                    ? { targetSteps: String(liveRoom.targetSteps) }
+                    : null),
+                  ...(unlimitedDurationDays
+                    ? { durationDays: String(unlimitedDurationDays) }
+                    : null),
+                }
               : null),
           },
         });
@@ -1846,6 +1950,14 @@ function MatchmakingScreenContent() {
       fetchRaceStartState,
       isUnlimitedGoalRoom,
       trackLayoutId,
+      unlimitedChallengeTimezone,
+      unlimitedDurationDays,
+      liveRoom?.targetSteps,
+      liveRoom?.entryType,
+      liveRoom?.entryAmountCents,
+      liveRoom?.maxPlayers,
+      user?.id,
+      user?.username,
     ],
   );
 
@@ -2698,12 +2810,59 @@ function MatchmakingScreenContent() {
         notifyRaceStarted(playerCount, raceStartedAtRef.current ?? undefined);
       }
     }
+    if (user?.id) {
+      try {
+        const { screenCache } = require("@/utils/screenCache") as typeof import("@/utils/screenCache");
+        const cacheKey = `live-race-detail:v1:${user.id}:${backendRaceId}`;
+        const roster = participantsRef.current.map((p, i) => ({
+          id: p.userId || `p-${i}`,
+          userId: p.userId,
+          currentSteps: 0,
+          status: "active",
+          rank: i + 1,
+          username: p.isCurrentUser ? "You" : p.username,
+          countryFlag: p.countryFlag ?? null,
+          avatarColor: p.avatarColor ?? "#00E676",
+          avatarUrl: p.avatarUrl ?? null,
+          isHost: !!p.isHost,
+        }));
+        void screenCache.set(cacheKey, {
+          race: {
+            id: backendRaceId,
+            title: `Unlimited · ${(liveRoom?.targetSteps ?? 0).toLocaleString()} steps/day`,
+            status: "in_progress",
+            entryType: UNLIMITED_GOAL_CHALLENGE_TYPE,
+            entryAmountCents: liveRoom?.entryAmountCents ?? 0,
+            entryAmountDollars: (liveRoom?.entryAmountCents ?? 0) / 100,
+            targetSteps: liveRoom?.targetSteps ?? 10000,
+            currentPlayers: Math.max(roster.length, playerCount, 1),
+            maxPlayers: null,
+            startedAt: new Date().toISOString(),
+            completedAt: null,
+            creatorId: user.id,
+            prizePool: 0,
+            prizeTiers: [],
+            spectatorCount: 0,
+            capacityMode: "unlimited",
+            challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
+            trackLayout: "bg",
+            challengeDurationDays: unlimitedDurationDays ?? 7,
+            challengeTimezone: unlimitedChallengeTimezone,
+          },
+          participants: roster,
+        });
+      } catch {
+        /* optional */
+      }
+    }
     router.replace({
       pathname: "/race/live-detail",
       params: {
         id: backendRaceId,
         challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
         capacityMode: "unlimited",
+        ...(liveRoom?.targetSteps ? { targetSteps: String(liveRoom.targetSteps) } : null),
+        ...(unlimitedDurationDays ? { durationDays: String(unlimitedDurationDays) } : null),
         ...(isUnlimitedRaceDummyDataEnabled() ? { dummyRace: "1" } : null),
       },
     });
@@ -2720,6 +2879,11 @@ function MatchmakingScreenContent() {
     startRaceManually,
     notifyRaceStarted,
     isUnlimitedGoalRoom,
+    user?.id,
+    liveRoom?.targetSteps,
+    liveRoom?.entryAmountCents,
+    unlimitedDurationDays,
+    unlimitedChallengeTimezone,
   ]);
 
   // ── Derived values ────────────────────────────────────────────────────────

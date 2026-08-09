@@ -1609,6 +1609,7 @@ export function ensureActiveRaceInStore(params: {
             store.getState().raceProgress.goalSteps ?? nextGoal ?? 0,
           timeLeftSeconds: store.getState().raceProgress.timeLeftSeconds ?? 0,
           isSponsored: resolvedSponsored,
+          ...(params.unlimitedDailyMode === true ? { unlimitedDailyMode: true } : {}),
           ...(challengeEndAtRestart != null
             ? { challengeEndAt: challengeEndAtRestart }
             : {}),
@@ -1680,6 +1681,7 @@ export function setActiveRaceProgress(params: {
     // (No-op for classic races — callers only pass Unlimited ids through the
     // Unlimited live-detail path.)
     if (params.unlimitedDailyMode === true) {
+      // Preserve any day/timezone context already registered (matchmaking / live-detail).
       registerUnlimitedClassicProgressBlock(params.raceId);
     }
   } catch {
@@ -1779,6 +1781,7 @@ export function setActiveRaceProgress(params: {
       goalSteps: resolvedGoal,
       timeLeftSeconds: 0,
       isSponsored: resolvedSponsored,
+      ...(params.unlimitedDailyMode === true ? { unlimitedDailyMode: true } : {}),
       ...(challengeEndAt != null ? { challengeEndAt } : {}),
     },
     params.raceStartTime,

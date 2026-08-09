@@ -25,6 +25,11 @@ export type RaceProgressNotificationPayload = {
   challengeEndAt?: string | number;
   /** Drives "Sponsored Event" vs "Live Race" notification title. */
   isSponsored?: boolean;
+  /**
+   * Unlimited Daily Goal — same race tray UI, but native FGS must not POST
+   * /api/races/:id/progress (uses walk steps + Unlimited live-progress instead).
+   */
+  unlimitedDailyMode?: boolean;
 };
 
 type NativeModule = {
@@ -109,6 +114,9 @@ async function toNativePayload(
   // Title type is explicit only — having an end window does not mean sponsored.
   if (payload.isSponsored === true) {
     out.isSponsored = true;
+  }
+  if (payload.unlimitedDailyMode === true) {
+    out.unlimitedDailyMode = true;
   }
   out.visualType = payload.isSponsored
     ? "sponsored_event"

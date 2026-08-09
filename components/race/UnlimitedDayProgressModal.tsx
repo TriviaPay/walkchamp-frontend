@@ -1,55 +1,107 @@
 /**
- * Daily Progress modal for Unlimited Daily Goal Challenges.
- *
- * When `historyRows` from GET .../daily-history are provided, each day shows
- * its verified step total. Otherwise falls back to aggregate schedule status
- * with live steps only on the in-progress day.
+ * Challenge Progress modal — Image 3 (Unlimited only).
+ * Opened from the progress card (i). Horizontal day cells; week sections for 30/60/90.
  */
 import React, { useMemo } from "react";
 import {
   FlatList,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { BlueShoe } from "@/components/BlueShoe";
 import type { UnlimitedViewerSchedule } from "@/utils/unlimitedViewerSchedule";
-import { formatDateKeyLabel } from "@/utils/unlimitedViewerSchedule";
 import {
   buildUnlimitedDayRows,
-  buildUnlimitedDaySummary,
   buildUnlimitedDayWeekSections,
   type UnlimitedDayRow,
   type UnlimitedDayStatus,
 } from "@/utils/unlimitedDayProgress";
-import { UnlimitedProgressSummary } from "@/components/race/UnlimitedProgressSummary";
-import { resolvePrizePoolEligibilityStatus, type UnlimitedChallengeResultStatus } from "@/utils/unlimitedResults";
+import { UNLIMITED_COPY } from "@/utils/unlimitedLiveUiCopy";
 
 export type { UnlimitedDayStatus, UnlimitedDayRow } from "@/utils/unlimitedDayProgress";
-
-const STATUS_META: Record<UnlimitedDayStatus, { label: string; color: string; icon: string }> = {
-  passed: { label: "Passed", color: "#00E676", icon: "check-circle" },
-  in_progress: { label: "LIVE", color: "#FF6B35", icon: "activity" },
-  upcoming: { label: "Upcoming", color: "#5A6A8A", icon: "circle" },
-  failed: { label: "Failed", color: "#FF4444", icon: "x-circle" },
-  validation_pending: { label: "Validating", color: "#FFAA00", icon: "clock" },
-};
 
 type Props = {
   visible: boolean;
   onClose: () => void;
   schedule: UnlimitedViewerSchedule | null;
   todaySteps: number;
-  /** Authoritative rows from daily-history when loaded. */
   historyRows?: UnlimitedDayRow[] | null;
-  /** Backend participant.qualificationStatus — drives the summary's eligibility line. */
-  qualificationStatus?: string | null;
-  prizePoolEligibilityStatus?: string | null;
-  /** Global result status (defaults to "challenge_in_progress" while the modal is opened from Live Race). */
-  resultStatus?: UnlimitedChallengeResultStatus;
 };
+
+function DayCell({
+  row,
+  todaySteps,
+  isCurrent,
+}: {
+  row: UnlimitedDayRow;
+  todaySteps: number;
+  isCurrent: boolean;
+}) {
+  const steps =
+    typeof row.verifiedSteps === "number"
+      ? row.verifiedSteps
+      : isCurrent
+        ? todaySteps
+        : null;
+  const failed = row.status === "failed";
+  const passed = row.status === "passed";
+  const upcoming = row.status === "upcoming";
+  const validating = row.status === "validation_pending";
+  const inProgress = row.status === "in_progress" || isCurrent;
+
+  const borderColor = failed
+    ? "#FF4444"
+    : inProgress || passed
+      ? "#00E676"
+      : "#3A4258";
+  const iconColor = failed ? "#FF4444" : passed || inProgress ? "#00E676" : "#6B7A99";
+
+  return (
+    <View
+      style={[
+        styles.dayCell,
+        { borderColor },
+        inProgress && styles.dayCellCurrent,
+        failed && styles.dayCellFailed,
+      ]}
+    >
+      <Text style={styles.dayCellLabel}>Day {row.dayNumber}</Text>
+      <View
+        style={[
+          styles.dayIconCircle,
+          failed && { backgroundColor: "#FF4444" },
+          passed && { backgroundColor: "#00E676" },
+          (upcoming || validating) && styles.dayIconDashed,
+          inProgress && !passed && !failed && { borderColor: "#00E676", borderWidth: 2 },
+        ]}
+      >
+        {passed ? (
+          <Feather name="check" size={14} color="#0B0F1A" />
+        ) : failed ? (
+          <Feather name="x" size={14} color="#fff" />
+        ) : inProgress ? (
+          <Feather name="loader" size={12} color={iconColor} />
+        ) : (
+          <View style={styles.dayIconDot} />
+        )}
+      </View>
+      {steps != null && !upcoming ? (
+        <Text style={[styles.daySteps, failed && { color: "#FF6B6B" }]}>
+          {steps.toLocaleString()}
+        </Text>
+      ) : (
+        <Text style={[styles.dayStepsMuted, failed && { color: "#FF6B6B" }]}>
+          {failed ? "Missed" : validating ? "Pending" : "Upcoming"}
+        </Text>
+      )}
+    </View>
+  );
+}
 
 export function UnlimitedDayProgressModal({
   visible,
@@ -57,97 +109,103 @@ export function UnlimitedDayProgressModal({
   schedule,
   todaySteps,
   historyRows,
-  qualificationStatus,
-  prizePoolEligibilityStatus,
-  resultStatus = "challenge_in_progress",
 }: Props) {
   const rows = useMemo(() => {
     if (historyRows && historyRows.length > 0) return historyRows;
     return schedule ? buildUnlimitedDayRows(schedule, todaySteps) : [];
   }, [historyRows, schedule, todaySteps]);
   const sections = useMemo(() => buildUnlimitedDayWeekSections(rows), [rows]);
-  const flatRows = useMemo(
-    () =>
-      sections.flatMap((section) =>
-        section.title ? [{ kind: "header" as const, title: section.title }, ...section.data.map((d) => ({ kind: "day" as const, row: d }))] : section.data.map((d) => ({ kind: "day" as const, row: d })),
-      ),
-    [sections],
-  );
-  const summary = useMemo(() => buildUnlimitedDaySummary(rows), [rows]);
-  const eligibility = resolvePrizePoolEligibilityStatus({
-    resultStatus,
-    qualificationStatus,
-    prizePoolEligibilityStatus,
-  });
-  const disqualified = schedule?.viewerStatus === "failed";
+  const daysLeft = schedule?.remainingDaysAfterToday ?? 0;
+  const goal = schedule?.dailyGoalSteps ?? rows[0]?.dailyGoalSteps ?? 0;
+  const pct = goal > 0 ? Math.min(1, todaySteps / goal) : 0;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={styles.card}>
-          <View style={styles.header}>
-            <Text style={styles.title}>Challenge Progress</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Feather name="x" size={20} color="#8B9AC0" />
-            </TouchableOpacity>
-          </View>
+        <View style={styles.sheet}>
+          <TouchableOpacity
+            style={styles.closeBtn}
+            onPress={onClose}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityLabel="Close"
+          >
+            <Feather name="x" size={20} color="#E2E8F8" />
+          </TouchableOpacity>
 
-          <Text style={styles.note}>
-            {disqualified
-              ? "Daily goal missed — you are no longer qualified."
-              : "Complete your daily step goal every day to qualify."}
-          </Text>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.scrollContent}
+          >
+            <View style={styles.heroIcon}>
+              <View style={styles.heroRing}>
+                <BlueShoe size={36} />
+              </View>
+            </View>
+            <Text style={styles.brand}>
+              {UNLIMITED_COPY.modalBrand}{" "}
+              <Text style={styles.infinity}>∞</Text>
+            </Text>
+            {schedule ? (
+              <Text style={styles.dayOf}>
+                Day {schedule.currentDayIndex} of {schedule.durationDays}
+              </Text>
+            ) : null}
 
-          {schedule || rows.length > 0 ? (
-            <UnlimitedProgressSummary summary={summary} eligibility={eligibility} />
-          ) : null}
+            <View style={styles.todayCard}>
+              <Text style={styles.todayLabel}>{UNLIMITED_COPY.todayGoal}</Text>
+              <Text style={styles.todayValue}>
+                <Text style={styles.todaySteps}>{todaySteps.toLocaleString()}</Text>
+                <Text style={styles.todayGoal}> / {goal.toLocaleString()}</Text>
+              </Text>
+              <View style={styles.barBg}>
+                <View style={[styles.barFill, { width: `${Math.round(pct * 100)}%` as `${number}%` }]} />
+              </View>
+              <View style={styles.remainRow}>
+                <Feather name="clock" size={12} color="#8B9AC0" />
+                <Text style={styles.remainText}>
+                  {daysLeft} {daysLeft === 1 ? "day" : "days"} remaining
+                </Text>
+              </View>
+            </View>
 
-          <FlatList
-            data={flatRows}
-            keyExtractor={(item, index) =>
-              item.kind === "header" ? `h:${item.title}` : `d:${item.row.dayNumber}:${index}`
-            }
-            style={{ maxHeight: 340 }}
-            initialNumToRender={16}
-            windowSize={7}
-            removeClippedSubviews
-            renderItem={({ item }) => {
-              if (item.kind === "header") {
-                return <Text style={styles.weekHeader}>{item.title}</Text>;
-              }
-              const row = item.row;
-              const meta = STATUS_META[row.status];
-              const isCurrent = schedule && row.dayNumber === schedule.currentDayIndex;
-              const steps =
-                typeof row.verifiedSteps === "number"
-                  ? row.verifiedSteps
-                  : isCurrent
-                    ? todaySteps
-                    : null;
-              return (
-                <View style={styles.dayRow}>
-                  <View style={styles.dayNumberWrap}>
-                    <Text style={styles.dayNumber}>Day {row.dayNumber}</Text>
-                    <Text style={styles.dayDate}>{formatDateKeyLabel(row.localDate)}</Text>
-                  </View>
-                  <View style={[styles.stateBadge, { borderColor: meta.color }]}>
-                    <Feather name={meta.icon as never} size={11} color={meta.color} />
-                    <Text style={[styles.stateText, { color: meta.color }]}>{meta.label}</Text>
-                  </View>
-                  {steps != null ? (
-                    <Text style={styles.stepsText}>
-                      {steps.toLocaleString()} / {row.dailyGoalSteps.toLocaleString()}
-                    </Text>
-                  ) : (
-                    <View style={{ flex: 1 }} />
+            {sections.map((section, sIdx) => (
+              <View key={section.title ?? `s-${sIdx}`} style={styles.section}>
+                {section.title ? <Text style={styles.weekHeader}>{section.title}</Text> : null}
+                <FlatList
+                  horizontal
+                  data={section.data}
+                  keyExtractor={(item) => `d-${item.dayNumber}`}
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.dayRow}
+                  initialNumToRender={10}
+                  windowSize={5}
+                  renderItem={({ item }) => (
+                    <DayCell
+                      row={item}
+                      todaySteps={todaySteps}
+                      isCurrent={!!schedule && item.dayNumber === schedule.currentDayIndex}
+                    />
                   )}
-                </View>
-              );
-            }}
-          />
+                />
+              </View>
+            ))}
 
-          <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
-            <Text style={styles.closeBtnText}>Close</Text>
+            <View style={styles.warnBox}>
+              <Feather name="alert-triangle" size={16} color="#FF6B6B" />
+              <Text style={styles.warnText}>{UNLIMITED_COPY.modalWarning}</Text>
+            </View>
+            <View style={styles.infoBox}>
+              <Feather name="award" size={16} color="#5B9CFF" />
+              <Text style={styles.infoText}>
+                {UNLIMITED_COPY.modalInfoPrefix}
+                <Text style={styles.infoHighlight}>{UNLIMITED_COPY.modalInfoHighlight}</Text>
+                .
+              </Text>
+            </View>
+          </ScrollView>
+
+          <TouchableOpacity style={styles.cta} onPress={onClose} activeOpacity={0.85}>
+            <Text style={styles.ctaText}>{UNLIMITED_COPY.modalCta}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -161,58 +219,150 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.78)",
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
   },
-  card: {
+  sheet: {
     width: "100%",
     maxWidth: 420,
-    backgroundColor: "#0F1117",
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: "rgba(124,58,255,0.35)",
-    padding: 20,
+    maxHeight: "90%",
+    backgroundColor: "#12151F",
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: "rgba(0,230,118,0.2)",
+    paddingTop: 16,
+    paddingBottom: 14,
+    paddingHorizontal: 16,
   },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
-  title: { fontSize: 17, fontWeight: "800", color: "#fff" },
-  note: { fontSize: 12, color: "#8B9AC0", marginBottom: 12, lineHeight: 17 },
+  closeBtn: { position: "absolute", top: 14, right: 14, zIndex: 2, padding: 4 },
+  scrollContent: { paddingTop: 8, paddingBottom: 8, gap: 12 },
+  heroIcon: { alignItems: "center", marginTop: 4 },
+  heroRing: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 3,
+    borderColor: "#00E676",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,230,118,0.08)",
+  },
+  brand: {
+    textAlign: "center",
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#FFFFFF",
+    marginTop: 8,
+  },
+  infinity: { color: "#A78BFA", fontWeight: "900" },
+  dayOf: {
+    textAlign: "center",
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#00E676",
+    marginTop: 2,
+  },
+  todayCard: {
+    backgroundColor: "#0B0E16",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
+    padding: 14,
+    gap: 8,
+  },
+  todayLabel: { fontSize: 12, color: "#8B9AC0", fontWeight: "600" },
+  todayValue: {},
+  todaySteps: { fontSize: 28, fontWeight: "800", color: "#00E676" },
+  todayGoal: { fontSize: 20, fontWeight: "700", color: "#FFFFFF" },
+  barBg: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#1E2436",
+    overflow: "hidden",
+  },
+  barFill: { height: "100%", backgroundColor: "#00E676", borderRadius: 999 },
+  remainRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  remainText: { fontSize: 12, color: "#8B9AC0", fontWeight: "600" },
+  section: { gap: 6 },
   weekHeader: {
-    fontSize: 11.5,
+    fontSize: 11,
     fontWeight: "800",
     color: "#C4B5FD",
-    paddingVertical: 8,
     textTransform: "uppercase",
     letterSpacing: 0.3,
   },
-  dayRow: {
-    flexDirection: "row",
+  dayRow: { gap: 8, paddingVertical: 2 },
+  dayCell: {
+    width: 72,
+    minHeight: 96,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    backgroundColor: "#0B0E16",
     alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    gap: 6,
+  },
+  dayCellCurrent: {
+    borderWidth: 2,
+    shadowColor: "#00E676",
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  dayCellFailed: { backgroundColor: "rgba(255,68,68,0.08)" },
+  dayCellLabel: { fontSize: 11, fontWeight: "700", color: "#C7CDDA" },
+  dayIconCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "transparent",
+  },
+  dayIconDashed: {
+    borderWidth: 1.5,
+    borderColor: "#5A6A8A",
+    borderStyle: "dashed",
+  },
+  dayIconDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#5A6A8A",
+  },
+  daySteps: { fontSize: 12, fontWeight: "800", color: "#00E676" },
+  dayStepsMuted: { fontSize: 11, fontWeight: "700", color: "#6B7A99" },
+  warnBox: {
+    flexDirection: "row",
     gap: 10,
-    minHeight: 44,
-    paddingVertical: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.06)",
-  },
-  dayNumberWrap: { width: 74 },
-  dayNumber: { fontSize: 13, fontWeight: "700", color: "#E2E8F8" },
-  dayDate: { fontSize: 10.5, color: "#5A6A8A", marginTop: 1 },
-  stateBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
+    alignItems: "flex-start",
+    backgroundColor: "rgba(255,68,68,0.12)",
     borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  stateText: { fontSize: 10.5, fontWeight: "800" },
-  stepsText: { flex: 1, textAlign: "right", fontSize: 12, fontWeight: "700", color: "#C7CDDA" },
-  closeBtn: {
-    marginTop: 14,
-    height: 44,
+    borderColor: "rgba(255,68,68,0.45)",
     borderRadius: 12,
-    backgroundColor: "#1A1D2E",
+    padding: 12,
+  },
+  warnText: { flex: 1, fontSize: 13, fontWeight: "600", color: "#FFB4B4", lineHeight: 18 },
+  infoBox: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-start",
+    backgroundColor: "rgba(59,130,246,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(91,156,255,0.45)",
+    borderRadius: 12,
+    padding: 12,
+  },
+  infoText: { flex: 1, fontSize: 13, fontWeight: "600", color: "#B7D0FF", lineHeight: 18 },
+  infoHighlight: { color: "#7EB6FF", fontWeight: "800" },
+  cta: {
+    marginTop: 10,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: "#00E676",
     alignItems: "center",
     justifyContent: "center",
   },
-  closeBtnText: { color: "#E2E8F8", fontWeight: "800", fontSize: 14 },
+  ctaText: { fontSize: 16, fontWeight: "900", color: "#0B0F1A" },
 });
