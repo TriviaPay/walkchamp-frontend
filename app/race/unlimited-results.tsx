@@ -27,6 +27,7 @@ import { useAuth } from "@/context/AuthContext";
 import {
   fetchUnlimitedResultsData,
   fetchUnlimitedOwnPrizeShareCents,
+  fetchUnlimitedDailyHistory,
   type UnlimitedResultsData,
 } from "@/services/unlimitedResultsApi";
 import {
@@ -38,6 +39,8 @@ import {
   buildUnlimitedDayRows,
   buildUnlimitedDaySummary,
   buildUnlimitedDayWeekSections,
+  dayRowsFromDailyHistory,
+  type UnlimitedDayRow,
 } from "@/utils/unlimitedDayProgress";
 import {
   resolveUnlimitedResultStatus,
@@ -61,6 +64,7 @@ export default function UnlimitedResultsScreen() {
   const { safeTop, safeBottom } = useSafeLayout();
 
   const [data, setData] = useState<UnlimitedResultsData | null>(null);
+  const [historyRows, setHistoryRows] = useState<UnlimitedDayRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [ownPrizeShareCents, setOwnPrizeShareCents] = useState<number | null>(null);
@@ -71,13 +75,20 @@ export default function UnlimitedResultsScreen() {
     async (opts?: { silent?: boolean }) => {
       if (!challengeId) return;
       if (!opts?.silent) setLoading((prev) => (data ? prev : true));
-      const result = await fetchUnlimitedResultsData(challengeId);
+      const [result, history] = await Promise.all([
+        fetchUnlimitedResultsData(challengeId),
+        fetchUnlimitedDailyHistory(challengeId, user?.id),
+      ]);
       if (result) setData(result);
+      const mappedHistory = dayRowsFromDailyHistory(history, {
+        todaySteps: result?.participants.find((p) => p.userId === user?.id)?.currentSteps,
+      });
+      if (mappedHistory) setHistoryRows(mappedHistory);
       setLoading(false);
       setRefreshing(false);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [challengeId],
+    [challengeId, user?.id],
   );
 
   useEffect(() => {
@@ -94,10 +105,12 @@ export default function UnlimitedResultsScreen() {
     channel?.bind("challenge_completed", onRealtimeRefresh);
     channel?.bind("challenge_cancelled", onRealtimeRefresh);
     channel?.bind("progress_updated", onRealtimeRefresh);
+    channel?.bind("results_status_changed", onRealtimeRefresh);
     return () => {
       channel?.unbind("challenge_completed", onRealtimeRefresh);
       channel?.unbind("challenge_cancelled", onRealtimeRefresh);
       channel?.unbind("progress_updated", onRealtimeRefresh);
+      channel?.unbind("results_status_changed", onRealtimeRefresh);
       unsubscribeFromChannel(channelName);
     };
   }, [challengeId, load]);
@@ -150,6 +163,7 @@ export default function UnlimitedResultsScreen() {
       schedule?.viewerStatus === "failed" ||
       schedule?.viewerStatus === "left";
     return resolveUnlimitedResultStatus({
+      resultsStatus: data.race.resultsStatus,
       challengeStatus: data.race.rawStatus ?? data.race.status,
       settlementStatus: data.race.settlementStatus,
       viewerPersonallyFinished: personallyFinished,
@@ -162,14 +176,16 @@ export default function UnlimitedResultsScreen() {
       resolvePrizePoolEligibilityStatus({
         resultStatus,
         qualificationStatus: currentParticipant?.qualificationStatus,
+        prizePoolEligibilityStatus:
+          currentParticipant?.prizePoolEligibilityStatus ?? data?.race.prizePoolEligibilityStatus,
       }),
-    [resultStatus, currentParticipant],
+    [resultStatus, currentParticipant, data?.race.prizePoolEligibilityStatus],
   );
 
-  const dayRows = useMemo(
-    () => (schedule ? buildUnlimitedDayRows(schedule, currentParticipant?.currentSteps ?? 0) : []),
-    [schedule, currentParticipant],
-  );
+  const dayRows = useMemo(() => {
+    if (historyRows && historyRows.length > 0) return historyRows;
+    return schedule ? buildUnlimitedDayRows(schedule, currentParticipant?.currentSteps ?? 0) : [];
+  }, [historyRows, schedule, currentParticipant]);
   const daySummary = useMemo(() => buildUnlimitedDaySummary(dayRows), [dayRows]);
   const weekSections = useMemo(() => buildUnlimitedDayWeekSections(dayRows), [dayRows]);
 
@@ -192,7 +208,11 @@ export default function UnlimitedResultsScreen() {
     [data, resultStatus],
   );
 
-  const copy = resultsScreenCopy(resultStatus);
+  const copy = resultsScreenCopy(resultStatus, {
+    registeredParticipantCount: data?.race.registeredParticipantCount,
+    participantsFinishedCount: data?.race.participantsFinishedCount,
+    participantsPendingCount: data?.race.participantsPendingCount,
+  });
   const durationDays = data?.race.challengeDurationDays ?? schedule?.durationDays ?? 0;
 
   if (loading && !data) {

@@ -1,19 +1,9 @@
 /**
  * Daily Progress modal for Unlimited Daily Goal Challenges.
  *
- * Per-day historical step totals (e.g. "Day 1 ✓ 10,231") are NOT currently
- * exposed by any frontend-reachable endpoint — GET /unlimited-challenges/:id
- * and .../leaderboard only return an aggregate `completedDays` count plus the
- * viewer's CURRENT day row (see Backend/src/lib/unlimitedLiveProgress.ts).
- * This view therefore renders per-day STATUS (passed / in_progress / upcoming /
- * failed / validation_pending) from those backend-authoritative aggregates,
- * and shows the live step count only for the in-progress day. A future backend
- * endpoint returning full per-day history would let each passed row show its
- * exact step total — see the "Backend follow-up" note in the implementation
- * report.
- *
- * For 30/60/90-day challenges the day list is virtualized via FlatList and
- * grouped into "Week N" sections (see buildUnlimitedDayWeekSections).
+ * When `historyRows` from GET .../daily-history are provided, each day shows
+ * its verified step total. Otherwise falls back to aggregate schedule status
+ * with live steps only on the in-progress day.
  */
 import React, { useMemo } from "react";
 import {
@@ -52,8 +42,11 @@ type Props = {
   onClose: () => void;
   schedule: UnlimitedViewerSchedule | null;
   todaySteps: number;
+  /** Authoritative rows from daily-history when loaded. */
+  historyRows?: UnlimitedDayRow[] | null;
   /** Backend participant.qualificationStatus — drives the summary's eligibility line. */
   qualificationStatus?: string | null;
+  prizePoolEligibilityStatus?: string | null;
   /** Global result status (defaults to "challenge_in_progress" while the modal is opened from Live Race). */
   resultStatus?: UnlimitedChallengeResultStatus;
 };
@@ -63,13 +56,15 @@ export function UnlimitedDayProgressModal({
   onClose,
   schedule,
   todaySteps,
+  historyRows,
   qualificationStatus,
+  prizePoolEligibilityStatus,
   resultStatus = "challenge_in_progress",
 }: Props) {
-  const rows = useMemo(
-    () => (schedule ? buildUnlimitedDayRows(schedule, todaySteps) : []),
-    [schedule, todaySteps],
-  );
+  const rows = useMemo(() => {
+    if (historyRows && historyRows.length > 0) return historyRows;
+    return schedule ? buildUnlimitedDayRows(schedule, todaySteps) : [];
+  }, [historyRows, schedule, todaySteps]);
   const sections = useMemo(() => buildUnlimitedDayWeekSections(rows), [rows]);
   const flatRows = useMemo(
     () =>
@@ -79,7 +74,11 @@ export function UnlimitedDayProgressModal({
     [sections],
   );
   const summary = useMemo(() => buildUnlimitedDaySummary(rows), [rows]);
-  const eligibility = resolvePrizePoolEligibilityStatus({ resultStatus, qualificationStatus });
+  const eligibility = resolvePrizePoolEligibilityStatus({
+    resultStatus,
+    qualificationStatus,
+    prizePoolEligibilityStatus,
+  });
   const disqualified = schedule?.viewerStatus === "failed";
 
   return (
@@ -99,7 +98,9 @@ export function UnlimitedDayProgressModal({
               : "Complete your daily step goal every day to qualify."}
           </Text>
 
-          {schedule ? <UnlimitedProgressSummary summary={summary} eligibility={eligibility} /> : null}
+          {schedule || rows.length > 0 ? (
+            <UnlimitedProgressSummary summary={summary} eligibility={eligibility} />
+          ) : null}
 
           <FlatList
             data={flatRows}
@@ -117,6 +118,12 @@ export function UnlimitedDayProgressModal({
               const row = item.row;
               const meta = STATUS_META[row.status];
               const isCurrent = schedule && row.dayNumber === schedule.currentDayIndex;
+              const steps =
+                typeof row.verifiedSteps === "number"
+                  ? row.verifiedSteps
+                  : isCurrent
+                    ? todaySteps
+                    : null;
               return (
                 <View style={styles.dayRow}>
                   <View style={styles.dayNumberWrap}>
@@ -127,9 +134,9 @@ export function UnlimitedDayProgressModal({
                     <Feather name={meta.icon as never} size={11} color={meta.color} />
                     <Text style={[styles.stateText, { color: meta.color }]}>{meta.label}</Text>
                   </View>
-                  {isCurrent && schedule ? (
+                  {steps != null ? (
                     <Text style={styles.stepsText}>
-                      {todaySteps.toLocaleString()} / {schedule.dailyGoalSteps.toLocaleString()}
+                      {steps.toLocaleString()} / {row.dailyGoalSteps.toLocaleString()}
                     </Text>
                   ) : (
                     <View style={{ flex: 1 }} />
@@ -193,18 +200,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 4,
     borderWidth: 1,
-    borderRadius: 999,
+    borderRadius: 10,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
-  stateText: { fontSize: 10, fontWeight: "700" },
-  stepsText: { fontSize: 12, color: "#8B9AC0", flex: 1, textAlign: "right" },
+  stateText: { fontSize: 10.5, fontWeight: "800" },
+  stepsText: { flex: 1, textAlign: "right", fontSize: 12, fontWeight: "700", color: "#C7CDDA" },
   closeBtn: {
     marginTop: 14,
-    backgroundColor: "rgba(124,58,255,0.18)",
+    height: 44,
     borderRadius: 12,
-    paddingVertical: 12,
+    backgroundColor: "#1A1D2E",
     alignItems: "center",
+    justifyContent: "center",
   },
-  closeBtnText: { color: "#C4B5FD", fontWeight: "700", fontSize: 14 },
+  closeBtnText: { color: "#E2E8F8", fontWeight: "800", fontSize: 14 },
 });

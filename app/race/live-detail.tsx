@@ -68,6 +68,11 @@ import {
   resolveUnlimitedResultStatus,
   resolvePrizePoolEligibilityStatus,
 } from "@/utils/unlimitedResults";
+import { fetchUnlimitedDailyHistory } from "@/services/unlimitedResultsApi";
+import {
+  dayRowsFromDailyHistory,
+  type UnlimitedDayRow,
+} from "@/utils/unlimitedDayProgress";
 import {
   pickUnlimitedRealtimeDisplaySteps,
   resolveUnlimitedDisplayedLiveSteps,
@@ -256,6 +261,11 @@ interface RaceData {
    * into in_progress/completed like `status` above); see utils/unlimitedResults.ts. */
   rawStatus?: string | null;
   settlementStatus?: string | null;
+  resultsStatus?: string | null;
+  registeredParticipantCount?: number | null;
+  participantsFinishedCount?: number | null;
+  participantsPendingCount?: number | null;
+  prizePoolEligibilityStatus?: string | null;
   qualifiedParticipantCount?: number | null;
 }
 
@@ -288,6 +298,9 @@ interface RaceParticipant {
   qualificationStatus?: string | null;
   dailyGoalSteps?: number | null;
   completedDays?: number | null;
+  prizePoolEligibilityStatus?: string | null;
+  raceStartBaselineSteps?: number | null;
+  challengeDaySteps?: number | null;
 }
 
 interface LiveRaceDetailCache {
@@ -2371,6 +2384,7 @@ function LiveRaceDetailScreenContent() {
   const [isLeaderboardVisible, setIsLeaderboardVisible] = useState(true);
   const [showReactionPicker,   setShowReactionPicker]   = useState(false);
   const [showUnlimitedDayProgress, setShowUnlimitedDayProgress] = useState(false);
+  const [unlimitedHistoryRows, setUnlimitedHistoryRows] = useState<UnlimitedDayRow[] | null>(null);
   const [trackLayoutId, setTrackLayoutId] = useState<TrackLayoutId>(() => {
     if (isTrackLayoutId(initialTrackLayout)) {
       return initialTrackLayout;
@@ -3205,6 +3219,30 @@ function LiveRaceDetailScreenContent() {
     router.push({ pathname: "/race/unlimited-results", params: { challengeId: raceId } } as never);
   }, [race, currentParticipant, raceId]);
 
+  // Load verified per-day history when the progress modal opens (or once while Unlimited is live).
+  useEffect(() => {
+    if (!isUnlimitedHeader || !raceId || !showUnlimitedDayProgress) return;
+    let cancelled = false;
+    void fetchUnlimitedDailyHistory(raceId, currentUserId).then((payload) => {
+      if (cancelled) return;
+      const rows = dayRowsFromDailyHistory(payload, {
+        schedule: unlimitedTaglineSchedule ?? null,
+        todaySteps: unlimitedDailySteps,
+      });
+      if (rows) setUnlimitedHistoryRows(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isUnlimitedHeader,
+    raceId,
+    showUnlimitedDayProgress,
+    currentUserId,
+    unlimitedTaglineSchedule,
+    unlimitedDailySteps,
+  ]);
+
   const winners = useMemo(() => {
     const nonForfeited = participants.filter((p) => p.status !== "forfeited");
     if (!nonForfeited.length) return [];
@@ -4032,25 +4070,29 @@ function LiveRaceDetailScreenContent() {
         setLoading(false);
       }
 
-      // Comments/reactions are race-only for now; skip 404 noise for unlimited IDs.
-      if (!preferUnlimitedDetail && !isUnlimitedGoalChallenge(racePayload?.race ?? null)) {
-        void Promise.all([
-          authFetch(`/api/races/${raceId}/comments`),
-          authFetch(`/api/races/${raceId}/reactions`),
-        ]).then(async ([commentsRes, reactionsRes]) => {
-          if (commentsRes.ok) {
-            const body = await commentsRes.json() as { comments?: RaceCommentPayload[] };
-            const normalized = Array.isArray(body.comments)
-              ? body.comments.map(normalizeIncomingComment).filter((c): c is RaceComment => c !== null)
-              : [];
-            setComments(dedupeComments(normalized));
-          }
-          if (reactionsRes.ok) {
-            const body = await reactionsRes.json() as { reactions?: ReactionCount[] };
-            setReactionCounts(Array.isArray(body.reactions) ? body.reactions : []);
-          }
-        }).catch(() => {});
-      }
+      // Unlimited chat uses dedicated endpoints (classic /races/:id/comments 403s —
+      // membership is checked against race_participants, not unlimited participants).
+      const chatIsUnlimited =
+        preferUnlimitedDetail || isUnlimitedGoalChallenge(racePayload?.race ?? null);
+      const chatBase = chatIsUnlimited
+        ? `/api/unlimited-challenges/${raceId}`
+        : `/api/races/${raceId}`;
+      void Promise.all([
+        authFetch(`${chatBase}/comments`),
+        authFetch(`${chatBase}/reactions`),
+      ]).then(async ([commentsRes, reactionsRes]) => {
+        if (commentsRes.ok) {
+          const body = await commentsRes.json() as { comments?: RaceCommentPayload[] };
+          const normalized = Array.isArray(body.comments)
+            ? body.comments.map(normalizeIncomingComment).filter((c): c is RaceComment => c !== null)
+            : [];
+          setComments(dedupeComments(normalized));
+        }
+        if (reactionsRes.ok) {
+          const body = await reactionsRes.json() as { reactions?: ReactionCount[] };
+          setReactionCounts(Array.isArray(body.reactions) ? body.reactions : []);
+        }
+      }).catch(() => {});
     } finally {
       fetchInFlightRef.current = false;
     }
@@ -4772,20 +4814,6 @@ function LiveRaceDetailScreenContent() {
     setComments((prev) => [...prev, optimistic].slice(-60));
     setTimeout(() => cheerScrollRef.current?.scrollToEnd({ animated: true }), 50);
 
-    // Unlimited (Daily Goal) challenges: /api/races/:id/comments only recognizes
-    // classic race-room participants, so this always 403s for an Unlimited
-    // challenge id and every message showed as "failed". Backend support for
-    // Unlimited chat doesn't exist yet — echo locally (session-only, not
-    // broadcast to other participants) instead of a perpetual failure state.
-    if (isUnlimitedHeader) {
-      setComments((prev) =>
-        prev.map((c) =>
-          c.clientMessageId === clientMsgId ? { ...c, status: "sent", isOptimistic: false } : c,
-        ),
-      );
-      return true;
-    }
-
     // Dummy / offline preview — keep local message, no backend.
     if (useDummyRace) {
       setComments((prev) =>
@@ -4815,10 +4843,17 @@ function LiveRaceDetailScreenContent() {
         );
       };
       try {
-        // Match live-track payload (`text`); clientMessageId is client-only for dedupe.
-        const res = await authFetch(`/api/races/${raceId}/comments`, {
+        const chatBase = isUnlimitedHeader
+          ? `/api/unlimited-challenges/${raceId}`
+          : `/api/races/${raceId}`;
+        // Unlimited accepts clientMessageId for dedupe; classic races ignore extras.
+        const res = await authFetch(`${chatBase}/comments`, {
           method: "POST",
-          body: JSON.stringify({ text: trimmed }),
+          body: JSON.stringify(
+            isUnlimitedHeader
+              ? { text: trimmed, clientMessageId: clientMsgId }
+              : { text: trimmed },
+          ),
         });
         if (res.ok) {
           const body = await res.json().catch(() => null) as {
@@ -4851,7 +4886,7 @@ function LiveRaceDetailScreenContent() {
           if (__DEV__) {
             const errBody = await res.text().catch(() => "");
             console.warn(
-              `[LiveChat] POST /api/races/${raceId}/comments → ${res.status}`,
+              `[LiveChat] POST ${chatBase}/comments → ${res.status}`,
               errBody.slice(0, 200),
             );
           }
@@ -4882,11 +4917,11 @@ function LiveRaceDetailScreenContent() {
       if (existing) return prev.map((c) => c.emoji === emoji ? { ...c, count: c.count + 1 } : c);
       return [...prev, { emoji, count: 1 }];
     });
-    // Same backend gap as comments — /api/races/:id/reactions only recognizes
-    // classic race-room participants, so skip the always-403 call for Unlimited.
-    if (isUnlimitedHeader) return;
     try {
-      const res = await authFetch(`/api/races/${raceId}/reactions`, {
+      const chatBase = isUnlimitedHeader
+        ? `/api/unlimited-challenges/${raceId}`
+        : `/api/races/${raceId}`;
+      const res = await authFetch(`${chatBase}/reactions`, {
         method: "POST",
         body: JSON.stringify({ emoji }),
       });
@@ -4894,6 +4929,14 @@ function LiveRaceDetailScreenContent() {
         const body = await res.json().catch(() => null) as { counts?: ReactionCount[] } | null;
         // Replace with authoritative server counts
         if (Array.isArray(body?.counts)) setReactionCounts(body!.counts!);
+      } else if (res.status === 403) {
+        // Unlimited reactions require membership (stricter than classic race endpoint).
+        setReactionCounts((prev) => {
+          const existing = prev.find((c) => c.emoji === emoji);
+          if (!existing) return prev;
+          if (existing.count <= 1) return prev.filter((c) => c.emoji !== emoji);
+          return prev.map((c) => (c.emoji === emoji ? { ...c, count: c.count - 1 } : c));
+        });
       }
     } catch { /* silent — optimistic update stays */ }
   }, [raceId, isActive, isUnlimitedHeader]);
@@ -4974,6 +5017,7 @@ function LiveRaceDetailScreenContent() {
 
   const unlimitedResultStatus = isUnlimitedLive
     ? resolveUnlimitedResultStatus({
+        resultsStatus: race.resultsStatus,
         challengeStatus: race.rawStatus ?? race.status,
         settlementStatus: race.settlementStatus,
         viewerPersonallyFinished:
@@ -4986,6 +5030,8 @@ function LiveRaceDetailScreenContent() {
     ? resolvePrizePoolEligibilityStatus({
         resultStatus: unlimitedResultStatus,
         qualificationStatus: currentParticipant?.qualificationStatus,
+        prizePoolEligibilityStatus:
+          currentParticipant?.prizePoolEligibilityStatus ?? race.prizePoolEligibilityStatus,
       })
     : "pending";
   const goToUnlimitedResults = () => {
@@ -5373,7 +5419,11 @@ function LiveRaceDetailScreenContent() {
           onClose={() => setShowUnlimitedDayProgress(false)}
           schedule={unlimitedViewerSchedule}
           todaySteps={unlimitedDailySteps}
+          historyRows={unlimitedHistoryRows}
           qualificationStatus={currentParticipant?.qualificationStatus}
+          prizePoolEligibilityStatus={
+            currentParticipant?.prizePoolEligibilityStatus ?? race.prizePoolEligibilityStatus
+          }
           resultStatus={unlimitedResultStatus}
         />
       ) : null}

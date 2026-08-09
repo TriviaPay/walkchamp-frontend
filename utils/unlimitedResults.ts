@@ -9,16 +9,9 @@
  * non-`left` participant's required days are `passed`/`failed` (see
  * `unlimitedChallengeSettlement.ts` lines ~31-44).
  *
- * This module derives a `UnlimitedChallengeResultStatus` from EXISTING
- * backend-authoritative fields only:
- *   - `challenge.status`      (waiting|starting|active|settling|completed|cancelled_by_platform)
- *   - `challenge.settlementStatus` (pending|in_progress|completed|manual_review|rolled_over|refunded)
- *   - the viewer's OWN personal completion (from computeUnlimitedViewerSchedule),
- *     used ONLY to distinguish "still racing" from "waiting for everyone else" —
- *     never to conclude "results_ready" (that requires the GLOBAL challenge
- *     status to be settled, see resolveUnlimitedResultStatus below).
- *
- * No backend change. No frontend-invented final eligibility or prize amounts.
+ * Prefer backend `resultsStatus` when present. Otherwise derive from
+ * `challenge.status` + `settlementStatus` + the viewer's personal finish
+ * (viewerStatus) — never treat global `status` alone as final results.
  */
 
 // ── Result state model (spec §3) ──────────────────────────────────────────────
@@ -30,6 +23,8 @@ export type UnlimitedChallengeResultStatus =
   | "results_ready";
 
 export interface UnlimitedResultStatusInput {
+  /** Backend `challenge.resultsStatus` when present — preferred over status/settlement. */
+  resultsStatus?: string | null | undefined;
   /** Raw backend `challenge.status`. */
   challengeStatus: string | null | undefined;
   /** Raw backend `challenge.settlementStatus`. */
@@ -43,17 +38,39 @@ export interface UnlimitedResultStatusInput {
 /** Settlement outcomes that mean "nothing left to validate" (spec §7, §11). */
 const FINAL_SETTLEMENT_STATUSES = new Set(["completed", "refunded", "rolled_over"]);
 
+/** Map backend resultsStatus vocabulary onto the FE result-state model. */
+export function normalizeBackendResultsStatus(
+  raw: string | null | undefined,
+): UnlimitedChallengeResultStatus | null {
+  const s = (raw ?? "").trim().toLowerCase();
+  if (!s) return null;
+  if (s === "results_ready") return "results_ready";
+  if (s === "waiting_for_participants") return "waiting_for_participants";
+  if (s === "steps_validation_in_progress") return "steps_validation_in_progress";
+  // Backend uses `in_progress` while FE copy uses `challenge_in_progress`.
+  if (s === "in_progress" || s === "challenge_in_progress") return "challenge_in_progress";
+  return null;
+}
+
 /**
  * Derive the Unlimited result-state the frontend should render.
  *
- * Never returns "results_ready" from the viewer's own local end time alone —
- * only the global `challengeStatus`/`settlementStatus` pair (backend-authoritative,
- * only flipped by `settleUnlimitedChallenge` after EVERY participant is done)
- * can produce that state.
+ * Prefer `resultsStatus` from the backend. Fallback never returns "results_ready"
+ * from the viewer's own local end time alone — only global settlement / results_ready.
  */
 export function resolveUnlimitedResultStatus(
   input: UnlimitedResultStatusInput,
 ): UnlimitedChallengeResultStatus {
+  const fromBackend = normalizeBackendResultsStatus(input.resultsStatus);
+  if (fromBackend) {
+    // Backend may still say in_progress while this viewer personally finished —
+    // show "waiting for others" so we don't keep the live racing chrome.
+    if (fromBackend === "challenge_in_progress" && input.viewerPersonallyFinished) {
+      return "waiting_for_participants";
+    }
+    return fromBackend;
+  }
+
   const status = (input.challengeStatus ?? "").trim().toLowerCase();
   const settlement = (input.settlementStatus ?? "").trim().toLowerCase();
 
@@ -86,23 +103,25 @@ export interface PrizePoolEligibilityInput {
   resultStatus: UnlimitedChallengeResultStatus;
   /** Backend participant.qualificationStatus: active|goal_completed_today|pending_verification|disqualified|left|qualified. */
   qualificationStatus: string | null | undefined;
+  /** Backend participant.prizePoolEligibilityStatus when present (pending|eligible|not_eligible). */
+  prizePoolEligibilityStatus?: string | null | undefined;
 }
 
 /**
- * Backend only ever writes `qualified` (settlement winner) or `disqualified`
- * (day-finalize failure) — see Backend/src/lib/unlimitedChallengeJobs.ts:150-158
- * and unlimitedChallengeSettlement.ts:160-163. Everything else is "pending"
- * until settlement, except once results are final: a participant left in
- * `active`/`left` at that point was never flipped to `qualified`, i.e. they
- * did not win, so it is safe to show `not_eligible` (never a frontend guess —
- * simply "backend did not mark you a winner").
+ * Prefer backend `prizePoolEligibilityStatus` when set. Otherwise derive from
+ * qualificationStatus + resultStatus (qualified/disqualified/results_ready).
  */
 export function resolvePrizePoolEligibilityStatus(
   input: PrizePoolEligibilityInput,
 ): PrizePoolEligibilityStatus {
   const q = (input.qualificationStatus ?? "").trim().toLowerCase();
+  // Terminal membership always wins over a stale pending eligibility field.
   if (q === "disqualified") return "not_eligible";
   if (q === "qualified") return "eligible";
+  const fromBackend = (input.prizePoolEligibilityStatus ?? "").trim().toLowerCase();
+  if (fromBackend === "eligible" || fromBackend === "not_eligible" || fromBackend === "pending") {
+    return fromBackend;
+  }
   if (input.resultStatus === "results_ready") return "not_eligible";
   return "pending";
 }
@@ -156,17 +175,33 @@ export interface UnlimitedResultsCopy {
   secondaryText: string | null;
 }
 
-export function resultsScreenCopy(status: UnlimitedChallengeResultStatus): UnlimitedResultsCopy {
+export function resultsScreenCopy(
+  status: UnlimitedChallengeResultStatus,
+  counters?: {
+    registeredParticipantCount?: number | null;
+    participantsFinishedCount?: number | null;
+    participantsPendingCount?: number | null;
+  },
+): UnlimitedResultsCopy {
   switch (status) {
-    case "waiting_for_participants":
+    case "waiting_for_participants": {
+      const pending = counters?.participantsPendingCount;
+      const finished = counters?.participantsFinishedCount;
+      const registered = counters?.registeredParticipantCount;
+      const countLine =
+        typeof pending === "number" && pending >= 0 && typeof registered === "number" && registered > 0
+          ? `${finished ?? Math.max(0, registered - pending)} of ${registered} participants finished — ${pending} still in their local timezone.`
+          : null;
       return {
         title: "Challenge Complete",
         statusHeadline: "Waiting for all participants",
         message:
+          countLine ??
           "Your challenge is complete. Some participants are still finishing the race in their local time zones.",
         secondaryText:
           "Final prize-pool results will be available after every participant finishes and all daily steps are verified.",
       };
+    }
     case "steps_validation_in_progress":
       return {
         title: "Challenge Results",

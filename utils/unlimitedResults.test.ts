@@ -23,6 +23,28 @@ import {
   assert.equal(status, "waiting_for_participants");
 }
 
+// Prefer backend resultsStatus when present (maps in_progress → challenge_in_progress).
+{
+  assert.equal(
+    resolveUnlimitedResultStatus({
+      resultsStatus: "results_ready",
+      challengeStatus: "active",
+      settlementStatus: null,
+      viewerPersonallyFinished: false,
+    }),
+    "results_ready",
+  );
+  assert.equal(
+    resolveUnlimitedResultStatus({
+      resultsStatus: "in_progress",
+      challengeStatus: "active",
+      settlementStatus: null,
+      viewerPersonallyFinished: true,
+    }),
+    "waiting_for_participants",
+  );
+}
+
 // Still racing personally → normal in-progress UI, not waiting/ready.
 {
   const status = resolveUnlimitedResultStatus({

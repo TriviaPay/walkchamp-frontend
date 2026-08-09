@@ -612,6 +612,10 @@ type OnlineCandidate = {
   status?: string;
   isFriend?: boolean;
   inviteStatus?: string;
+  /** Backend now returns room members in this list (not filtered out). */
+  hasJoined?: boolean;
+  /** "joined" | "registered" | "none" — from online-invite-candidates. */
+  membership?: "joined" | "registered" | "none" | string;
 };
 
 type FriendItem = {
@@ -1200,9 +1204,12 @@ function MatchmakingScreenContent() {
   const isParticipantOnline = useCallback(
     (participant: RoomParticipant | null | undefined) => {
       if (!participant) return false;
-      if (participant.isCurrentUser) return true;
       const id = normalizeUserId(participant.userId);
+      const selfId = normalizeUserId(user?.id);
+      // Self is always green while this device is on the Waiting Room screen.
+      if (participant.isCurrentUser || (!!selfId && !!id && id === selfId)) return true;
       if (!id) return false;
+      // Align with BE isOnlineNow(): scoped lists + /presence/summary exclude status=offline.
       if (isUserOnline(id)) return true;
       if (racePresenceIds.has(id)) return true;
       if (raceApiOnlineIds.has(id)) return true;
@@ -1212,7 +1219,7 @@ function MatchmakingScreenContent() {
       if (!scheduledStartAt) return true;
       return false;
     },
-    [isUserOnline, racePresenceIds, raceApiOnlineIds, friendsOnlineIds, scheduledStartAt],
+    [isUserOnline, racePresenceIds, raceApiOnlineIds, friendsOnlineIds, scheduledStartAt, user?.id],
   );
 
   // Shared global presence (same source as Chat) + mark this device online.
@@ -2910,8 +2917,11 @@ function MatchmakingScreenContent() {
         const list = rawList.filter((c) => !!normalizeUserId(c?.userId));
         if (__DEV__) {
           const friendCount = list.filter((c) => c.isFriend).length;
+          const joinedCount = list.filter(
+            (c) => c.hasJoined || c.membership === "joined" || c.membership === "registered",
+          ).length;
           console.log(
-            `[WaitingRoom] online-invite-candidates ok raceId=${backendRaceId} count=${list.length} friends=${friendCount}`,
+            `[WaitingRoom] online-invite-candidates ok raceId=${backendRaceId} count=${list.length} friends=${friendCount} joined=${joinedCount}`,
           );
         }
         setOnlineCandidates(list);
@@ -3040,9 +3050,9 @@ function MatchmakingScreenContent() {
       .map((p) => normalizeUserId(p.userId))
       .filter((id): id is string => !!id),
   );
-  // Online tab: show ALL invite-eligible online people (including friends).
-  // Already-joined users stay in the list so the UI can show "Joined ✓"
-  // (BE currently omits them from candidates — we re-add online room members).
+  // Online tab: BE now returns members + friends + others (see online-invite-candidates).
+  // Never filter `!isFriend` — that hid every online friend and emptied the tab when
+  // Walk's "X online" was just you + a friend. Joined friends render with Joined ✓.
   const inviteList: Array<OnlineCandidate | FriendItem> = (() => {
     if (!isOnlineTab) return friendsList;
     const selfId = normalizeUserId(user?.id);
@@ -3050,17 +3060,32 @@ function MatchmakingScreenContent() {
     for (const c of onlineCandidates) {
       const id = normalizeUserId(c.userId);
       if (!id || (selfId && id === selfId)) continue;
-      byId.set(id, c);
+      // Shared presence window also excludes status=offline.
+      if ((c.status ?? "").toLowerCase() === "offline") continue;
+      const joined =
+        c.hasJoined === true ||
+        c.membership === "joined" ||
+        c.membership === "registered" ||
+        participantIds.has(id);
+      byId.set(id, {
+        ...c,
+        hasJoined: joined,
+        membership: c.membership ?? (joined ? "joined" : "none"),
+        inviteStatus: joined ? "none" : c.inviteStatus,
+      });
     }
-    // Fallback if candidates is empty/sparse: surface online friends for invite.
+    // Fallback if candidates is empty/sparse (403/host race, brief poll miss).
     for (const f of friendsList) {
       const id = normalizeUserId(f.userId);
       if (!id || byId.has(id) || (selfId && id === selfId)) continue;
       const online =
         Boolean(f.isOnline) ||
         friendsOnlineIds.has(id) ||
-        isUserOnline(id);
+        isUserOnline(id) ||
+        raceApiOnlineIds.has(id) ||
+        racePresenceIds.has(id);
       if (!online) continue;
+      const joined = participantIds.has(id);
       byId.set(id, {
         userId: f.userId,
         username: f.username,
@@ -3072,10 +3097,11 @@ function MatchmakingScreenContent() {
         isFriend: true,
         status: "online",
         inviteStatus: "none",
+        hasJoined: joined,
+        membership: joined ? "joined" : "none",
       });
     }
-    // BE excludes joined/registered users from candidates — put online room
-    // members back so the invite sheet can show Joined ✓ instead of hiding them.
+    // Fallback: online room members not yet in the candidates payload.
     for (const p of participants) {
       const id = normalizeUserId(p.userId);
       if (!id || byId.has(id) || (selfId && id === selfId) || p.isCurrentUser) continue;
@@ -3089,9 +3115,20 @@ function MatchmakingScreenContent() {
         countryFlag: p.countryFlag ?? null,
         status: "online",
         inviteStatus: "none",
+        hasJoined: true,
+        membership: "joined",
       });
     }
-    return Array.from(byId.values());
+    // Members / friends first (matches BE ordering).
+    return Array.from(byId.values()).sort((a, b) => {
+      const aJoined = Boolean((a as OnlineCandidate).hasJoined) || participantIds.has(normalizeUserId(a.userId) ?? "");
+      const bJoined = Boolean((b as OnlineCandidate).hasJoined) || participantIds.has(normalizeUserId(b.userId) ?? "");
+      if (aJoined !== bJoined) return aJoined ? -1 : 1;
+      const aFriend = Boolean((a as OnlineCandidate).isFriend);
+      const bFriend = Boolean((b as OnlineCandidate).isFriend);
+      if (aFriend !== bFriend) return aFriend ? -1 : 1;
+      return 0;
+    });
   })();
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -3663,9 +3700,15 @@ function MatchmakingScreenContent() {
                   ) : inviteList.map((person) => {
                     const personKey = normalizeUserId(person.userId) || person.userId;
                     const status = inviteStatuses[person.userId] ?? inviteStatuses[personKey] ?? "idle";
-                    const hasJoined = participantIds.has(personKey);
+                    const candidate = person as OnlineCandidate;
+                    // Prefer BE hasJoined/membership (members are now returned in candidates).
+                    const hasJoined =
+                      candidate.hasJoined === true ||
+                      candidate.membership === "joined" ||
+                      candidate.membership === "registered" ||
+                      participantIds.has(personKey);
                     const isOnline = isOnlineTab
-                      ? true
+                      ? (candidate.status ?? "").toLowerCase() !== "offline"
                       : Boolean((person as FriendItem).isOnline) ||
                         isUserOnline(person.userId) ||
                         racePresenceIds.has(personKey);

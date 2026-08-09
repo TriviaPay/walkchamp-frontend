@@ -273,7 +273,14 @@ export type UnlimitedLiveDetailMapped = {
     rawStatus?: string | null;
     /** Raw backend challenge.settlementStatus (pending|in_progress|completed|manual_review|rolled_over|refunded). */
     settlementStatus?: string | null;
+    /** Backend challenge.resultsStatus — branch UI on this, not global status. */
+    resultsStatus?: string | null;
+    registeredParticipantCount?: number | null;
+    participantsFinishedCount?: number | null;
+    participantsPendingCount?: number | null;
     qualifiedParticipantCount?: number | null;
+    /** Viewer's own prize-pool eligibility from detail/my-active (pending|eligible|not_eligible). */
+    prizePoolEligibilityStatus?: string | null;
   };
   participants: Array<{
     id: string;
@@ -296,6 +303,11 @@ export type UnlimitedLiveDetailMapped = {
     dayNumber?: number | null;
     qualificationStatus?: string | null;
     dailyGoalSteps?: number | null;
+    prizePoolEligibilityStatus?: string | null;
+    /** Display-only: steps at day open (HC midnight baseline). */
+    raceStartBaselineSteps?: number | null;
+    /** Display-only: challenge-day progress (usually today's total). */
+    challengeDaySteps?: number | null;
   }>;
 };
 
@@ -371,6 +383,15 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
   const dayNumber = asNumber(pick(obj, "dayNumber", "day_number"));
   const qualificationStatus = asString(pick(obj, "qualificationStatus", "qualification_status"));
   const dailyGoalSteps = asNumber(pick(obj, "dailyGoalSteps", "daily_goal_steps"));
+  const prizePoolEligibilityStatus = asString(
+    pick(obj, "prizePoolEligibilityStatus", "prize_pool_eligibility_status"),
+  );
+  const raceStartBaselineSteps = asNumber(
+    pick(obj, "raceStartBaselineSteps", "race_start_baseline_steps", "startBaselineSteps", "start_baseline_steps"),
+  );
+  const challengeDaySteps = asNumber(
+    pick(obj, "challengeDaySteps", "challenge_day_steps"),
+  );
   return {
     id:
       asString(pick(obj, "participantId", "participant_id", "registrationId", "registration_id")) ??
@@ -405,6 +426,9 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
     ...(dayNumber != null ? { dayNumber } : {}),
     ...(qualificationStatus ? { qualificationStatus } : {}),
     ...(dailyGoalSteps != null ? { dailyGoalSteps } : {}),
+    ...(prizePoolEligibilityStatus ? { prizePoolEligibilityStatus } : {}),
+    ...(raceStartBaselineSteps != null ? { raceStartBaselineSteps } : {}),
+    ...(challengeDaySteps != null ? { challengeDaySteps } : {}),
   };
 }
 
@@ -694,9 +718,24 @@ export function mapUnlimitedDetailToLiveDetail(
         asString(pick(root ?? {}, "challengeDayKey", "challenge_day_key")),
       rawStatus: waiting.race.status,
       settlementStatus: asString(pick(challenge, "settlementStatus", "settlement_status")),
+      resultsStatus:
+        asString(pick(challenge, "resultsStatus", "results_status")) ??
+        asString(pick(root ?? {}, "resultsStatus", "results_status")),
+      registeredParticipantCount:
+        asNumber(pick(challenge, "registeredParticipantCount", "registered_participant_count")) ??
+        asNumber(pick(root ?? {}, "registeredParticipantCount", "registered_participant_count")),
+      participantsFinishedCount:
+        asNumber(pick(challenge, "participantsFinishedCount", "participants_finished_count")) ??
+        asNumber(pick(root ?? {}, "participantsFinishedCount", "participants_finished_count")),
+      participantsPendingCount:
+        asNumber(pick(challenge, "participantsPendingCount", "participants_pending_count")) ??
+        asNumber(pick(root ?? {}, "participantsPendingCount", "participants_pending_count")),
       qualifiedParticipantCount: asNumber(
         pick(challenge, "qualifiedParticipantCount", "qualified_participant_count"),
       ),
+      prizePoolEligibilityStatus:
+        asString(pick(challenge, "prizePoolEligibilityStatus", "prize_pool_eligibility_status")) ??
+        asString(pick(root ?? {}, "prizePoolEligibilityStatus", "prize_pool_eligibility_status")),
     },
     participants,
   };

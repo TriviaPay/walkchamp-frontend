@@ -3,16 +3,10 @@
  * Goal Challenge "Daily Progress" modal and Results screen. Pure logic (no
  * React Native imports) so it can be unit tested directly with `npx tsx`.
  *
- * Per-day historical step totals (e.g. "Day 1 · 10,231") are NOT currently
- * exposed by any frontend-reachable endpoint — GET /unlimited-challenges/:id
- * and .../leaderboard only return an aggregate `completedDays` count plus the
- * viewer's CURRENT day row (see Backend/src/lib/unlimitedLiveProgress.ts).
- * `verifiedSteps` is therefore only populated for the viewer's current day
- * (from live health-sync data the caller already has); historical rows carry
- * a `status` derived from backend-authoritative aggregates only — never a
- * frontend-invented step count or pass/fail guess for a specific past day.
- * See the "Backend follow-up" note in the implementation report for the
- * per-day history endpoint this would unlock.
+ * Prefer GET /unlimited-challenges/:id/daily-history when available — that
+ * returns verifiedSteps + dayStatus for every day. Otherwise fall back to
+ * aggregate schedule fields (completedDays / viewerStatus) with live steps
+ * only on the current day.
  */
 import {
   addCalendarDaysToKey,
@@ -33,8 +27,24 @@ export interface UnlimitedDayRow {
   localDate: string;
   status: UnlimitedDayStatus;
   dailyGoalSteps: number;
-  /** Only populated for the viewer's current day (live verified steps). Historical days have no exposed per-day total. */
+  /** Populated from daily-history when available; otherwise only the current day. */
   verifiedSteps: number | null;
+}
+
+const DAY_STATUSES = new Set<UnlimitedDayStatus>([
+  "upcoming",
+  "in_progress",
+  "validation_pending",
+  "passed",
+  "failed",
+]);
+
+export function normalizeUnlimitedDayStatus(raw: unknown): UnlimitedDayStatus | null {
+  const s = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (DAY_STATUSES.has(s as UnlimitedDayStatus)) return s as UnlimitedDayStatus;
+  if (s === "pending_verification") return "validation_pending";
+  if (s === "pending") return "upcoming";
+  return null;
 }
 
 export function buildUnlimitedDayRows(schedule: UnlimitedViewerSchedule, todaySteps?: number): UnlimitedDayRow[] {
@@ -66,6 +76,80 @@ export function buildUnlimitedDayRows(schedule: UnlimitedViewerSchedule, todaySt
     });
   }
   return rows;
+}
+
+/** One day from GET /unlimited-challenges/:id/daily-history. */
+export type UnlimitedDailyHistoryDay = {
+  dayNumber?: number;
+  dayIndex?: number;
+  localDate?: string;
+  participantLocalDate?: string;
+  dayStatus?: string;
+  status?: string;
+  dailyGoalSteps?: number;
+  goalSteps?: number;
+  verifiedSteps?: number | null;
+};
+
+export type UnlimitedDailyHistoryPayload = {
+  durationDays?: number;
+  dailyGoalSteps?: number;
+  startLocalDate?: string;
+  days?: UnlimitedDailyHistoryDay[];
+};
+
+/** Map backend daily-history payload → day rows (authoritative verified steps). */
+export function dayRowsFromDailyHistory(
+  payload: UnlimitedDailyHistoryPayload | null | undefined,
+  fallback?: { schedule?: UnlimitedViewerSchedule | null; todaySteps?: number },
+): UnlimitedDayRow[] | null {
+  const days = Array.isArray(payload?.days) ? payload!.days! : null;
+  if (!days || days.length === 0) return null;
+
+  const goalDefault =
+    (typeof payload?.dailyGoalSteps === "number" ? payload.dailyGoalSteps : null) ??
+    fallback?.schedule?.dailyGoalSteps ??
+    0;
+
+  const rows: UnlimitedDayRow[] = days
+    .map((d) => {
+      const dayNumber = typeof d.dayNumber === "number" ? d.dayNumber : d.dayIndex;
+      if (typeof dayNumber !== "number" || dayNumber < 1) return null;
+      const status =
+        normalizeUnlimitedDayStatus(d.dayStatus) ??
+        normalizeUnlimitedDayStatus(d.status) ??
+        "upcoming";
+      const localDate =
+        (typeof d.localDate === "string" && d.localDate) ||
+        (typeof d.participantLocalDate === "string" && d.participantLocalDate) ||
+        (fallback?.schedule
+          ? addCalendarDaysToKey(fallback.schedule.startLocalDate, dayNumber - 1)
+          : "");
+      let verifiedSteps =
+        typeof d.verifiedSteps === "number" ? d.verifiedSteps : null;
+      // Keep live sensor total on the open day when history hasn't finalized yet.
+      if (
+        status === "in_progress" &&
+        typeof fallback?.todaySteps === "number" &&
+        (verifiedSteps == null || fallback.todaySteps > verifiedSteps)
+      ) {
+        verifiedSteps = fallback.todaySteps;
+      }
+      return {
+        dayNumber,
+        localDate,
+        status,
+        dailyGoalSteps:
+          (typeof d.dailyGoalSteps === "number" ? d.dailyGoalSteps : null) ??
+          (typeof d.goalSteps === "number" ? d.goalSteps : null) ??
+          goalDefault,
+        verifiedSteps,
+      } satisfies UnlimitedDayRow;
+    })
+    .filter((r): r is UnlimitedDayRow => r != null)
+    .sort((a, b) => a.dayNumber - b.dayNumber);
+
+  return rows.length > 0 ? rows : null;
 }
 
 // ── Daily Progress Summary (spec §14) ─────────────────────────────────────────

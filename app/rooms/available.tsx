@@ -2666,6 +2666,39 @@ function AvailableRoomsScreenContent() {
     if (!ar) return;
     setWithdrawingRegistration(true);
     try {
+      const isUnlimited =
+        ar.challenge_type === "unlimited_goal" ||
+        isUnlimitedGoalChallenge({
+          challengeType: ar.challenge_type,
+          maxPlayers: ar.max_players,
+        });
+      // Unlimited leave releases the seat itself — do not follow with cancel-registration.
+      if (isUnlimited) {
+        const res = await authFetch(`/api/unlimited-challenges/${ar.room_id}/leave`, {
+          method: "POST",
+          body: JSON.stringify({ reason: "cancel_registration" }),
+        });
+        const body = await res.json().catch(() => ({})) as RaceLeaveResponse & Record<string, unknown>;
+        if (!res.ok && !isAlreadyLeftLeaveError(res.status, body)) {
+          AppAlert.alert("Could not withdraw", (body.error as string) ?? "Please try again.");
+          return;
+        }
+        void refreshWallet({ silent: true });
+        setUpcomingRooms((prev) =>
+          prev.map((r) =>
+            r.room_id === ar.room_id
+              ? {
+                  ...r,
+                  current_user_registered: false,
+                  registered_count: Math.max(0, r.registered_count - 1),
+                  eligible_to_register: true,
+                }
+              : r,
+          ),
+        );
+        setRegisteredRaceModal(null);
+        return;
+      }
       const useLeave = ar.room_status === "open" || ar.room_status === "full";
       const res = await authFetch(
         useLeave

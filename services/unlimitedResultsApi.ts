@@ -1,19 +1,16 @@
 /**
  * Data access for the Unlimited Daily Goal Challenge Results screen.
  *
- * Reuses the SAME detail endpoint (`GET /api/unlimited-challenges/:id`) and
- * mapper (`mapUnlimitedDetailToLiveDetail`) as Live Detail — no new backend
- * route. The only extra read is `GET /api/notifications`, used solely to
- * recover the CURRENT user's own already-credited `payoutCents` (written by
- * Backend/src/lib/unlimitedChallengeSettlement.ts `sendNotification(...,
- * "race_won", ..., { payoutCents })`) — never a frontend-computed share, and
- * never another participant's amount.
+ * Detail: `GET /api/unlimited-challenges/:id`
+ * History: `GET /api/unlimited-challenges/:id/daily-history?userId=`
+ * Own prize: `GET /api/notifications` for `race_won` payoutCents only.
  */
 import { authFetch } from "@/utils/authFetch";
 import {
   mapUnlimitedDetailToLiveDetail,
   type UnlimitedLiveDetailMapped,
 } from "@/utils/unlimitedLiveRace";
+import type { UnlimitedDailyHistoryPayload } from "@/utils/unlimitedDayProgress";
 
 export interface UnlimitedResultsData {
   race: UnlimitedLiveDetailMapped["race"];
@@ -30,6 +27,23 @@ export async function fetchUnlimitedResultsData(
     const mapped = mapUnlimitedDetailToLiveDetail(payload);
     if (!mapped) return null;
     return { race: mapped.race, participants: mapped.participants };
+  } catch {
+    return null;
+  }
+}
+
+/** Full verified day history for a participant (defaults to the caller). */
+export async function fetchUnlimitedDailyHistory(
+  challengeId: string,
+  userId?: string | null,
+): Promise<UnlimitedDailyHistoryPayload | null> {
+  try {
+    const qs = userId ? `?userId=${encodeURIComponent(userId)}` : "";
+    const res = await authFetch(`/api/unlimited-challenges/${challengeId}/daily-history${qs}`);
+    if (!res.ok) return null;
+    const payload: unknown = await res.json().catch(() => null);
+    if (!payload || typeof payload !== "object") return null;
+    return payload as UnlimitedDailyHistoryPayload;
   } catch {
     return null;
   }
