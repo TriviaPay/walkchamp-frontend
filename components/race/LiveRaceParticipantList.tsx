@@ -326,6 +326,9 @@ export type LiveBoardRowParticipant = {
   prizeAmount?: number;
   isTied?: boolean;
   tieGroupSize?: number;
+  /** Unlimited Daily Goal Challenge only — backend-authoritative per-participant day (may differ across timezones). */
+  dayNumber?: number | null;
+  durationDays?: number | null;
 };
 
 const LiveBoardRow = memo(function LiveBoardRow({
@@ -392,7 +395,7 @@ const LiveBoardRow = memo(function LiveBoardRow({
   useEffect(() => {
     setAvatarFailed(false);
   }, [avatarUri]);
-  const initial = isUser ? "Y" : (participant.username.charAt(0).toUpperCase() || "?");
+  const initial = participant.username.charAt(0).toUpperCase() || "?";
   const showPhoto = !!avatarUri && !avatarFailed;
 
   return (
@@ -473,6 +476,14 @@ const LiveBoardRow = memo(function LiveBoardRow({
               <Text style={[styles.tagTxt, { color: warning }]}>Tied</Text>
             </View>
           )}
+          {!isForfeited && participant.dayNumber != null && (
+            <View style={[styles.tag, { backgroundColor: "#7C3AFF22", borderColor: "#7C3AFF55" }]}>
+              <Text style={[styles.tagTxt, { color: "#C4B5FD" }]}>
+                Day {participant.dayNumber}
+                {participant.durationDays ? `/${participant.durationDays}` : ""}
+              </Text>
+            </View>
+          )}
         </View>
         <View style={[styles.track, { backgroundColor: border }]}>
           <View
@@ -497,6 +508,12 @@ const LiveBoardRow = memo(function LiveBoardRow({
           >
             {participant.currentSteps.toLocaleString()}
           </Text>
+          {!isForfeited &&
+            participant.dayNumber != null &&
+            targetSteps > 0 &&
+            participant.currentSteps >= targetSteps && (
+              <Feather name="check-circle" size={12} color="#00E676" />
+            )}
         </View>
         {!isForfeited && stepDelta > 0 && (
           <Text style={styles.stepDelta}>+{stepDelta}</Text>

@@ -215,6 +215,10 @@ export type UnlimitedWaitingRoomMapped = {
     hostUserId: string | null;
     /** True when a dedicated count field (or prize-derived count) was found. */
     hasExplicitPlayerCount?: boolean;
+    /** Host/challenge IANA timezone `startAtUtc` was anchored to (see serializeChallenge). */
+    challengeTimezone: string | null;
+    durationDays: number | null;
+    dailyGoalSteps: number | null;
   };
   participants: unknown[];
 };
@@ -332,6 +336,13 @@ export function mapUnlimitedDetailToWaitingRoom(
         pick(challenge, "hostUserId", "host_user_id", "creatorId", "creator_id"),
       ),
       hasExplicitPlayerCount,
+      challengeTimezone: asString(
+        pick(challenge, "challengeTimezone", "challenge_timezone", "timezone"),
+      ),
+      durationDays: asNumber(pick(challenge, "durationDays", "duration_days")),
+      dailyGoalSteps: asNumber(
+        pick(challenge, "dailyGoalSteps", "daily_goal_steps", "targetSteps", "target_steps"),
+      ),
     },
     participants,
   };

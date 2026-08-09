@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AccessibilityInfo,
   Animated,
@@ -17,6 +17,11 @@ import {
   getSponsoredPrizePerWinnerUsd,
   SPONSORED_DEFAULT_TARGET_STEPS,
 } from "@/utils/sponsoredEventsApi";
+import {
+  computeUnlimitedViewerSchedule,
+  formatViewerStartLabel,
+} from "@/utils/unlimitedViewerSchedule";
+import { getDeviceTimezone } from "@/utils/timezone";
 
 export type RaceStartingSoonPhase = "registered" | "join_window" | "racing";
 export type RaceStartingSoonChallengeType = "free" | "coins" | "cash" | "sponsored";
@@ -47,6 +52,16 @@ export type RaceStartingSoonCardProps = {
   onPressCta: () => void;
   /** Optional outer wrapper style (e.g. carousel card width). */
   style?: StyleProp<ViewStyle>;
+  /**
+   * Unlimited Daily Goal Challenge only — when true, the start clock and
+   * countdown target the VIEWER's own local-midnight start on the host's
+   * selected calendar date, never `scheduledStartAt` converted into device
+   * local time. See utils/unlimitedViewerSchedule.ts.
+   */
+  isUnlimitedGoal?: boolean;
+  /** Host/challenge IANA timezone `scheduledStartAt` was anchored to (Unlimited only). */
+  unlimitedChallengeTimezone?: string | null;
+  unlimitedDurationDays?: number | null;
 };
 
 type Theme = {
@@ -159,26 +174,54 @@ function pad2(n: number) {
 
 function useStartsInParts(iso: string | null) {
   const [parts, setParts] = useState({ h: 0, m: 0, s: 0, totalMs: 0, expired: !iso });
+  const partsRef = useRef(parts);
+  partsRef.current = parts;
 
   useEffect(() => {
     if (!iso) {
-      setParts({ h: 0, m: 0, s: 0, totalMs: 0, expired: true });
+      // Avoid setState loops when parent re-renders with a stable null iso.
+      if (!partsRef.current.expired) {
+        setParts({ h: 0, m: 0, s: 0, totalMs: 0, expired: true });
+      }
       return;
     }
+
+    let id: ReturnType<typeof setInterval> | null = null;
+
     const tick = () => {
       const diff = new Date(iso).getTime() - Date.now();
       if (diff <= 0) {
-        setParts({ h: 0, m: 0, s: 0, totalMs: 0, expired: true });
+        if (!partsRef.current.expired) {
+          setParts({ h: 0, m: 0, s: 0, totalMs: 0, expired: true });
+        }
+        if (id) {
+          clearInterval(id);
+          id = null;
+        }
         return;
       }
       const h = Math.floor(diff / 3_600_000);
       const m = Math.floor((diff % 3_600_000) / 60_000);
       const s = Math.floor((diff % 60_000) / 1_000);
+      const prev = partsRef.current;
+      // Only update when the displayed digits change — prevents update-depth storms
+      // if a parent re-render keeps remounting this effect.
+      if (
+        prev.h === h &&
+        prev.m === m &&
+        prev.s === s &&
+        !prev.expired
+      ) {
+        return;
+      }
       setParts({ h, m, s, totalMs: diff, expired: false });
     };
+
     tick();
-    const id = setInterval(tick, 1_000);
-    return () => clearInterval(id);
+    id = setInterval(tick, 1_000);
+    return () => {
+      if (id) clearInterval(id);
+    };
   }, [iso]);
 
   return parts;
@@ -504,12 +547,32 @@ export function RaceStartingSoonCard({
   isParticipant = true,
   onPressCta,
   style,
+  isUnlimitedGoal = false,
+  unlimitedChallengeTimezone,
+  unlimitedDurationDays,
 }: RaceStartingSoonCardProps) {
   const theme = THEMES[challengeType];
   const isCash = challengeType === "cash";
   const reducedMotion = useReducedMotion();
-  const hasStart = Boolean(scheduledStartAt);
-  const parts = useStartsInParts(phase === "racing" ? null : scheduledStartAt);
+  // Unlimited: target the viewer's own local-midnight start on the host's
+  // selected calendar date, not scheduledStartAt converted into device time.
+  const unlimitedViewerSchedule = useMemo(() => {
+    if (!isUnlimitedGoal || !scheduledStartAt || !unlimitedDurationDays) return null;
+    return computeUnlimitedViewerSchedule(
+      {
+        startAtUtc: scheduledStartAt,
+        challengeTimezone: unlimitedChallengeTimezone ?? null,
+        durationDays: unlimitedDurationDays,
+      },
+      { fallbackTimezone: getDeviceTimezone() },
+    );
+  }, [isUnlimitedGoal, scheduledStartAt, unlimitedChallengeTimezone, unlimitedDurationDays]);
+  const unlimitedViewerStartIso = unlimitedViewerSchedule
+    ? new Date(unlimitedViewerSchedule.viewerStartAtMs).toISOString()
+    : null;
+  const effectiveStartAt = unlimitedViewerStartIso ?? scheduledStartAt;
+  const hasStart = Boolean(effectiveStartAt);
+  const parts = useStartsInParts(phase === "racing" ? null : effectiveStartAt);
   const urgent =
     phase === "join_window" ||
     (!parts.expired && parts.totalMs > 0 && parts.totalMs < 10 * 60_000);
@@ -555,8 +618,10 @@ export function RaceStartingSoonCard({
     : urgent
       ? "Join Waiting Room"
       : "Open Waiting Room";
-  const startClock = formatRaceClock(scheduledStartAt);
-  const endClock = formatRaceClock(endsAt);
+  const startClock = unlimitedViewerSchedule
+    ? formatViewerStartLabel(unlimitedViewerSchedule)
+    : formatRaceClock(scheduledStartAt);
+  const endClock = isUnlimitedGoal ? null : formatRaceClock(endsAt);
   const progressMsg = !isLive && !parts.expired
     ? daysToGoMessage(parts.totalMs)
     : "Almost time! Keep your steps going";

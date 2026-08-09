@@ -30,7 +30,10 @@ import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { AppAlert } from "@/components/AppAlert";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import ActiveRaceModal, { type ActiveRaceInfo } from "@/components/ActiveRaceModal";
+import ActiveRaceModal, {
+  type ActiveRaceInfo,
+  normalizeActiveRaceInfo,
+} from "@/components/ActiveRaceModal";
 import AlreadyRegisteredModal, { type RegisteredRaceInfo } from "@/components/AlreadyRegisteredModal";
 import { JoinProgressOverlay } from "@/components/RaceJoinBadge";
 import JoinWithCodeModal, { type JoinWithCodeResult } from "@/components/JoinWithCodeModal";
@@ -64,6 +67,12 @@ import {
   USD_CASH_LEAVE_ACTION_LABEL,
 } from "@/utils/usdCashChallengeLeavePolicy";
 import { isUnlimitedGoalChallenge, formatPlayerCountDisplay } from "@/utils/unlimitedGoal";
+import {
+  computeUnlimitedViewerSchedule,
+  formatViewerStartLabel,
+  UNLIMITED_LOCAL_MIDNIGHT_NOTE,
+} from "@/utils/unlimitedViewerSchedule";
+import { getDeviceTimezone } from "@/utils/timezone";
 import { fetchAvailableUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
 import { mergeUpcomingRoomsById } from "@/utils/unlimitedChallengeRooms";
 import { saveHostedUnlimitedChallenge } from "@/utils/hostedUnlimitedCache";
@@ -108,6 +117,8 @@ interface UpcomingRoom {
   current_user_registered: boolean;
   eligible_to_register: boolean;
   capacity_mode?: string | null;
+  /** Unlimited Daily Goal Challenge only — IANA timezone scheduled_start_at was anchored to. */
+  challenge_timezone?: string | null;
 }
 
 
@@ -826,12 +837,28 @@ function UpcomingAvatar({ userId, avatarColor, username, isSponsored, size = rs(
 }
 
 function UpcomingRoomCard({ room, currentUserId, onRegister, onCancel, onCancelRoom, onViewHost, registering }: UpcomingRoomCardProps) {
-  const countdown   = useCountdown(room.scheduled_start_at);
   const isUnlimited = isUnlimitedGoalChallenge({
     challengeType: room.challenge_type,
     capacityMode: room.capacity_mode,
     maxPlayers: room.max_players,
   });
+  // Unlimited: viewer's own local-midnight start on the host's selected calendar
+  // date — never a device-local conversion of the raw scheduled_start_at instant.
+  const unlimitedViewerSchedule = useMemo(() => {
+    if (!isUnlimited || !room.scheduled_start_at || !room.challenge_duration_days) return null;
+    return computeUnlimitedViewerSchedule(
+      {
+        startAtUtc: room.scheduled_start_at,
+        challengeTimezone: room.challenge_timezone ?? null,
+        durationDays: room.challenge_duration_days,
+      },
+      { fallbackTimezone: getDeviceTimezone() },
+    );
+  }, [isUnlimited, room.scheduled_start_at, room.challenge_timezone, room.challenge_duration_days]);
+  const unlimitedViewerStartIso = unlimitedViewerSchedule
+    ? new Date(unlimitedViewerSchedule.viewerStartAtMs).toISOString()
+    : null;
+  const countdown = useCountdown(unlimitedViewerStartIso ?? room.scheduled_start_at);
   const isFull      = isUnlimited ? false : room.registered_count >= room.max_players;
   const isSponsored = room.challenge_type === "sponsored";
   const isCoins     = !isSponsored && room.challenge_type === "coins_battle";
@@ -964,7 +991,14 @@ function UpcomingRoomCard({ room, currentUserId, onRegister, onCancel, onCancelR
           <Text style={[ucard.countdownBig, { color: accent }]}>{countdown || "Starting soon"}</Text>
         </View>
         {room.scheduled_start_at ? (
-          <Text style={ucard.scheduledDate}>{fmtScheduled(room.scheduled_start_at)}</Text>
+          <Text style={ucard.scheduledDate}>
+            {unlimitedViewerSchedule
+              ? formatViewerStartLabel(unlimitedViewerSchedule)
+              : fmtScheduled(room.scheduled_start_at)}
+          </Text>
+        ) : null}
+        {unlimitedViewerSchedule ? (
+          <Text style={ucard.unlimitedTzNote}>{UNLIMITED_LOCAL_MIDNIGHT_NOTE}</Text>
         ) : null}
       </View>
 
@@ -1096,6 +1130,7 @@ const ucard = StyleSheet.create({
   countdownRow: { flexDirection: "row", alignItems: "center", gap: 7 },
   countdownBig: { fontSize: rf(20), fontWeight: "800", letterSpacing: 0.3 },
   scheduledDate: { fontSize: rf(11), color: "#6B7FA8", marginLeft: 22 },
+  unlimitedTzNote: { fontSize: rf(9.5), color: "#5A6688", marginLeft: 22, marginTop: 2 },
 
   statsRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#131720", borderRadius: 14, borderWidth: 1, paddingVertical: rs(12), paddingHorizontal: rs(8) },
   statChip: { flex: 1, alignItems: "center", gap: 4 },
@@ -1169,12 +1204,28 @@ interface CompactCardProps {
 const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
   room, currentUserId, onRegister, onCancel, onCancelRoom, onViewHost, onGoWaiting, registering,
 }: CompactCardProps) {
-  const countdown   = useCountdown(room.scheduled_start_at);
   const isUnlimited = isUnlimitedGoalChallenge({
     challengeType: room.challenge_type,
     capacityMode: room.capacity_mode,
     maxPlayers: room.max_players,
   });
+  // Unlimited: viewer's own local-midnight start on the host's selected calendar
+  // date — never a device-local conversion of the raw scheduled_start_at instant.
+  const unlimitedViewerSchedule = useMemo(() => {
+    if (!isUnlimited || !room.scheduled_start_at || !room.challenge_duration_days) return null;
+    return computeUnlimitedViewerSchedule(
+      {
+        startAtUtc: room.scheduled_start_at,
+        challengeTimezone: room.challenge_timezone ?? null,
+        durationDays: room.challenge_duration_days,
+      },
+      { fallbackTimezone: getDeviceTimezone() },
+    );
+  }, [isUnlimited, room.scheduled_start_at, room.challenge_timezone, room.challenge_duration_days]);
+  const unlimitedViewerStartIso = unlimitedViewerSchedule
+    ? new Date(unlimitedViewerSchedule.viewerStartAtMs).toISOString()
+    : null;
+  const countdown = useCountdown(unlimitedViewerStartIso ?? room.scheduled_start_at);
   const isFull      = isUnlimited ? false : room.registered_count >= room.max_players;
   const isSponsored = room.challenge_type === "sponsored";
   const isCoins     = !isSponsored && room.challenge_type === "coins_battle";
@@ -1321,9 +1372,11 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
             <View style={cc.dateRow}>
               <Feather name="calendar" size={11} color="#8B9AC0" />
               <Text style={cc.countdownSmall} numberOfLines={2}>
-                {room.challenge_duration_days > 1 && room.challenge_end_at
-                  ? `${fmtShort(room.scheduled_start_at)} → ${fmtShort(room.challenge_end_at)}`
-                  : fmtShort(room.scheduled_start_at)}
+                {unlimitedViewerSchedule
+                  ? formatViewerStartLabel(unlimitedViewerSchedule)
+                  : room.challenge_duration_days > 1 && room.challenge_end_at
+                    ? `${fmtShort(room.scheduled_start_at)} → ${fmtShort(room.challenge_end_at)}`
+                    : fmtShort(room.scheduled_start_at)}
               </Text>
             </View>
           ) : null}
@@ -2057,7 +2110,7 @@ function AvailableRoomsScreenContent() {
           setConsentUpcomingRoom(null);
           setConsentRoom(null);
           pendingRaceActionRef.current = null;
-          setActiveRaceModal(ar);
+          setActiveRaceModal(normalizeActiveRaceInfo(ar as unknown as Record<string, unknown>));
           return;
         }
       }
@@ -2400,8 +2453,16 @@ function AvailableRoomsScreenContent() {
         const body = await res.json().catch(() => ({})) as Record<string, unknown>;
         if (res.status === 409 && (body.code === "ACTIVE_RACE_EXISTS" || body.code === "one_challenge_at_a_time")) {
           pendingRaceActionRef.current = () => doJoin(room);
-          if (body.active_race) setActiveRaceModal(body.active_race as ActiveRaceInfo);
-          else AppAlert.alert("Could not join", (body.error as string) ?? "You already have an active challenge.");
+          if (body.active_race) {
+            setActiveRaceModal(
+              normalizeActiveRaceInfo(body.active_race as Record<string, unknown>),
+            );
+          } else {
+            AppAlert.alert(
+              "Could not join",
+              (body.error as string) ?? "You already have an active challenge.",
+            );
+          }
           return;
         }
         AppAlert.alert("Could not join", (body.error as string) ?? "Room may be full or closed.");
@@ -2516,9 +2577,16 @@ function AvailableRoomsScreenContent() {
     if (!ar) return;
     setLeavingActiveRace(true);
     try {
-      const res = await authFetch(`/api/races/${ar.room_id}/leave`, {
+      const isUnlimited =
+        ar.challenge_type === "unlimited_goal" || ar.room_type === "unlimited_goal";
+      const leaveUrl = isUnlimited
+        ? `/api/unlimited-challenges/${ar.room_id}/leave`
+        : `/api/races/${ar.room_id}/leave`;
+      const res = await authFetch(leaveUrl, {
         method: "POST",
-        body: JSON.stringify({ reason: "join_another_race" }),
+        body: isUnlimited
+          ? undefined
+          : JSON.stringify({ reason: "join_another_race" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as Record<string, string>;
@@ -2582,6 +2650,10 @@ function AvailableRoomsScreenContent() {
         initialMaxPlayers: isUnlimitedRoom ? null : room.max_players,
         initialTargetSteps: room.target_steps,
         initialDailyGoalSteps: isUnlimitedRoom ? room.target_steps : undefined,
+        initialDurationDays: isUnlimitedRoom ? room.challenge_duration_days : undefined,
+        initialChallengeTimezone: isUnlimitedRoom
+          ? (room.challenge_timezone ?? undefined)
+          : undefined,
         initialCoinEntryAmount:
           room.challenge_type === "coins_battle" ? room.coin_entry_amount : undefined,
         initialTrackLayout: resolveRoomTrackCode(room),

@@ -81,6 +81,12 @@ import {
 import { mapUnlimitedDetailToWaitingRoom } from "@/utils/unlimitedWaitingRoom";
 import { UNLIMITED_GOAL_CHALLENGE_TYPE } from "@/utils/unlimitedGoal";
 import { normalizeUnlimitedLiveStatus } from "@/utils/unlimitedLiveRace";
+import {
+  computeUnlimitedViewerSchedule,
+  formatViewerStartLabel,
+  UNLIMITED_LOCAL_MIDNIGHT_NOTE,
+} from "@/utils/unlimitedViewerSchedule";
+import { getDeviceTimezone } from "@/utils/timezone";
 import { isUnlimitedRaceDummyDataEnabled, isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
 import {
   DUMMY_UNLIMITED_RACE_ID,
@@ -293,13 +299,16 @@ function firstRealUsername(...candidates: unknown[]): string | null {
 async function hydrateWaitingRoomProfiles(
   participants: RoomParticipant[],
 ): Promise<RoomParticipant[]> {
+  // Cap profile fetches — unlimited rooms can have 100+ rows; never block the
+  // grid on N parallel public-profile calls. Host + self + a few joiners is enough.
+  const MAX_PROFILE_HYDRATE = 12;
   const needIds = [
     ...new Set(
       participants
         .filter((p) => !!p.userId && isPlaceholderUsername(p.username))
         .map((p) => p.userId),
     ),
-  ];
+  ].slice(0, MAX_PROFILE_HYDRATE);
   if (needIds.length === 0) return participants;
 
   type PublicProfileLite = {
@@ -906,6 +915,9 @@ function MatchmakingScreenContent() {
     initialScheduledStartAt?: string;
     initialDailyGoalSteps?: string;
     initialTrackLayout?: string;
+    /** Unlimited Daily Goal Challenge only — for the viewer-local-midnight schedule display. */
+    initialDurationDays?: string;
+    initialChallengeTimezone?: string;
     dummyRace?: string;
   }>();
 
@@ -983,7 +995,9 @@ function MatchmakingScreenContent() {
   const participantsRef = useRef(participants);
   /** Users who just left — suppress poll re-adding them while BE registration lags. */
   const recentlyLeftIdsRef = useRef<Map<string, number>>(new Map());
-  const [participantsLoading, setParticipantsLoading] = useState(true);
+  const [participantsLoading, setParticipantsLoading] = useState(
+    () => !(parseInitialParticipants(params.initialParticipants)?.length),
+  );
   const [participantsError, setParticipantsError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1137,6 +1151,20 @@ function MatchmakingScreenContent() {
     () => (typeof params.initialScheduledStartAt === "string" && params.initialScheduledStartAt
       ? params.initialScheduledStartAt
       : null),
+  );
+  // Unlimited Daily Goal Challenge only — host/challenge IANA timezone + duration,
+  // used to compute the VIEWER's own local-midnight start display (never the raw
+  // UTC→device-local conversion of scheduledStartAt). See utils/unlimitedViewerSchedule.ts.
+  const [unlimitedChallengeTimezone, setUnlimitedChallengeTimezone] = useState<string | null>(
+    () =>
+      (typeof params.initialChallengeTimezone === "string" && params.initialChallengeTimezone) ||
+      null,
+  );
+  const [unlimitedDurationDays, setUnlimitedDurationDays] = useState<number | null>(
+    () =>
+      (params.initialDurationDays && Number(params.initialDurationDays) > 0
+        ? Number(params.initialDurationDays)
+        : null),
   );
   const [trackLayoutId, setTrackLayoutId] = useState<string | null>(() => {
     const seeded =
@@ -1622,6 +1650,7 @@ function MatchmakingScreenContent() {
       : null;
     if (cached?.participants?.length) {
       setParticipants(cached.participants);
+      setParticipantsLoading(false);
       if (cached.liveRoom) {
         const seeded = Number(params.initialCurrentPlayers) || 0;
         setLiveRoom({
@@ -1646,6 +1675,7 @@ function MatchmakingScreenContent() {
     if (participants.length === 0 && user) {
       const self = buildSelfParticipant(user, isHostMode);
       setParticipants([self]);
+      setParticipantsLoading(false);
       setLiveRoom((prev) => ({
         currentPlayers: params.initialCurrentPlayers
           ? Number(params.initialCurrentPlayers)
@@ -2005,6 +2035,8 @@ function MatchmakingScreenContent() {
           challengeEndAt?: string | null;
           challenge_end_at?: string | null;
           challengeDurationDays?: number;
+          durationDays?: number;
+          challengeTimezone?: string | null;
           coinEntryAmount?: number;
           coinPrizePool?: number;
           trackLayout?: string | null;
@@ -2146,6 +2178,15 @@ function MatchmakingScreenContent() {
         if (apiSchedule) {
           setScheduledStartAt(apiSchedule);
         }
+        if (unlimitedCapacity) {
+          if (typeof dataRace.challengeTimezone === "string" && dataRace.challengeTimezone) {
+            setUnlimitedChallengeTimezone(dataRace.challengeTimezone);
+          }
+          const apiDurationDays = dataRace.durationDays ?? dataRace.challengeDurationDays;
+          if (typeof apiDurationDays === "number" && apiDurationDays > 0) {
+            setUnlimitedDurationDays(apiDurationDays);
+          }
+        }
         const scheduleForMode = apiSchedule || scheduledStartAt;
 
         const wrMode = resolveWaitingRoomMode(scheduleForMode);
@@ -2209,14 +2250,12 @@ function MatchmakingScreenContent() {
           unlimitedCapacity || nextLiveRoom.maxPlayers <= 0
             ? normalized
             : normalized.slice(0, nextLiveRoom.maxPlayers);
-        // Scheduled/future rooms often omit hostUsername — hydrate like Free/Cash rooms.
-        const hydrated = await hydrateWaitingRoomProfiles(capped);
         // Drop users who just left if BE registration row hasn't cancelled yet.
         const leftCutoff = Date.now() - 90_000;
         for (const [uid, at] of recentlyLeftIdsRef.current) {
           if (at < leftCutoff) recentlyLeftIdsRef.current.delete(uid);
         }
-        const nextParticipants = hydrated.filter((p) => {
+        const nextParticipants = capped.filter((p) => {
           const id = normalizeUserId(p.userId);
           return !id || !recentlyLeftIdsRef.current.has(id);
         });
@@ -2233,11 +2272,24 @@ function MatchmakingScreenContent() {
               : { ...nextLiveRoom },
           );
         }
+        // Paint instantly — do not wait on profile hydration (100+ rooms).
         setParticipants(nextParticipants);
         setParticipantsLoading(false);
         setParticipantsError(null);
         persistWaitingRoomCache(nextParticipants, nextLiveRoom);
         void refreshOnlineIds();
+        // Background name/avatar fill for any Host/Player placeholders.
+        void hydrateWaitingRoomProfiles(nextParticipants).then((hydrated) => {
+          if (exitingRef.current) return;
+          const changed = hydrated.some(
+            (p, i) =>
+              p.username !== nextParticipants[i]?.username ||
+              p.avatarUrl !== nextParticipants[i]?.avatarUrl,
+          );
+          if (!changed) return;
+          setParticipants(hydrated);
+          persistWaitingRoomCache(hydrated, nextLiveRoom);
+        });
         if (
           (effectiveLiveStatus === "in_progress" || dataRace.status === "in_progress") &&
           startPhaseRef.current === "idle"
@@ -2673,6 +2725,21 @@ function MatchmakingScreenContent() {
   const realMaxPlayers = liveRoom?.maxPlayers ?? raceMaxPlayers;
   const waitingRoomMode = resolveWaitingRoomMode(scheduledStartAt, nowMs);
   const minimumParticipants = resolveMinimumParticipants(liveRoom?.minimumParticipants);
+  // Unlimited Daily Goal Challenge: the viewer's OWN local-midnight start on the
+  // host-selected calendar date — never scheduledStartAt converted into device
+  // local time (that would show "Aug 8 afternoon" for a Chicago participant when
+  // an India host picked "Aug 9 12:00 AM"). See utils/unlimitedViewerSchedule.ts.
+  const unlimitedViewerSchedule = useMemo(() => {
+    if (!isUnlimitedGoalRoom || !scheduledStartAt || !unlimitedDurationDays) return null;
+    return computeUnlimitedViewerSchedule(
+      {
+        startAtUtc: scheduledStartAt,
+        challengeTimezone: unlimitedChallengeTimezone,
+        durationDays: unlimitedDurationDays,
+      },
+      { fallbackTimezone: getDeviceTimezone(), nowMs },
+    );
+  }, [isUnlimitedGoalRoom, scheduledStartAt, unlimitedChallengeTimezone, unlimitedDurationDays, nowMs]);
   const neededPlayers = playersNeeded(minimumParticipants, realPlayerCount);
   const roomExpiresAtResolved = useMemo(
     () =>
@@ -2771,7 +2838,35 @@ function MatchmakingScreenContent() {
     isUnlimitedCapacity,
   ]);
 
-  const unlimitedSlotSize = Math.min(72, Math.max(56, Math.floor(layoutWidth * 0.18)));
+  // 6 columns × 2 rows — slots stretch to fill the full row width (no trailing gap).
+  const UNLIMITED_SLOTS_PER_ROW = 6;
+  const unlimitedSlotGap = 6;
+  const [unlimitedPanelWidth, setUnlimitedPanelWidth] = useState(() =>
+    Math.max(240, layoutWidth - rs(40) - rs(28)),
+  );
+  const unlimitedPageWidth = unlimitedPanelWidth;
+  // Exact fit: (width - 5 gaps) / 6 — never leave empty space after the 6th slot.
+  const unlimitedSlotSize = Math.max(
+    32,
+    Math.floor(
+      (unlimitedPageWidth - unlimitedSlotGap * (UNLIMITED_SLOTS_PER_ROW - 1)) /
+        UNLIMITED_SLOTS_PER_ROW,
+    ),
+  );
+  const unlimitedPageSize = UNLIMITED_SLOTS_PER_ROW * 2;
+  const unlimitedScrollerHeight = unlimitedSlotSize * 2 + unlimitedSlotGap;
+  const unlimitedPageCount = Math.max(1, Math.ceil(slots.length / unlimitedPageSize));
+  const [unlimitedScrollX, setUnlimitedScrollX] = useState(0);
+  const unlimitedContentWidth = unlimitedPageCount * unlimitedPageWidth;
+  const unlimitedThumbWidth = Math.max(
+    36,
+    (unlimitedPageWidth / Math.max(unlimitedContentWidth, 1)) * unlimitedPageWidth,
+  );
+  const unlimitedThumbMax = Math.max(0, unlimitedPageWidth - unlimitedThumbWidth);
+  const unlimitedThumbX =
+    unlimitedContentWidth <= unlimitedPageWidth
+      ? 0
+      : (unlimitedScrollX / (unlimitedContentWidth - unlimitedPageWidth)) * unlimitedThumbMax;
 
   const showingOverlay = startPhase !== "idle";
 
@@ -3081,9 +3176,14 @@ function MatchmakingScreenContent() {
           <View style={styles.scheduleRow}>
             <Feather name="calendar" size={14} color="#C4B5FD" />
             <Text style={styles.scheduleText}>
-              {formatWaitingRoomSchedule(scheduledStartAt)}
+              {unlimitedViewerSchedule
+                ? formatViewerStartLabel(unlimitedViewerSchedule)
+                : formatWaitingRoomSchedule(scheduledStartAt)}
             </Text>
           </View>
+        ) : null}
+        {unlimitedViewerSchedule ? (
+          <Text style={styles.scheduleSubText}>{UNLIMITED_LOCAL_MIDNIGHT_NOTE}</Text>
         ) : null}
 
         <View style={styles.infoBanner}>
@@ -3124,27 +3224,99 @@ function MatchmakingScreenContent() {
           </View>
 
           {isUnlimitedCapacity ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.unlimitedScroller}
+            <View
+              style={styles.unlimitedScrollWrap}
+              onLayout={(e) => {
+                const w = Math.floor(e.nativeEvent.layout.width);
+                if (w > 0 && w !== unlimitedPanelWidth) setUnlimitedPanelWidth(w);
+              }}
             >
-              {slots.map((p, i) => (
-                <View
-                  key={p?.userId ? `${p.userId}-${i}` : `empty-${i}`}
-                  style={[styles.unlimitedSlotCell, { width: unlimitedSlotSize }]}
-                >
-                  <PlayerSlot
-                    participant={p}
-                    onPress={p ? () => setSelectedParticipant(p) : undefined}
-                    isOnline={isParticipantOnline(p)}
-                    loading={participantsLoading && !p}
-                    colors={colors}
-                    slotSize={unlimitedSlotSize}
+              <ScrollView
+                horizontal
+                pagingEnabled
+                decelerationRate="fast"
+                snapToInterval={unlimitedPageWidth}
+                snapToAlignment="start"
+                disableIntervalMomentum
+                showsHorizontalScrollIndicator={false}
+                style={{ height: unlimitedScrollerHeight, width: unlimitedPageWidth }}
+                contentContainerStyle={styles.unlimitedScroller}
+                onScroll={(e) => setUnlimitedScrollX(e.nativeEvent.contentOffset.x)}
+                scrollEventThrottle={16}
+              >
+                {Array.from({ length: unlimitedPageCount }, (_, pageIndex) => {
+                  const pageSlots: Array<RoomParticipant | null> = slots.slice(
+                    pageIndex * unlimitedPageSize,
+                    pageIndex * unlimitedPageSize + unlimitedPageSize,
+                  );
+                  // Pad last page so both rows stay a full 6-wide grid.
+                  while (pageSlots.length < unlimitedPageSize) pageSlots.push(null);
+                  return (
+                    <View
+                      key={`ul-page-${pageIndex}`}
+                      style={[
+                        styles.unlimitedPage,
+                        {
+                          width: unlimitedPageWidth,
+                          height: unlimitedScrollerHeight,
+                        },
+                      ]}
+                    >
+                      {Array.from({ length: 2 }, (_, row) => (
+                        <View
+                          key={`ul-row-${pageIndex}-${row}`}
+                          style={[
+                            styles.unlimitedRow,
+                            {
+                              gap: unlimitedSlotGap,
+                              height: unlimitedSlotSize,
+                            },
+                          ]}
+                        >
+                          {pageSlots
+                            .slice(
+                              row * UNLIMITED_SLOTS_PER_ROW,
+                              row * UNLIMITED_SLOTS_PER_ROW + UNLIMITED_SLOTS_PER_ROW,
+                            )
+                            .map((p, i) => (
+                              <View
+                                key={
+                                  p?.userId
+                                    ? `${p.userId}-${pageIndex}-${row}-${i}`
+                                    : `empty-${pageIndex}-${row}-${i}`
+                                }
+                                style={styles.unlimitedSlotFlex}
+                              >
+                                <PlayerSlot
+                                  participant={p}
+                                  onPress={p ? () => setSelectedParticipant(p) : undefined}
+                                  isOnline={isParticipantOnline(p)}
+                                  loading={participantsLoading && !p}
+                                  colors={colors}
+                                  slotSize={unlimitedSlotSize}
+                                />
+                              </View>
+                            ))}
+                        </View>
+                      ))}
+                    </View>
+                  );
+                })}
+              </ScrollView>
+              {unlimitedPageCount > 1 ? (
+                <View style={styles.unlimitedScrollTrack}>
+                  <View
+                    style={[
+                      styles.unlimitedScrollThumb,
+                      {
+                        width: unlimitedThumbWidth,
+                        transform: [{ translateX: unlimitedThumbX }],
+                      },
+                    ]}
                   />
                 </View>
-              ))}
-            </ScrollView>
+              ) : null}
+            </View>
           ) : (
             <View style={styles.grid}>
               {slots.map((p, i) => (
@@ -3840,6 +4012,15 @@ const styles = StyleSheet.create({
     color: "#C4B5FD",
     textAlign: "center",
   },
+  scheduleSubText: {
+    fontSize: rf(11),
+    fontWeight: "500",
+    color: "rgba(196,181,253,0.75)",
+    textAlign: "center",
+    marginTop: -6,
+    marginBottom: 12,
+    paddingHorizontal: 20,
+  },
   infoBanner: {
     width: "100%",
     flexDirection: "row",
@@ -3946,16 +4127,38 @@ const styles = StyleSheet.create({
     paddingTop: 7,
     paddingBottom: SLOT_PAD,
   },
+  unlimitedScrollWrap: {
+    width: "100%",
+    gap: 12,
+  },
   unlimitedScroller: {
     flexDirection: "row",
     alignItems: "flex-start",
-    paddingTop: 8,
-    paddingBottom: 4,
-    paddingHorizontal: 2,
-    gap: 10,
   },
-  unlimitedSlotCell: {
-    paddingHorizontal: 2,
+  unlimitedPage: {
+    justifyContent: "space-between",
+  },
+  unlimitedRow: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  unlimitedSlotFlex: {
+    flex: 1,
+    height: "100%",
+    minWidth: 0,
+  },
+  unlimitedScrollTrack: {
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: "rgba(167,139,250,0.22)",
+    overflow: "hidden",
+    marginTop: 2,
+  },
+  unlimitedScrollThumb: {
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: "#A78BFA",
   },
   playerSlot: {
     width: "100%",

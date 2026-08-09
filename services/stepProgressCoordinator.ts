@@ -58,6 +58,16 @@ let lastWalkNotificationSteps = -1;
 let lastWalkNotificationPushMs = 0;
 let lastKnownTrackingDate: string | null = null;
 let midnightCheckTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * Consecutive-zero counter for the "drop polluted verified lane" guard in
+ * resolveAuthoritativeTodaySteps. A single Health Connect / HealthKit read
+ * can transiently fail (rate limit, native bridge hiccup) and the provider
+ * silently returns an empty 0-step result rather than throwing — under rapid
+ * re-polling (e.g. an active Unlimited race refreshing on every roster/Pusher
+ * update) a lone glitchy 0 must never wipe out an already-confirmed daily
+ * total. Require the same fresh 0 reading twice in a row before trusting it.
+ */
+let consecutiveZeroProviderReads = 0;
 
 function mapProviderSource(): StepProgressSource {
   switch (stepProviderManager.getActiveProviderId()) {
@@ -220,12 +230,26 @@ export async function resolveAuthoritativeTodaySteps(
   // inflated AsyncStorage cache (classic "yesterday still showing" after reload).
   if (verifiedActive) {
     let providerSteps = 0;
+    // Track whether we actually got a fresh reading vs skipped/failed — a
+    // transient native read failure must never be treated the same as HC
+    // genuinely reporting 0 for today (see "Drop a polluted verified lane"
+    // below), otherwise a single flaky call during rapid re-polling (e.g. an
+    // active Unlimited race refreshing on every roster update) wipes out an
+    // already-confirmed daily total and the UI flickers between 0 and the
+    // real count.
+    let providerReadOk = false;
     if (!opts?.ignoreProvider) {
       try {
         const data = await stepProviderManager.getTodayStepsForBackgroundPoll();
-        providerSteps = Math.max(0, data?.steps ?? 0);
+        // `null` means "couldn't read right now" (provider re-initializing,
+        // permission cache momentarily stale, etc.) — not a genuine HC/HK 0.
+        if (data) {
+          providerSteps = Math.max(0, data.steps ?? 0);
+          providerReadOk = true;
+        }
       } catch {
         providerSteps = 0;
+        providerReadOk = false;
       }
     }
     const verifiedLane = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
@@ -250,9 +274,17 @@ export async function resolveAuthoritativeTodaySteps(
         `canonical dropInflatedLocal=${localCached} provider=${providerSteps} lastSynced=${backendSynced}`,
       );
     }
-    // Drop a polluted verified lane that looks like a leftover sensor absolute.
-    if (providerSteps === 0 && verifiedLane > 250) {
-      accepted = providerSteps;
+    // Drop a polluted verified lane that looks like a leftover sensor absolute —
+    // only when HC/HK genuinely reported 0 for a fresh read, never on a skipped
+    // or failed read, and only once confirmed twice in a row (a lone glitchy 0
+    // must never zero out a real, already-confirmed total on a transient hiccup).
+    if (providerReadOk && providerSteps === 0 && verifiedLane > 250) {
+      consecutiveZeroProviderReads += 1;
+      if (consecutiveZeroProviderReads >= 2) {
+        accepted = providerSteps;
+      }
+    } else if (providerReadOk && providerSteps > 0) {
+      consecutiveZeroProviderReads = 0;
     }
     stepEngineLog(
       "StepEngine",
@@ -441,19 +473,37 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
     nativeSteps,
   );
 
+  // Redux may still hold yesterday's absolute after a partial date-key write
+  // (storage already says "today" but lanes were never zeroed). Treat a
+  // pre-midnight verified/today timestamp as a forced rollover.
+  const rpNow = store.getState().raceProgress;
+  const reduxUpdatedRaw =
+    rpNow.verifiedTodayStepsAt ?? rpNow.todayStepsLastUpdatedAt ?? 0;
+  const reduxUpdatedMs =
+    typeof reduxUpdatedRaw === "string"
+      ? new Date(reduxUpdatedRaw).getTime()
+      : Number(reduxUpdatedRaw);
+  const reduxStaleByTimestamp =
+    Number.isFinite(reduxUpdatedMs) &&
+    isStepSnapshotFromBeforeToday(
+      reduxUpdatedMs,
+      Math.max(rpNow.verifiedTodaySteps ?? 0, rpNow.todaySteps ?? 0),
+    );
+
   const needsRollover =
     (trackingDate != null && trackingDate !== today) ||
     (nativeDate != null && nativeDate !== today) ||
     (lastKnownTrackingDate != null && lastKnownTrackingDate !== today) ||
-    nativeStaleByTimestamp;
+    nativeStaleByTimestamp ||
+    reduxStaleByTimestamp;
 
   stepDebugVerboseLog(
     "StepReset",
-    `currentUserId=${activeUserId ?? "none"} localDate=${today} previousLocalDate=${trackingDate ?? "none"} dayChanged=${needsRollover}`,
+    `currentUserId=${activeUserId ?? "none"} localDate=${today} previousLocalDate=${trackingDate ?? "none"} dayChanged=${needsRollover} reduxStale=${reduxStaleByTimestamp}`,
   );
   stepEngineLog(
     "DayReset",
-    `previousDate=${trackingDate ?? lastKnownTrackingDate ?? "none"} currentDate=${today} reset=${needsRollover}`,
+    `previousDate=${trackingDate ?? lastKnownTrackingDate ?? "none"} currentDate=${today} reset=${needsRollover} reduxStale=${reduxStaleByTimestamp}`,
   );
 
   if (!needsRollover) {
@@ -1452,6 +1502,8 @@ export function ensureActiveRaceInStore(params: {
   isSponsored?: boolean;
   /** Sponsored / timed races — seeds native countdown chronometer. */
   challengeEndAt?: string | number | null;
+  /** Unlimited Daily Goal — live-race tray notification without classic progress POSTs. */
+  unlimitedDailyMode?: boolean;
 }): void {
   if (!params.participantConfirmed) {
     stepCoordDebug(
@@ -1579,9 +1631,10 @@ export function ensureActiveRaceInStore(params: {
     bootSteps: boot,
     freshStart: false,
     participantConfirmed: true,
+    unlimitedDailyMode: params.unlimitedDailyMode === true,
   });
   stepCoordDebug(
-    `[StepCoordinator] ensureActiveRaceInStore activated raceId=${params.raceId} bootSteps=${boot}`,
+    `[StepCoordinator] ensureActiveRaceInStore activated raceId=${params.raceId} bootSteps=${boot} unlimitedDailyMode=${params.unlimitedDailyMode === true}`,
   );
 }
 
@@ -1603,6 +1656,11 @@ export function setActiveRaceProgress(params: {
   preserveAsCompanion?: boolean;
   isSponsored?: boolean;
   challengeEndAt?: string | number | null;
+  /**
+   * Unlimited Daily Goal Challenge: start the same live-race ongoing notification
+   * as classic/sponsored, while classic /api/races/:id/progress stays blocked.
+   */
+  unlimitedDailyMode?: boolean;
 }): void {
   if (!params.participantConfirmed) {
     stepCoordDebug(
@@ -1611,16 +1669,18 @@ export function setActiveRaceProgress(params: {
     void suppressLiveRaceNotification(params.raceId, "not_confirmed_participant");
     return;
   }
-  // Defense: Unlimited challenge IDs must never enter classic race lane / race FGS.
+  // Unlimited challenge IDs are allowed to own the live-race ongoing notification
+  // (same tray as classic / sponsored once the challenge starts). Classic sensor
+  // progress POSTs remain blocked separately in raceProgressApi + RaceContext.
   try {
-    const { isUnlimitedClassicProgressBlocked } = require(
+    const { registerUnlimitedClassicProgressBlock } = require(
       "@/services/unlimitedRaceProgressGuard",
     ) as typeof import("@/services/unlimitedRaceProgressGuard");
-    if (isUnlimitedClassicProgressBlocked(params.raceId)) {
-      stepCoordDebug(
-        `[StepCoordinator] setActiveRaceProgress blocked — Unlimited challengeId=${params.raceId}`,
-      );
-      return;
+    // Keep the progress-POST block registered whenever this id is Unlimited-owned.
+    // (No-op for classic races — callers only pass Unlimited ids through the
+    // Unlimited live-detail path.)
+    if (params.unlimitedDailyMode === true) {
+      registerUnlimitedClassicProgressBlock(params.raceId);
     }
   } catch {
     /* optional */
@@ -1888,8 +1948,18 @@ export function clearActiveRaceProgress(
   })();
 }
 
-/** Push daily-steps notification after race ends — does not stop the foreground service. */
-export async function switchDailyStepsNotification(todaySteps?: number): Promise<void> {
+/**
+ * Push daily-steps notification after race ends — does not stop the foreground service.
+ *
+ * `dailyGoalOverride` lets an active Unlimited Daily Goal Challenge show ITS OWN
+ * per-day goal (which can differ from the user's general Walk profile goal in
+ * `raceProgress.dailyGoal`) so the ongoing tray notification reads "X / challenge
+ * goal" instead of silently substituting an unrelated personal target.
+ */
+export async function switchDailyStepsNotification(
+  todaySteps?: number,
+  dailyGoalOverride?: number,
+): Promise<void> {
   const s = store.getState().raceProgress;
   if (!s.userId) return;
   // Prefer live resolved total (verified + provisional). Optional todaySteps arg is
@@ -1902,19 +1972,25 @@ export async function switchDailyStepsNotification(todaySteps?: number): Promise
       Math.max(0, Math.floor(todaySteps ?? 0)),
     ),
   });
+  const goal =
+    typeof dailyGoalOverride === "number" && dailyGoalOverride > 0
+      ? Math.floor(dailyGoalOverride)
+      : s.dailyGoal > 0
+        ? s.dailyGoal
+        : 10_000;
   // Invalidate same-step throttle so we always re-sync native after race teardown
   // (native SWITCH_TO_WALK may have briefly written a stale low body).
   lastWalkNotificationSteps = -1;
   await stepTrackingNotificationService.mirrorWalkScreen({
     userId: s.userId,
     todaySteps: resolved,
-    dailyGoal: s.dailyGoal > 0 ? s.dailyGoal : 10_000,
+    dailyGoal: goal,
   });
   lastWalkNotificationSteps = resolved;
   lastWalkNotificationPushMs = Date.now();
   logger.debug(
     "NotificationMode",
-    `switch race_live -> daily_steps todaySteps=${resolved}`,
+    `switch race_live -> daily_steps todaySteps=${resolved} goal=${goal}`,
   );
 }
 

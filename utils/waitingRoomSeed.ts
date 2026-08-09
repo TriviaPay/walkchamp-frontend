@@ -174,6 +174,8 @@ export function buildMatchmakingParams(options: {
   initialPrizePoolCents?: number;
   initialDailyGoalSteps?: number;
   initialDurationDays?: number;
+  /** Unlimited Daily Goal Challenge only — host/challenge IANA timezone startAtUtc was anchored to. */
+  initialChallengeTimezone?: string;
   /** Selected race track theme code (e.g. bg, daylightStadium). */
   initialTrackLayout?: string;
 }): Record<string, string> {
@@ -223,6 +225,9 @@ export function buildMatchmakingParams(options: {
   }
   if (options.initialDurationDays != null) {
     params.initialDurationDays = String(options.initialDurationDays);
+  }
+  if (options.initialChallengeTimezone?.trim()) {
+    params.initialChallengeTimezone = options.initialChallengeTimezone.trim();
   }
   if (options.initialTrackLayout?.trim()) {
     params.initialTrackLayout = options.initialTrackLayout.trim();

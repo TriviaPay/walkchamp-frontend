@@ -267,6 +267,13 @@ export type UnlimitedLiveDetailMapped = {
     hasExplicitPlayerCount?: boolean;
     challengeTimezone?: string | null;
     challengeDayKey?: string | null;
+    /** Raw backend challenge.status (waiting|starting|active|settling|completed|cancelled_by_platform) —
+     * unlike `status` above, this is never collapsed into "in_progress"/"completed"/"waiting", so
+     * callers can tell "settling" (settlement running) apart from "active" (see utils/unlimitedResults.ts). */
+    rawStatus?: string | null;
+    /** Raw backend challenge.settlementStatus (pending|in_progress|completed|manual_review|rolled_over|refunded). */
+    settlementStatus?: string | null;
+    qualifiedParticipantCount?: number | null;
   };
   participants: Array<{
     id: string;
@@ -283,6 +290,12 @@ export type UnlimitedLiveDetailMapped = {
     totalChallengeSteps?: number | null;
     challengeDayKey?: string | null;
     completedDays?: number | null;
+    /** Locked participant timezone for this player's active day window (backend-authoritative). */
+    timezone?: string | null;
+    /** 1-based active day number for this player (backend-authoritative). */
+    dayNumber?: number | null;
+    qualificationStatus?: string | null;
+    dailyGoalSteps?: number | null;
   }>;
 };
 
@@ -350,6 +363,14 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
     asString(pick(obj, "challengeDayKey", "challenge_day_key", "localDate", "local_date")) ??
     null;
   const completedDays = asNumber(pick(obj, "completedDays", "completed_days"));
+  // Backend-authoritative locked-timezone / active-day fields — only populated
+  // once this player has a live day window (loadChallengePlayers in
+  // Backend/src/lib/unlimitedLiveProgress.ts). Used to build the viewer schedule
+  // without ever guessing or converting from the host's timezone.
+  const timezone = asString(pick(obj, "timezone"));
+  const dayNumber = asNumber(pick(obj, "dayNumber", "day_number"));
+  const qualificationStatus = asString(pick(obj, "qualificationStatus", "qualification_status"));
+  const dailyGoalSteps = asNumber(pick(obj, "dailyGoalSteps", "daily_goal_steps"));
   return {
     id:
       asString(pick(obj, "participantId", "participant_id", "registrationId", "registration_id")) ??
@@ -380,6 +401,10 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
     ...(totalChallengeSteps != null ? { totalChallengeSteps } : {}),
     ...(challengeDayKey ? { challengeDayKey } : {}),
     ...(completedDays != null ? { completedDays } : {}),
+    ...(timezone ? { timezone } : {}),
+    ...(dayNumber != null ? { dayNumber } : {}),
+    ...(qualificationStatus ? { qualificationStatus } : {}),
+    ...(dailyGoalSteps != null ? { dailyGoalSteps } : {}),
   };
 }
 
@@ -439,6 +464,10 @@ export function mergeUnlimitedLiveParticipants(
         mapped.totalChallengeSteps ?? prev.totalChallengeSteps ?? null,
       challengeDayKey: mapped.challengeDayKey ?? prev.challengeDayKey ?? null,
       completedDays: mapped.completedDays ?? prev.completedDays ?? null,
+      timezone: mapped.timezone ?? prev.timezone ?? null,
+      dayNumber: mapped.dayNumber ?? prev.dayNumber ?? null,
+      qualificationStatus: mapped.qualificationStatus ?? prev.qualificationStatus ?? null,
+      dailyGoalSteps: mapped.dailyGoalSteps ?? prev.dailyGoalSteps ?? null,
       // Keep "Dummy User 00012" / real usernames — do not let leaderboard `du…` codes win.
       username: preferLiveDisplayUsername(prev.username, mapped.username),
       isHost: prev.isHost || mapped.isHost,
@@ -663,6 +692,11 @@ export function mapUnlimitedDetailToLiveDetail(
       challengeDayKey:
         asString(pick(challenge, "challengeDayKey", "challenge_day_key")) ??
         asString(pick(root ?? {}, "challengeDayKey", "challenge_day_key")),
+      rawStatus: waiting.race.status,
+      settlementStatus: asString(pick(challenge, "settlementStatus", "settlement_status")),
+      qualifiedParticipantCount: asNumber(
+        pick(challenge, "qualifiedParticipantCount", "qualified_participant_count"),
+      ),
     },
     participants,
   };

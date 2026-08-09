@@ -88,6 +88,13 @@ import {
   isValidUnlimitedEntryFeeCents,
   type UnlimitedGoalDurationDays,
 } from "@/utils/unlimitedGoal";
+import { computeUnlimitedViewerSchedule } from "@/utils/unlimitedViewerSchedule";
+import { getDeviceTimezone } from "@/utils/timezone";
+import {
+  resolveUnlimitedResultStatus,
+  resolveUnlimitedResultCardState,
+  unlimitedResultCardCopy,
+} from "@/utils/unlimitedResults";
 import {
   previewUnlimitedGoalPaymentQuote,
   type UnlimitedGoalPaymentQuote,
@@ -2346,6 +2353,11 @@ function WalkScreenContent() {
     current_user_registered: boolean;
     host_user_id: string;
     status?: string | null;
+    /** Unlimited Daily Goal Challenge only — for the viewer-local-midnight schedule display. */
+    challenge_timezone?: string | null;
+    challenge_duration_days?: number;
+    /** Unlimited Daily Goal Challenge only — result-state derivation (utils/unlimitedResults.ts). */
+    settlement_status?: string | null;
   };
   const [registeredUpcomingRooms, setRegisteredUpcomingRooms] = useState<WalkUpcomingRoom[]>([]);
   /** Distinguish loading from confirmed empty for Next Race / Live Race card. */
@@ -2519,6 +2531,9 @@ function WalkScreenContent() {
           host_user_id: u.host_user_id,
           current_user_registered: serverReg || (!leftIds.has(u.room_id) && !!u.current_user_registered),
           status: u.status,
+          challenge_timezone: u.challenge_timezone ?? null,
+          challenge_duration_days: u.challenge_duration_days,
+          settlement_status: u.settlement_status ?? null,
         };
       });
       const merged = mergeUpcomingRoomsById(
@@ -3066,6 +3081,66 @@ function WalkScreenContent() {
   const sponsoredRacingId =
     sponsoredStatus?.kind === "racing" ? sponsoredStatus.eventId : null;
 
+  const findAnyActiveRace = useCallback(() => {
+    for (const [ek, cs] of Object.entries(challengeStatuses)) {
+      if (
+        cs &&
+        ACTIVE_OR_WAITING.includes(cs.status) &&
+        cs.raceId &&
+        cs.raceId !== sponsoredRacingId
+      ) {
+        return { entryKey: ek, cs };
+      }
+    }
+    // Unlimited waiting/live is not on the free/coins/cash challengeStatuses map —
+    // block Create / Host the same way using registered upcoming / my-open rooms.
+    for (const room of registeredUpcomingRooms) {
+      if (!room.current_user_registered || !room.room_id) continue;
+      if (room.room_id === sponsoredRacingId) continue;
+      if (room.challenge_type === "sponsored") continue;
+      if (
+        !isUnlimitedGoalChallenge({
+          challengeType: room.challenge_type,
+          maxPlayers: room.max_players,
+        })
+      ) {
+        continue;
+      }
+      const status = (room.status ?? "").toLowerCase();
+      const isLive =
+        status === "active" ||
+        status === "starting" ||
+        status === "settling" ||
+        status === "in_progress";
+      const isHost = !!user?.id && room.host_user_id === user.id;
+      const cs: ChallengeStatus = {
+        status: isLive
+          ? isHost
+            ? "user_hosting_active"
+            : "user_joined_active"
+          : isHost
+            ? "user_hosting_waiting"
+            : "user_joined_waiting",
+        raceId: room.room_id,
+        isHost,
+        isParticipant: true,
+        joinedCount: room.registered_count ?? 1,
+        maxPlayers: 0,
+        targetSteps: room.target_steps,
+        scheduledStartAt: room.scheduled_start_at,
+        startedAt: isLive ? room.scheduled_start_at : null,
+        entryAmountCents: Math.round((room.entry_fee ?? 0) * 100),
+        canHost: false,
+        canJoin: false,
+        isActive: isLive,
+        isFinished: false,
+        label: isLive ? "Racing" : "Waiting",
+      };
+      return { entryKey: "unlimited_goal", cs };
+    }
+    return null;
+  }, [challengeStatuses, registeredUpcomingRooms, sponsoredRacingId, user?.id]);
+
   const findActiveRaceForOtherChallenge = useCallback((targetEntryKey: string) => {
     for (const [ek, cs] of Object.entries(challengeStatuses)) {
       if (
@@ -3078,22 +3153,11 @@ function WalkScreenContent() {
         return { entryKey: ek, cs };
       }
     }
-    return null;
-  }, [challengeStatuses, sponsoredRacingId]);
-
-  const findAnyActiveRace = useCallback(() => {
-    for (const [ek, cs] of Object.entries(challengeStatuses)) {
-      if (
-        cs &&
-        ACTIVE_OR_WAITING.includes(cs.status) &&
-        cs.raceId &&
-        cs.raceId !== sponsoredRacingId
-      ) {
-        return { entryKey: ek, cs };
-      }
-    }
-    return null;
-  }, [challengeStatuses, sponsoredRacingId]);
+    // Unlimited blocks hosting/joining every non-sponsored challenge type.
+    if (targetEntryKey === "unlimited_goal") return null;
+    const any = findAnyActiveRace();
+    return any?.entryKey === "unlimited_goal" ? any : null;
+  }, [challengeStatuses, sponsoredRacingId, findAnyActiveRace]);
 
   const entryKeyToReminderType = useCallback((entryKey: string): RaceStartingSoonChallengeType => {
     if (entryKey === "free") return "free";
@@ -3128,6 +3192,12 @@ function WalkScreenContent() {
     entryAmountCents?: number;
     onPressCta: () => void;
     sortMs: number;
+    /** Unlimited Daily Goal Challenge only — viewer-local-midnight schedule inputs. */
+    isUnlimitedGoal?: boolean;
+    unlimitedChallengeTimezone?: string | null;
+    unlimitedDurationDays?: number | null;
+    /** Set once the viewer's own Unlimited duration has ended but results aren't final yet (spec §25). */
+    unlimitedResultBadge?: { title: string; subtitle: string } | null;
   };
 
   /** Tick so Next Race drops cards / flips phase when scheduledStartAt crosses thresholds.
@@ -3396,6 +3466,37 @@ function WalkScreenContent() {
       const registeredCount = room.registered_count ?? 1;
       const entryAmountCents =
         room.entry_fee > 0 ? Math.round(room.entry_fee * 100) : undefined;
+
+      // Unlimited Daily Goal: once the VIEWER'S OWN local duration has ended,
+      // the walk card must show Results Pending / Validation in Progress /
+      // View Results instead of the live "racing" CTA — never a final result
+      // just because this participant is done (spec §25, utils/unlimitedResults.ts).
+      let unlimitedResultBadge: { title: string; subtitle: string } | null = null;
+      if (isUnlimitedRoom && room.scheduled_start_at && room.challenge_duration_days) {
+        const viewerSchedule = computeUnlimitedViewerSchedule(
+          {
+            startAtUtc: room.scheduled_start_at,
+            challengeTimezone: room.challenge_timezone ?? null,
+            durationDays: room.challenge_duration_days,
+            dailyGoalSteps: room.target_steps,
+            challengeStatus: room.status,
+          },
+          { fallbackTimezone: getDeviceTimezone(), nowMs: now },
+        );
+        const personallyFinished =
+          viewerSchedule?.viewerStatus === "completed" ||
+          viewerSchedule?.viewerStatus === "failed" ||
+          viewerSchedule?.viewerStatus === "left";
+        if (personallyFinished) {
+          const unlimitedResultStatus = resolveUnlimitedResultStatus({
+            challengeStatus: room.status,
+            settlementStatus: room.settlement_status,
+            viewerPersonallyFinished: true,
+          });
+          const cardState = resolveUnlimitedResultCardState(unlimitedResultStatus);
+          if (cardState) unlimitedResultBadge = unlimitedResultCardCopy(cardState);
+        }
+      }
       cards.push({
         key: `upcoming:${room.room_id}`,
         challengeType,
@@ -3411,10 +3512,22 @@ function WalkScreenContent() {
             : undefined,
         coinEntryAmount: room.coin_entry_amount,
         entryAmountCents,
+        isUnlimitedGoal: isUnlimitedRoom,
+        unlimitedChallengeTimezone: isUnlimitedRoom ? room.challenge_timezone : undefined,
+        unlimitedDurationDays: isUnlimitedRoom ? room.challenge_duration_days : undefined,
+        unlimitedResultBadge,
         onPressCta: () => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
           if (challengeType === "sponsored") {
             openSponsoredWaitingRoom(room.room_id);
+            return;
+          }
+          // Unlimited: viewer's own days are done — go to Results, never back into Live Detail's racing UI.
+          if (unlimitedResultBadge) {
+            router.push({
+              pathname: "/race/unlimited-results",
+              params: { challengeId: room.room_id },
+            } as never);
             return;
           }
           // Live race (classic or Unlimited): go straight to Live Detail.
@@ -3452,6 +3565,10 @@ function WalkScreenContent() {
             initialTargetSteps: room.target_steps,
             initialCurrentPlayers: room.registered_count ?? 1,
             initialDailyGoalSteps: isUnlimitedRoom ? room.target_steps : undefined,
+            initialDurationDays: isUnlimitedRoom ? room.challenge_duration_days : undefined,
+            initialChallengeTimezone: isUnlimitedRoom
+              ? (room.challenge_timezone ?? undefined)
+              : undefined,
           });
         },
         sortMs: startMs,
@@ -3489,11 +3606,15 @@ function WalkScreenContent() {
 
   const buildActiveRaceInfoFromStatus = useCallback((entryKey: string, cs: ChallengeStatus): ActiveRaceInfo => {
     const isActiveRace = cs.status === "user_hosting_active" || cs.status === "user_joined_active";
+    const isUnlimited = entryKey === "unlimited_goal";
     return {
       room_id: cs.raceId!,
       room_status: isActiveRace ? "in_progress" : "open",
-      challenge_type: entryKey,
-      entry_fee: entryKeyToFee(entryKey),
+      challenge_type: isUnlimited ? "unlimited_goal" : entryKey,
+      room_type: isUnlimited ? "unlimited_goal" : undefined,
+      entry_fee: isUnlimited
+        ? (cs.entryAmountCents ?? 0) / 100
+        : entryKeyToFee(entryKey),
       target_steps: cs.targetSteps ?? 1000,
       current_user_role: cs.isHost ? "host" : "participant",
       can_leave: true,
@@ -3501,7 +3622,12 @@ function WalkScreenContent() {
       started_at: cs.startedAt ?? null,
       scheduled_start_at: cs.scheduledStartAt ?? null,
       registered_count: typeof cs.joinedCount === "number" ? cs.joinedCount : undefined,
-      max_players: typeof cs.maxPlayers === "number" && cs.maxPlayers > 0 ? cs.maxPlayers : undefined,
+      max_players:
+        isUnlimited
+          ? 0
+          : typeof cs.maxPlayers === "number" && cs.maxPlayers > 0
+            ? cs.maxPlayers
+            : undefined,
     };
   }, []);
 
@@ -3543,6 +3669,58 @@ function WalkScreenContent() {
         } catch { /* fall through to race detail */ }
 
         try {
+          if (entryKey === "unlimited_goal") {
+            const detailRes = await authFetch(`/api/unlimited-challenges/${raceId}`);
+            if (!detailRes.ok) return;
+            const detail = (await detailRes.json()) as {
+              challenge?: {
+                status?: string;
+                startAtUtc?: string | null;
+                dailyGoalSteps?: number;
+                paidParticipantCount?: number;
+                entryFeeCents?: number;
+                challengeTimezone?: string | null;
+                durationDays?: number;
+              };
+              participantCount?: number;
+            };
+            const ch = detail.challenge;
+            if (!ch) return;
+            const status = (ch.status ?? "").toLowerCase();
+            const live =
+              status === "active" || status === "starting" || status === "settling";
+            setActiveRaceModal((prev) => {
+              if (!prev || prev.room_id !== raceId) return prev;
+              return {
+                ...prev,
+                challenge_type: "unlimited_goal",
+                room_type: "unlimited_goal",
+                started_at: live ? (ch.startAtUtc ?? prev.started_at) : prev.started_at,
+                scheduled_start_at: ch.startAtUtc ?? prev.scheduled_start_at,
+                registered_count:
+                  typeof detail.participantCount === "number"
+                    ? detail.participantCount
+                    : typeof ch.paidParticipantCount === "number"
+                      ? ch.paidParticipantCount
+                      : prev.registered_count,
+                max_players: 0,
+                target_steps:
+                  typeof ch.dailyGoalSteps === "number" && ch.dailyGoalSteps > 0
+                    ? ch.dailyGoalSteps
+                    : prev.target_steps,
+                entry_fee:
+                  typeof ch.entryFeeCents === "number"
+                    ? ch.entryFeeCents / 100
+                    : prev.entry_fee,
+                room_status: live ? "in_progress" : "open",
+                challenge_timezone: ch.challengeTimezone ?? prev.challenge_timezone,
+                duration_days:
+                  typeof ch.durationDays === "number" ? ch.durationDays : prev.duration_days,
+              };
+            });
+            return;
+          }
+
           const detailRes = await authFetch(`/api/races/${raceId}`);
           if (!detailRes.ok) return;
           const detail = (await detailRes.json()) as {
@@ -3843,12 +4021,32 @@ function WalkScreenContent() {
     setActiveRaceModal(null);
     pendingRaceActionRef.current = null;
     if (!ar) return;
+    const isUnlimited =
+      ar.challenge_type === "unlimited_goal" || ar.room_type === "unlimited_goal";
     if (ar.room_status === "in_progress") {
-      router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(ar.room_id, user?.id) });
+      router.push({
+        pathname: "/race/live-detail",
+        params: {
+          ...liveRaceNavParams(ar.room_id, user?.id),
+          ...(isUnlimited
+            ? { challengeType: "unlimited_goal", capacityMode: "unlimited" }
+            : {}),
+        },
+      });
     } else {
       navToMatchmaking({
         raceId: ar.room_id,
         isHost: ar.current_user_role === "host",
+        ...(isUnlimited
+          ? {
+              initialEntryType: "unlimited_goal",
+              initialCapacityMode: "unlimited",
+              initialDailyGoalSteps: ar.target_steps,
+              initialScheduledStartAt: ar.scheduled_start_at ?? undefined,
+              initialCurrentPlayers: ar.registered_count,
+              initialMaxPlayers: null,
+            }
+          : {}),
       });
     }
   };
@@ -3858,9 +4056,16 @@ function WalkScreenContent() {
     if (!ar) return;
     setLeavingActiveRace(true);
     try {
-      const res = await authFetch(`/api/races/${ar.room_id}/leave`, {
+      const isUnlimited =
+        ar.challenge_type === "unlimited_goal" || ar.room_type === "unlimited_goal";
+      const leaveUrl = isUnlimited
+        ? `/api/unlimited-challenges/${ar.room_id}/leave`
+        : `/api/races/${ar.room_id}/leave`;
+      const res = await authFetch(leaveUrl, {
         method: "POST",
-        body: JSON.stringify({ reason: "join_another_race" }),
+        body: isUnlimited
+          ? undefined
+          : JSON.stringify({ reason: "join_another_race" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as Record<string, string>;
@@ -3869,6 +4074,8 @@ function WalkScreenContent() {
       }
       setActiveRace(null, false);
       setActiveRaceModal(null);
+      void fetchRegisteredUpcomingRooms();
+      void loadChallengeStatuses();
       const pending = pendingRaceActionRef.current;
       pendingRaceActionRef.current = null;
       if (pending) await pending();
@@ -4036,7 +4243,11 @@ function WalkScreenContent() {
           return;
         }
 
-        if (res.status === 409 && data.code === "ACTIVE_RACE_EXISTS" && data.active_race) {
+        if (
+          res.status === 409 &&
+          (data.code === "ACTIVE_RACE_EXISTS" || data.code === "one_challenge_at_a_time") &&
+          data.active_race
+        ) {
           const ar = data.active_race as ActiveRaceInfo & {
             room_type?: string;
             is_sponsored?: boolean;
@@ -4234,6 +4445,10 @@ function WalkScreenContent() {
             "",
           initialDailyGoalSteps: meta.isUnlimited ? draft.unlimited.dailyGoalSteps : undefined,
           initialDurationDays: meta.isUnlimited ? draft.unlimited.durationDays : undefined,
+          initialChallengeTimezone: meta.isUnlimited
+            ? ((data.race as { challengeTimezone?: string } | undefined)?.challengeTimezone ??
+              getUserTimezone())
+            : undefined,
           initialScheduledStartAt: meta.scheduledStartAt?.toISOString() ?? undefined,
           initialTrackLayout:
             data.race?.trackLayout ?? draft.trackLayout ?? undefined,
@@ -4494,23 +4709,49 @@ function WalkScreenContent() {
           );
 
           const renderNextRaceCard = (card: (typeof nextRaceCards)[number], width?: number) => (
-            <RaceStartingSoonCard
-              key={card.key}
-              challengeType={card.challengeType}
-              phase={card.phase}
-              scheduledStartAt={card.scheduledStartAt}
-              endsAt={card.endsAt}
-              registeredCount={card.registeredCount}
-              maxSlots={card.maxSlots}
-              targetSteps={card.targetSteps}
-              prizePoolCents={card.prizePoolCents}
-              prizePerWinnerCents={card.prizePerWinnerCents}
-              coinEntryAmount={card.coinEntryAmount}
-              entryAmountCents={card.entryAmountCents}
-              isParticipant
-              onPressCta={card.onPressCta}
-              style={width != null ? { width, marginBottom: 0 } : undefined}
-            />
+            <View style={width != null ? { width } : undefined} key={card.key}>
+              <RaceStartingSoonCard
+                challengeType={card.challengeType}
+                phase={card.phase}
+                scheduledStartAt={card.scheduledStartAt}
+                endsAt={card.endsAt}
+                registeredCount={card.registeredCount}
+                maxSlots={card.maxSlots}
+                targetSteps={card.targetSteps}
+                prizePoolCents={card.prizePoolCents}
+                prizePerWinnerCents={card.prizePerWinnerCents}
+                coinEntryAmount={card.coinEntryAmount}
+                entryAmountCents={card.entryAmountCents}
+                isParticipant
+                isUnlimitedGoal={card.isUnlimitedGoal}
+                unlimitedChallengeTimezone={card.unlimitedChallengeTimezone}
+                unlimitedDurationDays={card.unlimitedDurationDays}
+                onPressCta={card.onPressCta}
+                style={width != null ? { width, marginBottom: 0 } : undefined}
+              />
+              {card.unlimitedResultBadge ? (
+                <TouchableOpacity
+                  onPress={card.onPressCta}
+                  activeOpacity={0.85}
+                  style={{
+                    marginTop: 6,
+                    borderRadius: 12,
+                    paddingVertical: 9,
+                    paddingHorizontal: 14,
+                    backgroundColor: "rgba(124,58,255,0.16)",
+                    borderWidth: 1,
+                    borderColor: "rgba(124,58,255,0.4)",
+                  }}
+                >
+                  <Text style={{ color: "#C4B5FD", fontWeight: "800", fontSize: rf(12.5) }}>
+                    {card.unlimitedResultBadge.title}
+                  </Text>
+                  <Text style={{ color: "#8B9AC0", fontSize: rf(10.5), marginTop: 2 }}>
+                    {card.unlimitedResultBadge.subtitle}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           );
 
           return (
@@ -4876,7 +5117,9 @@ function WalkScreenContent() {
                     return { entryKey: ek, cs };
                   }
                 }
-                return null;
+                // Unlimited waiting/live also blocks cash host/join (sponsored allowed).
+                const any = findAnyActiveRace();
+                return any?.entryKey === "unlimited_goal" ? any : null;
               })();
               if (otherActive) {
                 if (otherActive.cs.isHost) {
@@ -5768,12 +6011,31 @@ function WalkScreenContent() {
           const info = alreadyHostingModal;
           setAlreadyHostingModal(null);
           if (!info?.raceId) return;
+          const isUnlimited = info.entryKey === "unlimited_goal";
           if (info.isActiveRace) {
-            router.push({ pathname: "/race/live-detail", params: liveRaceNavParams(info.raceId, user?.id) });
+            router.push({
+              pathname: "/race/live-detail",
+              params: {
+                ...liveRaceNavParams(info.raceId, user?.id),
+                ...(isUnlimited
+                  ? { challengeType: "unlimited_goal", capacityMode: "unlimited" }
+                  : {}),
+              },
+            });
           } else {
             setActiveRace(info.raceId, true);
-            joinRace(entryKeyToFee(info.entryKey), 10, true);
-            navToMatchmaking({ raceId: info.raceId!, isHost: true });
+            joinRace(entryKeyToFee(info.entryKey), isUnlimited ? 0 : 10, true);
+            navToMatchmaking({
+              raceId: info.raceId!,
+              isHost: true,
+              ...(isUnlimited
+                ? {
+                    initialEntryType: "unlimited_goal",
+                    initialCapacityMode: "unlimited",
+                    initialMaxPlayers: null,
+                  }
+                : {}),
+            });
           }
         }}
       />

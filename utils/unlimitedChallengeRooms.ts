@@ -200,6 +200,11 @@ export type UnlimitedUpcomingRoom = {
   platform_fee_cents?: number | null;
   total_charge_cents?: number | null;
   reward_pool?: number | null;
+  /** Host/challenge IANA timezone `scheduled_start_at` was anchored to (see serializeChallenge). */
+  challenge_timezone?: string | null;
+  /** Raw backend settlement bookkeeping — see utils/unlimitedResults.ts resolveUnlimitedResultStatus. */
+  settlement_status?: string | null;
+  qualified_participant_count?: number | null;
 };
 
 /**
@@ -406,6 +411,9 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
     registered_count: participantCount,
     scheduled_start_at: startAt,
     challenge_duration_days: durationDays,
+    challenge_timezone: asString(
+      pickRaw(obj, "challengeTimezone", "challenge_timezone", "timezone"),
+    ),
     challenge_end_at: endAt,
     selected_track_theme_id: asString(pickRaw(obj, "selected_track_theme_id", "trackLayout")) ?? "bg",
     theme_name: asString(pickRaw(obj, "theme_name", "themeName")) ?? "Unlimited",
@@ -430,6 +438,10 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
     platform_fee_cents: asNumber(pickRaw(obj, "platformFeeCents", "platform_fee_cents")),
     total_charge_cents: asNumber(pickRaw(obj, "totalChargeCents", "total_charge_cents")),
     reward_pool: rewardPoolDollars,
+    settlement_status: asString(pickRaw(obj, "settlementStatus", "settlement_status")),
+    qualified_participant_count: asNumber(
+      pickRaw(obj, "qualifiedParticipantCount", "qualified_participant_count"),
+    ),
   };
 }
 

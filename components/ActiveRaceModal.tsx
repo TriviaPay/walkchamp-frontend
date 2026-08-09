@@ -8,6 +8,12 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import {
+  computeUnlimitedViewerSchedule,
+  formatViewerStartLabel,
+  UNLIMITED_LOCAL_MIDNIGHT_NOTE,
+} from "@/utils/unlimitedViewerSchedule";
+import { getDeviceTimezone } from "@/utils/timezone";
 
 export interface ActiveRaceInfo {
   room_id: string;
@@ -32,6 +38,11 @@ export interface ActiveRaceInfo {
   scheduledStartAt?: string | null;
   currentPlayers?: number;
   maxPlayers?: number;
+  /** Unlimited Daily Goal Challenge only — for the viewer-local-midnight schedule display. */
+  challenge_timezone?: string | null;
+  duration_days?: number | null;
+  challengeTimezone?: string | null;
+  durationDays?: number | null;
 }
 
 /** Normalize snake_case / camelCase active-race payloads into ActiveRaceInfo. */
@@ -54,6 +65,12 @@ export function normalizeActiveRaceInfo(
     (typeof raw.scheduled_start_at === "string" ? raw.scheduled_start_at : null) ??
     (typeof raw.scheduledStartAt === "string" ? raw.scheduledStartAt : null) ??
     null;
+  const challengeTimezone =
+    (typeof raw.challenge_timezone === "string" ? raw.challenge_timezone : null) ??
+    (typeof raw.challengeTimezone === "string" ? raw.challengeTimezone : null);
+  const durationDays =
+    (typeof raw.duration_days === "number" ? raw.duration_days : null) ??
+    (typeof raw.durationDays === "number" ? raw.durationDays : null);
 
   return {
     room_id: String(raw.room_id ?? ""),
@@ -70,6 +87,8 @@ export function normalizeActiveRaceInfo(
     started_at: started,
     max_players: max,
     registered_count: registered,
+    challenge_timezone: challengeTimezone,
+    duration_days: durationDays,
   };
 }
 
@@ -96,6 +115,12 @@ interface ActiveRaceModalProps {
 }
 
 function challengeLabel(info: ActiveRaceInfo): string {
+  if (
+    info.challenge_type === "unlimited_goal" ||
+    info.room_type === "unlimited_goal"
+  ) {
+    return "Daily Goal Challenge";
+  }
   if (info.challenge_type === "coins_battle") return "Coins Battle";
   if (info.entry_fee === 0) return "Free Challenge";
   return `$${info.entry_fee.toFixed(2)} Challenge`;
@@ -131,6 +156,11 @@ function formatParticipants(info: ActiveRaceInfo): string {
     (typeof info.max_players === "number" ? info.max_players : undefined) ??
     (typeof info.maxParticipants === "number" ? info.maxParticipants : undefined) ??
     (typeof info.maxPlayers === "number" ? info.maxPlayers : undefined);
+  const unlimited =
+    info.challenge_type === "unlimited_goal" || info.room_type === "unlimited_goal";
+  if (unlimited && typeof count === "number") {
+    return `${count.toLocaleString()} joined`;
+  }
   if (typeof count === "number" && typeof max === "number" && max > 0) {
     return `${count} / ${max}`;
   }
@@ -175,8 +205,12 @@ export default function ActiveRaceModal({
   onLeaveAndContinue,
   onCancel,
 }: ActiveRaceModalProps) {
+  const status = (activeRace?.room_status ?? "").toLowerCase();
   const isWaiting =
-    activeRace?.room_status === "open" || activeRace?.room_status === "full";
+    status === "open" ||
+    status === "full" ||
+    status === "waiting" ||
+    status === "scheduled";
 
   const label = activeRace ? challengeLabel(activeRace) : "Challenge";
 
@@ -192,6 +226,24 @@ export default function ActiveRaceModal({
   // Prefer actual start, then scheduled start.
   const startIso = activeRace?.started_at ?? activeRace?.scheduled_start_at ?? null;
   const participants = activeRace ? formatParticipants(activeRace) : "Not available";
+  const isUnlimitedActiveRace =
+    activeRace?.challenge_type === "unlimited_goal" || activeRace?.room_type === "unlimited_goal";
+  // Unlimited: show the viewer's own local-midnight start on the host's selected
+  // calendar date — never scheduled_start_at converted into device local time.
+  const unlimitedViewerSchedule =
+    isUnlimitedActiveRace && activeRace?.scheduled_start_at && activeRace?.duration_days
+      ? computeUnlimitedViewerSchedule(
+          {
+            startAtUtc: activeRace.scheduled_start_at,
+            challengeTimezone: activeRace.challenge_timezone ?? null,
+            durationDays: activeRace.duration_days,
+          },
+          { fallbackTimezone: getDeviceTimezone() },
+        )
+      : null;
+  const startTimeLabel = unlimitedViewerSchedule
+    ? formatViewerStartLabel(unlimitedViewerSchedule)
+    : formatStartTime(startIso);
 
   return (
     <Modal
@@ -234,10 +286,13 @@ export default function ActiveRaceModal({
               <DetailRow
                 icon="calendar"
                 label="Start Time"
-                value={formatStartTime(startIso)}
+                value={startTimeLabel}
                 showDivider
               />
               <DetailRow icon="users" label="Participants" value={participants} />
+              {unlimitedViewerSchedule ? (
+                <Text style={styles.unlimitedTzNote}>{UNLIMITED_LOCAL_MIDNIGHT_NOTE}</Text>
+              ) : null}
             </View>
           ) : null}
 
@@ -289,6 +344,13 @@ export default function ActiveRaceModal({
 }
 
 const styles = StyleSheet.create({
+  unlimitedTzNote: {
+    marginTop: 8,
+    fontSize: 11,
+    fontWeight: "500",
+    color: "#8792A8",
+    textAlign: "center",
+  },
   backdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.82)",

@@ -27,9 +27,9 @@ export function useParticipantStepAnimator() {
     setDisplayMap({});
   }, []);
 
-  const setConfirmedSteps = useCallback(
-    (userId: string, steps: number, options?: { allowRollback?: boolean; instant?: boolean }) => {
-      if (!userId) return;
+  /** Compute the next { confirmed, display } for one participant without touching React state. */
+  const computeNextState = useCallback(
+    (userId: string, steps: number, options?: { allowRollback?: boolean; instant?: boolean }): ParticipantAnimState => {
       const safe = Math.max(0, Math.floor(steps));
       const prev = statesRef.current.get(userId);
 
@@ -46,10 +46,49 @@ export function useParticipantStepAnimator() {
         display = Math.max(prev.display, Math.min(prev.display, confirmed));
       }
 
-      statesRef.current.set(userId, { confirmed, display });
-      setDisplayMap((m) => ({ ...m, [userId]: display }));
+      return { confirmed, display };
     },
     [],
+  );
+
+  const setConfirmedSteps = useCallback(
+    (userId: string, steps: number, options?: { allowRollback?: boolean; instant?: boolean }) => {
+      if (!userId) return;
+      const next = computeNextState(userId, steps, options);
+      statesRef.current.set(userId, next);
+      setDisplayMap((m) => ({ ...m, [userId]: next.display }));
+    },
+    [computeNextState],
+  );
+
+  /**
+   * Same as calling setConfirmedSteps for each entry, but commits a single React
+   * state update instead of one per participant. A large roster (e.g. an
+   * Unlimited race with 100+ participants) hydrating on every roster/Pusher
+   * refresh was previously triggering one setState per row (up to 100+ renders
+   * per hydrate), which made the live screen feel laggy / hard to scroll.
+   */
+  const setConfirmedStepsBatch = useCallback(
+    (
+      entries: Array<{ userId: string; steps: number; allowRollback?: boolean; instant?: boolean }>,
+    ) => {
+      if (!entries.length) return;
+      const updates: Record<string, number> = {};
+      let changed = false;
+      for (const { userId, steps, allowRollback, instant } of entries) {
+        if (!userId) continue;
+        const next = computeNextState(userId, steps, { allowRollback, instant });
+        const prevDisplay = statesRef.current.get(userId)?.display;
+        statesRef.current.set(userId, next);
+        if (prevDisplay !== next.display) {
+          updates[userId] = next.display;
+          changed = true;
+        }
+      }
+      if (!changed) return;
+      setDisplayMap((m) => ({ ...m, ...updates }));
+    },
+    [computeNextState],
   );
 
   const getDisplaySteps = useCallback(
@@ -91,5 +130,5 @@ export function useParticipantStepAnimator() {
     };
   }, []);
 
-  return { resetForRace, setConfirmedSteps, getDisplaySteps };
+  return { resetForRace, setConfirmedSteps, setConfirmedStepsBatch, getDisplaySteps };
 }

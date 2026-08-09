@@ -58,6 +58,17 @@ import {
 } from "@/utils/unlimitedLiveRace";
 import { formatChallengeDayKey } from "@/utils/challengeDayKey";
 import {
+  computeUnlimitedViewerSchedule,
+  type UnlimitedViewerSchedule,
+} from "@/utils/unlimitedViewerSchedule";
+import { getDeviceTimezone } from "@/utils/timezone";
+import { UnlimitedCurrentDayCard } from "@/components/race/UnlimitedCurrentDayCard";
+import { UnlimitedDayProgressModal } from "@/components/race/UnlimitedDayProgressModal";
+import {
+  resolveUnlimitedResultStatus,
+  resolvePrizePoolEligibilityStatus,
+} from "@/utils/unlimitedResults";
+import {
   pickUnlimitedRealtimeDisplaySteps,
   resolveUnlimitedDisplayedLiveSteps,
 } from "@/utils/unlimitedHybridProgress";
@@ -81,9 +92,9 @@ import { useRace } from "@/context/RaceContext";
 import { useWalkContext } from "@/context/WalkContext";
 import { usePresence } from "@/context/PresenceContext";
 import { useRaceProgress } from "@/hooks/useRaceProgress";
-import { updateRankFromBackend, ensureActiveRaceInStore, clearActiveRaceProgress, suppressLiveRaceNotification, suppressSpectatorLiveRaceNotifications, switchDailyStepsNotification } from "@/services/stepProgressCoordinator";
+import { updateRankFromBackend, ensureActiveRaceInStore, clearActiveRaceProgress, suppressLiveRaceNotification, suppressSpectatorLiveRaceNotifications, switchDailyStepsNotification, handleMidnightRolloverIfNeeded } from "@/services/stepProgressCoordinator";
 import { findEligibleLiveRaceParticipant } from "@/utils/raceNotificationEligibility";
-import { stepEngineLog } from "@/utils/stepAccuracy";
+import { stepEngineLog, isFreshLocalDay } from "@/utils/stepAccuracy";
 import { store } from "@/store";
 import { raceProgressActions } from "@/store/slices/raceProgressSlice";
 import {
@@ -241,6 +252,11 @@ interface RaceData {
   hasExplicitPlayerCount?: boolean;
   challengeTimezone?: string | null;
   challengeDayKey?: string | null;
+  /** Unlimited Daily Goal Challenge only — raw backend challenge.status (never collapsed
+   * into in_progress/completed like `status` above); see utils/unlimitedResults.ts. */
+  rawStatus?: string | null;
+  settlementStatus?: string | null;
+  qualifiedParticipantCount?: number | null;
 }
 
 interface RaceParticipant {
@@ -266,6 +282,12 @@ interface RaceParticipant {
   finishedAt?: string | null;
   challengeDayKey?: string | null;
   totalChallengeSteps?: number | null;
+  /** Unlimited Daily Goal Challenge only — backend-authoritative locked schedule for this player. */
+  timezone?: string | null;
+  dayNumber?: number | null;
+  qualificationStatus?: string | null;
+  dailyGoalSteps?: number | null;
+  completedDays?: number | null;
 }
 
 interface LiveRaceDetailCache {
@@ -1191,6 +1213,13 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
   const listEndSpacer = isUnlimited
     ? BOARD_ROW_HEIGHT * 5
     : BOARD_ROW_HEIGHT * 2;
+  // Memoized so a 100+ row Unlimited roster doesn't rebuild this string on
+  // every parent re-render (e.g. the ~75ms step-catchup animation ticks) —
+  // only when the underlying rows actually change.
+  const topperRowsExtraData = useMemo(
+    () => `${topperRows.length}:${topperRows.map((p) => `${p.id}:${p.stepRank}:${p.currentSteps}`).join("|")}`,
+    [topperRows],
+  );
 
   const renderBoardRow = useCallback(
     ({
@@ -1220,7 +1249,11 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
             : null;
       return (
         <LiveBoardRow
-          participant={{ ...item, isHost: !!item.isHost } as LiveBoardRowParticipant}
+          participant={{
+            ...item,
+            isHost: !!item.isHost,
+            durationDays: isUnlimited ? race.challengeDurationDays : undefined,
+          } as LiveBoardRowParticipant}
           rank={rank}
           isUser={isUser}
           isCompleted={isCompleted}
@@ -1245,6 +1278,8 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
       getAvatarVersion,
       isCompleted,
       race.targetSteps,
+      isUnlimited,
+      race.challengeDurationDays,
       colors.primary,
       colors.foreground,
       colors.mutedForeground,
@@ -1306,7 +1341,7 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
             <FlatList
               data={topperRows}
               keyExtractor={(p) => `${p.userId || "u"}:${p.id}`}
-              extraData={`${topperRows.length}:${topperRows.map((p) => `${p.id}:${p.stepRank}:${p.currentSteps}`).join("|")}`}
+              extraData={topperRowsExtraData}
               renderItem={({ item, index }) =>
                 renderBoardRow({
                   item,
@@ -2055,10 +2090,16 @@ function LiveRaceDetailScreenContent() {
         : 0,
     ),
   );
-  const unlimitedDailySteps = resolveUnlimitedDisplayedLiveSteps(
-    unlimitedVerifiedSteps,
-    unlimitedProvisionalSteps,
-  );
+  // After local midnight Redux zeros verified/provisional, but a leftover
+  // sensor absolute can briefly reappear before HC/HK rebases. Never paint that
+  // leftover as "today" while verified is still 0 inside the fresh-day window.
+  const unlimitedDailySteps =
+    isFreshLocalDay() && unlimitedVerifiedSteps <= 0
+      ? 0
+      : resolveUnlimitedDisplayedLiveSteps(
+          unlimitedVerifiedSteps,
+          unlimitedProvisionalSteps,
+        );
   const unlimitedProgressSource =
     unlimitedProvisionalSteps > unlimitedVerifiedSteps
       ? unlimitedVerifiedSteps > 0
@@ -2081,6 +2122,19 @@ function LiveRaceDetailScreenContent() {
   localStepsRef.current = liveRaceSteps;
   const raceResumedRef = useRef(false);
   const raceCompletedRef = useRef(false);
+  // Throttle Unlimited's verified-daily-steps refresh so rapid roster/Pusher
+  // churn (e.g. a large-roster live race) can't fire overlapping native
+  // Health Connect / HealthKit reads — a transient failure on one of those
+  // overlapping calls was causing the live daily step count to flicker
+  // between 0 and the real total. Classic races never use this ref.
+  const unlimitedStepsRefreshGateRef = useRef(0);
+  const requestUnlimitedStepsRefresh = useCallback(() => {
+    const now = Date.now();
+    if (now - unlimitedStepsRefreshGateRef.current < 4_000) return;
+    unlimitedStepsRefreshGateRef.current = now;
+    void refreshTodaySteps({ rehydrateBackend: true, mergeNative: true });
+    void triggerSync({ force: true });
+  }, [refreshTodaySteps, triggerSync]);
   const [finalRaceSteps, setFinalRaceSteps] = useState<number | null>(null);
   // Declared above finalizeLiveRace so the callback can read race.targetSteps safely.
   const [race, setRace] = useState<RaceData | null>(initialCache?.race ?? null);
@@ -2309,13 +2363,14 @@ function LiveRaceDetailScreenContent() {
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
   const [profileInitialData, setProfileInitialData] = useState<PublicProfileInitialData | undefined>(undefined);
 
-  const { resetForRace, setConfirmedSteps, getDisplaySteps } = useParticipantStepAnimator();
+  const { resetForRace, setConfirmedSteps, setConfirmedStepsBatch, getDisplaySteps } = useParticipantStepAnimator();
 
   // ── Track-specific state ──────────────────────────────────────────────────
   const [completionPollArmed, setCompletionPollArmed] = useState(false);
   const [heroHeight,           setHeroHeight]           = useState(400);
   const [isLeaderboardVisible, setIsLeaderboardVisible] = useState(true);
   const [showReactionPicker,   setShowReactionPicker]   = useState(false);
+  const [showUnlimitedDayProgress, setShowUnlimitedDayProgress] = useState(false);
   const [trackLayoutId, setTrackLayoutId] = useState<TrackLayoutId>(() => {
     if (isTrackLayoutId(initialTrackLayout)) {
       return initialTrackLayout;
@@ -2522,8 +2577,71 @@ function LiveRaceDetailScreenContent() {
       capacityMode: race.capacityMode,
       maxPlayers: race.maxPlayers,
     });
+
+  const currentParticipant = useMemo(
+    () => participants.find((p) =>
+      p.userId === user?.id ||
+      (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase()),
+    ) ?? null,
+    [participants, user?.id, user?.username],
+  );
+
+  /**
+   * Multi-day end strip — alternates with tagline every 3s in the same slot.
+   * Unlimited: computed from the viewer's own locked-timezone day schedule
+   * (never Math.ceil against the shared challengeEndAt/device-now pair, which
+   * can be wrong across DST and ignores per-participant timezone locking).
+   *
+   * Also used below to gate every self-steps consumer (progress bar,
+   * localStepsRef, participant-list self row) on the viewer's OWN
+   * `viewerStatus` — never the race-level `isActive` flag, which flips true as
+   * soon as ANY participant's local midnight passes. Without this, a
+   * participant whose own challenge day hasn't started yet (e.g. an earlier
+   * timezone than the host) would see their ordinary daily HC/HK step count
+   * (unrelated to this challenge) merged into "today's goal progress".
+   */
+  const unlimitedTaglineSchedule = useMemo(() => {
+    if (!isUnlimitedHeader || !race) return null;
+    return computeUnlimitedViewerSchedule(
+      {
+        startAtUtc: race.scheduledStartAt ?? race.startedAt ?? null,
+        challengeTimezone: race.challengeTimezone ?? null,
+        durationDays: race.challengeDurationDays ?? null,
+        dailyGoalSteps: race.targetSteps,
+        challengeStatus: race.status,
+      },
+      {
+        liveDay: currentParticipant
+          ? {
+              timezone: currentParticipant.timezone,
+              dayNumber: currentParticipant.dayNumber,
+              localDate: currentParticipant.challengeDayKey,
+              dailyGoalSteps: currentParticipant.dailyGoalSteps,
+              qualificationStatus: currentParticipant.qualificationStatus,
+              completedDays: currentParticipant.completedDays,
+            }
+          : null,
+        fallbackTimezone: getDeviceTimezone(),
+      },
+    );
+  }, [
+    isUnlimitedHeader,
+    race?.scheduledStartAt,
+    race?.startedAt,
+    race?.challengeTimezone,
+    race?.challengeDurationDays,
+    race?.targetSteps,
+    race?.status,
+    currentParticipant,
+  ]);
+  /** True once the viewer's OWN local day has begun (or for classic races, always true). */
+  const unlimitedViewerDayStarted =
+    !isUnlimitedHeader || unlimitedTaglineSchedule?.viewerStatus !== "scheduled";
   // Keep localStepsRef aligned with the correct progress lane for Pusher / finalize.
-  localStepsRef.current = isUnlimitedHeader ? unlimitedDailySteps : liveRaceSteps;
+  localStepsRef.current =
+    isUnlimitedHeader
+      ? (unlimitedViewerDayStarted ? unlimitedDailySteps : 0)
+      : liveRaceSteps;
 
   // Unlimited: block classic progress POSTs and keep walk sync active for the whole screen life.
   useEffect(() => {
@@ -2536,16 +2654,15 @@ function LiveRaceDetailScreenContent() {
       timezone: race?.challengeTimezone ?? undefined,
     });
     setWalkBackendSyncPaused(false);
-    // Drop any classic race session that was bound to this Unlimited challenge id.
-    const activeId = store.getState().raceProgress.activeRaceId;
+    // Drop classic RaceContext sensor tracking only — do NOT clearActiveRaceProgress
+    // here. Unlimited now owns the same live-race ongoing notification tray as
+    // classic/sponsored once the viewer's day has started.
     if (
       racePhase === "in_race" &&
-      (contextRaceId === raceId || activeId === raceId)
+      (contextRaceId === raceId ||
+        store.getState().raceProgress.activeRaceId === raceId)
     ) {
       stopRaceStepTracking("unlimited_daily_mode");
-    }
-    if (activeId === raceId) {
-      clearActiveRaceProgress("cancelled", { raceId });
     }
     void (async () => {
       try {
@@ -2556,20 +2673,47 @@ function LiveRaceDetailScreenContent() {
       } catch {
         /* optional */
       }
+      // Force calendar-day reset before reading today's total (covers the case
+      // where storage already says "today" but Redux still holds yesterday).
+      await handleMidnightRolloverIfNeeded().catch(() => false);
       await refreshTodaySteps({ rehydrateBackend: true, mergeNative: true }).catch(
         () => undefined,
       );
       // Absolute verified daily total → POST /api/walk/steps → peers via Unlimited realtime.
       await triggerSync({ force: true }).catch(() => undefined);
       const rp = store.getState().raceProgress;
-      const notifSteps = resolveWalkNotificationSteps({
-        verifiedTodaySteps: rp.verifiedTodaySteps ?? 0,
-        provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
-        todaySteps: rp.todaySteps,
-      });
-      // Challenge-owned ongoing tray: daily FGS (91002), not classic race_live.
-      // Prefer HC/HK verified — never lock inflated sensor (e.g. 1592 vs HC 433).
-      void switchDailyStepsNotification(notifSteps);
+      const notifSteps =
+        unlimitedViewerDayStarted && !(isFreshLocalDay() && (rp.verifiedTodaySteps ?? 0) <= 0)
+          ? resolveWalkNotificationSteps({
+              verifiedTodaySteps: rp.verifiedTodaySteps ?? 0,
+              provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
+              todaySteps: rp.todaySteps,
+            })
+          : 0;
+      if (unlimitedViewerDayStarted && user?.id) {
+        ensureActiveRaceInStore({
+          raceId,
+          raceStartTime: new Date(
+            race?.startedAt ?? race?.scheduledStartAt ?? Date.now(),
+          ).toISOString(),
+          userId: user.id,
+          username: user.username ?? "Runner",
+          goalSteps: race?.targetSteps ?? 0,
+          totalParticipants: race?.currentPlayers ?? participants.length,
+          bootSteps: notifSteps,
+          participantConfirmed: true,
+          unlimitedDailyMode: true,
+          challengeEndAt: race?.challengeEndAt ?? undefined,
+        });
+        updateRankFromBackend({
+          raceSteps: notifSteps,
+          goalSteps: race?.targetSteps ?? undefined,
+          totalParticipants: race?.currentPlayers ?? participants.length,
+        });
+      } else {
+        // Before the viewer's own day starts, keep the ordinary daily walk tray.
+        void switchDailyStepsNotification(0, race?.targetSteps);
+      }
       const dayKey =
         race?.challengeDayKey ??
         formatChallengeDayKey(Date.now(), race?.challengeTimezone) ??
@@ -2590,38 +2734,69 @@ function LiveRaceDetailScreenContent() {
         });
       }
     })();
-    // Periodically refresh HC/HK, sync verified, and upload provisional while Live Detail is open.
+    // Periodically refresh HC/HK, sync verified, and keep the live-race tray
+    // notification in sync with today's daily steps while Live Detail is open.
     const syncIv = setInterval(() => {
-      void refreshTodaySteps({ rehydrateBackend: false, mergeNative: true }).catch(
-        () => undefined,
-      );
-      void triggerSync({ force: true }).catch(() => undefined);
-      const rp = store.getState().raceProgress;
-      const verified = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
-      const provisional = Math.max(
-        0,
-        Math.floor(rp.provisionalSensorTodaySteps ?? 0),
-      );
-      const notifSteps = resolveWalkNotificationSteps({
-        verifiedTodaySteps: verified,
-        provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
-        todaySteps: rp.todaySteps,
-      });
-      void switchDailyStepsNotification(notifSteps);
-      const dayKey =
-        race?.challengeDayKey ??
-        formatChallengeDayKey(Date.now(), race?.challengeTimezone) ??
-        "";
-      if (dayKey && provisional > verified && provisional <= verified + 250) {
-        void uploadUnlimitedProvisionalProgress({
-          challengeId: raceId,
-          challengeDayKey: dayKey,
-          timezone:
-            race?.challengeTimezone ||
-            Intl.DateTimeFormat().resolvedOptions().timeZone,
-          provisionalCumulativeSteps: Math.max(verified, provisional),
-        });
-      }
+      void (async () => {
+        await handleMidnightRolloverIfNeeded().catch(() => false);
+        await refreshTodaySteps({ rehydrateBackend: false, mergeNative: true }).catch(
+          () => undefined,
+        );
+        await triggerSync({ force: true }).catch(() => undefined);
+        const rp = store.getState().raceProgress;
+        const verified = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
+        const provisional = Math.max(
+          0,
+          Math.floor(rp.provisionalSensorTodaySteps ?? 0),
+        );
+        const notifSteps =
+          unlimitedViewerDayStarted && !(isFreshLocalDay() && verified <= 0)
+            ? resolveWalkNotificationSteps({
+                verifiedTodaySteps: verified,
+                provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
+                todaySteps: rp.todaySteps,
+              })
+            : 0;
+        if (unlimitedViewerDayStarted && user?.id) {
+          if (store.getState().raceProgress.activeRaceId !== raceId) {
+            ensureActiveRaceInStore({
+              raceId,
+              raceStartTime: new Date(
+                race?.startedAt ?? race?.scheduledStartAt ?? Date.now(),
+              ).toISOString(),
+              userId: user.id,
+              username: user.username ?? "Runner",
+              goalSteps: race?.targetSteps ?? 0,
+              totalParticipants: race?.currentPlayers ?? participants.length,
+              bootSteps: notifSteps,
+              participantConfirmed: true,
+              unlimitedDailyMode: true,
+              challengeEndAt: race?.challengeEndAt ?? undefined,
+            });
+          }
+          updateRankFromBackend({
+            raceSteps: notifSteps,
+            goalSteps: race?.targetSteps ?? undefined,
+            totalParticipants: race?.currentPlayers ?? participants.length,
+          });
+        } else {
+          void switchDailyStepsNotification(notifSteps, race?.targetSteps);
+        }
+        const dayKey =
+          race?.challengeDayKey ??
+          formatChallengeDayKey(Date.now(), race?.challengeTimezone) ??
+          "";
+        if (dayKey && provisional > verified && provisional <= verified + 250) {
+          void uploadUnlimitedProvisionalProgress({
+            challengeId: raceId,
+            challengeDayKey: dayKey,
+            timezone:
+              race?.challengeTimezone ||
+              Intl.DateTimeFormat().resolvedOptions().timeZone,
+            provisionalCumulativeSteps: Math.max(verified, provisional),
+          });
+        }
+      })();
     }, 5_000);
     return () => {
       clearInterval(syncIv);
@@ -2638,6 +2813,15 @@ function LiveRaceDetailScreenContent() {
     stopRaceStepTracking,
     race?.challengeDayKey,
     race?.challengeTimezone,
+    race?.targetSteps,
+    race?.startedAt,
+    race?.scheduledStartAt,
+    race?.challengeEndAt,
+    race?.currentPlayers,
+    unlimitedViewerDayStarted,
+    user?.id,
+    user?.username,
+    participants.length,
   ]);
 
   // Keep global Live header "racing" count aligned while this screen is open.
@@ -2654,9 +2838,10 @@ function LiveRaceDetailScreenContent() {
   const resolveParticipantRaceSteps = useCallback(
     (p: RaceParticipant, isMe = false): number => {
       if (isMe && isCompleted && finalRaceSteps !== null) return finalRaceSteps;
-      // Unlimited: local avatar uses daily HC/HK totals, not classic raceSteps.
+      // Unlimited: local avatar uses daily HC/HK totals, not classic raceSteps —
+      // but only once the viewer's OWN local day has started (see unlimitedViewerDayStarted).
       if (isMe && isUnlimitedHeader && (isActive || race?.status === "in_progress")) {
-        return unlimitedDailySteps;
+        return unlimitedViewerDayStarted ? unlimitedDailySteps : 0;
       }
       // Own steps always come from the live tracker while this race is active —
       // same as classic Live Race (never show stale API 0 for self).
@@ -2671,6 +2856,7 @@ function LiveRaceDetailScreenContent() {
       trackingThisRace,
       isUnlimitedHeader,
       unlimitedDailySteps,
+      unlimitedViewerDayStarted,
       race?.status,
     ],
   );
@@ -2724,10 +2910,16 @@ function LiveRaceDetailScreenContent() {
 
   const statusLabel = isCompleted ? "FINISHED" : isActive ? "LIVE" : race ? "WAITING" : "NO RACE";
 
-  /** Multi-day end strip — alternates with tagline every 3s in the same slot. */
-  const challengeEndsLabel = useMemo(
-    () =>
-      getChallengeDaysLeftLabel(
+  const challengeEndsLabel = useMemo(() => {
+    if (isUnlimitedHeader) {
+      if (!unlimitedTaglineSchedule) return null;
+      const { remainingDaysAfterToday, currentDayIndex, durationDays } = unlimitedTaglineSchedule;
+      if (durationDays < 2) return null;
+      return remainingDaysAfterToday > 0
+        ? `${remainingDaysAfterToday} ${remainingDaysAfterToday === 1 ? "day" : "days"} left after today • Day ${currentDayIndex} of ${durationDays}`
+        : `Final day • Day ${currentDayIndex} of ${durationDays}`;
+    }
+    return getChallengeDaysLeftLabel(
         {
           challengeEndAt: race?.challengeEndAt,
           challengeDurationDays: race?.challengeDurationDays,
@@ -2739,20 +2931,21 @@ function LiveRaceDetailScreenContent() {
           timeLeftLabel: race?.timeLeftLabel ?? race?.remainingLabel,
         },
         Date.now(),
-      ),
-    [
-      race?.challengeEndAt,
-      race?.challengeDurationDays,
-      race?.startedAt,
-      race?.createdAt,
-      race?.targetSteps,
-      race?.timeLeftSeconds,
-      race?.daysLeft,
-      race?.hoursLeft,
-      race?.timeLeftLabel,
-      race?.remainingLabel,
-    ],
-  );
+      );
+  }, [
+    isUnlimitedHeader,
+    unlimitedTaglineSchedule,
+    race?.challengeEndAt,
+    race?.challengeDurationDays,
+    race?.startedAt,
+    race?.createdAt,
+    race?.targetSteps,
+    race?.timeLeftSeconds,
+    race?.daysLeft,
+    race?.hoursLeft,
+    race?.timeLeftLabel,
+    race?.remainingLabel,
+  ]);
 
   const sponsoredStartIso = useMemo(() => {
     if (!isSponsored) return null;
@@ -2813,14 +3006,20 @@ function LiveRaceDetailScreenContent() {
   const taglineAlt = !isCompleted && taglineFrozenRef.current ? taglineFrozenRef.current : null;
 
   // Feed confirmed step values into the animator (local user + Pusher/backend).
+  // Batched into a single state commit — with a large Unlimited roster (100+),
+  // one setState per participant made the live screen feel laggy / hard to
+  // scroll or switch tabs.
   useEffect(() => {
     if (!isActive && !isCompleted) return;
+    const entries: Array<{ userId: string; steps: number; allowRollback?: boolean; instant?: boolean }> = [];
     for (const p of participants) {
       const isMe =
         p.userId === user?.id ||
         (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase());
       const confirmed = resolveParticipantRaceSteps(p, isMe);
-      setConfirmedSteps(p.userId, confirmed, {
+      entries.push({
+        userId: p.userId,
+        steps: confirmed,
         instant: isMe && isUnlimitedHeader,
         allowRollback: isMe && isUnlimitedHeader,
       });
@@ -2831,6 +3030,7 @@ function LiveRaceDetailScreenContent() {
         );
       }
     }
+    setConfirmedStepsBatch(entries);
   }, [
     participants,
     liveRaceSteps,
@@ -2838,7 +3038,7 @@ function LiveRaceDetailScreenContent() {
     isCompleted,
     user?.id,
     user?.username,
-    setConfirmedSteps,
+    setConfirmedStepsBatch,
     resolveParticipantRaceSteps,
     isUnlimitedHeader,
     unlimitedDailySteps,
@@ -2944,13 +3144,6 @@ function LiveRaceDetailScreenContent() {
     () => sortedPlayers.find((p) => p.isMe) ?? trackPlayers[0] ?? sortedPlayers[0] ?? null,
     [sortedPlayers, trackPlayers],
   );
-  const currentParticipant = useMemo(
-    () => participants.find((p) =>
-      p.userId === user?.id ||
-      (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase()),
-    ) ?? null,
-    [participants, user?.id, user?.username],
-  );
 
   // Leave / forfeit / DQ / complete: stop participant-only live race notification for this race.
   useEffect(() => {
@@ -2959,6 +3152,58 @@ function LiveRaceDetailScreenContent() {
     void suppressLiveRaceNotification(raceId, `participant_${currentParticipant.status ?? "ineligible"}`);
     stopRaceStepTracking(`participant_${currentParticipant.status ?? "ineligible"}`);
   }, [raceId, user?.id, user?.username, currentParticipant, currentParticipant?.status, stopRaceStepTracking]);
+
+  // ── Unlimited Daily Goal: navigate to Results once the VIEWER'S OWN local
+  // challenge duration ends — never when the global challenge finishes for
+  // someone else. Results screen itself decides waiting/validating/ready from
+  // backend-authoritative challenge.status/settlementStatus (spec §5). Guarded
+  // to fire only once per screen instance so re-renders don't re-push.
+  const unlimitedResultsNavGuardRef = useRef(false);
+  useEffect(() => {
+    if (!race || !raceId) return;
+    const unlimited =
+      isUnlimitedGoalFrontendEnabled() &&
+      isUnlimitedGoalChallenge({
+        challengeType: race.challengeType,
+        entryType: race.entryType,
+        type: race.type,
+        capacityMode: race.capacityMode,
+        maxPlayers: race.maxPlayers,
+      });
+    if (!unlimited) return;
+    const schedule = computeUnlimitedViewerSchedule(
+      {
+        startAtUtc: race.scheduledStartAt ?? race.startedAt ?? null,
+        challengeTimezone: race.challengeTimezone ?? null,
+        durationDays: race.challengeDurationDays ?? null,
+        dailyGoalSteps: race.targetSteps,
+        challengeStatus: race.status,
+      },
+      {
+        liveDay: currentParticipant
+          ? {
+              timezone: currentParticipant.timezone,
+              dayNumber: currentParticipant.dayNumber,
+              localDate: currentParticipant.challengeDayKey,
+              dailyGoalSteps: currentParticipant.dailyGoalSteps,
+              qualificationStatus: currentParticipant.qualificationStatus,
+              completedDays: currentParticipant.completedDays,
+            }
+          : null,
+        fallbackTimezone: getDeviceTimezone(),
+      },
+    );
+    if (!schedule) return;
+    const personallyFinished =
+      schedule.viewerStatus === "completed" ||
+      schedule.viewerStatus === "failed" ||
+      schedule.viewerStatus === "left";
+    if (!personallyFinished || unlimitedResultsNavGuardRef.current) return;
+    unlimitedResultsNavGuardRef.current = true;
+    // Typed-route union regenerates on next Metro/expo-router build; cast avoids a
+    // stale-cache compile error for this newly added screen (app/race/unlimited-results.tsx).
+    router.push({ pathname: "/race/unlimited-results", params: { challengeId: raceId } } as never);
+  }, [race, currentParticipant, raceId]);
 
   const winners = useMemo(() => {
     const nonForfeited = participants.filter((p) => p.status !== "forfeited");
@@ -3004,10 +3249,16 @@ function LiveRaceDetailScreenContent() {
   }, [participants, isCompleted, race?.currentPlayers, user?.id, resolveParticipantRaceSteps]);
 
   // For the local user, prefer the real-time local step count.
-  // Classic: RaceContext raceSteps. Unlimited: Walk/HC daily totals.
+  // Classic: RaceContext raceSteps. Unlimited: Walk/HC daily totals, but only
+  // once the VIEWER'S OWN local day has started — the race-level `isActive`
+  // flag alone flips true as soon as any participant's midnight passes, which
+  // would otherwise show this viewer's ordinary (unrelated) daily step count
+  // before their own Day 1 has actually begun.
   const mySteps = myPlayer?.isMe
     ? (isActive
-        ? (isUnlimitedHeader ? unlimitedDailySteps : liveRaceSteps)
+        ? (isUnlimitedHeader
+            ? (unlimitedViewerDayStarted ? unlimitedDailySteps : 0)
+            : liveRaceSteps)
         : (finalRaceSteps ?? myPlayer.steps ?? 0))
     : (myPlayer?.steps ?? 0);
   const myProgress = Math.min(mySteps / Math.max(race?.targetSteps ?? 1, 1), 1);
@@ -3118,8 +3369,8 @@ function LiveRaceDetailScreenContent() {
       ) {
         stopRaceStepTracking("unlimited_daily_mode");
       }
-      // Unlimited uses the daily walk ongoing notification (not classic race FGS).
-      // Never treat an Unlimited participant as a spectator — that cleared the tray.
+      // Unlimited uses the same live-race ongoing notification as classic/sponsored
+      // once the viewer's own day has started. Classic progress POSTs stay blocked.
       const meInUnlimitedRoster = parts.some(
         (p) =>
           p.userId === user.id ||
@@ -3130,28 +3381,48 @@ function LiveRaceDetailScreenContent() {
       if (meInUnlimitedRoster) {
         const rp = store.getState().raceProgress;
         const v = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
-        const p = Math.max(
-          0,
-          Math.floor(rp.provisionalSensorTodaySteps ?? rp.todaySteps ?? 0),
-        );
-        void switchDailyStepsNotification(
-          resolveWalkNotificationSteps({
-            verifiedTodaySteps: v,
-            provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
-            todaySteps: rp.todaySteps,
-          }),
-        );
+        const notifSteps =
+          unlimitedViewerDayStarted && !(isFreshLocalDay() && v <= 0)
+            ? resolveWalkNotificationSteps({
+                verifiedTodaySteps: v,
+                provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
+                todaySteps: rp.todaySteps,
+              })
+            : 0;
+        if (unlimitedViewerDayStarted) {
+          ensureActiveRaceInStore({
+            raceId,
+            raceStartTime: new Date(
+              liveRaceData.startedAt ?? Date.now(),
+            ).toISOString(),
+            userId: user.id,
+            username: user.username ?? "Runner",
+            goalSteps: liveRaceData.targetSteps ?? 0,
+            totalParticipants: liveRaceData.currentPlayers ?? parts.length,
+            bootSteps: notifSteps,
+            participantConfirmed: true,
+            unlimitedDailyMode: true,
+            challengeEndAt: liveRaceData.challengeEndAt ?? undefined,
+          });
+          updateRankFromBackend({
+            raceSteps: notifSteps,
+            goalSteps: liveRaceData.targetSteps ?? undefined,
+            totalParticipants: liveRaceData.currentPlayers ?? parts.length,
+          });
+        } else {
+          void switchDailyStepsNotification(0, liveRaceData.targetSteps);
+        }
       } else {
         void suppressSpectatorLiveRaceNotifications(raceId);
       }
-      void refreshTodaySteps({ rehydrateBackend: true, mergeNative: true });
-      void triggerSync({ force: true });
+      requestUnlimitedStepsRefresh();
       const dayKey =
         liveRaceData.challengeDayKey ??
         formatChallengeDayKey(
           Date.now(),
           liveRaceData.challengeTimezone,
         );
+      const batchEntries: Array<{ userId: string; steps: number; allowRollback?: boolean; instant?: boolean }> = [];
       for (const p of parts) {
         const isMe =
           p.userId === user.id ||
@@ -3176,7 +3447,7 @@ function LiveRaceDetailScreenContent() {
               : serverToday;
           const localDisplay = localOk ? unlimitedDailySteps : 0;
           const steps = Math.max(0, Math.floor(Math.max(localDisplay, safeServer)));
-          setConfirmedSteps(p.userId, steps, { instant: true, allowRollback: true });
+          batchEntries.push({ userId: p.userId, steps, instant: true, allowRollback: true });
           prevStepsMapRef.current[p.userId] = steps;
           continue;
         }
@@ -3200,9 +3471,10 @@ function LiveRaceDetailScreenContent() {
           dayKey && prevDay && dayKey !== prevDay
             ? incoming
             : Math.max(prev, incoming);
-        setConfirmedSteps(p.userId, steps, { instant: true });
+        batchEntries.push({ userId: p.userId, steps, instant: true });
         prevStepsMapRef.current[p.userId] = steps;
       }
+      setConfirmedStepsBatch(batchEntries);
       stepEngineLog(
         "LiveRace",
         `backendHydrated=unlimited_daily raceId=${raceId} walkSync=active dayKey=${dayKey ?? "n/a"} roster=${parts.length}`,
@@ -3217,11 +3489,13 @@ function LiveRaceDetailScreenContent() {
         "LiveRace",
         `backendHydrated=spectator raceId=${raceId} participantNotifications=false`,
       );
-      for (const p of parts) {
-        const steps = Math.max(prevStepsMapRef.current[p.userId] ?? 0, p.currentSteps ?? 0);
-        setConfirmedSteps(p.userId, steps, { instant: true });
-        prevStepsMapRef.current[p.userId] = steps;
-      }
+      setConfirmedStepsBatch(
+        parts.map((p) => {
+          const steps = Math.max(prevStepsMapRef.current[p.userId] ?? 0, p.currentSteps ?? 0);
+          prevStepsMapRef.current[p.userId] = steps;
+          return { userId: p.userId, steps, instant: true };
+        }),
+      );
       return;
     }
 
@@ -3284,16 +3558,21 @@ function LiveRaceDetailScreenContent() {
     }
     void catchUpLiveRaceSteps(preservedSteps, true);
     stepEngineLog("LiveRace", `backendHydrated=true raceId=${raceId} participantNotifications=true`);
-    for (const p of parts) {
-      const isMe =
-        p.userId === user.id ||
-        (!!user.username && p.username.toLowerCase() === user.username.toLowerCase());
-      if (isMe) continue;
-      // Never reset remote walkers to 0 when Unlimited detail omits live steps.
-      const steps = Math.max(prevStepsMapRef.current[p.userId] ?? 0, p.currentSteps ?? 0);
-      setConfirmedSteps(p.userId, steps, { instant: true });
-      prevStepsMapRef.current[p.userId] = steps;
-    }
+    setConfirmedStepsBatch(
+      parts
+        .filter((p) => {
+          const isMe =
+            p.userId === user.id ||
+            (!!user.username && p.username.toLowerCase() === user.username.toLowerCase());
+          return !isMe;
+        })
+        .map((p) => {
+          // Never reset remote walkers to 0 when Unlimited detail omits live steps.
+          const steps = Math.max(prevStepsMapRef.current[p.userId] ?? 0, p.currentSteps ?? 0);
+          prevStepsMapRef.current[p.userId] = steps;
+          return { userId: p.userId, steps, instant: true };
+        }),
+    );
   }, [
     raceId,
     user,
@@ -3303,11 +3582,11 @@ function LiveRaceDetailScreenContent() {
     setRaceTargetSteps,
     resumeLiveRace,
     catchUpLiveRaceSteps,
-    setConfirmedSteps,
+    setConfirmedStepsBatch,
     stopRaceStepTracking,
     unlimitedDailySteps,
-    refreshTodaySteps,
-    triggerSync,
+    requestUnlimitedStepsRefresh,
+    unlimitedViewerDayStarted,
   ]);
 
   const fetchRaceDetails = useCallback(async (
@@ -3497,14 +3776,49 @@ function LiveRaceDetailScreenContent() {
       timezone: race?.challengeTimezone ?? undefined,
     });
       setWalkBackendSyncPaused(false);
-      if (store.getState().raceProgress.activeRaceId === raceId) {
-        clearActiveRaceProgress("cancelled", { raceId });
+      // Stop classic RaceContext sensor path only — keep/start live-race tray notif.
+      if (
+        racePhase === "in_race" &&
+        (contextRaceId === raceId ||
+          store.getState().raceProgress.activeRaceId === raceId)
+      ) {
         stopRaceStepTracking("unlimited_focus");
       }
-      void refreshTodaySteps({ rehydrateBackend: true, mergeNative: true });
-      void triggerSync({ force: true });
+      requestUnlimitedStepsRefresh();
+      void handleMidnightRolloverIfNeeded().catch(() => false);
       const rp = store.getState().raceProgress;
-      void switchDailyStepsNotification(Math.max(0, rp.verifiedTodaySteps ?? 0));
+      const v = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
+      const notifSteps =
+        unlimitedViewerDayStarted && !(isFreshLocalDay() && v <= 0)
+          ? resolveWalkNotificationSteps({
+              verifiedTodaySteps: v,
+              provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
+              todaySteps: rp.todaySteps,
+            })
+          : 0;
+      if (unlimitedViewerDayStarted && user?.id) {
+        ensureActiveRaceInStore({
+          raceId,
+          raceStartTime: new Date(
+            race?.startedAt ?? race?.scheduledStartAt ?? Date.now(),
+          ).toISOString(),
+          userId: user.id,
+          username: user.username ?? "Runner",
+          goalSteps: race?.targetSteps ?? 0,
+          totalParticipants: race?.currentPlayers ?? participantsOnFocusRef.current.length,
+          bootSteps: notifSteps,
+          participantConfirmed: true,
+          unlimitedDailyMode: true,
+          challengeEndAt: race?.challengeEndAt ?? undefined,
+        });
+        updateRankFromBackend({
+          raceSteps: notifSteps,
+          goalSteps: race?.targetSteps ?? undefined,
+          totalParticipants: race?.currentPlayers ?? participantsOnFocusRef.current.length,
+        });
+      } else {
+        void switchDailyStepsNotification(0, race?.targetSteps);
+      }
       void fetchDetailsOnFocusRef.current(true);
       stepEngineLog(
         "LiveScreen",
@@ -3580,7 +3894,7 @@ function LiveRaceDetailScreenContent() {
         void resumeStepWatching();
       }, 0);
     };
-  }, [raceId, race, user?.id, user?.username, resumeStepWatching, refreshTodaySteps, triggerSync, stopRaceStepTracking, setRaceTargetSteps, racePhase, contextRaceId]));
+  }, [raceId, race, user?.id, user?.username, resumeStepWatching, refreshTodaySteps, triggerSync, stopRaceStepTracking, setRaceTargetSteps, racePhase, contextRaceId, requestUnlimitedStepsRefresh, unlimitedViewerDayStarted]));
 
   useEffect(() => {
     if (!raceId || !user?.id) return;
@@ -3621,8 +3935,7 @@ function LiveRaceDetailScreenContent() {
         })
       ) {
         setWalkBackendSyncPaused(false);
-        void refreshTodaySteps({ rehydrateBackend: true, mergeNative: true });
-        void triggerSync({ force: true });
+        requestUnlimitedStepsRefresh();
         stepEngineLog("Resume", "unlimited walkSync refresh");
         return;
       }
@@ -3635,7 +3948,7 @@ function LiveRaceDetailScreenContent() {
       void catchUpStepsRef.current(me?.currentSteps ?? 0, true);
     });
     return () => sub.remove();
-  }, [raceId, race, user?.id, user?.username, refreshTodaySteps, triggerSync, finalizeLiveRace]);
+  }, [raceId, race, user?.id, user?.username, refreshTodaySteps, triggerSync, finalizeLiveRace, requestUnlimitedStepsRefresh]);
 
   // ── Full fetch (initial load — race first, comments/reactions in background) ─
   const fetchRace = useCallback(async () => {
@@ -4459,6 +4772,20 @@ function LiveRaceDetailScreenContent() {
     setComments((prev) => [...prev, optimistic].slice(-60));
     setTimeout(() => cheerScrollRef.current?.scrollToEnd({ animated: true }), 50);
 
+    // Unlimited (Daily Goal) challenges: /api/races/:id/comments only recognizes
+    // classic race-room participants, so this always 403s for an Unlimited
+    // challenge id and every message showed as "failed". Backend support for
+    // Unlimited chat doesn't exist yet — echo locally (session-only, not
+    // broadcast to other participants) instead of a perpetual failure state.
+    if (isUnlimitedHeader) {
+      setComments((prev) =>
+        prev.map((c) =>
+          c.clientMessageId === clientMsgId ? { ...c, status: "sent", isOptimistic: false } : c,
+        ),
+      );
+      return true;
+    }
+
     // Dummy / offline preview — keep local message, no backend.
     if (useDummyRace) {
       setComments((prev) =>
@@ -4538,7 +4865,7 @@ function LiveRaceDetailScreenContent() {
       }
     })();
     return true;
-  }, [raceId, isActive, participants, currentUserId, user, useDummyRace]);
+  }, [raceId, isActive, participants, currentUserId, user, useDummyRace, isUnlimitedHeader]);
 
   const handleSendCheer = useCallback(() => {
     if (!cheerText.trim()) return;
@@ -4555,6 +4882,9 @@ function LiveRaceDetailScreenContent() {
       if (existing) return prev.map((c) => c.emoji === emoji ? { ...c, count: c.count + 1 } : c);
       return [...prev, { emoji, count: 1 }];
     });
+    // Same backend gap as comments — /api/races/:id/reactions only recognizes
+    // classic race-room participants, so skip the always-403 call for Unlimited.
+    if (isUnlimitedHeader) return;
     try {
       const res = await authFetch(`/api/races/${raceId}/reactions`, {
         method: "POST",
@@ -4566,7 +4896,7 @@ function LiveRaceDetailScreenContent() {
         if (Array.isArray(body?.counts)) setReactionCounts(body!.counts!);
       }
     } catch { /* silent — optimistic update stays */ }
-  }, [raceId, isActive]);
+  }, [raceId, isActive, isUnlimitedHeader]);
 
   // ── Loading / not found ───────────────────────────────────────────────────
   if (loading) {
@@ -4613,6 +4943,55 @@ function LiveRaceDetailScreenContent() {
     max: race.maxPlayers,
     isUnlimited: isUnlimitedLive,
   });
+
+  // ── Unlimited Daily Goal: viewer-personalized day/countdown schedule ──────
+  // Plain computation (not useMemo): sits after early returns — do not use hooks here.
+  // Never the host's timezone / a shared UTC end instant — see utils/unlimitedViewerSchedule.ts.
+  const unlimitedViewerSchedule = isUnlimitedLive
+    ? computeUnlimitedViewerSchedule(
+        {
+          startAtUtc: race.scheduledStartAt ?? race.startedAt ?? null,
+          challengeTimezone: race.challengeTimezone ?? null,
+          durationDays: race.challengeDurationDays ?? null,
+          dailyGoalSteps: race.targetSteps,
+          challengeStatus: race.status,
+        },
+        {
+          liveDay: currentParticipant
+            ? {
+                timezone: currentParticipant.timezone,
+                dayNumber: currentParticipant.dayNumber,
+                localDate: currentParticipant.challengeDayKey,
+                dailyGoalSteps: currentParticipant.dailyGoalSteps,
+                qualificationStatus: currentParticipant.qualificationStatus,
+                completedDays: currentParticipant.completedDays,
+              }
+            : null,
+          fallbackTimezone: getDeviceTimezone(),
+        },
+      )
+    : null;
+
+  const unlimitedResultStatus = isUnlimitedLive
+    ? resolveUnlimitedResultStatus({
+        challengeStatus: race.rawStatus ?? race.status,
+        settlementStatus: race.settlementStatus,
+        viewerPersonallyFinished:
+          unlimitedViewerSchedule?.viewerStatus === "completed" ||
+          unlimitedViewerSchedule?.viewerStatus === "failed" ||
+          unlimitedViewerSchedule?.viewerStatus === "left",
+      })
+    : "challenge_in_progress";
+  const unlimitedEligibility = isUnlimitedLive
+    ? resolvePrizePoolEligibilityStatus({
+        resultStatus: unlimitedResultStatus,
+        qualificationStatus: currentParticipant?.qualificationStatus,
+      })
+    : "pending";
+  const goToUnlimitedResults = () => {
+    if (!raceId) return;
+    router.push({ pathname: "/race/unlimited-results", params: { challengeId: raceId } } as never);
+  };
 
   // Info-bar Prize Pool chip — same row as TIME / PARTICIPANTS for every race type.
   // Plain computation (not useMemo): sits after early returns — do not use hooks here.
@@ -4977,6 +5356,27 @@ function LiveRaceDetailScreenContent() {
           }}
         />
       </View>
+
+      {/* ── Unlimited Daily Goal: compact Day X of Y / today's goal / countdown ── */}
+      {isUnlimitedLive && unlimitedViewerSchedule ? (
+        <UnlimitedCurrentDayCard
+          schedule={unlimitedViewerSchedule}
+          todaySteps={unlimitedDailySteps}
+          onPressProgress={() => setShowUnlimitedDayProgress(true)}
+          eligibility={unlimitedEligibility}
+          onPressViewResults={goToUnlimitedResults}
+        />
+      ) : null}
+      {isUnlimitedLive ? (
+        <UnlimitedDayProgressModal
+          visible={showUnlimitedDayProgress}
+          onClose={() => setShowUnlimitedDayProgress(false)}
+          schedule={unlimitedViewerSchedule}
+          todaySteps={unlimitedDailySteps}
+          qualificationStatus={currentParticipant?.qualificationStatus}
+          resultStatus={unlimitedResultStatus}
+        />
+      ) : null}
 
       {/* ── View toggle ── */}
       <RaceViewToggle
