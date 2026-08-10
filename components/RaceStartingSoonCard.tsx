@@ -19,6 +19,7 @@ import {
 } from "@/utils/sponsoredEventsApi";
 import {
   computeUnlimitedViewerSchedule,
+  formatViewerEndLabel,
   formatViewerStartLabel,
 } from "@/utils/unlimitedViewerSchedule";
 import { getDeviceTimezone } from "@/utils/timezone";
@@ -621,7 +622,11 @@ export function RaceStartingSoonCard({
   const startClock = unlimitedViewerSchedule
     ? formatViewerStartLabel(unlimitedViewerSchedule)
     : formatRaceClock(scheduledStartAt);
-  const endClock = isUnlimitedGoal ? null : formatRaceClock(endsAt);
+  // Unlimited: viewer-local end (start + duration). Classic: API endsAt only.
+  // Waiting room → Starts only. Live → Started + Ends.
+  const endClock = unlimitedViewerSchedule
+    ? formatViewerEndLabel(unlimitedViewerSchedule)
+    : formatRaceClock(endsAt);
   const progressMsg = !isLive && !parts.expired
     ? daysToGoMessage(parts.totalMs)
     : "Almost time! Keep your steps going";
@@ -730,14 +735,14 @@ export function RaceStartingSoonCard({
           >
             {title}
           </Text>
-          {(startClock || endClock) && (
+          {(startClock || (isLive && endClock)) && (
             <View style={styles.raceWindowTimes}>
               {startClock ? (
                 <Text style={styles.raceWindowText} numberOfLines={1}>
-                  Starts {startClock}
+                  {isLive ? "Started" : "Starts"} {startClock}
                 </Text>
               ) : null}
-              {endClock ? (
+              {isLive && endClock ? (
                 <Text style={styles.raceWindowText} numberOfLines={1}>
                   Ends {endClock}
                 </Text>

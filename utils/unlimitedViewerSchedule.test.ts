@@ -9,6 +9,7 @@ import {
   formatCountdownClock,
   formatDateKeyInZone,
   formatDateKeyLabel,
+  formatViewerEndLabel,
   formatViewerStartLabel,
   zonedMidnightMsFromDateKey,
 } from "./unlimitedViewerSchedule";
@@ -24,6 +25,7 @@ import {
   assert.ok(schedule);
   assert.equal(schedule!.startLocalDate, "2026-08-09");
   assert.equal(formatViewerStartLabel(schedule!), "Aug 9, 2026 • 12:00 AM");
+  assert.equal(formatViewerEndLabel(schedule!), "Aug 16, 2026 • 12:00 AM");
   assert.equal(schedule!.viewerStatus, "scheduled");
   assert.equal(schedule!.durationDays, 7);
 }

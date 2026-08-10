@@ -339,6 +339,14 @@ export function formatViewerStartLabel(schedule: Pick<UnlimitedViewerSchedule, "
   return `${formatDateKeyLabel(schedule.startLocalDate)} • 12:00 AM`;
 }
 
+/** "Aug 16, 2026 • 12:00 AM" — viewer's own local midnight end (start + durationDays). */
+export function formatViewerEndLabel(
+  schedule: Pick<UnlimitedViewerSchedule, "startLocalDate" | "durationDays">,
+): string {
+  const endLocalDate = addCalendarDaysToKey(schedule.startLocalDate, schedule.durationDays);
+  return `${formatDateKeyLabel(endLocalDate)} • 12:00 AM`;
+}
+
 export const UNLIMITED_LOCAL_MIDNIGHT_NOTE =
   "Starts at midnight in each participant's local challenge timezone.";
 
