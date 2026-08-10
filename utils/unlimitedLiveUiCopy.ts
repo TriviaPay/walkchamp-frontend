@@ -16,9 +16,22 @@ export const UNLIMITED_COPY = {
   modalInfoHighlight: "Live Board",
   modalCta: "Let's go!",
   modalTitle: "Challenge Progress",
-  modalBrand: "Unlimited Daily Challenge",
+  /** Product display name (create flow, live race, modal brand). */
+  challengeName: "Streak Challenge",
+  challengeNamePlural: "Streak Challenges",
+  modalBrand: "Streak Challenge",
+  /** Badge when the viewer missed a required day (was "LOST"). */
+  lostBadge: "Streak Broken",
+  /** Live Board chip for a disqualified Unlimited participant. */
+  lostChip: "Streak Broken",
   todayGoal: "Today Goal",
 } as const;
+
+/** Live / waiting titles: `Streak · 10,000 steps/day`. */
+export function streakChallengeTitle(dailyGoalSteps: number): string {
+  const n = Math.max(0, Math.floor(dailyGoalSteps));
+  return `Streak · ${n > 0 ? n.toLocaleString() : "—"} steps/day`;
+}
 
 export function missedDayFooterCopy(missedDayIndex: number | null | undefined): string {
   if (typeof missedDayIndex === "number" && missedDayIndex > 0) {

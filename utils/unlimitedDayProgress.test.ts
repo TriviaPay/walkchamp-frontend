@@ -6,6 +6,8 @@ import {
   buildUnlimitedDayRows,
   buildUnlimitedDaySummary,
   buildUnlimitedDayWeekSections,
+  dayRowsFromDailyHistory,
+  mergeUnlimitedHistoryWithSchedule,
 } from "./unlimitedDayProgress";
 import { computeUnlimitedViewerSchedule, type UnlimitedViewerSchedule } from "./unlimitedViewerSchedule";
 
@@ -154,6 +156,32 @@ for (const durationDays of [7, 10, 30, 60, 90]) {
     assert.equal(sections.length, 13);
     assert.equal(sections.reduce((n, s) => n + s.data.length, 0), 90);
   }
+}
+
+// ── Partial history pads to full duration (Challenge Progress Image 1) ────────
+{
+  const schedule = scheduleFor({ durationDays: 7, currentDayIndex: 2, completedDays: 1 });
+  const partial = dayRowsFromDailyHistory(
+    {
+      durationDays: 7,
+      dailyGoalSteps: 10_000,
+      days: [
+        { dayNumber: 1, dayStatus: "passed", verifiedSteps: 10_231 },
+        { dayNumber: 2, dayStatus: "in_progress", verifiedSteps: 100 },
+      ],
+    },
+    { schedule, todaySteps: 8420 },
+  );
+  assert.ok(partial);
+  assert.equal(partial!.length, 7, "partial history must expand to full challenge length");
+  assert.equal(partial![0]!.verifiedSteps, 10_231);
+  assert.equal(partial![1]!.verifiedSteps, 8420, "live todaySteps wins on in_progress");
+  assert.equal(partial![2]!.status, "upcoming");
+  assert.equal(partial![6]!.dayNumber, 7);
+
+  const merged = mergeUnlimitedHistoryWithSchedule(partial!.slice(0, 2), schedule, 8420);
+  assert.equal(merged.length, 7);
+  assert.equal(merged[1]!.verifiedSteps, 8420);
 }
 
 console.log("unlimitedDayProgress.test.ts: ok");

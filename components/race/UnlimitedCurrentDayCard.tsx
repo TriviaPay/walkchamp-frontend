@@ -1,6 +1,7 @@
 /**
  * Unlimited Live Race progress strip — compact calendar + day/goal layout
  * matching product Images 1 (eligible) & 2 (LOST). Unlimited-gated by caller.
+ * Entire tile opens Challenge Progress (not only the info icon).
  */
 import React, { memo } from "react";
 import { Text, TouchableOpacity, View, StyleSheet } from "react-native";
@@ -18,6 +19,7 @@ import type { UnlimitedDayRow } from "@/utils/unlimitedDayProgress";
 type Props = {
   schedule: UnlimitedViewerSchedule;
   todaySteps: number;
+  /** Opens Challenge Progress — wired to the whole tile. */
   onPressInfo?: () => void;
   eligibility?: PrizePoolEligibilityStatus;
   historyRows?: UnlimitedDayRow[] | null;
@@ -108,15 +110,13 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
     ? missedDayFooterCopy(missedDay)
     : UNLIMITED_COPY.missADayOut;
 
-  return (
-    <View style={styles.card}>
+  const body = (
+    <>
       <View style={styles.row}>
         <CalendarGoalIcon />
 
         <View style={styles.mid}>
-          <Text style={[styles.dayLine, lost && styles.dayLineLost]} numberOfLines={1}>
-            Day {schedule.currentDayIndex} of {schedule.durationDays}
-          </Text>
+          {/* Day N of Y is intentionally omitted here — shown in Challenge Progress only. */}
           {!beforeStart ? (
             <>
               <Text style={styles.goalLabel} numberOfLines={1}>
@@ -139,7 +139,7 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
         <View style={styles.right}>
           {lost ? (
             <View style={styles.lostBadge}>
-              <Text style={styles.lostBadgeText}>LOST</Text>
+              <Text style={styles.lostBadgeText}>{UNLIMITED_COPY.lostBadge}</Text>
             </View>
           ) : null}
           {!finished ? (
@@ -156,16 +156,7 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
               <Text style={styles.footerText} numberOfLines={1}>
                 {footerLabel}
               </Text>
-              {onPressInfo ? (
-                <TouchableOpacity
-                  onPress={onPressInfo}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityLabel="Challenge progress details"
-                  accessibilityRole="button"
-                >
-                  <Feather name="info" size={12} color="#4DA3FF" />
-                </TouchableOpacity>
-              ) : null}
+              <Feather name="info" size={12} color="#4DA3FF" />
             </View>
           ) : null}
         </View>
@@ -177,18 +168,26 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
           <Text style={styles.lostFooterText} numberOfLines={1}>
             {footerLabel}
           </Text>
-          {onPressInfo ? (
-            <TouchableOpacity
-              onPress={onPressInfo}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityLabel="Challenge progress details"
-              accessibilityRole="button"
-            >
-              <Feather name="info" size={12} color="#4DA3FF" />
-            </TouchableOpacity>
-          ) : null}
+          <Feather name="info" size={12} color="#4DA3FF" />
         </View>
       ) : null}
+    </>
+  );
+
+  return (
+    <View style={styles.card}>
+      {onPressInfo ? (
+        <TouchableOpacity
+          onPress={onPressInfo}
+          activeOpacity={0.85}
+          accessibilityLabel="Challenge progress details"
+          accessibilityRole="button"
+        >
+          {body}
+        </TouchableOpacity>
+      ) : (
+        body
+      )}
 
       {finished && onPressViewResults ? (
         <TouchableOpacity style={styles.viewResultsBtn} onPress={onPressViewResults}>
@@ -203,10 +202,11 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
 const styles = StyleSheet.create({
   card: {
     marginHorizontal: 12,
-    marginBottom: 8,
+    marginTop: 0,
+    marginBottom: 10,
     paddingHorizontal: 12,
     paddingVertical: 12,
-    minHeight: 72,
+    minHeight: 64,
     borderRadius: 16,
     backgroundColor: "#12151C",
     borderWidth: 1,
@@ -221,23 +221,12 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     justifyContent: "center",
-    gap: 2,
-  },
-  dayLine: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#9B8EC4",
-    letterSpacing: 0.1,
-  },
-  dayLineLost: {
-    color: "#00E676",
-    fontWeight: "800",
-    fontSize: 14,
+    gap: 3,
   },
   goalLabel: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#8B93A7",
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#E2E8F8",
   },
   stepsLine: {
     marginTop: 1,
@@ -261,14 +250,14 @@ const styles = StyleSheet.create({
   lostBadge: {
     backgroundColor: "#FF3B3B",
     borderRadius: 999,
-    paddingHorizontal: 9,
+    paddingHorizontal: 8,
     paddingVertical: 3,
   },
   lostBadgeText: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: "900",
     color: "#FFFFFF",
-    letterSpacing: 0.5,
+    letterSpacing: 0.2,
   },
   flameRow: {
     flexDirection: "row",

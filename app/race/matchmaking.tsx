@@ -1881,11 +1881,12 @@ function MatchmakingScreenContent() {
               avatarUrl: p.avatarUrl ?? null,
               isHost: !!p.isHost,
             }));
+            // Sync mem write happens inside set() before await — Live Detail getSync hits immediately.
             void screenCache.set(cacheKey, {
               race: {
                 id: backendRaceId,
                 title: isUnlimitedGoalRoom
-                  ? `Unlimited · ${(liveRoom?.targetSteps ?? 0).toLocaleString()} steps/day`
+                  ? `Streak · ${(liveRoom?.targetSteps ?? 0).toLocaleString()} steps/day`
                   : "Live Race",
                 status: "in_progress",
                 entryType: isUnlimitedGoalRoom
@@ -1927,6 +1928,7 @@ function MatchmakingScreenContent() {
               ? {
                   challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
                   capacityMode: "unlimited",
+                  title: `Streak · ${(liveRoom?.targetSteps ?? 0).toLocaleString()} steps/day`,
                   ...(liveRoom?.targetSteps
                     ? { targetSteps: String(liveRoom.targetSteps) }
                     : null),
@@ -2218,7 +2220,7 @@ function MatchmakingScreenContent() {
                 challenge_type: UNLIMITED_GOAL_CHALLENGE_TYPE,
                 entry_fee: (dataRace.entryAmountCents ?? 0) / 100,
                 coin_entry_amount: 0,
-                title: `Unlimited · ${(dataRace.targetSteps ?? 0).toLocaleString()} steps/day`,
+                title: `Streak · ${(dataRace.targetSteps ?? 0).toLocaleString()} steps/day`,
                 target_steps: dataRace.targetSteps ?? 0,
                 max_players: 0,
                 registered_count: resolvedPlayerCount,
@@ -2829,7 +2831,7 @@ function MatchmakingScreenContent() {
         void screenCache.set(cacheKey, {
           race: {
             id: backendRaceId,
-            title: `Unlimited · ${(liveRoom?.targetSteps ?? 0).toLocaleString()} steps/day`,
+            title: `Streak · ${(liveRoom?.targetSteps ?? 0).toLocaleString()} steps/day`,
             status: "in_progress",
             entryType: UNLIMITED_GOAL_CHALLENGE_TYPE,
             entryAmountCents: liveRoom?.entryAmountCents ?? 0,

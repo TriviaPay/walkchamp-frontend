@@ -654,7 +654,7 @@ export function mapUnlimitedDetailToLiveDetail(
 
   const title =
     asString(pick(challenge, "title", "name")) ??
-    `Unlimited · ${waiting.race.targetSteps.toLocaleString()} steps/day`;
+    `Streak · ${waiting.race.targetSteps.toLocaleString()} steps/day`;
 
   const hostUserId =
     asString(pick(challenge, "hostUserId", "host_user_id")) ?? "";

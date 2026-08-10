@@ -1,23 +1,25 @@
 /**
- * Challenge Progress modal — Image 3 (Unlimited only).
- * Opened from the progress card (i). Horizontal day cells; week sections for 30/60/90.
+ * Challenge Progress modal — Image 1 (Unlimited only).
+ * Full duration day strip + circular step ring on the current day.
+ * Opened from the entire Unlimited progress tile (not only the info icon).
  */
 import React, { useMemo } from "react";
 import {
-  FlatList,
   Modal,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import Svg, { Circle } from "react-native-svg";
 import { BlueShoe } from "@/components/BlueShoe";
 import type { UnlimitedViewerSchedule } from "@/utils/unlimitedViewerSchedule";
 import {
   buildUnlimitedDayRows,
-  buildUnlimitedDayWeekSections,
+  mergeUnlimitedHistoryWithSchedule,
   type UnlimitedDayRow,
   type UnlimitedDayStatus,
 } from "@/utils/unlimitedDayProgress";
@@ -33,14 +35,59 @@ type Props = {
   historyRows?: UnlimitedDayRow[] | null;
 };
 
+/** Compact step progress ring for the current-day cell (Image 1). */
+function MiniStepRing({
+  progress,
+  size = 28,
+  stroke = 3,
+  color = "#00E676",
+  trackColor = "#2A3348",
+}: {
+  progress: number;
+  size?: number;
+  stroke?: number;
+  color?: string;
+  trackColor?: string;
+}) {
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const pct = Math.min(1, Math.max(0, progress));
+  return (
+    <Svg width={size} height={size}>
+      <Circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        stroke={trackColor}
+        strokeWidth={stroke}
+        fill="none"
+      />
+      <Circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        stroke={color}
+        strokeWidth={stroke}
+        fill="none"
+        strokeDasharray={`${c * pct} ${c * (1 - pct)}`}
+        strokeLinecap="round"
+        rotation="-90"
+        origin={`${size / 2}, ${size / 2}`}
+      />
+    </Svg>
+  );
+}
+
 function DayCell({
   row,
   todaySteps,
   isCurrent,
+  cellWidth,
 }: {
   row: UnlimitedDayRow;
   todaySteps: number;
   isCurrent: boolean;
+  cellWidth: number;
 }) {
   const steps =
     typeof row.verifiedSteps === "number"
@@ -52,54 +99,112 @@ function DayCell({
   const passed = row.status === "passed";
   const upcoming = row.status === "upcoming";
   const validating = row.status === "validation_pending";
-  const inProgress = row.status === "in_progress" || isCurrent;
+  const inProgress = (row.status === "in_progress" || isCurrent) && !passed && !failed;
+  const goal = row.dailyGoalSteps > 0 ? row.dailyGoalSteps : 1;
+  const ringProgress = inProgress
+    ? Math.min(1, Math.max(0, (steps ?? 0) / goal))
+    : 0;
 
   const borderColor = failed
     ? "#FF4444"
     : inProgress || passed
       ? "#00E676"
-      : "#3A4258";
-  const iconColor = failed ? "#FF4444" : passed || inProgress ? "#00E676" : "#6B7A99";
+      : "#5A6A8A";
 
   return (
     <View
       style={[
         styles.dayCell,
-        { borderColor },
+        { width: cellWidth, borderColor },
+        upcoming && styles.dayCellUpcoming,
         inProgress && styles.dayCellCurrent,
         failed && styles.dayCellFailed,
       ]}
     >
-      <Text style={styles.dayCellLabel}>Day {row.dayNumber}</Text>
-      <View
-        style={[
-          styles.dayIconCircle,
-          failed && { backgroundColor: "#FF4444" },
-          passed && { backgroundColor: "#00E676" },
-          (upcoming || validating) && styles.dayIconDashed,
-          inProgress && !passed && !failed && { borderColor: "#00E676", borderWidth: 2 },
-        ]}
-      >
-        {passed ? (
+      <Text style={styles.dayCellLabel} numberOfLines={1}>
+        Day {row.dayNumber}
+      </Text>
+
+      {passed ? (
+        <View style={[styles.dayIconCircle, styles.dayIconPassed]}>
           <Feather name="check" size={14} color="#0B0F1A" />
-        ) : failed ? (
+        </View>
+      ) : failed ? (
+        <View style={[styles.dayIconCircle, styles.dayIconFailed]}>
           <Feather name="x" size={14} color="#fff" />
-        ) : inProgress ? (
-          <Feather name="loader" size={12} color={iconColor} />
-        ) : (
-          <View style={styles.dayIconDot} />
-        )}
-      </View>
-      {steps != null && !upcoming ? (
-        <Text style={[styles.daySteps, failed && { color: "#FF6B6B" }]}>
+        </View>
+      ) : inProgress ? (
+        <MiniStepRing progress={ringProgress} size={28} stroke={3} />
+      ) : validating ? (
+        <View style={[styles.dayIconCircle, styles.dayIconDashed]}>
+          <Feather name="clock" size={12} color="#6B7A99" />
+        </View>
+      ) : (
+        <View style={[styles.dayIconCircle, styles.dayIconDashed]} />
+      )}
+
+      {failed ? (
+        <Text style={styles.dayMissed}>Missed</Text>
+      ) : upcoming ? (
+        <Text style={styles.dayStepsMuted}>Upcoming</Text>
+      ) : validating && steps == null ? (
+        <Text style={styles.dayStepsMuted}>Pending</Text>
+      ) : steps != null ? (
+        <Text style={[styles.daySteps, failed && { color: "#FF6B6B" }]} numberOfLines={1}>
           {steps.toLocaleString()}
         </Text>
       ) : (
-        <Text style={[styles.dayStepsMuted, failed && { color: "#FF6B6B" }]}>
-          {failed ? "Missed" : validating ? "Pending" : "Upcoming"}
-        </Text>
+        <Text style={styles.dayStepsMuted}>Upcoming</Text>
       )}
     </View>
+  );
+}
+
+function DayStrip({
+  rows,
+  schedule,
+  todaySteps,
+  cellWidth,
+  fitAll,
+}: {
+  rows: UnlimitedDayRow[];
+  schedule: UnlimitedViewerSchedule | null;
+  todaySteps: number;
+  cellWidth: number;
+  fitAll: boolean;
+}) {
+  if (fitAll) {
+    return (
+      <View style={styles.dayRowFit}>
+        {rows.map((item) => (
+          <DayCell
+            key={`d-${item.dayNumber}`}
+            row={item}
+            todaySteps={todaySteps}
+            isCurrent={!!schedule && item.dayNumber === schedule.currentDayIndex}
+            cellWidth={cellWidth}
+          />
+        ))}
+      </View>
+    );
+  }
+  return (
+    <ScrollView
+      horizontal
+      nestedScrollEnabled
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.dayRowScroll}
+    >
+      {rows.map((item) => (
+        <DayCell
+          key={`d-${item.dayNumber}`}
+          row={item}
+          todaySteps={todaySteps}
+          isCurrent={!!schedule && item.dayNumber === schedule.currentDayIndex}
+          cellWidth={cellWidth}
+        />
+      ))}
+    </ScrollView>
   );
 }
 
@@ -110,19 +215,33 @@ export function UnlimitedDayProgressModal({
   todaySteps,
   historyRows,
 }: Props) {
+  const { width: winW } = useWindowDimensions();
+  const sheetWidth = Math.min(winW - 32, 420);
   const rows = useMemo(() => {
-    if (historyRows && historyRows.length > 0) return historyRows;
-    return schedule ? buildUnlimitedDayRows(schedule, todaySteps) : [];
+    if (!schedule) {
+      return historyRows && historyRows.length > 0 ? historyRows : [];
+    }
+    if (historyRows && historyRows.length > 0) {
+      return mergeUnlimitedHistoryWithSchedule(historyRows, schedule, todaySteps);
+    }
+    return buildUnlimitedDayRows(schedule, todaySteps);
   }, [historyRows, schedule, todaySteps]);
-  const sections = useMemo(() => buildUnlimitedDayWeekSections(rows), [rows]);
   const daysLeft = schedule?.remainingDaysAfterToday ?? 0;
   const goal = schedule?.dailyGoalSteps ?? rows[0]?.dailyGoalSteps ?? 0;
   const pct = goal > 0 ? Math.min(1, todaySteps / goal) : 0;
 
+  // ≤7 days fit on one row; 10/30/60/90 slide horizontally on the same line.
+  const contentInner = sheetWidth - 32; // sheet horizontal padding
+  const gap = 6;
+  const fitAll = rows.length > 0 && rows.length <= 7;
+  const cellWidth = fitAll
+    ? Math.max(44, Math.floor((contentInner - gap * (rows.length - 1)) / rows.length))
+    : 56;
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { width: sheetWidth }]}>
           <TouchableOpacity
             style={styles.closeBtn}
             onPress={onClose}
@@ -136,6 +255,8 @@ export function UnlimitedDayProgressModal({
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.scrollContent}
           >
+            {/* Image 1 header: title → shoe ring → brand → Day N of Y */}
+            <Text style={styles.modalTitle}>{UNLIMITED_COPY.modalTitle}</Text>
             <View style={styles.heroIcon}>
               <View style={styles.heroRing}>
                 <BlueShoe size={36} />
@@ -168,27 +289,15 @@ export function UnlimitedDayProgressModal({
               </View>
             </View>
 
-            {sections.map((section, sIdx) => (
-              <View key={section.title ?? `s-${sIdx}`} style={styles.section}>
-                {section.title ? <Text style={styles.weekHeader}>{section.title}</Text> : null}
-                <FlatList
-                  horizontal
-                  data={section.data}
-                  keyExtractor={(item) => `d-${item.dayNumber}`}
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.dayRow}
-                  initialNumToRender={10}
-                  windowSize={5}
-                  renderItem={({ item }) => (
-                    <DayCell
-                      row={item}
-                      todaySteps={todaySteps}
-                      isCurrent={!!schedule && item.dayNumber === schedule.currentDayIndex}
-                    />
-                  )}
-                />
-              </View>
-            ))}
+            <View style={styles.section}>
+              <DayStrip
+                rows={rows}
+                schedule={schedule}
+                todaySteps={todaySteps}
+                cellWidth={cellWidth}
+                fitAll={fitAll}
+              />
+            </View>
 
             <View style={styles.warnBox}>
               <Feather name="alert-triangle" size={16} color="#FF6B6B" />
@@ -216,13 +325,13 @@ export function UnlimitedDayProgressModal({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.78)",
+    // Solid — blocks the Neon Finish track’s pentagon mesh from showing through.
+    backgroundColor: "#050711",
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 16,
   },
   sheet: {
-    width: "100%",
     maxWidth: 420,
     maxHeight: "90%",
     backgroundColor: "#12151F",
@@ -232,14 +341,28 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 14,
     paddingHorizontal: 16,
+    overflow: "hidden",
   },
   closeBtn: { position: "absolute", top: 14, right: 14, zIndex: 2, padding: 4 },
-  scrollContent: { paddingTop: 8, paddingBottom: 8, gap: 12 },
-  heroIcon: { alignItems: "center", marginTop: 4 },
+  scrollContent: { paddingTop: 4, paddingBottom: 8, gap: 12 },
+  modalTitle: {
+    textAlign: "center",
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#FFFFFF",
+    marginTop: 2,
+    marginBottom: 4,
+  },
+  heroIcon: {
+    alignItems: "center",
+    justifyContent: "center",
+    height: 88,
+    marginTop: 2,
+  },
   heroRing: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 76,
+    height: 76,
+    borderRadius: 38,
     borderWidth: 3,
     borderColor: "#00E676",
     alignItems: "center",
@@ -251,7 +374,7 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: "800",
     color: "#FFFFFF",
-    marginTop: 8,
+    marginTop: -2,
   },
   infinity: { color: "#A78BFA", fontWeight: "900" },
   dayOf: {
@@ -259,7 +382,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "800",
     color: "#00E676",
-    marginTop: 2,
+    marginTop: -4,
   },
   todayCard: {
     backgroundColor: "#0B0E16",
@@ -274,7 +397,7 @@ const styles = StyleSheet.create({
   todaySteps: { fontSize: 28, fontWeight: "800", color: "#00E676" },
   todayGoal: { fontSize: 20, fontWeight: "700", color: "#FFFFFF" },
   barBg: {
-    height: 8,
+    height: 10,
     borderRadius: 999,
     backgroundColor: "#1E2436",
     overflow: "hidden",
@@ -283,16 +406,14 @@ const styles = StyleSheet.create({
   remainRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   remainText: { fontSize: 12, color: "#8B9AC0", fontWeight: "600" },
   section: { gap: 6 },
-  weekHeader: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: "#C4B5FD",
-    textTransform: "uppercase",
-    letterSpacing: 0.3,
+  dayRowFit: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 6,
+    paddingVertical: 2,
   },
-  dayRow: { gap: 8, paddingVertical: 2 },
+  dayRowScroll: { gap: 6, paddingVertical: 2 },
   dayCell: {
-    width: 72,
     minHeight: 96,
     borderRadius: 14,
     borderWidth: 1.5,
@@ -300,18 +421,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 8,
-    paddingHorizontal: 4,
+    paddingHorizontal: 2,
     gap: 6,
+  },
+  dayCellUpcoming: {
+    borderColor: "#3A4258",
   },
   dayCellCurrent: {
     borderWidth: 2,
-    shadowColor: "#00E676",
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 3,
   },
   dayCellFailed: { backgroundColor: "rgba(255,68,68,0.08)" },
-  dayCellLabel: { fontSize: 11, fontWeight: "700", color: "#C7CDDA" },
+  dayCellLabel: { fontSize: 10, fontWeight: "700", color: "#C7CDDA" },
   dayIconCircle: {
     width: 28,
     height: 28,
@@ -320,19 +440,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "transparent",
   },
+  dayIconPassed: { backgroundColor: "#00E676" },
+  dayIconFailed: { backgroundColor: "#FF4444" },
   dayIconDashed: {
     borderWidth: 1.5,
     borderColor: "#5A6A8A",
     borderStyle: "dashed",
   },
-  dayIconDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#5A6A8A",
-  },
-  daySteps: { fontSize: 12, fontWeight: "800", color: "#00E676" },
-  dayStepsMuted: { fontSize: 11, fontWeight: "700", color: "#6B7A99" },
+  daySteps: { fontSize: 10, fontWeight: "800", color: "#00E676" },
+  dayStepsMuted: { fontSize: 9, fontWeight: "700", color: "#6B7A99" },
+  dayMissed: { fontSize: 10, fontWeight: "800", color: "#FF6B6B" },
   warnBox: {
     flexDirection: "row",
     gap: 10,

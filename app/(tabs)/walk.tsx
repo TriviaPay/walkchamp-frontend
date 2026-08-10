@@ -4117,7 +4117,7 @@ function WalkScreenContent() {
       }
 
       if (meta.isUnlimited && !isUnlimitedGoalFrontendEnabled()) {
-        AppAlert.alert("Unavailable", "Unlimited Challenge is disabled in this build.");
+        AppAlert.alert("Unavailable", "Streak Challenge is disabled in this build.");
         setChallengeCreating(false);
         return;
       }
@@ -4354,7 +4354,7 @@ function WalkScreenContent() {
             coin_entry_amount: 0,
             title:
               unlimitedChallenge?.title ??
-              `Unlimited · ${dailySteps.toLocaleString()} steps/day`,
+              `Streak · ${dailySteps.toLocaleString()} steps/day`,
             target_steps: dailySteps,
             max_players: 0,
             registered_count: unlimitedChallenge?.participantCount ?? 1,

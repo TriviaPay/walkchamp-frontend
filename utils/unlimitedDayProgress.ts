@@ -149,7 +149,45 @@ export function dayRowsFromDailyHistory(
     .filter((r): r is UnlimitedDayRow => r != null)
     .sort((a, b) => a.dayNumber - b.dayNumber);
 
-  return rows.length > 0 ? rows : null;
+  if (rows.length === 0) return null;
+
+  // History may only return days that already started — pad to full challenge length
+  // so the Challenge Progress UI can show the total week/duration (Image 1).
+  if (fallback?.schedule && fallback.schedule.durationDays > rows.length) {
+    return mergeUnlimitedHistoryWithSchedule(rows, fallback.schedule, fallback.todaySteps);
+  }
+  return rows;
+}
+
+/**
+ * Overlay verified daily-history onto a full duration skeleton so the modal
+ * always shows Day 1…N (not only the partial history window).
+ */
+export function mergeUnlimitedHistoryWithSchedule(
+  historyRows: UnlimitedDayRow[] | null | undefined,
+  schedule: UnlimitedViewerSchedule,
+  todaySteps?: number,
+): UnlimitedDayRow[] {
+  const base = buildUnlimitedDayRows(schedule, todaySteps);
+  if (!historyRows?.length) return base;
+  const byDay = new Map(historyRows.map((r) => [r.dayNumber, r]));
+  return base.map((row) => {
+    const hit = byDay.get(row.dayNumber);
+    if (!hit) return row;
+    const verifiedSteps =
+      hit.status === "in_progress" &&
+      typeof todaySteps === "number" &&
+      (hit.verifiedSteps == null || todaySteps > hit.verifiedSteps)
+        ? todaySteps
+        : hit.verifiedSteps;
+    return {
+      ...row,
+      ...hit,
+      localDate: hit.localDate || row.localDate,
+      dailyGoalSteps: hit.dailyGoalSteps > 0 ? hit.dailyGoalSteps : row.dailyGoalSteps,
+      verifiedSteps,
+    };
+  });
 }
 
 // ── Daily Progress Summary (spec §14) ─────────────────────────────────────────

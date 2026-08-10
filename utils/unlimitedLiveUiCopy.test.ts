@@ -12,6 +12,10 @@ import type { UnlimitedDayRow } from "./unlimitedDayProgress";
 import type { UnlimitedViewerSchedule } from "./unlimitedViewerSchedule";
 
 assert.equal(UNLIMITED_COPY.missADayOut, "Miss a day = out");
+assert.equal(UNLIMITED_COPY.challengeName, "Streak Challenge");
+assert.equal(UNLIMITED_COPY.modalBrand, "Streak Challenge");
+assert.equal(UNLIMITED_COPY.lostBadge, "Streak Broken");
+assert.equal(UNLIMITED_COPY.lostChip, "Streak Broken");
 assert.equal(
   UNLIMITED_COPY.lostAfterMiss,
   "Challenge lost after missing a required day.",

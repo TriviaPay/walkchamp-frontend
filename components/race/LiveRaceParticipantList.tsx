@@ -22,6 +22,7 @@ import {
   getTopThreeRankAccent,
   RANK_CURRENT_USER_GREEN,
 } from "@/utils/participantRankUi";
+import { UNLIMITED_COPY } from "@/utils/unlimitedLiveUiCopy";
 
 const PANEL_ROW_HEIGHT = 52;
 /** Compact so ~10 Live Board rows fit above progress/chat without scrolling. */
@@ -482,7 +483,9 @@ const LiveBoardRow = memo(function LiveBoardRow({
                 { backgroundColor: "#FF4444", borderColor: "#FF4444" },
               ]}
             >
-              <Text style={[styles.tagTxt, { color: "#FFFFFF" }]}>Lost</Text>
+              <Text style={[styles.tagTxt, { color: "#FFFFFF" }]}>
+                {UNLIMITED_COPY.lostChip}
+              </Text>
             </View>
           )}
           {!isForfeited && participant.isTied && (

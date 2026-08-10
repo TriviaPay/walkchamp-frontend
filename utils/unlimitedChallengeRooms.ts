@@ -394,7 +394,7 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
 
   const title =
     asString(pickRaw(obj, "title", "name")) ??
-    `Unlimited · ${dailyGoal > 0 ? dailyGoal.toLocaleString() : "—"} steps/day`;
+    `Streak · ${dailyGoal > 0 ? dailyGoal.toLocaleString() : "—"} steps/day`;
 
   const status =
     asString(pickRaw(obj, "status", "room_status", "roomStatus")) ?? "scheduled";

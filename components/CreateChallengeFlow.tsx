@@ -186,7 +186,7 @@ function StepProgress({
 }
 
 const CHALLENGE_TYPE_PILLS = {
-  unlimited: ["Unlimited Players", "Daily Goal", "Equal Prize Split"] as const,
+  unlimited: ["Unlimited Players", "Streak Goal", "Equal Prize Split"] as const,
   fixed: ["2–10 Players", "Up to 3 Winners"] as const,
 };
 
@@ -821,8 +821,8 @@ export function CreateChallengeFlow({
                       }}
                       accessibilityLabel={
                         unlimitedSelected
-                          ? "Daily Goal Challenge, selected"
-                          : "Daily Goal Challenge, not selected"
+                          ? "Streak Challenge, selected"
+                          : "Streak Challenge, not selected"
                       }
                       disabled={!unlimitedEnabled}
                       onPress={() => {
@@ -901,7 +901,7 @@ export function CreateChallengeFlow({
                                     },
                                   ]}
                                 >
-                                  Daily Goal Challenge
+                                  Streak Challenge
                                 </Text>
                                 <View style={styles.newBadge}>
                                   <Text style={styles.newBadgeText}>NEW</Text>

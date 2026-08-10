@@ -247,7 +247,7 @@ function buildInstantLiveRaceShell(opts: {
     id: opts.raceId,
     title:
       (opts.title && String(opts.title).trim()) ||
-      (unlimited ? "Unlimited Challenge" : "Live Race"),
+      (unlimited ? "Streak Challenge" : "Live Race"),
     status: "in_progress",
     entryType,
     entryAmountCents: 0,
@@ -2133,9 +2133,9 @@ function LiveRaceDetailScreenContent() {
       userId: user?.id,
       username: user?.username,
     });
-    // First-paint shell only — do not rebuild on every user/roster refresh.
+    // Rebuild once when auth user id arrives so the shell includes "You" immediately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [raceId]);
+  }, [raceId, user?.id]);
 
   // ── Mic Pass / voice-chat state ─────────────────────────────────────────────
   // NOTE: Mic Pass is purely social — it has zero effect on steps, race
@@ -2532,7 +2532,72 @@ function LiveRaceDetailScreenContent() {
     if (isTrackLayoutId(cachedLayout)) {
       setTrackLayoutId(cachedLayout);
     }
-  }, [raceId, initialTrackLayout]);
+  }, [raceId, initialTrackLayout, user?.id]);
+
+  // Disk warm: after app kill, mem cache is empty — hydrate from AsyncStorage before API.
+  useEffect(() => {
+    if (!raceId || typeof raceId !== "string" || !user?.id) return;
+    if (screenCache.getSync<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId, user.id))) return;
+    let cancelled = false;
+    void screenCache.get<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId, user.id)).then((cached) => {
+      if (cancelled || !cached?.race) return;
+      setRace((prev) => prev ?? cached.race);
+      setParticipants((prev) => {
+        if (prev.length > 0) {
+          return mergeParticipantsPreservingSteps(prev, cached.participants, {
+            viewerUserId: user.id,
+            dayAware: true,
+          });
+        }
+        return cached.participants;
+      });
+      if (isTrackLayoutId(cached.race.trackLayout)) {
+        setTrackLayoutId(cached.race.trackLayout);
+      }
+      setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [raceId, user?.id]);
+
+  // Instant "You" seed for Unlimited — don't wait on detail API / late auth hydrate.
+  useEffect(() => {
+    if (!user?.id) return;
+    if (!(unlimitedHint && isUnlimitedGoalFrontendEnabled())) return;
+    setParticipants((prev) => {
+      const idx = prev.findIndex(
+        (p) =>
+          p.userId === user.id ||
+          (!!user.username &&
+            !!p.username &&
+            p.username.toLowerCase() === user.username.toLowerCase()),
+      );
+      if (idx >= 0) {
+        const cur = prev[idx]!;
+        if (cur.userId === user.id && cur.username === "You") return prev;
+        const next = prev.slice();
+        next[idx] = { ...cur, userId: user.id, username: "You" };
+        return next;
+      }
+      // Empty / single shell roster only — never invent membership on a full remote roster.
+      if (prev.length > 1) return prev;
+      return [
+        {
+          id: user.id,
+          userId: user.id,
+          currentSteps: 0,
+          status: "active",
+          rank: 1,
+          username: "You",
+          countryFlag: null,
+          avatarColor: "#00E676",
+          isHost: true,
+        },
+        ...prev,
+      ];
+    });
+  }, [user?.id, user?.username, unlimitedHint]);
 
   const scrollRef     = useRef<ScrollView>(null);
   const cheerScrollRef = useRef<ScrollView>(null);
@@ -3066,7 +3131,7 @@ function LiveRaceDetailScreenContent() {
   const headerRaceTitle = isSponsored
     ? localizeSponsoredEventTitle(raceTitle, race?.startedAt)
     : isUnlimitedHeader
-      ? "Unlimited Challenge"
+      ? UNLIMITED_COPY.challengeName
       : raceTitle.replace(/^LIVE\s+/i, "");
 
   const unlimitedLiveViewTrackedRef = useRef(false);
@@ -3321,61 +3386,11 @@ function LiveRaceDetailScreenContent() {
     stopRaceStepTracking(`participant_${currentParticipant.status ?? "ineligible"}`);
   }, [raceId, user?.id, user?.username, currentParticipant, currentParticipant?.status, stopRaceStepTracking]);
 
-  // ── Unlimited Daily Goal: navigate to Results once the VIEWER'S OWN local
-  // challenge duration ends — never when the global challenge finishes for
-  // someone else. Results screen itself decides waiting/validating/ready from
-  // backend-authoritative challenge.status/settlementStatus (spec §5). Guarded
-  // to fire only once per screen instance so re-renders don't re-push.
-  const unlimitedResultsNavGuardRef = useRef(false);
-  useEffect(() => {
-    if (!race || !raceId) return;
-    const unlimited =
-      isUnlimitedGoalFrontendEnabled() &&
-      isUnlimitedGoalChallenge({
-        challengeType: race.challengeType,
-        entryType: race.entryType,
-        type: race.type,
-        capacityMode: race.capacityMode,
-        maxPlayers: race.maxPlayers,
-      });
-    if (!unlimited) return;
-    const schedule = computeUnlimitedViewerSchedule(
-      {
-        startAtUtc: race.scheduledStartAt ?? race.startedAt ?? null,
-        challengeTimezone: race.challengeTimezone ?? null,
-        durationDays: race.challengeDurationDays ?? null,
-        dailyGoalSteps: race.targetSteps,
-        challengeStatus: race.status,
-      },
-      {
-        liveDay: currentParticipant
-          ? {
-              timezone: currentParticipant.timezone,
-              dayNumber: currentParticipant.dayNumber,
-              localDate: currentParticipant.challengeDayKey,
-              dailyGoalSteps: currentParticipant.dailyGoalSteps,
-              qualificationStatus: currentParticipant.qualificationStatus,
-              completedDays: currentParticipant.completedDays,
-            }
-          : null,
-        fallbackTimezone: getDeviceTimezone(),
-      },
-    );
-    if (!schedule) return;
-    const personallyFinished =
-      schedule.viewerStatus === "completed" ||
-      schedule.viewerStatus === "failed" ||
-      schedule.viewerStatus === "left";
-    if (!personallyFinished || unlimitedResultsNavGuardRef.current) return;
-    unlimitedResultsNavGuardRef.current = true;
-    // Typed-route union regenerates on next Metro/expo-router build; cast avoids a
-    // stale-cache compile error for this newly added screen (app/race/unlimited-results.tsx).
-    router.push({ pathname: "/race/unlimited-results", params: { challengeId: raceId } } as never);
-  }, [race, currentParticipant, raceId]);
+  // Unlimited Results: never auto-navigate from Live — only via "View Results" tap.
 
-  // Load verified per-day history when the progress modal opens (or once while Unlimited is live).
+  // Prefetch verified per-day history as soon as Unlimited Live mounts (modal opens instantly).
   useEffect(() => {
-    if (!isUnlimitedHeader || !raceId || !showUnlimitedDayProgress) return;
+    if (!isUnlimitedHeader || !raceId) return;
     let cancelled = false;
     void fetchUnlimitedDailyHistory(raceId, currentUserId).then((payload) => {
       if (cancelled) return;
@@ -3391,7 +3406,6 @@ function LiveRaceDetailScreenContent() {
   }, [
     isUnlimitedHeader,
     raceId,
-    showUnlimitedDayProgress,
     currentUserId,
     unlimitedTaglineSchedule,
     unlimitedDailySteps,
@@ -5548,16 +5562,19 @@ function LiveRaceDetailScreenContent() {
         )}
       </View>
 
-      {/* ── Tagline: Start time ↔ Beat your friends (or Spectating badge), 5s each ── */}
-      <LiveTaglineRotator
-        raceId={raceKeyForTagline}
-        alt={taglineAlt}
-        visible={!isCompleted}
-        isSpectator={!currentParticipant}
-      />
+      {/* ── Tagline: Start time ↔ Beat your friends (or Spectating badge), 5s each ──
+          Unlimited: hide tagline entirely (no day rotator, no “Beat your friends”). */}
+      {!isUnlimitedLive ? (
+        <LiveTaglineRotator
+          raceId={raceKeyForTagline}
+          alt={taglineAlt}
+          visible={!isCompleted}
+          isSpectator={!currentParticipant}
+        />
+      ) : null}
 
       {/* ── Info bar ── */}
-      <View style={s.infoBar}>
+      <View style={[s.infoBar, isUnlimitedLive && s.infoBarUnlimited]}>
         <RaceClockInfoBar
           enabled={!!race}
           isActive={isActive}
@@ -5580,7 +5597,7 @@ function LiveRaceDetailScreenContent() {
         />
       </View>
 
-      {/* ── Unlimited Daily Goal: compact Day X of Y / today's goal / countdown ── */}
+      {/* ── Unlimited Daily Goal: today goal / countdown (no Day N of Y — avoids chip overlap) ── */}
       {isUnlimitedLive && unlimitedViewerSchedule ? (
         <UnlimitedCurrentDayCard
           schedule={unlimitedViewerSchedule}
@@ -6282,6 +6299,7 @@ const s = StyleSheet.create({
   leaveTxt:    { color: "#FFFFFF", fontSize: 13, fontWeight: "800", marginRight: 4 },
   headerSpacer: { width: 68 },
   infoBar:  { flexDirection: "row", paddingHorizontal: 12, gap: 6, minHeight: 44, alignItems: "center" },
+  infoBarUnlimited: { marginTop: 4, marginBottom: 8 },
   infoCard: {
     flex: 1,
     backgroundColor: "#111421",

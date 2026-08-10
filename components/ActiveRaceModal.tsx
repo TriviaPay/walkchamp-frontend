@@ -119,7 +119,7 @@ function challengeLabel(info: ActiveRaceInfo): string {
     info.challenge_type === "unlimited_goal" ||
     info.room_type === "unlimited_goal"
   ) {
-    return "Daily Goal Challenge";
+    return "Streak Challenge";
   }
   if (info.challenge_type === "coins_battle") return "Coins Battle";
   if (info.entry_fee === 0) return "Free Challenge";

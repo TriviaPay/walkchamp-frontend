@@ -2475,7 +2475,7 @@ function AvailableRoomsScreenContent() {
       if (isUnlimitedJoin) {
         void saveHostedUnlimitedChallenge({
           room_id: room.room_id,
-          title: room.title || "Unlimited Challenge",
+          title: room.title || "Streak Challenge",
           entry_fee: room.entry_fee,
           coin_entry_amount: room.coin_entry_amount ?? 0,
           target_steps: room.target_steps,
