@@ -21,6 +21,7 @@ import {
   View,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import { safeGoBack } from "@/utils/safeGoBack";
 import { Feather } from "@expo/vector-icons";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useAuth } from "@/context/AuthContext";
@@ -54,6 +55,7 @@ import {
 } from "@/utils/unlimitedResults";
 import { UnlimitedProgressSummary } from "@/components/race/UnlimitedProgressSummary";
 import { subscribeToChannel, unsubscribeFromChannel, CHANNELS } from "@/services/realtimeService";
+import { rf } from "@/utils/responsive";
 
 const POLL_MS = 20_000;
 
@@ -227,7 +229,7 @@ export default function UnlimitedResultsScreen() {
     return (
       <View style={[styles.screen, styles.centerFill, { paddingTop: safeTop }]}>
         <Text style={styles.errorText}>Couldn't load challenge results.</Text>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => safeGoBack("/(tabs)/live")}>
           <Text style={styles.backBtnText}>Go Back</Text>
         </TouchableOpacity>
       </View>
@@ -237,7 +239,7 @@ export default function UnlimitedResultsScreen() {
   return (
     <View style={[styles.screen, { paddingTop: safeTop }]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <TouchableOpacity onPress={() => safeGoBack("/(tabs)/live")} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <Feather name="arrow-left" size={22} color="#E2E8F8" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{copy.title}</Text>
@@ -572,7 +574,7 @@ function formatCents(cents: number): string {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#0B0F1A" },
   centerFill: { alignItems: "center", justifyContent: "center", gap: 14 },
-  errorText: { color: "#8B9AC0", fontSize: 14 },
+  errorText: { color: "#8B9AC0", fontSize: rf(14) },
   backBtn: { backgroundColor: "#7C3AFF", borderRadius: 12, paddingHorizontal: 22, paddingVertical: 11 },
   backBtnText: { color: "#fff", fontWeight: "700" },
   header: {
@@ -582,7 +584,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
-  headerTitle: { fontSize: 17, fontWeight: "800", color: "#fff" },
+  headerTitle: { fontSize: rf(17), fontWeight: "800", color: "#fff" },
   statusCard: {
     borderRadius: 18,
     backgroundColor: "rgba(20,24,40,0.9)",
@@ -593,13 +595,13 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   statusBadgeRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  statusBadgeText: { fontSize: 16, fontWeight: "800", color: "#fff" },
-  statusMessage: { fontSize: 13.5, color: "#C8D0E8", lineHeight: 19 },
-  statusSecondary: { fontSize: 12, color: "#8B9AC0", lineHeight: 17 },
+  statusBadgeText: { fontSize: rf(16), fontWeight: "800", color: "#fff" },
+  statusMessage: { fontSize: rf(13.5), color: "#C8D0E8", lineHeight: 19 },
+  statusSecondary: { fontSize: rf(12), color: "#8B9AC0", lineHeight: 17 },
   statusGrid: { marginTop: 6, gap: 8 },
   statRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  statLabel: { fontSize: 12.5, color: "#8B9AC0", fontWeight: "600" },
-  statValue: { fontSize: 13.5, color: "#E2E8F8", fontWeight: "800" },
+  statLabel: { fontSize: rf(12.5), color: "#8B9AC0", fontWeight: "600" },
+  statValue: { fontSize: rf(13.5), color: "#E2E8F8", fontWeight: "800" },
   finalBlock: {
     marginTop: 8,
     paddingTop: 12,
@@ -608,11 +610,11 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   finalEligibilityRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  finalEligibilityText: { fontSize: 15, fontWeight: "900", letterSpacing: 0.3 },
-  finalMessage: { fontSize: 12.5, color: "#C8D0E8", lineHeight: 18, marginBottom: 4 },
-  dayHistoryTitle: { fontSize: 14, fontWeight: "800", color: "#E2E8F8", marginBottom: 8, marginTop: 4 },
+  finalEligibilityText: { fontSize: rf(15), fontWeight: "900", letterSpacing: 0.3 },
+  finalMessage: { fontSize: rf(12.5), color: "#C8D0E8", lineHeight: 18, marginBottom: 4 },
+  dayHistoryTitle: { fontSize: rf(14), fontWeight: "800", color: "#E2E8F8", marginBottom: 8, marginTop: 4 },
   weekHeader: {
-    fontSize: 11.5,
+    fontSize: rf(11.5),
     fontWeight: "800",
     color: "#C4B5FD",
     paddingVertical: 8,
@@ -629,9 +631,9 @@ const styles = StyleSheet.create({
     borderBottomColor: "rgba(255,255,255,0.06)",
   },
   dayHistoryRowFailed: { backgroundColor: "rgba(255,68,68,0.06)", borderRadius: 8 },
-  dayHistoryDay: { fontSize: 13, fontWeight: "700", color: "#E2E8F8" },
-  dayHistoryDate: { fontSize: 10.5, color: "#5A6A8A", marginTop: 1 },
-  dayHistorySteps: { fontSize: 12, color: "#8B9AC0" },
+  dayHistoryDay: { fontSize: rf(13), fontWeight: "700", color: "#E2E8F8" },
+  dayHistoryDate: { fontSize: rf(10.5), color: "#5A6A8A", marginTop: 1 },
+  dayHistorySteps: { fontSize: rf(12), color: "#8B9AC0" },
   dayStatusBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -641,7 +643,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
-  dayStatusText: { fontSize: 10, fontWeight: "700" },
+  dayStatusText: { fontSize: rf(10), fontWeight: "700" },
   collapsible: {
     borderRadius: 14,
     backgroundColor: "rgba(20,24,40,0.85)",
@@ -656,11 +658,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
-  collapsibleTitle: { fontSize: 13, fontWeight: "800", color: "#E2E8F8" },
+  collapsibleTitle: { fontSize: rf(13), fontWeight: "800", color: "#E2E8F8" },
   collapsibleBody: { paddingHorizontal: 14, paddingBottom: 10, gap: 8 },
-  emptyListText: { fontSize: 12, color: "#5A6A8A", fontStyle: "italic" },
+  emptyListText: { fontSize: rf(12), color: "#5A6A8A", fontStyle: "italic" },
   participantRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  participantRank: { fontSize: 12, fontWeight: "800", color: "#8B9AC0", width: 24 },
+  participantRank: { fontSize: rf(12), fontWeight: "800", color: "#8B9AC0", width: 24 },
   participantAvatar: {
     width: 30,
     height: 30,
@@ -668,7 +670,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  participantAvatarText: { fontSize: 13, fontWeight: "800" },
-  participantName: { fontSize: 13, fontWeight: "700", color: "#E2E8F8" },
-  participantSub: { fontSize: 11, color: "#8B9AC0", marginTop: 1 },
+  participantAvatarText: { fontSize: rf(13), fontWeight: "800" },
+  participantName: { fontSize: rf(13), fontWeight: "700", color: "#E2E8F8" },
+  participantSub: { fontSize: rf(11), color: "#8B9AC0", marginTop: 1 },
 });

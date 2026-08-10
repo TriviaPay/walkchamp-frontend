@@ -31,6 +31,7 @@ import {
 import type { AppDispatch, RootState } from "@/store";
 import { isTrackLayoutId } from "@/constants/trackLayouts";
 import { resolveTrackThemeImageSource } from "@/utils/trackThemeMedia";
+import { rf } from "@/utils/responsive";
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
@@ -399,7 +400,7 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
                     },
                   ]}
                 >
-                  <Text style={{ fontSize: 14, fontWeight: sel ? "700" : "500", color: sel ? "#000" : colors.foreground }}>{n}</Text>
+                  <Text style={{ fontSize: rf(14), fontWeight: sel ? "700" : "500", color: sel ? "#000" : colors.foreground }}>{n}</Text>
                   {sel && (
                     <View style={[styles.checkBadge, { backgroundColor: colors.primary }]}>
                       <Feather name="check" size={8} color="#000" />
@@ -578,7 +579,7 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  headerTitle: { fontSize: 18, fontWeight: "700" },
+  headerTitle: { fontSize: rf(18), fontWeight: "700" },
 
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8 },
@@ -594,10 +595,10 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   coinIcon: { width: 16, height: 16 },
-  balanceText: { fontSize: 13, flex: 1 },
+  balanceText: { fontSize: rf(13), flex: 1 },
 
   sectionLabel: {
-    fontSize: 11,
+    fontSize: rf(11),
     fontWeight: "700",
     letterSpacing: 0.8,
     textTransform: "uppercase",
@@ -632,7 +633,7 @@ const styles = StyleSheet.create({
   },
 
   hScroll: { marginBottom: 16 },
-  trackHint: { fontSize: 12, marginBottom: 8, marginTop: -2 },
+  trackHint: { fontSize: rf(12), marginBottom: 8, marginTop: -2 },
   trackRow: { gap: 10, paddingVertical: 4 },
   trackCard: {
     height: 100,
@@ -663,7 +664,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 4,
   },
-  trackLabelText: { fontSize: 11, fontWeight: "600", color: "#fff", textAlign: "center" },
+  trackLabelText: { fontSize: rf(11), fontWeight: "600", color: "#fff", textAlign: "center" },
 
   prizeBox: {
     borderRadius: 14,
@@ -673,10 +674,10 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   prizeBoxHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 10 },
-  prizeBoxTitle: { fontSize: 13, fontWeight: "700" },
+  prizeBoxTitle: { fontSize: rf(13), fontWeight: "700" },
   prizeRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 5 },
-  prizeLabel: { fontSize: 12 },
-  prizeValue: { fontSize: 12 },
+  prizeLabel: { fontSize: rf(12) },
+  prizeValue: { fontSize: rf(12) },
   prizeDivider: { height: StyleSheet.hairlineWidth, marginVertical: 8 },
 
   warningBox: {
@@ -688,7 +689,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     gap: 6,
   },
-  warningText: { fontSize: 12, color: "#EF4444", lineHeight: 16 },
+  warningText: { fontSize: rf(12), color: "#EF4444", lineHeight: 16 },
   shopBtn: {
     alignSelf: "flex-start",
     backgroundColor: "rgba(239,68,68,0.15)",
@@ -699,7 +700,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(239,68,68,0.35)",
     marginTop: 2,
   },
-  shopBtnText: { fontSize: 12, fontWeight: "600", color: "#F87171" },
+  shopBtnText: { fontSize: rf(12), fontWeight: "600", color: "#F87171" },
 
   errorBox: {
     flexDirection: "row",
@@ -709,7 +710,7 @@ const styles = StyleSheet.create({
     padding: 10,
     marginBottom: 8,
   },
-  errorText: { fontSize: 12, color: "#F87171", flex: 1 },
+  errorText: { fontSize: rf(12), color: "#F87171", flex: 1 },
 
   footer: {
     paddingHorizontal: 20,
@@ -725,7 +726,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
-  hostBtnText: { fontSize: 16, fontWeight: "700" },
+  hostBtnText: { fontSize: rf(16), fontWeight: "700" },
   cancelBtn: {
     height: 46,
     borderRadius: 14,
@@ -733,9 +734,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  cancelText: { fontSize: 15, fontWeight: "600" },
+  cancelText: { fontSize: rf(15), fontWeight: "600" },
   footerNote: {
-    fontSize: 11,
+    fontSize: rf(11),
     textAlign: "center",
     lineHeight: 16,
     paddingHorizontal: 8,

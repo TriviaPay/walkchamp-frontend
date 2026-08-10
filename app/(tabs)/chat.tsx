@@ -1300,7 +1300,7 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
               {activeFriend.avatarUrl ? (
                 <CachedAvatarImage userId={activeFriend.id} avatarVersion={getAvatarVersion(activeFriend.id, activeFriend.avatarVersion ?? 0)} size={42} />
               ) : (
-                <Text style={{ fontSize: 16, fontWeight: "800", color: "#fff" }}>{activeFriend.username[0].toUpperCase()}</Text>
+                <Text style={{ fontSize: rf(16), fontWeight: "800", color: "#fff" }}>{activeFriend.username[0].toUpperCase()}</Text>
               )}
             </View>
             <View style={{ position: "absolute", bottom: 1, right: 1, width: 11, height: 11, borderRadius: 6, backgroundColor: activeFriend.isOnline ? colors.primary : "#505060", borderWidth: 2, borderColor: colors.card }} />
@@ -1308,9 +1308,9 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
               <Text style={[cStyles.dmName, { color: colors.foreground }]}>@{activeFriend.username}</Text>
-              {activeFriend.flag ? <Text style={{ fontSize: 17 }}>{activeFriend.flag}</Text> : null}
+              {activeFriend.flag ? <Text style={{ fontSize: rf(17) }}>{activeFriend.flag}</Text> : null}
             </View>
-            <Text style={{ color: activeFriend.isOnline ? colors.primary : colors.mutedForeground, fontSize: 11, marginTop: 1 }}>
+            <Text style={{ color: activeFriend.isOnline ? colors.primary : colors.mutedForeground, fontSize: rf(11), marginTop: 1 }}>
               {activeFriend.isOnline ? "Online" : "Offline"}
             </Text>
           </View>
@@ -1423,8 +1423,8 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
               <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 22, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: colors.border }}>
                 <Avatar color={longPressConv.friendAvatarColor} letter={longPressConv.friendUsername[0]} size={40} />
                 <View>
-                  <Text style={{ color: colors.foreground, fontWeight: "700", fontSize: 15 }}>@{longPressConv.friendUsername}</Text>
-                  <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>{longPressConv.friendFlag}</Text>
+                  <Text style={{ color: colors.foreground, fontWeight: "700", fontSize: rf(15) }}>@{longPressConv.friendUsername}</Text>
+                  <Text style={{ color: colors.mutedForeground, fontSize: rf(12) }}>{longPressConv.friendFlag}</Text>
                 </View>
               </View>
             )}
@@ -1436,8 +1436,8 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
                 <Feather name="trash-2" size={18} color="#FF3B30" />
               </View>
               <View>
-                <Text style={{ color: "#FF3B30", fontSize: 16, fontWeight: "600" }}>Delete Chat</Text>
-                <Text style={{ color: colors.mutedForeground, fontSize: 12, marginTop: 2 }}>Remove this conversation history</Text>
+                <Text style={{ color: "#FF3B30", fontSize: rf(16), fontWeight: "600" }}>Delete Chat</Text>
+                <Text style={{ color: colors.mutedForeground, fontSize: rf(12), marginTop: 2 }}>Remove this conversation history</Text>
               </View>
             </TouchableOpacity>
             <TouchableOpacity
@@ -1448,15 +1448,15 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
                 <Feather name="user-minus" size={18} color="#EF4444" />
               </View>
               <View>
-                <Text style={{ color: "#EF4444", fontSize: 16, fontWeight: "600" }}>Unfriend</Text>
-                <Text style={{ color: colors.mutedForeground, fontSize: 12, marginTop: 2 }}>Remove friend and delete chat</Text>
+                <Text style={{ color: "#EF4444", fontSize: rf(16), fontWeight: "600" }}>Unfriend</Text>
+                <Text style={{ color: colors.mutedForeground, fontSize: rf(12), marginTop: 2 }}>Remove friend and delete chat</Text>
               </View>
             </TouchableOpacity>
             <TouchableOpacity
               style={{ marginHorizontal: 20, marginTop: 4, borderRadius: 14, backgroundColor: colors.muted, alignItems: "center", paddingVertical: 15 }}
               onPress={() => setLongPressConv(null)}
             >
-              <Text style={{ color: colors.mutedForeground, fontSize: 15, fontWeight: "600" }}>Cancel</Text>
+              <Text style={{ color: colors.mutedForeground, fontSize: rf(15), fontWeight: "600" }}>Cancel</Text>
             </TouchableOpacity>
           </TouchableOpacity>
         </TouchableOpacity>
@@ -1497,22 +1497,22 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
             <View style={{ flex: 1, minWidth: 0 }}>
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 1, minWidth: 0 }}>
-                  <Text style={{ color: colors.foreground, fontSize: 15, fontWeight: "700" }} numberOfLines={1}>@{conv.friendUsername}</Text>
-                  <Text style={{ fontSize: 14 }}>{conv.friendFlag}</Text>
+                  <Text style={{ color: colors.foreground, fontSize: rf(15), fontWeight: "700" }} numberOfLines={1}>@{conv.friendUsername}</Text>
+                  <Text style={{ fontSize: rf(14) }}>{conv.friendFlag}</Text>
                 </View>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                  {conv.lastMessageAt && <Text style={{ fontSize: 11, color: colors.mutedForeground }}>{formatRelativeTime(conv.lastMessageAt)}</Text>}
+                  {conv.lastMessageAt && <Text style={{ fontSize: rf(11), color: colors.mutedForeground }}>{formatRelativeTime(conv.lastMessageAt)}</Text>}
                   {conv.unreadCount > 0 && (
                     <View style={{ backgroundColor: "#00E676", borderRadius: 10, minWidth: 20, height: 20, alignItems: "center", justifyContent: "center", paddingHorizontal: 5 }}>
-                      <Text style={{ fontSize: 10, fontWeight: "900", color: "#000" }}>{conv.unreadCount > 9 ? "9+" : conv.unreadCount}</Text>
+                      <Text style={{ fontSize: rf(10), fontWeight: "900", color: "#000" }}>{conv.unreadCount > 9 ? "9+" : conv.unreadCount}</Text>
                     </View>
                   )}
                 </View>
               </View>
               {conv.lastMessage ? (
-                <Text style={{ fontSize: 13, color: colors.mutedForeground, marginTop: 3 }} numberOfLines={1}>{conv.lastMessage}</Text>
+                <Text style={{ fontSize: rf(13), color: colors.mutedForeground, marginTop: 3 }} numberOfLines={1}>{conv.lastMessage}</Text>
               ) : (
-                <Text style={{ fontSize: 13, color: colors.mutedForeground + "60", marginTop: 3, fontStyle: "italic" }}>Start a conversation…</Text>
+                <Text style={{ fontSize: rf(13), color: colors.mutedForeground + "60", marginTop: 3, fontStyle: "italic" }}>Start a conversation…</Text>
               )}
             </View>
           </TouchableOpacity>
@@ -1878,7 +1878,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
       <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 14, paddingVertical: 10, gap: 10, marginBottom: 14 }}>
         <Feather name="search" size={16} color={colors.mutedForeground} />
         <TextInput
-          style={{ flex: 1, fontSize: 15, color: colors.foreground, padding: 0 }}
+          style={{ flex: 1, fontSize: rf(15), color: colors.foreground, padding: 0 }}
           placeholder="Search users by username…"
           placeholderTextColor={colors.mutedForeground}
           value={searchQuery}
@@ -1925,14 +1925,14 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
               <View style={{ flex: 1 }}>
                 <Text style={[cStyles.friendName, { color: colors.foreground }]}>@{u.username}</Text>
                 {u.fullName ? (
-                  <Text style={{ fontSize: 12, color: colors.mutedForeground, marginTop: 2 }}>{u.fullName} {u.flag}</Text>
+                  <Text style={{ fontSize: rf(12), color: colors.mutedForeground, marginTop: 2 }}>{u.fullName} {u.flag}</Text>
                 ) : (
-                  <Text style={{ fontSize: 14, marginTop: 2 }}>{u.flag}</Text>
+                  <Text style={{ fontSize: rf(14), marginTop: 2 }}>{u.flag}</Text>
                 )}
               </View>
               {u.friendStatus === "friends" ? (
                 <View style={{ borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: "#00E67618", borderWidth: 1, borderColor: "#00E67630" }}>
-                  <Text style={{ color: "#00E676", fontSize: 13, fontWeight: "600" }}>Friends</Text>
+                  <Text style={{ color: "#00E676", fontSize: rf(13), fontWeight: "600" }}>Friends</Text>
                 </View>
               ) : u.friendStatus === "pending_sent" ? (
                 <TouchableOpacity
@@ -1949,7 +1949,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
                   disabled={!u.requestId || actionLoading === u.requestId}
                   activeOpacity={0.8}
                 >
-                  <Text style={{ color: colors.warning, fontSize: 13, fontWeight: "600" }}>
+                  <Text style={{ color: colors.warning, fontSize: rf(13), fontWeight: "600" }}>
                     {u.requestId && actionLoading === u.requestId ? "…" : "Cancel"}
                   </Text>
                 </TouchableOpacity>
@@ -1958,14 +1958,14 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
                   style={{ borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: "#00E67612", borderWidth: 1.5, borderColor: "#00E676" }}
                   onPress={() => u.requestId ? void acceptFromSearch(u.requestId, u.id) : undefined}
                 >
-                  <Text style={{ color: "#00E676", fontSize: 13, fontWeight: "700" }}>Accept</Text>
+                  <Text style={{ color: "#00E676", fontSize: rf(13), fontWeight: "700" }}>Accept</Text>
                 </TouchableOpacity>
               ) : (
                 <TouchableOpacity
                   style={{ borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: "#A855F718", borderWidth: 1.5, borderColor: "#A855F760" }}
                   onPress={() => void sendRequestFromSearch(u.id)}
                 >
-                  <Text style={{ color: "#A855F7", fontSize: 13, fontWeight: "700" }}>Add Friend</Text>
+                  <Text style={{ color: "#A855F7", fontSize: rf(13), fontWeight: "700" }}>Add Friend</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -2005,9 +2005,9 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <Text style={[cStyles.friendName, { color: colors.foreground }]}>@{r.username}</Text>
-              <Text style={{ fontSize: 14 }}>{r.flag}</Text>
+              <Text style={{ fontSize: rf(14) }}>{r.flag}</Text>
             </View>
-            <Text style={{ fontSize: 12, color: "#00E676", marginTop: 3, fontWeight: "500" }}>Wants to be friends</Text>
+            <Text style={{ fontSize: rf(12), color: "#00E676", marginTop: 3, fontWeight: "500" }}>Wants to be friends</Text>
           </View>
           <View style={{ flexDirection: "column", gap: 7 }}>
             <TouchableOpacity
@@ -2015,14 +2015,14 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
               onPress={() => acceptRequest(r)}
               disabled={actionLoading === r.id}
             >
-              <Text style={{ color: "#00E676", fontSize: 13, fontWeight: "700" }}>Accept</Text>
+              <Text style={{ color: "#00E676", fontSize: rf(13), fontWeight: "700" }}>Accept</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={{ borderRadius: 10, borderWidth: 1.5, borderColor: "#EF4444", paddingHorizontal: 16, paddingVertical: 8, alignItems: "center", opacity: actionLoading === r.id ? 0.6 : 1, backgroundColor: "#EF444412" }}
               onPress={() => rejectRequest(r)}
               disabled={actionLoading === r.id}
             >
-              <Text style={{ color: "#EF4444", fontSize: 13, fontWeight: "700" }}>Decline</Text>
+              <Text style={{ color: "#EF4444", fontSize: rf(13), fontWeight: "700" }}>Decline</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -2040,16 +2040,16 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <Text style={[cStyles.friendName, { color: colors.foreground }]}>@{r.username}</Text>
-              <Text style={{ fontSize: 14 }}>{r.flag}</Text>
+              <Text style={{ fontSize: rf(14) }}>{r.flag}</Text>
             </View>
-            <Text style={{ fontSize: 12, color: colors.warning, marginTop: 3, fontWeight: "500" }}>Request pending</Text>
+            <Text style={{ fontSize: rf(12), color: colors.warning, marginTop: 3, fontWeight: "500" }}>Request pending</Text>
           </View>
           <TouchableOpacity
             style={{ borderRadius: 10, borderWidth: 1.5, borderColor: colors.warning + "60", paddingHorizontal: 14, paddingVertical: 8, backgroundColor: colors.warning + "12", opacity: actionLoading === r.id ? 0.6 : 1 }}
             onPress={() => cancelRequest(r)}
             disabled={actionLoading === r.id}
           >
-            <Text style={{ color: colors.warning, fontSize: 13, fontWeight: "600" }}>Cancel</Text>
+            <Text style={{ color: colors.warning, fontSize: rf(13), fontWeight: "600" }}>Cancel</Text>
           </TouchableOpacity>
         </View>
       ))}
@@ -2089,9 +2089,9 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <Text style={[cStyles.friendName, { color: colors.foreground }]}>@{f.username}</Text>
-              <Text style={{ fontSize: 14 }}>{f.flag}</Text>
+              <Text style={{ fontSize: rf(14) }}>{f.flag}</Text>
             </View>
-            <Text style={{ fontSize: 12, color: "#00E67690", marginTop: 2 }}>Tap to chat</Text>
+            <Text style={{ fontSize: rf(12), color: "#00E67690", marginTop: 2 }}>Tap to chat</Text>
           </View>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
             <TouchableOpacity

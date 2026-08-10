@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { rf } from "@/utils/responsive";
 
 export type SessionNoticeKind = "replaced" | "expired" | "revoked";
 
@@ -146,7 +147,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: "#FFFFFF",
-    fontSize: 20,
+    fontSize: rf(20),
     fontWeight: "700",
     textAlign: "center",
     marginBottom: 10,
@@ -154,7 +155,7 @@ const styles = StyleSheet.create({
   },
   message: {
     color: "#A8B2C8",
-    fontSize: 15,
+    fontSize: rf(15),
     lineHeight: 22,
     textAlign: "center",
     marginBottom: 24,
@@ -173,7 +174,7 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: {
     color: "#000",
-    fontSize: 16,
+    fontSize: rf(16),
     fontWeight: "700",
   },
 });

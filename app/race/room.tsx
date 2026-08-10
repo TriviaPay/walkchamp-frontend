@@ -15,9 +15,16 @@ import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
-import { useRace, RACE_DEFAULTS, RaceParticipant } from "@/context/RaceContext";
+import {
+  useRace,
+  RACE_DEFAULTS,
+  RaceParticipant,
+  useRaceStartAtMs,
+  useRaceUiProgress,
+} from "@/context/RaceContext";
 
 import { formatDuration } from "@/utils/format";
+import { LiveClockText } from "@/components/perf/LiveClockText";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { rf, rs } from "@/utils/responsive";
 
@@ -212,8 +219,10 @@ export default function RaceRoomScreen() {
   const userAvatarUrl = user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` : null;
   const {
     racePhase, raceEntryFee, raceMaxPlayers, playersJoined,
-    participants, countdown, raceTimerSeconds, userRaceSteps,
+    participants, countdown,
     prizeTiers, raceTargetSteps, } = useRace();
+  const { userRaceSteps } = useRaceUiProgress();
+  const raceStartAtMs = useRaceStartAtMs();
 
   const countdownScale = useRef(new Animated.Value(1)).current;
   const [showPrizeModal, setShowPrizeModal] = useState(false);
@@ -322,7 +331,17 @@ export default function RaceRoomScreen() {
             <Text style={[styles.liveText, { color: colors.destructive }]}>LIVE</Text>
           </View>
           <Feather name="clock" size={12} color={colors.mutedForeground} />
-          <Text style={[styles.timerText, { color: colors.foreground }]}>{formatDuration(raceTimerSeconds)}</Text>
+          <LiveClockText
+            enabled={!!raceStartAtMs && (racePhase === "in_race" || racePhase === "finished")}
+            style={[styles.timerText, { color: colors.foreground }]}
+            format={(now) =>
+              formatDuration(
+                raceStartAtMs
+                  ? Math.max(0, Math.floor((now - raceStartAtMs) / 1000))
+                  : 0,
+              )
+            }
+          />
           <Text style={[styles.dot, { color: colors.mutedForeground }]}>·</Text>
           <Feather name="eye" size={12} color={colors.mutedForeground} />
           <Text style={[styles.spectatorText, { color: colors.mutedForeground }]}>

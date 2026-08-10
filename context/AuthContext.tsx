@@ -88,7 +88,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void (async () => {
       const { session, refresh } = await getStoredSession();
       if (session && refresh?.trim()) {
-        const cachedUser = await storageGet<UserProfile>(STORAGE_KEYS.USER);
+        const { getWarmedCachedUser } = await import("@/services/startupWarmup");
+        const cachedUser =
+          (await getWarmedCachedUser()) ??
+          (await storageGet<UserProfile>(STORAGE_KEYS.USER));
         if (cachedUser) {
           perf.cacheHit("auth_user");
           dispatch(
@@ -198,6 +201,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     raceStepSyncService.cancelPending();
     // Clear in-memory screen cache so the next user never sees stale data.
     screenCache.clearAll();
+    try {
+      const { clearHydrationMarks } = require(
+        "@/services/loginHydration",
+      ) as typeof import("@/services/loginHydration");
+      clearHydrationMarks();
+    } catch {
+      /* ignore */
+    }
+    try {
+      const { clearStartupWarmup } = require(
+        "@/services/startupWarmup",
+      ) as typeof import("@/services/startupWarmup");
+      clearStartupWarmup();
+    } catch {
+      /* ignore */
+    }
+    try {
+      const { resetSplashWarmup } = require(
+        "@/services/startupSplashWarmup",
+      ) as typeof import("@/services/startupSplashWarmup");
+      resetSplashWarmup();
+    } catch {
+      /* ignore */
+    }
     // Clear in-memory permission *sequencing* only — never revoke OS grants.
     // Soft reset: drop in-progress wizard flags without forcing WearableSetup again.
     // First-launch orchestrator re-queries the OS and skips when already granted.

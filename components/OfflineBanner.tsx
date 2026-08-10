@@ -2,6 +2,7 @@ import React, { memo, useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNetwork } from "@/context/NetworkContext";
+import { rf } from "@/utils/responsive";
 
 /**
  * Non-intrusive offline banner. Hysteresis avoids flicker on brief drops.
@@ -58,7 +59,7 @@ const styles = StyleSheet.create({
   },
   text: {
     color: "#FECACA",
-    fontSize: 12,
+    fontSize: rf(12),
     fontWeight: "600",
   },
 });

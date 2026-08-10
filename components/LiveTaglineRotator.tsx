@@ -11,6 +11,7 @@ import Animated, {
 import { Feather } from "@expo/vector-icons";
 import { ChallengeEndsPillLabel } from "@/components/ChallengeEndsPillLabel";
 import { SponsoredEventWindowLabel } from "@/components/SponsoredEventWindowLabel";
+import { rf } from "@/utils/responsive";
 
 export type LiveTaglineAlt =
   | { kind: "ends"; label: string }
@@ -219,7 +220,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   subtitle: {
-    fontSize: 12,
+    fontSize: rf(12),
     color: "#64748B",
     fontWeight: "500",
     textAlign: "center",
@@ -242,7 +243,7 @@ const styles = StyleSheet.create({
   },
   endsPillText: {
     color: "#F5F3FF",
-    fontSize: 11.5,
+    fontSize: rf(11.5),
     fontWeight: "600",
     textAlign: "center",
     flexShrink: 1,
@@ -263,7 +264,7 @@ const styles = StyleSheet.create({
   },
   spectatingText: {
     color: "#C7D2FE",
-    fontSize: 12,
+    fontSize: rf(12),
     fontWeight: "600",
     textAlign: "center",
   },

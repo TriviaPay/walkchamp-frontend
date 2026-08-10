@@ -1319,7 +1319,7 @@ function SponsoredEventsScreenContent() {
         </View>
       ) : events.length === 0 ? (
         <View style={sc.centered}>
-          <Text style={{ fontSize: 52 }}>🏆</Text>
+          <Text style={{ fontSize: rf(52) }}>🏆</Text>
           <Text style={sc.emptyTitle}>{fetchError ? "Could Not Load Events" : "No Events Yet"}</Text>
           <Text style={sc.emptyBody}>
             {fetchError ?? "Weekend races are being set up. Tap to refresh."}
@@ -1331,7 +1331,7 @@ function SponsoredEventsScreenContent() {
         </View>
       ) : visibleEvents.length === 0 ? (
         <View style={sc.centered}>
-          <Text style={{ fontSize: 52 }}>🏆</Text>
+          <Text style={{ fontSize: rf(52) }}>🏆</Text>
           <Text style={sc.emptyTitle}>No Upcoming Events</Text>
           <Text style={sc.emptyBody}>Past weekend races have ended. Pull to refresh for the latest schedule.</Text>
           <TouchableOpacity style={sc.refreshBtn} onPress={() => { setLoading(true); void fetchEvents(); }} activeOpacity={0.8}>
@@ -1462,7 +1462,7 @@ const card = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.07)",
     borderRadius: 10, paddingHorizontal: rs(8), paddingVertical: rs(8),
   },
-  pillIcon: { fontSize: 12 },
+  pillIcon: { fontSize: rf(12) },
   pillVal: { fontSize: rf(13), fontWeight: "800", color: "#FFF" },
   pillLbl: { fontSize: rf(8.5), color: "rgba(255,255,255,0.35)" },
 

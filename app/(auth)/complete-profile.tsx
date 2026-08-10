@@ -348,7 +348,7 @@ export default function CompleteProfileScreen() {
               >
                 {selectedCountry ? (
                   <>
-                    <Text style={{ fontSize: 20 }}>{selectedCountry.flag}</Text>
+                    <Text style={{ fontSize: rf(20) }}>{selectedCountry.flag}</Text>
                     <Text style={[styles.input, { color: colors.foreground }]}>{selectedCountry.name}</Text>
                   </>
                 ) : (
@@ -446,7 +446,7 @@ export default function CompleteProfileScreen() {
           <ScrollView keyboardShouldPersistTaps="handled">
             {filteredCountries.map((item) => (
               <TouchableOpacity key={item.code} style={[styles.countryRow, { borderBottomColor: colors.border }]} onPress={() => { setSelectedCountry(item); setShowCountryPicker(false); setCountrySearch(""); }}>
-                <Text style={{ fontSize: 22 }}>{item.flag}</Text>
+                <Text style={{ fontSize: rf(22) }}>{item.flag}</Text>
                 <Text style={[styles.countryName, { color: colors.foreground }]}>{item.name}</Text>
                 {selectedCountry?.code === item.code && <Feather name="check" size={18} color={colors.primary} />}
               </TouchableOpacity>

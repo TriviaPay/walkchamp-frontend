@@ -16,6 +16,7 @@ import { useColors } from "@/hooks/useColors";
 import { getValidSession } from "@/services/authService";
 import { getApiBase } from "@/utils/apiUrl";
 import { AppAlert } from "@/components/AppAlert";
+import { rf } from "@/utils/responsive";
 
 const CASH_RULES_VERSION = "2026-06";
 
@@ -294,7 +295,7 @@ export default function JoinWithCodeModal({
               <SummaryRow
                 label="Entry Fee"
                 value={`$${((roomPreview?.entryAmountCents ?? 0) / 100).toFixed(2)}`}
-                valueStyle={{ color: "#FBBF24", fontSize: 18, fontWeight: "900" }}
+                valueStyle={{ color: "#FBBF24", fontSize: rf(18), fontWeight: "900" }}
                 colors={colors}
               />
               <SummaryRow label="Type" value="Skill-based race" colors={colors} />
@@ -418,8 +419,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  title: { fontSize: 20, fontWeight: "800", textAlign: "center" },
-  sub: { fontSize: 14, textAlign: "center", lineHeight: 20 },
+  title: { fontSize: rf(20), fontWeight: "800", textAlign: "center" },
+  sub: { fontSize: rf(14), textAlign: "center", lineHeight: 20 },
   inputWrap: {
     width: "100%",
     borderWidth: 1.5,
@@ -429,9 +430,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 2,
   },
-  input: { fontSize: 18, fontWeight: "700", letterSpacing: 3 },
+  input: { fontSize: rf(18), fontWeight: "700", letterSpacing: 3 },
   errorRow: { flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start" },
-  errorText: { fontSize: 12, color: "#EF4444", flex: 1 },
+  errorText: { fontSize: rf(12), color: "#EF4444", flex: 1 },
   btnRow: { flexDirection: "row", gap: 10, width: "100%", marginTop: 4 },
   btn: {
     flex: 1,
@@ -444,10 +445,10 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   btnCancel: { borderWidth: 1 },
-  btnCancelText: { fontSize: 15, fontWeight: "600" },
+  btnCancelText: { fontSize: rf(15), fontWeight: "600" },
   btnJoin: { backgroundColor: "#A855F7" },
   btnConfirm: { backgroundColor: "#3B82F6", width: "100%" },
-  btnJoinText: { fontSize: 15, fontWeight: "700", color: "#FFF" },
+  btnJoinText: { fontSize: rf(15), fontWeight: "700", color: "#FFF" },
   summaryBox: {
     width: "100%",
     borderRadius: 12,
@@ -460,9 +461,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
-  summaryLabel: { fontSize: 13 },
-  summaryValue: { fontSize: 13, fontWeight: "600" },
-  confirmLabel: { fontSize: 13, alignSelf: "flex-start" },
+  summaryLabel: { fontSize: rf(13) },
+  summaryValue: { fontSize: rf(13), fontWeight: "600" },
+  confirmLabel: { fontSize: rf(13), alignSelf: "flex-start" },
   checkRow: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -482,6 +483,6 @@ const styles = StyleSheet.create({
     marginTop: 1,
     flexShrink: 0,
   },
-  checkText: { fontSize: 13, lineHeight: 19, flex: 1 },
-  legalNote: { fontSize: 11, textAlign: "center", lineHeight: 16 },
+  checkText: { fontSize: rf(13), lineHeight: 19, flex: 1 },
+  legalNote: { fontSize: rf(11), textAlign: "center", lineHeight: 16 },
 });

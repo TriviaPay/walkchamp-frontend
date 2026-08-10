@@ -101,7 +101,7 @@ const hs = StyleSheet.create({
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 20, paddingBottom: 16, borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  headerTitle: { fontSize: 17, fontWeight: "700" },
+  headerTitle: { fontSize: rf(17), fontWeight: "700" },
   list: { paddingHorizontal: 16, paddingTop: 20, gap: 16 },
   sectionLabel: { fontSize: rf(16), fontWeight: "800" },
   card: { borderRadius: 16, borderWidth: 1, overflow: "hidden" },

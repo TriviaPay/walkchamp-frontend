@@ -1,0 +1,6807 @@
+import { AnimatedTrackOverlay } from "@/components/race/AnimatedTrackOverlay";
+import { BlueShoe } from "@/components/BlueShoe";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { getApiBase } from "@/utils/apiUrl";
+import { LinearGradient } from "expo-linear-gradient";
+import { router, useLocalSearchParams, useFocusEffect, useNavigation } from "expo-router";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { NavigationProp, ParamListBase } from "@react-navigation/native";
+import { safeGoBack } from "@/utils/safeGoBack";
+import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
+import {   Alert,
+  AppState,
+  Easing as RNEasing,
+  Image,
+  InteractionManager,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  FlatList,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+  Animated as RNAnimated,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { SkeletonLiveDetail } from "@/components/SkeletonRows";
+import { MicPassModal } from "@/components/race/MicPassModal";
+import { useMicPass } from "@/hooks/useMicPass";
+import { AppAlert } from "@/components/AppAlert";
+import Animated, {
+  cancelAnimation,
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withSequence,
+  withTiming, } from "react-native-reanimated";
+import { useSafeLayout } from "@/hooks/useSafeLayout";
+import { useParticipantStepAnimator } from "@/hooks/useParticipantStepAnimator";
+import { getLayoutScaleFactor, rf } from "@/utils/responsive";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { formatRaceSteps, resolveLiveRaceDisplaySteps } from "@/utils/liveRaceDisplay";
+import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
+import {
+  formatPlayerCountDisplay,
+  isUnlimitedGoalChallenge,
+} from "@/utils/unlimitedGoal";
+import {
+  FREE_TIER_COIN_REWARDS,
+  freeRaceAwardsCoinPrizes,
+  freeRaceCoinPrizePool,
+  freeRaceWinnerSlots,
+} from "@/utils/freeRaceRewards";
+import {
+  coerceUnlimitedRaceInProgress,
+  mapUnlimitedDetailToLiveDetail,
+  mergeUnlimitedLiveParticipants,
+} from "@/utils/unlimitedLiveRace";
+import { formatChallengeDayKey } from "@/utils/challengeDayKey";
+import {
+  computeUnlimitedViewerSchedule,
+  type UnlimitedViewerSchedule,
+} from "@/utils/unlimitedViewerSchedule";
+import { getDeviceTimezone } from "@/utils/timezone";
+import { UnlimitedCurrentDayCard } from "@/components/race/UnlimitedCurrentDayCard";
+import { UnlimitedDayProgressModal } from "@/components/race/UnlimitedDayProgressModal";
+import {
+  resolveUnlimitedResultStatus,
+  resolvePrizePoolEligibilityStatus,
+} from "@/utils/unlimitedResults";
+import { isUnlimitedPrizeLost, UNLIMITED_COPY } from "@/utils/unlimitedLiveUiCopy";
+import { fetchUnlimitedDailyHistory } from "@/services/unlimitedResultsApi";
+import {
+  dayRowsFromDailyHistory,
+  type UnlimitedDayRow,
+} from "@/utils/unlimitedDayProgress";
+import {
+  mergeUnlimitedSelfHydrateSteps,
+  resolveUnlimitedLiveDayContext,
+} from "@/utils/unlimitedLiveDayContext";
+import {
+  pickUnlimitedRealtimeDisplaySteps,
+  resolveUnlimitedDisplayedLiveSteps,
+} from "@/utils/unlimitedHybridProgress";
+import {
+  resolveWalkNotificationSteps,
+} from "@/services/steps/walkDisplaySteps";
+import { uploadUnlimitedProvisionalProgress } from "@/services/unlimitedProvisionalProgressApi";
+import {
+  registerUnlimitedClassicProgressBlock,
+  unregisterUnlimitedClassicProgressBlock,
+  isUnlimitedClassicProgressBlocked,
+} from "@/services/unlimitedRaceProgressGuard";
+import { setWalkBackendSyncPaused } from "@/services/walkSyncCoordinator";
+import { trackEvent } from "@/services/analytics";
+import { LiveTaglineRotator, type LiveTaglineAlt } from "@/components/LiveTaglineRotator";
+import { RaceClockInfoBar } from "@/components/race/RaceClockInfoBar";
+import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
+import { useColors } from "@/hooks/useColors";
+import { useAuth } from "@/context/AuthContext";
+import { useRace, useRaceUiProgress } from "@/context/RaceContext";
+import { useWalkContext } from "@/context/WalkContext";
+import { usePresenceActions } from "@/context/PresenceContext";
+import { useRaceProgress } from "@/hooks/useRaceProgress";
+import { updateRankFromBackend, ensureActiveRaceInStore, clearActiveRaceProgress, suppressLiveRaceNotification, suppressSpectatorLiveRaceNotifications, switchDailyStepsNotification, handleMidnightRolloverIfNeeded } from "@/services/stepProgressCoordinator";
+import { findEligibleLiveRaceParticipant } from "@/utils/raceNotificationEligibility";
+import { stepEngineLog, isFreshLocalDay } from "@/utils/stepAccuracy";
+import { store } from "@/store";
+import { raceProgressActions } from "@/store/slices/raceProgressSlice";
+import {
+  resolveFinalRaceAuthority,
+  resolveFinishedRaceDisplaySteps,
+  canShowFinalRaceOutcome,
+} from "@/services/steps/finalRaceAuthority";
+import { useRaceResultStatus } from "@/hooks/useRaceResultStatus";
+import {
+  verificationStatusToReconciliation,
+  isRaceVerifyFeatureEnabled,
+} from "@/services/raceVerificationApi";
+import { authFetch } from "@/utils/authFetch";
+import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import {
+  emitChallengeLeft,
+  emitChallengeStatusesRefresh,
+} from "@/utils/challengeLocalEvents";
+import { FEATURE_FLAGS, isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
+import {
+  filterRaceParticipantsForDisplay,
+  filterUnlimitedParticipantsForDisplay,
+  selectTopParticipantsForRaceTrack,
+  LIVE_RACE_TRACK_TOP_N,
+} from "@/utils/liveRaceParticipantList";
+import {
+  TrackPositionParticipantList,
+  LiveBoardRow,
+  BOARD_ROW_HEIGHT,
+  LIVE_BOARD_VISIBLE_ROWS,
+  type LiveBoardRowParticipant,
+} from "@/components/race/LiveRaceParticipantList";
+import {
+  shouldUseDummyUnlimitedRace,
+  createDummyUnlimitedRaceSession,
+  startDummyUnlimitedRaceSimulation,
+} from "@/services/dummyUnlimitedRace";
+import { RANK_CURRENT_USER_GREEN } from "@/utils/participantRankUi";
+import {
+  liveRaceFetchAllowed,
+  markLiveRaceFetched,
+  resetLiveRaceFetchGate,
+} from "@/utils/liveRaceFetchGate";
+import { debounceKeyed } from "@/utils/apiRequestCoordinator";
+import {
+  connectPusher,
+  subscribeToChannel,
+  unsubscribeFromChannel,
+  CHANNELS,
+} from "@/services/realtimeService";
+import { formatDuration } from "@/utils/format";
+import { localizeSponsoredEventTitle } from "@/utils/timezone";
+import {
+  getSponsoredPrizePerWinnerUsd,
+  getSponsoredWinnerCount,
+  SPONSORED_DEFAULT_TARGET_STEPS,
+} from "@/utils/sponsoredEventsApi";
+import { screenCache } from "@/utils/screenCache";
+import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
+import { PublicProfileModal } from "@/components/PublicProfileModal";
+import type { PublicProfileInitialData } from "@/components/PublicProfileModal";
+import { useTopBanner } from "@/context/TopBannerContext";
+import { raceStepSyncService } from "@/services/RaceStepSyncService";
+import {
+  applyParticipantProgressEvent,
+  applyLeaderboardSnapshot,
+  mergeParticipantsPreservingSteps,
+} from "@/services/liveRaceParticipantState";
+import { captureRaceRealtimeGuard } from "@/services/authSessionGeneration";
+import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import {
+  prefetchTrackTheme,
+  TrackThemeImageBackground,
+} from "@/components/TrackThemeImage";
+import type { TrackThemeImageSet } from "@/utils/trackThemeMedia";
+import {
+  isTrackLayoutId,
+  type TrackLayoutId,
+} from "@/constants/trackLayouts";
+
+const FALLBACK_COLORS = [
+  "#FFD700","#C0C0C0","#00E676","#FF8C00","#A855F7",
+  "#00B4FF","#FF5C93","#35D0BA","#F97316","#8B5CF6",
+];
+
+/** Stable per-user accent so track rings stay distinct when API reuses one avatarColor. */
+function accentColorForUser(userId: string, avatarColor?: string | null): string {
+  const generic = !avatarColor
+    || /^#abc123$/i.test(avatarColor)
+    || /^#00e676$/i.test(avatarColor)
+    || /^#22c55e$/i.test(avatarColor);
+  if (!generic && avatarColor) return avatarColor;
+  let h = 0;
+  for (let i = 0; i < userId.length; i++) h = (h * 31 + userId.charCodeAt(i)) >>> 0;
+  return FALLBACK_COLORS[h % FALLBACK_COLORS.length]!;
+}
+
+/** @deprecated Prefer FREE_TIER_COIN_REWARDS — kept for local call sites. */
+const FREE_TIER_COINS = FREE_TIER_COIN_REWARDS;
+/** Pool the top-N coin tiers and split equally among N tied rank-1 winners. */
+function computeFreeWinnerCoins(tieCount: number): number {
+  const pool = FREE_TIER_COINS
+    .slice(0, Math.min(tieCount, FREE_TIER_COINS.length))
+    .reduce((s, c) => s + c, 0);
+  return Math.floor(pool / tieCount);
+}
+/** Number of prize-eligible winner slots — matches backend numWinners(). */
+function getWinnerCount(playerCount: number): number {
+  return freeRaceWinnerSlots(playerCount);
+}
+const REACTIONS = ["🔥", "👏", "👑", "🏃", "🏆", "😮"];
+
+/**
+ * Instant first paint for Live Race — full UI shell from nav params / self user
+ * while detail API loads in the background. Avoids SkeletonLiveDetail delay.
+ */
+function buildInstantLiveRaceShell(opts: {
+  raceId: string;
+  unlimited: boolean;
+  trackLayout?: string | null;
+  challengeType?: string | null;
+  capacityMode?: string | null;
+  title?: string | null;
+  targetSteps?: number | null;
+  durationDays?: number | null;
+  userId?: string | null;
+  username?: string | null;
+}): { race: RaceData; participants: RaceParticipant[] } {
+  const unlimited = opts.unlimited;
+  const target =
+    typeof opts.targetSteps === "number" && opts.targetSteps > 0
+      ? opts.targetSteps
+      : unlimited
+        ? 10_000
+        : 1_000;
+  const entryType =
+    opts.challengeType ||
+    (unlimited ? "unlimited_goal" : "free");
+  const race: RaceData = {
+    id: opts.raceId,
+    title:
+      (opts.title && String(opts.title).trim()) ||
+      (unlimited ? "Streak Challenge" : "Live Race"),
+    status: "in_progress",
+    entryType,
+    entryAmountCents: 0,
+    entryAmountDollars: 0,
+    targetSteps: target,
+    currentPlayers: 1,
+    maxPlayers: unlimited ? null : 10,
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    creatorId: opts.userId ?? "",
+    prizePool: 0,
+    prizeTiers: [],
+    spectatorCount: 0,
+    capacityMode: opts.capacityMode ?? (unlimited ? "unlimited" : null),
+    challengeType: opts.challengeType ?? (unlimited ? "unlimited_goal" : null),
+    trackLayout: isTrackLayoutId(opts.trackLayout) ? opts.trackLayout : "bg",
+    challengeDurationDays:
+      typeof opts.durationDays === "number" && opts.durationDays > 0
+        ? opts.durationDays
+        : unlimited
+          ? 7
+          : null,
+    hasExplicitPlayerCount: false,
+  };
+  const participants: RaceParticipant[] = opts.userId
+    ? [
+        {
+          id: opts.userId,
+          userId: opts.userId,
+          currentSteps: 0,
+          status: "active",
+          rank: 1,
+          username: opts.username?.trim() || "You",
+          countryFlag: null,
+          avatarColor: "#00E676",
+          isHost: true,
+        },
+      ]
+    : [];
+  return { race, participants };
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface RaceData {
+  id: string;
+  title: string;
+  status: string;
+  type?: string;
+  entryType: string;
+  entryAmountCents: number;
+  entryAmountDollars: number;
+  targetSteps: number;
+  currentPlayers: number;
+  maxPlayers: number | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  scheduledStartAt?: string | null;
+  endsAt?: string | null;
+  creatorId: string;
+  prizePool: number;
+  prizeTiers: number[];
+  spectatorCount: number;
+  capacityMode?: string | null;
+  challengeType?: string | null;
+  trackLayout?: string;
+  imageSet?: TrackThemeImageSet | null;
+  imageUrl?: string | null;
+  assetVersion?: number;
+  width?: number;
+  height?: number;
+  challengeEndAt?: string | null;
+  challengeDurationDays?: number | null;
+  createdAt?: string;
+  timeLeftSeconds?: number | null;
+  daysLeft?: number | null;
+  hoursLeft?: number | null;
+  timeLeftLabel?: string | null;
+  remainingLabel?: string | null;
+  coinEntryAmount?: number;
+  coinPrizePool?: number;
+  coinWinnersPool?: number;
+  winnerCount?: number;
+  prizePoolCents?: number;
+  hasExplicitPlayerCount?: boolean;
+  challengeTimezone?: string | null;
+  challengeDayKey?: string | null;
+  /** Unlimited Daily Goal Challenge only — raw backend challenge.status (never collapsed
+   * into in_progress/completed like `status` above); see utils/unlimitedResults.ts. */
+  rawStatus?: string | null;
+  settlementStatus?: string | null;
+  resultsStatus?: string | null;
+  registeredParticipantCount?: number | null;
+  participantsFinishedCount?: number | null;
+  participantsPendingCount?: number | null;
+  prizePoolEligibilityStatus?: string | null;
+  qualifiedParticipantCount?: number | null;
+}
+
+interface RaceParticipant {
+  id: string;
+  userId: string;
+  currentSteps: number;
+  status: string | null;
+  rank: number | null;
+  displayRank?: number | null;
+  username: string;
+  countryFlag: string | null;
+  avatarColor: string | null;
+  avatarUrl?: string | null;
+  avatarVersion?: number | null;
+  isHost: boolean;
+  prizeAmount?: number;
+  prizeCoins?: number;
+  isTied?: boolean;
+  tieGroupSize?: number;
+  eligibleForPrize?: boolean;
+  isWinner?: boolean;
+  finishedGoal?: boolean;
+  finishedAt?: string | null;
+  challengeDayKey?: string | null;
+  totalChallengeSteps?: number | null;
+  /** Unlimited Daily Goal Challenge only — backend-authoritative locked schedule for this player. */
+  timezone?: string | null;
+  dayNumber?: number | null;
+  qualificationStatus?: string | null;
+  dailyGoalSteps?: number | null;
+  completedDays?: number | null;
+  prizePoolEligibilityStatus?: string | null;
+  raceStartBaselineSteps?: number | null;
+  challengeDaySteps?: number | null;
+}
+
+interface LiveRaceDetailCache {
+  race: RaceData;
+  participants: RaceParticipant[];
+}
+
+const liveRaceDetailCacheKey = (raceId: string, userId?: string | null) =>
+  `live-race-detail:v1:${userId || "anon"}:${raceId}`;
+
+async function fetchParticipantListFromPath(path: string): Promise<unknown[]> {
+  try {
+    const res = await authFetch(path);
+    if (!res.ok) return [];
+    const body = (await res.json().catch(() => null)) as Record<string, unknown> | unknown[] | null;
+    if (Array.isArray(body)) return body;
+    if (!body || typeof body !== "object") return [];
+    for (const key of [
+      "participants",
+      "registrations",
+      "leaderboard",
+      "standings",
+      "rankings",
+      "members",
+      "data",
+      "items",
+      "results",
+    ]) {
+      const v = (body as Record<string, unknown>)[key];
+      if (Array.isArray(v)) return v;
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+/** Paginate Unlimited leaderboard so enrichment covers the full roster (not default page of 25). */
+async function fetchAllUnlimitedLeaderboardRows(challengeId: string): Promise<unknown[]> {
+  const pageSize = 100;
+  // First page immediately — callers can paint top ranks without waiting for all pages.
+  const first = await fetchParticipantListFromPath(
+    `/api/unlimited-challenges/${challengeId}/leaderboard?limit=${pageSize}&offset=0`,
+  );
+  if (first.length === 0) return [];
+  if (first.length < pageSize) return first;
+
+  const all: unknown[] = [...first];
+  let offset = pageSize;
+  for (let page = 1; page < 50; page += 1) {
+    const rows = await fetchParticipantListFromPath(
+      `/api/unlimited-challenges/${challengeId}/leaderboard?limit=${pageSize}&offset=${offset}`,
+    );
+    if (rows.length === 0) break;
+    all.push(...rows);
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+/**
+ * Unlimited detail + first leaderboard page in parallel for faster first paint,
+ * then remaining pages merge in the background via fetchAllUnlimitedLeaderboardRows.
+ */
+async function fetchUnlimitedLiveDetailPayload(
+  challengeId: string,
+  opts?: {
+    currentUserId?: string | null;
+    currentUsername?: string | null;
+    /** Client already tracking this challenge as a live race (Waiting Room → Live). */
+    forceLive?: boolean;
+  },
+): Promise<LiveRaceDetailCache | null> {
+  if (!isUnlimitedGoalFrontendEnabled()) return null;
+  try {
+    const [detailRes, firstPage] = await Promise.all([
+      authFetch(`/api/unlimited-challenges/${challengeId}`),
+      fetchParticipantListFromPath(
+        `/api/unlimited-challenges/${challengeId}/leaderboard?limit=100&offset=0`,
+      ),
+    ]);
+    if (!detailRes.ok) return null;
+    let mapped = mapUnlimitedDetailToLiveDetail(await detailRes.json().catch(() => null));
+    if (!mapped) return null;
+
+    // Enrich with first page immediately.
+    if (firstPage.length > 0) {
+      mapped = {
+        ...mapped,
+        participants: mergeUnlimitedLiveParticipants(
+          mapped.participants,
+          firstPage,
+          { preferPrimaryCurrentSteps: true },
+        ),
+      };
+    }
+
+    // Remaining pages — only if first page was full.
+    if (firstPage.length >= 100) {
+      try {
+        const rest: unknown[] = [];
+        let offset = 100;
+        for (let page = 1; page < 50; page += 1) {
+          const rows = await fetchParticipantListFromPath(
+            `/api/unlimited-challenges/${challengeId}/leaderboard?limit=100&offset=${offset}`,
+          );
+          if (rows.length === 0) break;
+          rest.push(...rows);
+          if (rows.length < 100) break;
+          offset += 100;
+        }
+        if (rest.length > 0) {
+          mapped = {
+            ...mapped,
+            participants: mergeUnlimitedLiveParticipants(
+              mapped.participants,
+              [...firstPage, ...rest],
+              { preferPrimaryCurrentSteps: true },
+            ),
+          };
+        }
+      } catch {
+        // Keep first-page enrichment.
+      }
+    }
+
+    mapped = {
+      ...mapped,
+      race: coerceUnlimitedRaceInProgress(mapped.race, {
+        forceLive: opts?.forceLive === true,
+      }),
+    };
+
+    // Trust detail `players` / `participants` as the roster (same as Waiting Room).
+    let participants = mapped.participants as RaceParticipant[];
+
+    // Guarantee the current viewer appears on Race Track / Live Board.
+    const meId = opts?.currentUserId;
+    if (meId && !participants.some((p) => p.userId === meId)) {
+      participants = [
+        {
+          id: meId,
+          userId: meId,
+          currentSteps: 0,
+          status: "active",
+          rank: participants.length + 1,
+          username: opts?.currentUsername?.trim() || "You",
+          countryFlag: null,
+          avatarColor: "#00E676",
+          isHost: mapped.race.creatorId === meId,
+        } as RaceParticipant,
+        ...participants,
+      ];
+    }
+
+    return {
+      race: {
+        ...mapped.race,
+        currentPlayers: mapped.race.hasExplicitPlayerCount
+          ? Math.max(mapped.race.currentPlayers, 1)
+          : Math.max(mapped.race.currentPlayers, participants.length, 1),
+      } as RaceData,
+      participants,
+    };
+  } catch {
+    return null;
+  }
+}
+
+interface RaceComment {
+  id: string;
+  userId: string;
+  username: string;
+  countryFlag: string;
+  avatarColor: string;
+  avatarUrl?: string | null;
+  avatarVersion?: number | null;
+  text: string;
+  createdAt: string;
+  clientMessageId?: string;
+  status?: "sending" | "sent" | "failed";
+  isOptimistic?: boolean; }
+
+interface ReactionCount { emoji: string; count: number; }
+
+interface Player {
+  id: string; userId: string; rank: number; name: string; steps: number;
+  isMe: boolean; rankColor: string; initial: string;
+  country?: string; isHost?: boolean; avatarUrl?: string | null; avatarVersion?: number | null;
+  isForfeited?: boolean; }
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatSteps(n: number): string {
+  return formatRaceSteps(n);
+}
+
+type RaceCommentPayload = Partial<RaceComment> & { comment?: Partial<RaceComment>; timestamp?: string };
+
+function normalizeIncomingComment(payload: RaceCommentPayload): RaceComment | null {
+  const raw = payload.comment ?? payload;
+  if (!raw.id || !raw.text) return null;
+  return {
+    id: raw.id, userId: raw.userId ?? "", username: raw.username ?? "Runner",
+    countryFlag: raw.countryFlag ?? "", avatarColor: raw.avatarColor ?? "#00E676",
+    avatarUrl: raw.avatarUrl ?? null, avatarVersion: raw.avatarVersion ?? null,
+    text: raw.text, createdAt: raw.createdAt ?? new Date().toISOString(),
+    clientMessageId: raw.clientMessageId,
+    status: "sent" as const,
+  }; }
+
+function appendUniqueComment(prev: RaceComment[], comment: RaceComment): RaceComment[] {
+  if (prev.some((c) => c.id === comment.id ||
+    (comment.clientMessageId && c.clientMessageId === comment.clientMessageId))) return prev;
+  return [...prev, comment].slice(-60); }
+
+/** Keep latest occurrence per id / clientMessageId so React list keys stay unique. */
+function dedupeComments(list: RaceComment[]): RaceComment[] {
+  const seenIds = new Set<string>();
+  const seenClients = new Set<string>();
+  const out: RaceComment[] = [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const c = list[i]!;
+    if (seenIds.has(c.id)) continue;
+    if (c.clientMessageId && seenClients.has(c.clientMessageId)) continue;
+    seenIds.add(c.id);
+    if (c.clientMessageId) seenClients.add(c.clientMessageId);
+    out.push(c);
+  }
+  out.reverse();
+  return out.slice(-60);
+}
+
+function mergeOrAppendComment(prev: RaceComment[], incoming: RaceComment): RaceComment[] {
+  if (incoming.clientMessageId) {
+    const idx = prev.findIndex((c) => c.clientMessageId === incoming.clientMessageId);
+    if (idx !== -1) {
+      const next = [...prev];
+      next[idx] = incoming;
+      return dedupeComments(next);
+    }
+  }
+  if (prev.some((c) => c.id === incoming.id)) {
+    return dedupeComments(prev.map((c) => (c.id === incoming.id ? incoming : c)));
+  }
+  return dedupeComments([...prev, incoming]);
+}
+
+// ── Track geometry ────────────────────────────────────────────────────────────
+
+function laneBoundaryX(boundaryIndex: number, y: number, width: number, height: number) {
+  'worklet';
+  const topLeft = width * 0.315, topRight = width * 0.685;
+  const bottomLeft = width * 0.105, bottomRight = width * 0.895;
+  const topY = height * 0.13, bottomY = height * 0.91;
+  const t = Math.min(Math.max((y - topY) / (bottomY - topY), 0), 1);
+  return topLeft + (bottomLeft - topLeft) * t + ((topRight + (bottomRight - topRight) * t - (topLeft + (bottomLeft - topLeft) * t)) / 10) * boundaryIndex; }
+
+function laneCenterX(laneIndex: number, y: number, width: number, height: number) {
+  'worklet';
+  return (laneBoundaryX(laneIndex, y, width, height) + laneBoundaryX(laneIndex + 1, y, width, height)) / 2; }
+
+// ── Per-theme finish zone config ───────────────────────────────────────────
+// finishZoneFrac: fraction of hero height where the 100%-progress avatar stops.
+// 0 = very top, 1 = very bottom. Adjust per theme if the finish banner sits
+// at a different relative Y in that track image.
+// FINISH_ZONE_FRAC: fraction of hero height for the animation target at progress=1.
+// Kept small (0.06) so the animation approaches the top of the hero smoothly.
+// The actual pixel position when progress>=1 is overridden in the worklet by
+// the FINISH_LOCK formula (animSize/2 + 5) so avatars are always exactly 5 px
+// below the "Race Track / Live Board" tab strip, regardless of screen size.
+const FINISH_ZONE_FRAC = 0.06;
+const TRACK_FINISH_ZONE: Record<string, number> = {
+  bg:           FINISH_ZONE_FRAC,
+  bg1:          FINISH_ZONE_FRAC,
+  galaxy:       FINISH_ZONE_FRAC,
+  daylightStadium: FINISH_ZONE_FRAC,
+  forest:       FINISH_ZONE_FRAC,
+  city:         FINISH_ZONE_FRAC,
+  lava:         FINISH_ZONE_FRAC,
+  ice:          FINISH_ZONE_FRAC,
+  candy:        FINISH_ZONE_FRAC,
+  farm:         FINISH_ZONE_FRAC,
+  underwater:   FINISH_ZONE_FRAC,
+  musicfest:    FINISH_ZONE_FRAC,
+  barbie:       FINISH_ZONE_FRAC,
+  desert:       FINISH_ZONE_FRAC,
+  gold:         FINISH_ZONE_FRAC,
+  nightforest:  FINISH_ZONE_FRAC,
+  skykingdom:   FINISH_ZONE_FRAC,
+  rain:         FINISH_ZONE_FRAC,
+  storm:        FINISH_ZONE_FRAC,
+  mountain:     0.22,   // FINISH gate sits ~22% from top in the mountain image
+  waterfall:    FINISH_ZONE_FRAC,
+  webcity:      FINISH_ZONE_FRAC,
+  bridge:       FINISH_ZONE_FRAC,
+  newyork:      FINISH_ZONE_FRAC,
+  pirateisland: FINISH_ZONE_FRAC,
+  paradise:     FINISH_ZONE_FRAC,
+  musicfest2:   FINISH_ZONE_FRAC,
+  chocolate:    FINISH_ZONE_FRAC,
+  fireworks:    FINISH_ZONE_FRAC,
+  moon:         FINISH_ZONE_FRAC,
+  rainbow_road: FINISH_ZONE_FRAC,
+  runway:       FINISH_ZONE_FRAC,
+  toy_race:     FINISH_ZONE_FRAC,
+  water_park:   FINISH_ZONE_FRAC,
+};
+const DEFAULT_FINISH_ZONE_FRAC = FINISH_ZONE_FRAC;
+
+function getFinishZoneY(themeId: string, height: number): number {
+  'worklet';
+  const frac = (TRACK_FINISH_ZONE as Record<string, number>)[themeId] ?? DEFAULT_FINISH_ZONE_FRAC;
+  return height * frac;
+}
+
+function sampleTrack(progress: number, width: number, height: number, finishZoneY?: number) {
+  'worklet';
+  const clamped = Math.min(Math.max(progress, 0), 1);
+  const bottomY = height * 0.87;
+  const topY = finishZoneY ?? height * DEFAULT_FINISH_ZONE_FRAC;
+  const y = bottomY - (bottomY - topY) * clamped;
+  return { x: width * 0.5, y, angle: -90, depth: 0.82 + clamped * 0.2 }; }
+
+function LiveChatAvatar({
+  username,
+  avatarColor,
+  avatarUrl,
+  userId,
+  avatarVersion,
+  getAvatarVersion,
+  primary,
+}: {
+  username: string;
+  avatarColor: string;
+  avatarUrl?: string | null;
+  userId?: string;
+  avatarVersion?: number | null;
+  getAvatarVersion: (userId: string, fallback?: number) => number;
+  primary: string;
+}) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const uri =
+    avatarUrl && userId
+      ? `${getApiBase()}/api/profile/avatar/${userId}?v=${getAvatarVersion(userId, avatarVersion ?? 0)}`
+      : null;
+  useEffect(() => {
+    setImgFailed(false);
+  }, [uri]);
+  const color = avatarColor || primary;
+  return (
+    <View style={[st.liveChatAv, { backgroundColor: color + "22", borderColor: color }]}>
+      <Text style={[st.liveChatAvTxt, { color }]}>
+        {username.charAt(0).toUpperCase() || "?"}
+      </Text>
+      {uri && !imgFailed ? (
+        <Image
+          source={{ uri }}
+          onError={() => setImgFailed(true)}
+          style={[st.liveChatAvImg, StyleSheet.absoluteFillObject]}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/** Letter always underneath; photo only when URI exists — onError falls back to letter. */
+function RunnerAvatarFace({
+  size,
+  avatarUrl,
+  initial,
+  rankColor,
+  isMe,
+  isForfeited,
+  fontSize,
+  onPress,
+}: {
+  size: number;
+  avatarUrl?: string | null;
+  initial: string;
+  rankColor: string;
+  isMe: boolean;
+  isForfeited: boolean;
+  fontSize: number;
+  onPress?: () => void;
+}) {
+  const [imgFailed, setImgFailed] = useState(false);
+  useEffect(() => {
+    setImgFailed(false);
+  }, [avatarUrl]);
+  const showPhoto = !!avatarUrl && !imgFailed;
+  return (
+    <TouchableOpacity
+      activeOpacity={0.75}
+      onPress={onPress}
+      style={[st.runnerAvatar, {
+        width: size, height: size, borderRadius: size / 2,
+        borderColor: rankColor,
+        borderWidth: isMe ? 3 : 2,
+        backgroundColor: "#060914E8",
+        shadowColor: rankColor,
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+      }]}
+    >
+      <Text style={[st.runnerInitial, { color: rankColor, fontSize }]}>
+        {initial}
+      </Text>
+      {showPhoto ? (
+        <Image
+          source={{ uri: avatarUrl! }}
+          onError={() => setImgFailed(true)}
+          style={{
+            position: "absolute",
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+            opacity: isForfeited ? 0.5 : 1,
+          }}
+        />
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
+// ── RunnerMarker ──────────────────────────────────────────────────────────────
+// Animated: progress drives position on the UI thread via Reanimated worklets.
+// Only moves forward — backward steps are ignored unless the race resets.
+
+const RunnerMarker = React.memo(function RunnerMarker({ player, index, width, height, targetSteps, finishZoneY, themeId = "bg", rsFactor = 1, meAvatarUrl, isSpeakingVoice = false, overrideSteps, onPress }: {
+  player: Player; index: number; width: number; height: number;
+  targetSteps: number; finishZoneY?: number; themeId?: string;
+  rsFactor?: number; meAvatarUrl?: string | null;
+  isSpeakingVoice?: boolean;
+  /** For the current user: pass the real-time local step count so the avatar
+   *  position and label stay in sync with the progress bar (not Pusher-delayed). */
+  overrideSteps?: number;
+  onPress?: (userId: string) => void; }) {
+
+  const rs = (n: number) => Math.round(n * rsFactor);
+
+  // Resolved finish zone Y for this theme — falls back to theme config default
+  const fzY = finishZoneY ?? getFinishZoneY(themeId, height);
+
+  // Clamp progress to [0,1]
+  const clampProgress = (steps: number) =>
+    Math.min(Math.max(steps / Math.max(targetSteps, 1), 0), 1);
+
+  // Use the local real-time count when provided (current user), otherwise use
+  // the backend-reported value (other participants via Pusher).
+  const effectiveSteps = overrideSteps ?? player.steps;
+
+  // Stable progress shared value — initialised from current steps
+  const progressSV = useSharedValue(clampProgress(effectiveSteps));
+
+  // Ref tracks the last progress target we sent to animation (forward-only guard)
+  const lastTargetRef = useRef(clampProgress(effectiveSteps));
+
+  // Animate forward whenever steps or targetSteps change
+  useEffect(() => {
+    const newProgress = clampProgress(effectiveSteps);
+    const laneIdx = Math.min(Math.max(index, 0), 9);
+    const bottomY = height * 0.87;
+    const currentFzY = finishZoneY ?? getFinishZoneY(themeId, height);
+
+    if (__DEV__) console.log(
+      `[TrackMove] participant:${player.name} lane:${laneIdx}` +
+      ` currentSteps:${effectiveSteps} progress:${newProgress.toFixed(3)}` +
+      ` startY:${bottomY.toFixed(1)} finishZoneY:${currentFzY.toFixed(1)}` +
+      ` animation from:${lastTargetRef.current.toFixed(3)} to:${newProgress.toFixed(3)}`,
+    );
+
+    // Defensive: if progress drops back to near-start (race reset / new race),
+    // clear the forward-only guard so the avatar snaps to the correct position.
+    if (newProgress < 0.05 && lastTargetRef.current > 0.5) {
+      lastTargetRef.current = 0;
+      progressSV.value = 0;
+    }
+
+    // Only animate forward (backend might echo stale data)
+    if (newProgress >= lastTargetRef.current - 0.001) {
+      lastTargetRef.current = newProgress;
+      progressSV.value = withTiming(newProgress, {
+        duration: Math.min(Math.max((newProgress - progressSV.value) * 3000, 300), 800),
+        easing: Easing.out(Easing.quad),
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveSteps, targetSteps]);
+
+  // Lane index among the visible top-10 leaders (highest steps = lane 0).
+  // Name/steps sit above the avatar so clustered runners stay readable.
+  const laneIndex = Math.min(Math.max(index, 0), 9);
+  const yOffset   = index % 2 === 0 ? -4 : 4;
+
+  // Visual sizing from current React state (updates on re-render, not per-frame)
+  const currentPoint   = sampleTrack(clampProgress(effectiveSteps), width, height, fzY);
+  const size           = (player.isMe ? rs(43) : rs(34)) * currentPoint.depth;
+  const labelW         = Math.max(rs(78), size + rs(28));
+
+  // Speaking ring pulse — fades in when isSpeakingVoice, fades out when not.
+  const speakRingPulse = useSharedValue(0);
+  useEffect(() => {
+    cancelAnimation(speakRingPulse);
+    if (isSpeakingVoice) {
+      speakRingPulse.value = withRepeat(
+        withSequence(
+          withTiming(1,   { duration: 230 }),
+          withTiming(0.2, { duration: 320 }),
+        ), -1, false,
+      );
+    } else {
+      speakRingPulse.value = withTiming(0, { duration: 200 });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSpeakingVoice]);
+  const speakRingStyle = useAnimatedStyle(() => ({
+    opacity: speakRingPulse.value,
+    transform: [{ scale: 1 + 0.1 * speakRingPulse.value }],
+  }));
+
+  // Mountain (and any theme with finishZoneY > 10% of height) pins the finished
+  // avatar to the calibrated finish zone rather than the near-top standard lock.
+  // This aligns the avatar with the visual FINISH gate in the mountain image.
+  const useCalibratedFinishLock = fzY > height * 0.1;
+
+  // Animated position — runs on UI thread between React renders
+  // fzY is captured as a JS closure constant (re-created on each render when height/theme changes)
+  const animStyle = useAnimatedStyle(() => {
+    'worklet';
+    const point = sampleTrack(progressSV.value, width, height, fzY);
+    const animSize = (player.isMe ? Math.round(43 * rsFactor) : Math.round(34 * rsFactor)) * point.depth;
+
+    // FINISH LOCK: when progress reaches 100%, pin the finished avatar.
+    // Standard themes: pin 5 px below the hero top edge.
+    // Mountain (useCalibratedFinishLock=true): pin at the calibrated fzY so
+    // the avatar aligns with the visual FINISH gate in the mountain image.
+    const FINISH_GAP_PX = 5;
+    let y: number;
+    if (progressSV.value >= 1) {
+      y = useCalibratedFinishLock ? fzY : animSize / 2 + FINISH_GAP_PX;
+    } else {
+      y = point.y + yOffset;
+    }
+    const x = laneCenterX(laneIndex, y, width, height);
+    return { left: x - animSize / 2, top: y - animSize / 2 };
+  });
+
+  return (
+    <Animated.View style={[st.runner, animStyle]}>
+      <View style={[st.runnerTrail, { width: rs(14), height: rs(46), top: size * 0.45, backgroundColor: `${player.rankColor}30`, shadowColor: player.rankColor }]} />
+      {/* Speaking ring — absolute sibling of the avatar, pulsing lime ring */}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          {
+            position: "absolute" as const,
+            top: -5, left: -5,
+            width: size + 10, height: size + 10,
+            borderRadius: (size + 10) / 2,
+            borderWidth: 2,
+            borderColor: "#A3E635",
+          },
+          speakRingStyle,
+        ]}
+      />
+      <RunnerAvatarFace
+        size={size}
+        avatarUrl={player.isMe && meAvatarUrl ? meAvatarUrl : player.avatarUrl}
+        initial={player.initial}
+        rankColor={player.isForfeited ? "#FF4444" : player.rankColor}
+        isMe={!!player.isMe}
+        isForfeited={!!player.isForfeited}
+        fontSize={rs(14)}
+        onPress={() => onPress?.(player.userId)}
+      />
+      {/* Name + steps centered above the avatar (not left/right) to avoid overlap */}
+      <View
+        pointerEvents="none"
+        style={[
+          st.runnerLabel,
+          player.isMe && { borderColor: `${player.rankColor}88`, backgroundColor: "#050713F0" },
+          {
+            width: labelW,
+            left: size / 2 - labelW / 2,
+            bottom: size + rs(6),
+            alignItems: "center",
+          },
+        ]}
+      >
+        <Text
+          style={[
+            st.runnerName,
+            {
+              color: player.isMe ? player.rankColor : "#FFFFFF",
+              fontSize: rs(9),
+              textAlign: "center",
+            },
+          ]}
+          numberOfLines={1}
+        >
+          {player.isMe ? "You" : player.name}
+          {player.country ? ` ${player.country}` : ""}
+          {player.isHost ? <Text style={{ color: "#FFD700" }}> Host</Text> : ""}
+        </Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 2, justifyContent: "center" }}>
+          <BlueShoe size={rs(8)} />
+          <Text style={[st.runnerSteps, { fontSize: rs(8), textAlign: "center" }]}>
+            {formatSteps(effectiveSteps)} steps
+          </Text>
+        </View>
+      </View>
+    </Animated.View>
+  );
+});
+
+// ── Track Position per-participant mute (Race Track panel only) ───────────────
+
+// ── LeaderboardOverlay ────────────────────────────────────────────────────────
+
+function LeaderboardOverlay({ visible, players, width, height, animatedStyle, positionText, statusText, rsFactor = 1, meAvatarUrl, onLocalMute, onLocalUnmute, isRemoteLocallyMuted, showMuteControls = false, isActiveRace = false, muteAllActive = false, onMuteAll, onUnmuteAll }: {
+  visible: boolean; players: Player[]; width: number; height: number;
+  animatedStyle: object; positionText: string; statusText: string; rsFactor?: number;
+  meAvatarUrl?: string | null;
+  isRemoteLocallyMuted: (userId: string) => boolean;
+  onLocalMute: (userId: string) => void;
+  onLocalUnmute: (userId: string) => void;
+  showMuteControls?: boolean;
+  isActiveRace?: boolean;
+  muteAllActive?: boolean;
+  onMuteAll?: () => void;
+  onUnmuteAll?: () => void;
+}) {
+  const rs = (n: number) => Math.round(n * rsFactor);
+  return (
+    <Animated.View pointerEvents={visible ? "auto" : "none"} style={[st.lbOverlay, { width, height }, animatedStyle]}>
+      <View style={st.lbHead}>
+        <View style={st.lbHeadText}>
+          <Text style={[st.lbTitle, { fontSize: Math.max(8, rs(9)) }]}>TRACK POSITION</Text>
+          <Text style={[st.lbPosition, { fontSize: rs(13) }]}>{positionText}</Text>
+        </View>
+        <View style={st.lbStatusPill}>
+          <View style={st.lbDot} />
+          <Text style={[st.lbStatusText, { fontSize: Math.max(7, rs(8)) }]}>{statusText}</Text>
+        </View>
+      </View>
+      <TrackPositionParticipantList
+        players={players}
+        rsFactor={rsFactor}
+        meAvatarUrl={meAvatarUrl}
+        showMuteControls={!!showMuteControls}
+        isRemoteLocallyMuted={isRemoteLocallyMuted}
+        onLocalMute={onLocalMute}
+        onLocalUnmute={onLocalUnmute}
+        muteAllActive={muteAllActive}
+        onMuteAll={onMuteAll}
+        onUnmuteAll={onUnmuteAll}
+      />
+    </Animated.View>
+  ); }
+
+// ── RaceViewToggle ────────────────────────────────────────────────────────────
+
+function RaceViewToggle({ selectedView, onSelect, colors }: {
+  selectedView: "race_track" | "live_board";
+  onSelect: (v: "race_track" | "live_board") => void;
+  colors: ReturnType<typeof useColors>; }) {
+  const views = [
+    { id: "race_track" as const, label: "Race Track" },
+    { id: "live_board" as const, label: "Live Board" },
+  ];
+  return (
+    <View style={[togStyles.wrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      {views.map(({ id, label }) => {
+        const active = selectedView === id;
+        return (
+          <TouchableOpacity key={id} onPress={() => onSelect(id)} activeOpacity={0.85}
+            style={[togStyles.tab, active && { backgroundColor: colors.primary }]}>
+            <Text style={[togStyles.tabTxt, { color: active ? colors.primaryForeground : colors.mutedForeground }]}>
+              {label}
+            </Text>
+          </TouchableOpacity>
+        ); })}
+    </View>
+  ); }
+
+const togStyles = StyleSheet.create({
+  wrap:   { marginHorizontal: 12, marginTop: 8, marginBottom: 4, flexDirection: "row", borderRadius: 12, borderWidth: 1, padding: 3, gap: 3 },
+  tab:    { flex: 1, paddingVertical: 9, alignItems: "center", borderRadius: 10 },
+  tabTxt: { fontSize: rf(13), fontWeight: "800" }, });
+
+// ── CompactPrizeCard ──────────────────────────────────────────────────────────
+
+function coinsPrizeSplits(playerCount: number): number[] {
+  if (playerCount <= 2) return [1.0];
+  if (playerCount === 3) return [0.6, 0.4];
+  return [0.5, 0.3, 0.2];
+}
+function fmtCoins(n: number) {
+  if (n >= 1000) return `${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}k`;
+  return n.toLocaleString();
+}
+
+function PremiumPoolText({
+  children,
+  color,
+  compact = false,
+}: {
+  children: React.ReactNode;
+  color: string;
+  compact?: boolean;
+}) {
+  const shimmer = useRef(new RNAnimated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.delay(3600),
+        RNAnimated.timing(shimmer, {
+          toValue: 1,
+          duration: 900,
+          easing: RNEasing.inOut(RNEasing.quad),
+          useNativeDriver: true,
+        }),
+        RNAnimated.timing(shimmer, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [shimmer]);
+
+  return (
+    <View style={premiumPoolStyles.wrap}>
+      <Text
+        style={[
+          premiumPoolStyles.amount,
+          compact && premiumPoolStyles.amountCompact,
+          { color, textShadowColor: `${color}99` },
+        ]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {children}
+      </Text>
+      <RNAnimated.View
+        pointerEvents="none"
+        style={[
+          premiumPoolStyles.shimmer,
+          {
+            transform: [{
+              translateX: shimmer.interpolate({
+                inputRange: [0, 1],
+                outputRange: [-18, 110],
+              }),
+            }],
+            opacity: shimmer.interpolate({
+              inputRange: [0, 0.2, 0.5, 0.8, 1],
+              outputRange: [0, 0.18, 0.4, 0.18, 0],
+            }),
+          },
+        ]}
+      />
+    </View>
+  );
+}
+
+const premiumPoolStyles = StyleSheet.create({
+  wrap: { minWidth: 54, maxWidth: "48%", overflow: "hidden", alignItems: "flex-end" },
+  amount: {
+    fontSize: rf(21),
+    fontWeight: "900",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 7,
+  },
+  amountCompact: { fontSize: rf(19) },
+  shimmer: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: 12,
+    backgroundColor: "rgba(255,255,255,0.4)",
+    transform: [{ skewX: "-18deg" }],
+  },
+});
+
+function CompactPrizeCard({ race, colors }: { race: RaceData; colors: ReturnType<typeof useColors> }) {
+  if (race.entryType === "free") {
+    return (
+      <View style={[cpStyles.card, { backgroundColor: colors.card, borderColor: colors.primary + "33" }]}>
+        <Text style={{ fontSize: rf(16) }}>🎖️</Text>
+        <View>
+          <Text style={[cpStyles.freeTitle, { color: colors.primary }]}>Free Entry</Text>
+          <Text style={[cpStyles.freeSub, { color: colors.mutedForeground }]}>Badges & rank only</Text>
+        </View>
+      </View>
+    );
+  }
+  if (race.entryType === "coins_battle") {
+    const entryAmt = race.coinEntryAmount ?? 0;
+    const totalPool = race.coinPrizePool && race.coinPrizePool > 0
+      ? race.coinPrizePool
+      : entryAmt * race.currentPlayers;
+    const winnersPool = race.coinWinnersPool && race.coinWinnersPool > 0
+      ? race.coinWinnersPool
+      : totalPool;
+    const splits = coinsPrizeSplits(race.currentPlayers);
+    const rankIcons = ["🥇", "🥈", "🥉"];
+    return (
+      <View style={[cpStyles.card, { backgroundColor: colors.card, borderColor: "#F59E0B44" }]}>
+        <View style={cpStyles.headerRow}>
+          <Image source={COIN_IMG} style={{ width: 18, height: 18 }} />
+          <Text style={[cpStyles.label, { color: "#F59E0B" }]}>Coins Prize Pool</Text>
+          <PremiumPoolText color="#F59E0B" compact>{fmtCoins(winnersPool)} Coins</PremiumPoolText>
+        </View>
+        <View style={cpStyles.tiersRow}>
+          {splits.map((ratio, i) => (
+            <View key={i} style={[cpStyles.tier, { backgroundColor: colors.background, borderColor: colors.border }]}>
+              <Text style={{ fontSize: rf(13) }}>{rankIcons[i]}</Text>
+              <Text style={[cpStyles.tierAmt, { color: colors.foreground }]}>{fmtCoins(Math.floor(winnersPool * ratio))}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    );
+  }
+  return null;
+}
+
+const cpStyles = StyleSheet.create({
+  card:      { marginHorizontal: 12, borderRadius: 14, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 11, gap: 8 },
+  headerRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  label:     { flex: 1, fontSize: rf(14), fontWeight: "700" },
+  pool:      { fontSize: rf(15), fontWeight: "800" },
+  freeTitle: { fontSize: rf(14), fontWeight: "700" },
+  freeSub:   { fontSize: rf(12), marginTop: 1 },
+  tiersRow:  { flexDirection: "row", gap: 8 },
+  tier:      { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1 },
+  tierAmt:   { fontSize: rf(13), fontWeight: "700" }, });
+
+// ── LiveBoardPanel ────────────────────────────────────────────────────────────
+
+function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAvatarPress, colors, stepDeltas = {}, listHeader = null, listFooter = null }: {
+  race: RaceData; participants: RaceParticipant[];
+  currentUserId: string | null; userAvatarUrl?: string | null;
+  onAvatarPress?: (p: RaceParticipant) => void;
+  colors: ReturnType<typeof useColors>;
+  /** userId → step count gained since last Pusher update; shown as "+N" badge (clears after 2 s) */
+  stepDeltas?: Record<string, number>;
+  /** Rendered above the leaderboard (e.g. FinishedBanner) — FlatList is the sole vertical scroller. */
+  listHeader?: React.ReactNode;
+  listFooter?: React.ReactNode;
+}) {
+  const { getAvatarVersion } = useAvatarVersionContext();
+  const isCompleted = race.status === "completed";
+  const isSponsored = race.type === "sponsored";
+  const isUnlimited =
+    isUnlimitedGoalFrontendEnabled() &&
+    isUnlimitedGoalChallenge({
+      challengeType: race.challengeType,
+      entryType: race.entryType,
+      type: race.type,
+      capacityMode: race.capacityMode,
+      maxPlayers: race.maxPlayers,
+    });
+  const [showPrizeInfo, setShowPrizeInfo] = useState(false);
+  const { hostRow, topperRows, pinHost } = useMemo(() => {
+    // Unlimited: keep full roster (DQ included). Classic: hide left/DQ/ghost as before.
+    const eligible = isUnlimited
+      ? filterUnlimitedParticipantsForDisplay(participants)
+      : filterRaceParticipantsForDisplay(participants);
+    const hostId = String(race.creatorId ?? "").trim();
+    const marked = eligible.map((p) => {
+      const isHost = !!(p.isHost || (hostId && p.userId === hostId));
+      return { ...p, isHost };
+    });
+
+    // Standings by steps only — this number is what we show beside each name.
+    const bySteps = [...marked].sort((a, b) => {
+      if (b.currentSteps !== a.currentSteps) return b.currentSteps - a.currentSteps;
+      return String(a.userId ?? "").localeCompare(String(b.userId ?? ""));
+    });
+    const withStepRank = bySteps.map((p, i) => ({
+      ...p,
+      stepRank: i + 1,
+    }));
+
+    const host =
+      withStepRank.find((p) => p.isHost) ??
+      (hostId ? withStepRank.find((p) => p.userId === hostId) : undefined) ??
+      null;
+
+    const hostRank = host?.stepRank ?? 0;
+    // Top 3 host → stay in natural 🥇🥈🥉 order (do not pin above).
+    // Rank 4+ host → pin at top with number; toppers below keep medal order.
+    const shouldPinHost = !!host && hostRank >= 4;
+
+    // Unlimited must list everyone (no top-N / maxPlayers cap).
+    const topperCap = isUnlimited
+      ? withStepRank.length
+      : typeof race.maxPlayers === "number" && race.maxPlayers > 0
+        ? Math.min(race.maxPlayers, LIVE_RACE_TRACK_TOP_N)
+        : LIVE_RACE_TRACK_TOP_N;
+
+    if (shouldPinHost && host) {
+      const toppers = withStepRank.filter((p) => p.userId !== host.userId);
+      return {
+        hostRow: host,
+        // Do not re-apply topperCap after removing host — that dropped the last rows.
+        topperRows: isUnlimited ? toppers : toppers.slice(0, topperCap),
+        pinHost: true,
+      };
+    }
+
+    // Host in top 3 (or unknown): single step-ordered list with medals.
+    return {
+      hostRow: null,
+      topperRows: withStepRank.slice(0, topperCap),
+      pinHost: false,
+    };
+  }, [participants, isUnlimited, race.maxPlayers, race.creatorId]);
+
+  // Dev-only roster diagnostics — never shipped/logged in production builds.
+  // Verifies the full participant pipeline (backend → normalized → merged →
+  // rendered) is not silently losing rows, without adding any user-facing UI.
+  useEffect(() => {
+    if (!__DEV__) return;
+    const total = (pinHost && hostRow ? 1 : 0) + topperRows.length;
+    const idCounts = new Map<string, number>();
+    const allRows = pinHost && hostRow ? [hostRow, ...topperRows] : topperRows;
+    for (const p of allRows) {
+      const key = `${p.userId || "u"}:${p.id}`;
+      idCounts.set(key, (idCounts.get(key) ?? 0) + 1);
+    }
+    const duplicateKeys = [...idCounts.entries()].filter(([, n]) => n > 1);
+    stepEngineLog(
+      "RosterDiag",
+      `raceId=${race.id} backendParticipants=${participants.length} ` +
+        `renderedRows(flatListDataLength)=${total} isUnlimited=${isUnlimited} ` +
+        `uniqueKeys=${idCounts.size} duplicateKeys=${duplicateKeys.length}` +
+        (duplicateKeys.length > 0 ? ` dupSample=${duplicateKeys[0]?.[0]}` : ""),
+    );
+  }, [participants.length, topperRows, hostRow, pinHost, race.id, isUnlimited]);
+  const { height: winH, width: winW } = useWindowDimensions();
+  const prizeModalMaxH = Math.min(winH * 0.78, 560);
+  const prizeModalW = Math.min(winW - 32, 420);
+  const prizeUsd = getSponsoredPrizePerWinnerUsd(
+    (race as RaceData & { prizePerWinnerCents?: number }).prizePerWinnerCents,
+  );
+  // Count must match rows actually rendered (avoids "101" header with only 99 scrollable).
+  const displayedCount = (pinHost && hostRow ? 1 : 0) + topperRows.length;
+  const countLabel = formatPlayerCountDisplay({
+    current: isUnlimited
+      ? Math.max(displayedCount, 1)
+      : Math.max(race.currentPlayers || 0, participants.length, 1),
+    max: race.maxPlayers,
+    isUnlimited,
+  });
+  // Extra scroll room so ranks 100–101 clear above the steps/chat panels below.
+  const listEndSpacer = isUnlimited
+    ? BOARD_ROW_HEIGHT * 5
+    : BOARD_ROW_HEIGHT * 2;
+  // Memoized so a 100+ row Unlimited roster doesn't rebuild this string on
+  // every parent re-render (e.g. the ~75ms step-catchup animation ticks) —
+  // only when the underlying rows actually change.
+  const topperRowsExtraData = useMemo(
+    () => `${topperRows.length}:${topperRows.map((p) => `${p.id}:${p.stepRank}:${p.currentSteps}`).join("|")}`,
+    [topperRows],
+  );
+
+  const renderBoardRow = useCallback(
+    ({
+      item,
+      index,
+      rowCount,
+      forceNumericRank = false,
+    }: {
+      item: RaceParticipant & { isHost?: boolean; stepRank?: number };
+      index: number;
+      rowCount: number;
+      forceNumericRank?: boolean;
+    }) => {
+      const isUser = item.userId === currentUserId;
+      // Always use step standing — never list index (that caused fake top-3 medals).
+      const rank =
+        typeof item.stepRank === "number" && item.stepRank > 0
+          ? item.stepRank
+          : typeof item.rank === "number" && item.rank > 0
+            ? item.rank
+            : index + 1;
+      const pAvatarUrl =
+        item.avatarUrl && item.userId
+          ? `${getApiBase()}/api/profile/avatar/${item.userId}?v=${getAvatarVersion(item.userId ?? "", item.avatarVersion ?? 0)}`
+          : isUser
+            ? userAvatarUrl
+            : null;
+      return (
+        <LiveBoardRow
+          participant={{
+            ...item,
+            isHost: !!item.isHost,
+            durationDays: isUnlimited ? race.challengeDurationDays : undefined,
+            qualificationStatus: isUnlimited
+              ? (item as RaceParticipant).qualificationStatus
+              : undefined,
+            prizePoolEligibilityStatus: isUnlimited
+              ? (item as RaceParticipant).prizePoolEligibilityStatus
+              : undefined,
+            showUnlimitedLostChip: isUnlimited
+              ? isUnlimitedPrizeLost({
+                  qualificationStatus: (item as RaceParticipant).qualificationStatus,
+                  prizePoolEligibilityStatus: (item as RaceParticipant)
+                    .prizePoolEligibilityStatus,
+                })
+              : false,
+          } as LiveBoardRowParticipant}
+          rank={rank}
+          isUser={isUser}
+          isCompleted={isCompleted}
+          targetSteps={race.targetSteps}
+          primary={colors.primary}
+          foreground={colors.foreground}
+          mutedForeground={colors.mutedForeground}
+          border={colors.border}
+          gold={colors.gold}
+          warning={colors.warning}
+          avatarUri={pAvatarUrl ?? null}
+          stepDelta={item.userId ? (stepDeltas[item.userId] ?? 0) : 0}
+          onPress={() => onAvatarPress?.(item)}
+          showDivider={index < rowCount - 1}
+          forceNumericRank={forceNumericRank}
+        />
+      );
+    },
+    [
+      currentUserId,
+      userAvatarUrl,
+      getAvatarVersion,
+      isCompleted,
+      race.targetSteps,
+      isUnlimited,
+      race.challengeDurationDays,
+      colors.primary,
+      colors.foreground,
+      colors.mutedForeground,
+      colors.border,
+      colors.gold,
+      colors.warning,
+      stepDeltas,
+      onAvatarPress,
+    ],
+  );
+
+  return (
+    <View style={{ flex: 1 }}>
+      {listHeader}
+      <View
+        style={[
+          lbpStyles.card,
+          {
+            flex: 1,
+            backgroundColor: colors.card,
+            borderColor: colors.border,
+            marginBottom: listFooter ? 8 : 12,
+          },
+        ]}
+      >
+        <View style={lbpStyles.header}>
+          <View style={[lbpStyles.dot, { backgroundColor: isCompleted ? colors.gold : colors.destructive }]} />
+          <Text style={[lbpStyles.title, { color: colors.foreground }]}>
+            {isCompleted ? "Final Leaderboard" : "Live Leaderboard"}
+          </Text>
+          {isSponsored ? (
+            <TouchableOpacity
+              onPress={() => setShowPrizeInfo(true)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="Gift card prizes info"
+              activeOpacity={0.7}
+              style={lbpStyles.infoBtn}
+            >
+              <Feather name="info" size={16} color="#FF9900" />
+            </TouchableOpacity>
+          ) : null}
+          <Text style={[lbpStyles.count, { color: colors.mutedForeground }]}>{countLabel}</Text>
+        </View>
+        {(!hostRow && topperRows.length === 0) ? (
+          <Text style={[lbpStyles.empty, { color: colors.mutedForeground }]}>Waiting for participants...</Text>
+        ) : (
+          <View style={{ flex: 1, minHeight: LIVE_BOARD_VISIBLE_ROWS * BOARD_ROW_HEIGHT }}>
+            {/* Pin host only when outside top 3 (rank 4+). Top-3 host stays in medal order below. */}
+            {pinHost && hostRow ? (
+              <View style={{ borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }}>
+                {renderBoardRow({
+                  item: hostRow,
+                  index: 0,
+                  rowCount: 1,
+                  forceNumericRank: true,
+                })}
+              </View>
+            ) : null}
+            <FlatList
+              data={topperRows}
+              keyExtractor={(p) => `${p.userId || "u"}:${p.id}`}
+              extraData={topperRowsExtraData}
+              renderItem={({ item, index }) =>
+                renderBoardRow({
+                  item,
+                  index,
+                  rowCount: topperRows.length,
+                  forceNumericRank: false,
+                })
+              }
+              style={{ flex: 1 }}
+              contentContainerStyle={
+                topperRows.length > 0 ? { flexGrow: 0 } : undefined
+              }
+              ListFooterComponent={
+                topperRows.length > 0 ? (
+                  <View
+                    style={{ height: listEndSpacer }}
+                    accessibilityLabel="leaderboard-end-spacer"
+                  />
+                ) : null
+              }
+              nestedScrollEnabled
+              scrollEnabled
+              bounces
+              overScrollMode="always"
+              showsVerticalScrollIndicator
+              initialNumToRender={Math.min(topperRows.length, LIVE_BOARD_VISIBLE_ROWS + 12)}
+              maxToRenderPerBatch={32}
+              windowSize={21}
+              // Fixed getItemLayout under-estimated row height on some devices and
+              // blocked scrolling past ~99. Let FlatList measure naturally.
+              removeClippedSubviews={false}
+            />
+          </View>
+        )}
+      </View>
+      {listFooter}
+
+      {isSponsored ? (
+        <Modal
+          transparent
+          visible={showPrizeInfo}
+          animationType="fade"
+          onRequestClose={() => setShowPrizeInfo(false)}
+          statusBarTranslucent
+        >
+          <View style={lbpStyles.prizeOverlay}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={() => setShowPrizeInfo(false)}
+              accessibilityLabel="Dismiss prizes"
+            />
+            <View
+              style={[
+                lbpStyles.prizeModalCard,
+                {
+                  width: prizeModalW,
+                  maxHeight: prizeModalMaxH,
+                  backgroundColor: colors.card,
+                  borderColor: "#FF990055",
+                },
+              ]}
+            >
+              <View style={lbpStyles.prizeModalHeader}>
+                <Text style={{ fontSize: rf(18) }}>🎁</Text>
+                <View style={lbpStyles.prizeModalHeaderText}>
+                  <Text style={[lbpStyles.prizeModalTitle, { color: "#FF9900" }]} numberOfLines={1}>
+                    Gift Card Prizes
+                  </Text>
+                  <Text style={[lbpStyles.prizeModalSub, { color: "#FF9900" }]}>
+                    ${prizeUsd} each
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={[lbpStyles.prizeClose, { backgroundColor: colors.border + "99" }]}
+                  onPress={() => setShowPrizeInfo(false)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityLabel="Close"
+                  activeOpacity={0.7}
+                >
+                  <Feather name="x" size={18} color={colors.foreground} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                style={{ maxHeight: prizeModalMaxH - 72 }}
+                contentContainerStyle={lbpStyles.prizeScrollContent}
+                showsVerticalScrollIndicator
+                bounces
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+              >
+                <SponsoredPrizePanel
+                  race={race}
+                  participants={participants}
+                  colors={colors}
+                  embedded
+                />
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
+    </View>
+  ); }
+
+const lbpStyles = StyleSheet.create({
+  card:      { marginHorizontal: 12, borderRadius: 14, borderWidth: 1, paddingHorizontal: 10, paddingTop: 8, paddingBottom: 4, gap: 4 },
+  header:    { flexDirection: "row", alignItems: "center", gap: 6, paddingBottom: 2 },
+  dot:       { width: 7, height: 7, borderRadius: 3.5 },
+  title:     { flex: 1, fontSize: rf(14), fontWeight: "800" },
+  infoBtn:   { padding: 2 },
+  count:     { fontSize: rf(11) },
+  empty:     { fontSize: rf(13), textAlign: "center", paddingVertical: 8 },
+  row:       { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8 },
+  medal:     { fontSize: rf(18), width: 28, textAlign: "center" },
+  avatar:    { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  avatarImg: { width: 36, height: 36, borderRadius: 18 },
+  avatarTxt: { fontSize: rf(14), fontWeight: "800" },
+  info:      { flex: 1, gap: 5 },
+  nameRow:   { flexDirection: "row", alignItems: "center", gap: 4, flexWrap: "wrap" },
+  name:      { fontSize: rf(13), fontWeight: "700" },
+  tag:       { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 5, borderWidth: 1 },
+  tagTxt:    { fontSize: rf(9), fontWeight: "800" },
+  track:     { height: 4, borderRadius: 2, overflow: "hidden" },
+  fill:      { height: 4, borderRadius: 2 },
+  right:     { alignItems: "flex-end", gap: 2 },
+  steps:     { fontSize: rf(12), fontWeight: "700" },
+  stepDelta: { fontSize: rf(10), fontWeight: "800", color: "#00E676" },
+  prize:     { fontSize: rf(12), fontWeight: "800" },
+  prizeOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 24,
+  },
+  prizeModalCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: "hidden",
+    zIndex: 1,
+  },
+  prizeModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#FF990033",
+  },
+  prizeModalHeaderText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  prizeModalTitle: {
+    fontSize: rf(16),
+    fontWeight: "800",
+  },
+  prizeModalSub: {
+    fontSize: rf(13),
+    fontWeight: "700",
+  },
+  prizeClose: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  prizeScrollContent: {
+    paddingBottom: 12,
+    flexGrow: 0,
+  },
+});
+
+// ── ReactionBar ───────────────────────────────────────────────────────────────
+
+function ReactionBar({ counts, onReact, colors }: {
+  counts: ReactionCount[]; onReact: (emoji: string) => void; colors: ReturnType<typeof useColors>; }) {
+  const getCount = (emoji: string) => counts.find((c) => c.emoji === emoji)?.count ?? 0;
+  return (
+    <View style={[rbStyles.wrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      {REACTIONS.map((em) => (
+        <TouchableOpacity key={em} onPress={() => onReact(em)} activeOpacity={0.7} style={rbStyles.btn}>
+          <Text style={{ fontSize: rf(22) }}>{em}</Text>
+          {getCount(em) > 0 && <Text style={[rbStyles.count, { color: colors.mutedForeground }]}>{getCount(em)}</Text>}
+        </TouchableOpacity>
+      ))}
+    </View>
+  ); }
+
+const rbStyles = StyleSheet.create({
+  wrap:  { marginHorizontal: 12, borderRadius: 14, borderWidth: 1, padding: 12, flexDirection: "row", justifyContent: "space-around" },
+  btn:   { alignItems: "center", gap: 2 },
+  count: { fontSize: rf(10), fontWeight: "600" }, });
+
+// ── CheerFeed ─────────────────────────────────────────────────────────────────
+
+function CheerFeed({ comments, colors }: { comments: RaceComment[]; colors: ReturnType<typeof useColors> }) {
+  const feed = dedupeComments(comments).slice(-30);
+  return (
+    <View style={[cfStyles.wrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={cfStyles.header}>
+        <Text style={{ fontSize: rf(14) }}>🎉</Text>
+        <Text style={[cfStyles.title, { color: colors.foreground }]}>Cheer Feed</Text>
+      </View>
+      {feed.length === 0 ? (
+        <Text style={[cfStyles.empty, { color: colors.mutedForeground }]}>No cheers yet — be the first!</Text>
+      ) : feed.map((c, i) => (
+        <View key={`${c.id}-${c.clientMessageId ?? i}`} style={cfStyles.row}>
+          <View style={[cfStyles.avatar, { backgroundColor: c.avatarColor + "22", borderColor: c.avatarColor }]}>
+            <Text style={[cfStyles.avatarTxt, { color: c.avatarColor }]}>{c.username.charAt(0).toUpperCase()}</Text>
+          </View>
+          <View style={cfStyles.bubble}>
+            <Text style={[cfStyles.name, { color: colors.primary }]}>{c.countryFlag} {c.username}</Text>
+            <Text style={[cfStyles.msg, { color: colors.foreground }]}>{c.text}</Text>
+          </View>
+        </View>
+      ))}
+    </View>
+  ); }
+
+const cfStyles = StyleSheet.create({
+  wrap:      { marginHorizontal: 12, borderRadius: 14, borderWidth: 1, padding: 14, gap: 10 },
+  header:    { flexDirection: "row", alignItems: "center", gap: 6 },
+  title:     { fontSize: rf(14), fontWeight: "700" },
+  empty:     { fontSize: rf(13), paddingVertical: 4 },
+  row:       { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  avatar:    { width: 28, height: 28, borderRadius: 14, borderWidth: 1.5, alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  avatarTxt: { fontSize: rf(11), fontWeight: "800" },
+  bubble:    { flex: 1 },
+  name:      { fontSize: rf(11), fontWeight: "700" },
+  msg:       { fontSize: rf(13), lineHeight: 18, marginTop: 1 }, });
+
+// ── SponsoredPrizePanel ───────────────────────────────────────────────────────
+
+function SponsoredPrizePanel({ race, participants, colors, embedded = false }: {
+  race: RaceData;
+  participants?: RaceParticipant[];
+  colors: ReturnType<typeof useColors>;
+  /** When true, drop outer chrome (used inside the info modal). */
+  embedded?: boolean;
+}) {
+  const isCompleted = race.status === "completed";
+  const targetSteps =
+    typeof race.targetSteps === "number" && race.targetSteps > 0
+      ? race.targetSteps
+      : SPONSORED_DEFAULT_TARGET_STEPS;
+  const playerCount = Math.max(
+    (participants ?? []).length,
+    race.currentPlayers ?? 0,
+  );
+  const winnerCount = getSponsoredWinnerCount(playerCount);
+  const prizeUsd = getSponsoredPrizePerWinnerUsd(
+    (race as RaceData & { prizePerWinnerCents?: number }).prizePerWinnerCents,
+  );
+
+  const finishers = (participants ?? [])
+    .filter((p) => p.finishedGoal && p.finishedAt)
+    .sort((a, b) => {
+      const ta = a.finishedAt ? new Date(a.finishedAt).getTime() : Infinity;
+      const tb = b.finishedAt ? new Date(b.finishedAt).getTime() : Infinity;
+      return ta - tb;
+    });
+  const winners = finishers.slice(0, winnerCount);
+
+  const rankIcons = ["🥇", "🥈", "🥉"];
+  const ordinal = (i: number) =>
+    i === 0 ? "1st" : i === 1 ? "2nd" : i === 2 ? "3rd" : `${i + 1}th`;
+
+  return (
+    <View style={[
+      pzStyles.card,
+      { backgroundColor: colors.card, borderColor: "#FF990044" },
+      embedded && {
+        marginHorizontal: 0,
+        borderWidth: 0,
+        borderRadius: 0,
+        backgroundColor: "transparent",
+        paddingTop: 12,
+        paddingBottom: 4,
+      },
+    ]}>
+      {!embedded ? (
+        <View style={pzStyles.header}>
+          <Text style={{ fontSize: rf(18) }}>🎁</Text>
+          <Text style={[pzStyles.title, { color: "#FF9900" }]}>Gift Card Prizes</Text>
+          <Text style={[pzStyles.pool, { color: "#FF9900" }]}>${prizeUsd} each</Text>
+        </View>
+      ) : null}
+      {!embedded ? <View style={[pzStyles.divider, { backgroundColor: colors.border }]} /> : null}
+      {isCompleted ? (
+        winners.length > 0 ? (
+          winners.map((p, i) => (
+            <View key={p.userId} style={pzStyles.row}>
+              <Text style={{ fontSize: rf(15) }}>{rankIcons[i] ?? "🏅"}</Text>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[pzStyles.place, { color: "#FF9900" }]}>
+                  {ordinal(i)} Finisher
+                </Text>
+                <Text style={{ fontSize: rf(11), color: colors.mutedForeground }} numberOfLines={1}>{p.username}</Text>
+              </View>
+              <Text style={[pzStyles.amount, { color: "#FF9900" }]}>${prizeUsd} Gift Card</Text>
+            </View>
+          ))
+        ) : (
+          <Text style={{ fontSize: rf(12), color: colors.mutedForeground, textAlign: "center", paddingVertical: 4 }}>
+            No winners — no one completed the {targetSteps.toLocaleString()} step goal
+          </Text>
+        )
+      ) : (
+        <>
+          <View style={pzStyles.row}>
+            <Text style={{ fontSize: rf(15) }}>🥇</Text>
+            <Text style={[pzStyles.place, { color: "#FF9900" }]}>1st to finish</Text>
+            <Text style={[pzStyles.amount, { color: "#FF9900" }]}>${prizeUsd} Gift Card</Text>
+          </View>
+          {winnerCount >= 2 && (
+            <View style={pzStyles.row}>
+              <Text style={{ fontSize: rf(15) }}>🥈</Text>
+              <Text style={[pzStyles.place, { color: "#FF9900" }]}>2nd to finish</Text>
+              <Text style={[pzStyles.amount, { color: "#FF9900" }]}>${prizeUsd} Gift Card</Text>
+            </View>
+          )}
+          <Text style={{ fontSize: rf(11), color: colors.mutedForeground, textAlign: "center", marginTop: 4 }}>
+            Complete {targetSteps.toLocaleString()} steps to win · {winnerCount} winner{winnerCount !== 1 ? "s" : ""}
+            {playerCount > 0 ? ` · ${playerCount} racing` : ""}
+          </Text>
+        </>
+      )}
+    </View>
+  );
+}
+
+// ── PrizePanel ────────────────────────────────────────────────────────────────
+
+function PrizePanel({ race, participants, colors }: { race: RaceData; participants?: RaceParticipant[]; colors: ReturnType<typeof useColors> }) {
+  // Sponsored gift-card prizes open from Live Leaderboard info icon modal instead.
+  if (race.type === "sponsored") return null;
+  if (race.entryType === "free") return null;
+
+  const isUnlimited =
+    isUnlimitedGoalFrontendEnabled() &&
+    isUnlimitedGoalChallenge({
+      challengeType: race.challengeType,
+      entryType: race.entryType,
+      type: race.type,
+      capacityMode: race.capacityMode,
+      maxPlayers: race.maxPlayers,
+    });
+
+  const rankColors  = [colors.gold, colors.silver, colors.bronze];
+  const rankIcons   = ["🥇", "🥈", "🥉"];
+  const rankLabels  = ["1st Place", "2nd Place", "3rd Place"];
+  const isCompleted = race.status === "completed";
+
+  // After the race is finished the Race Finished card already shows winners
+  // and their prizes — hide the prize pool card to avoid duplication.
+  if (isCompleted) return null;
+
+  if (isUnlimited) {
+    // Unlimited Live Board does not show a prize-pool card (same as prior non-tier races).
+    return null;
+  }
+
+  // ── Coins battle ──────────────────────────────────────────────────────────
+  if (race.entryType === "coins_battle") {
+    const entryAmt = race.coinEntryAmount ?? 0;
+    const totalPool = race.coinPrizePool && race.coinPrizePool > 0
+      ? race.coinPrizePool
+      : entryAmt * race.currentPlayers;
+    const winnersPool = race.coinWinnersPool && race.coinWinnersPool > 0
+      ? race.coinWinnersPool
+      : totalPool;
+    const splits = coinsPrizeSplits(race.currentPlayers);
+
+    // After race: show actual coin prizes per participant
+    const completedCoinRows = isCompleted && participants
+      ? participants
+          .filter((p) => p.status !== "forfeited" && (p.prizeCoins ?? 0) > 0)
+          .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
+      : [];
+
+    return (
+      <View style={[pzStyles.card, { backgroundColor: colors.card, borderColor: "#F59E0B44" }]}>
+        <View style={pzStyles.header}>
+          <Image source={COIN_IMG} style={{ width: 20, height: 20 }} />
+          <Text style={[pzStyles.title, { color: "#F59E0B" }]}>Coins Prize Pool</Text>
+          <PremiumPoolText color="#F59E0B">{fmtCoins(winnersPool)} Coins</PremiumPoolText>
+        </View>
+        <View style={[pzStyles.divider, { backgroundColor: colors.border }]} />
+        {isCompleted && completedCoinRows.length > 0
+          ? completedCoinRows.map((p, i) => (
+              <View key={p.userId} style={pzStyles.row}>
+                <Text style={{ fontSize: rf(15) }}>{rankIcons[Math.min(i, 2)]}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={[pzStyles.place, { color: rankColors[Math.min(i, 2)] }]}>
+                    {p.isTied && (p.tieGroupSize ?? 1) > 1 ? `Tied ${rankLabels[Math.min(i, 2)]}` : rankLabels[Math.min(i, 2)]}
+                  </Text>
+                  <Text style={{ fontSize: rf(11), color: colors.mutedForeground }}>{p.username}</Text>
+                </View>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                  <Image source={COIN_IMG} style={{ width: 13, height: 13 }} />
+                  <Text style={[pzStyles.amount, { color: "#F59E0B" }]}>{fmtCoins(p.prizeCoins ?? 0)}</Text>
+                </View>
+              </View>
+            ))
+          : splits.map((ratio, i) => (
+              <View key={i} style={pzStyles.row}>
+                <Text style={{ fontSize: rf(15) }}>{rankIcons[i]}</Text>
+                <Text style={[pzStyles.place, { color: rankColors[i] }]}>{rankLabels[i]}</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                  <Image source={COIN_IMG} style={{ width: 13, height: 13 }} />
+                  <Text style={[pzStyles.amount, { color: "#F59E0B" }]}>{fmtCoins(Math.floor(winnersPool * ratio))}</Text>
+                </View>
+              </View>
+            ))
+        }
+      </View>
+    );
+  }
+
+  // ── Cash race ─────────────────────────────────────────────────────────────
+  if (!race.prizeTiers?.length) return null;
+
+  const completedRows = isCompleted && participants
+    ? participants
+        .filter((p) => p.status !== "forfeited" && (p.prizeAmount ?? 0) > 0)
+        .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
+    : [];
+
+  return (
+    <View style={[pzStyles.card, { backgroundColor: colors.card, borderColor: colors.gold + "44" }]}>
+      <View style={pzStyles.header}>
+        <Text style={{ fontSize: rf(18) }}>🏆</Text>
+        <Text style={[pzStyles.title, { color: colors.gold }]}>Prize Pool</Text>
+        <PremiumPoolText color={colors.gold}>${(race.prizePool ?? 0).toFixed(2)}</PremiumPoolText>
+      </View>
+      <View style={[pzStyles.divider, { backgroundColor: colors.border }]} />
+      {isCompleted && completedRows.length > 0
+        ? completedRows.map((p, i) => (
+            <View key={p.userId} style={pzStyles.row}>
+              <Text style={{ fontSize: rf(15) }}>{rankIcons[Math.min(i, 2)]}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[pzStyles.place, { color: rankColors[Math.min(i, 2)] }]}>
+                  {p.isTied && (p.tieGroupSize ?? 1) > 1 ? `Tied ${rankLabels[Math.min(i, 2)]}` : rankLabels[Math.min(i, 2)]}
+                </Text>
+                <Text style={{ fontSize: rf(11), color: colors.mutedForeground }}>{p.username}</Text>
+              </View>
+              <Text style={[pzStyles.amount, { color: colors.foreground }]}>${p.prizeAmount!.toFixed(2)}</Text>
+            </View>
+          ))
+        : race.prizeTiers.map((amount, i) => (
+            <View key={i} style={pzStyles.row}>
+              <Text style={{ fontSize: rf(15) }}>{rankIcons[i]}</Text>
+              <Text style={[pzStyles.place, { color: rankColors[i] }]}>{rankLabels[i]}</Text>
+              <Text style={[pzStyles.amount, { color: colors.foreground }]}>${amount.toFixed(2)}</Text>
+            </View>
+          ))
+      }
+    </View>
+  );
+}
+
+const pzStyles = StyleSheet.create({
+  card:    { marginHorizontal: 12, borderRadius: 14, borderWidth: 1, padding: 16, gap: 10 },
+  header:  { flexDirection: "row", alignItems: "center", gap: 8 },
+  title:   { flex: 1, fontSize: rf(16), fontWeight: "700" },
+  pool:    { fontSize: rf(16), fontWeight: "800" },
+  divider: { height: StyleSheet.hairlineWidth },
+  row:     { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, paddingVertical: 4 },
+  place:   { flex: 1, fontSize: rf(14), fontWeight: "600", minWidth: 0 },
+  amount:  { fontSize: rf(14), fontWeight: "700", flexShrink: 0, textAlign: "right" },
+});
+
+// ── LivePrizeStrip ─────────────────────────────────────────────────────────────
+
+const COIN_IMG = require("@/assets/images/game-coin.png");
+
+function LivePrizeStrip({ race, colors }: { race: RaceData; colors: ReturnType<typeof useColors> }) {
+  const isCoinsBattle = race.entryType === "coins_battle";
+  const isFree = race.entryType === "free";
+  const isUnlimited =
+    isUnlimitedGoalFrontendEnabled() &&
+    isUnlimitedGoalChallenge({
+      challengeType: race.challengeType,
+      entryType: race.entryType,
+      type: race.type,
+      capacityMode: race.capacityMode,
+      maxPlayers: race.maxPlayers,
+    });
+
+  if (isUnlimited) {
+    return (
+      <View style={lpsStyles.row}>
+        <View style={[lpsStyles.chip, { backgroundColor: colors.card, borderColor: colors.gold + "44" }]}>
+          <Text style={lpsStyles.icon}>🏆</Text>
+          <Text style={[lpsStyles.amt, { color: colors.gold }]}>Equal split</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (isCoinsBattle) {
+    const entryAmt = race.coinEntryAmount ?? 0;
+    const totalPool = race.coinPrizePool && race.coinPrizePool > 0
+      ? race.coinPrizePool
+      : entryAmt * race.currentPlayers;
+    const winnersPool = race.coinWinnersPool && race.coinWinnersPool > 0
+      ? race.coinWinnersPool
+      : totalPool;
+    const splits = coinsPrizeSplits(race.currentPlayers);
+    const medalIcons = ["🥇", "🥈", "🥉"];
+    return (
+      <View style={lpsStyles.row}>
+        {splits.map((ratio, i) => (
+          <View key={i} style={[lpsStyles.chip, { backgroundColor: colors.card, borderColor: "#F59E0B44" }]}>
+            <Text style={lpsStyles.icon}>{medalIcons[i]}</Text>
+            <Image source={COIN_IMG} style={lpsStyles.coinImg} />
+            <Text style={[lpsStyles.amt, { color: "#F59E0B" }]}>{fmtCoins(Math.floor(winnersPool * ratio))}</Text>
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  const freeWinnerSlots = getWinnerCount(race.currentPlayers);
+  const tiers = isFree
+    ? freeRaceAwardsCoinPrizes(race.targetSteps)
+      ? FREE_TIER_COINS.slice(0, freeWinnerSlots).map((c, i) => ({
+          icon: ["🥇", "🥈", "🥉"][i],
+          label: `${c}`,
+          isCoin: true,
+        }))
+      : [{ icon: "🎁", label: "Coins + Badges", isCoin: false }]
+    : (race.prizeTiers ?? []).slice(0, getWinnerCount(race.currentPlayers) || 3).map((amt, i) => ({ icon: ["🥇","🥈","🥉"][i], label: `$${amt.toFixed(2)}`, isCoin: false }));
+  if (!tiers.length) return null;
+  return (
+    <View style={lpsStyles.row}>
+      {tiers.map((t, i) => (
+        <View key={i} style={[lpsStyles.chip, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={lpsStyles.icon}>{t.icon}</Text>
+          <Text style={[lpsStyles.amt, { color: colors.foreground }]}>{t.label}</Text>
+          {t.isCoin && <Image source={COIN_IMG} style={lpsStyles.coinImg} />}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+const lpsStyles = StyleSheet.create({
+  row:     { flexDirection: "column", alignItems: "flex-end", gap: 4 },
+  chip:    { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 20, borderWidth: 1 },
+  icon:    { fontSize: rf(10) },
+  amt:     { fontSize: rf(10), fontWeight: "700" },
+  coinImg: { width: 11, height: 11 }, });
+
+// ── SpeakingBars ──────────────────────────────────────────────────────────────
+// Three vertical bars that animate at staggered speeds to indicate voice activity.
+function SpeakingBars() {
+  const b1 = useSharedValue(0.35);
+  const b2 = useSharedValue(0.35);
+  const b3 = useSharedValue(0.35);
+
+  useEffect(() => {
+    b1.value = withRepeat(
+      withSequence(
+        withTiming(1,    { duration: 210 }),
+        withTiming(0.3,  { duration: 210 }),
+      ), -1, false,
+    );
+    b2.value = withDelay(90, withRepeat(
+      withSequence(
+        withTiming(1,    { duration: 255 }),
+        withTiming(0.3,  { duration: 255 }),
+      ), -1, false,
+    ));
+    b3.value = withDelay(170, withRepeat(
+      withSequence(
+        withTiming(1,    { duration: 185 }),
+        withTiming(0.3,  { duration: 185 }),
+      ), -1, false,
+    ));
+    return () => {
+      cancelAnimation(b1);
+      cancelAnimation(b2);
+      cancelAnimation(b3);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const s1 = useAnimatedStyle(() => ({ transform: [{ scaleY: b1.value }] }));
+  const s2 = useAnimatedStyle(() => ({ transform: [{ scaleY: b2.value }] }));
+  const s3 = useAnimatedStyle(() => ({ transform: [{ scaleY: b3.value }] }));
+
+  return (
+    <View style={{ flexDirection: "row", gap: 2.5, alignItems: "center" }} pointerEvents="none">
+      <Animated.View style={[{ width: 3, height: 12, borderRadius: 2, backgroundColor: "#A3E635" }, s1]} />
+      <Animated.View style={[{ width: 3, height: 12, borderRadius: 2, backgroundColor: "#A3E635" }, s2]} />
+      <Animated.View style={[{ width: 3, height: 12, borderRadius: 2, backgroundColor: "#A3E635" }, s3]} />
+    </View>
+  );
+}
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
+
+export default function LiveRaceDetailScreen() {
+  return (
+    <ErrorBoundary>
+      <LiveRaceDetailScreenContent />
+    </ErrorBoundary>
+  );
+}
+
+function LiveRaceDetailScreenContent() {
+  const navigation = useNavigation<NavigationProp<ParamListBase>>();
+  /** Ignore accidental back presses during the first frames after mount (touch carry-over). */
+  const leaveArmedRef = useRef(false);
+  useEffect(() => {
+    leaveArmedRef.current = false;
+    const t = setTimeout(() => {
+      leaveArmedRef.current = true;
+    }, 400);
+    return () => clearTimeout(t);
+  }, []);
+
+  const leaveLiveDetail = useCallback(() => {
+    if (!leaveArmedRef.current) return;
+    safeGoBack("/(tabs)/live", navigation);
+  }, [navigation]);
+
+  const {
+    id: raceId,
+    trackLayout: initialTrackLayout,
+    challengeType: paramChallengeType,
+    capacityMode: paramCapacityMode,
+    dummyRace: paramDummyRace,
+    title: paramTitle,
+    targetSteps: paramTargetSteps,
+    durationDays: paramDurationDays,
+  } = useLocalSearchParams<{
+    id: string;
+    trackLayout?: string;
+    challengeType?: string;
+    capacityMode?: string;
+    dummyRace?: string;
+    title?: string;
+    targetSteps?: string;
+    durationDays?: string;
+  }>();
+  const { user, sessionToken } = useAuth();
+  const unlimitedHint =
+    paramCapacityMode === "unlimited" ||
+    paramChallengeType === "unlimited_goal" ||
+    isUnlimitedGoalChallenge({
+      challengeType: paramChallengeType,
+      capacityMode: paramCapacityMode,
+      entryType: paramChallengeType,
+    });
+  const useDummyRace = shouldUseDummyUnlimitedRace(
+    typeof raceId === "string" ? raceId : null,
+    paramDummyRace,
+    { unlimitedChallenge: unlimitedHint && isUnlimitedGoalFrontendEnabled() },
+  );
+  // Only prefer Unlimited detail for Unlimited challenges (nav hint or known type).
+  const preferUnlimitedDetail =
+    !useDummyRace &&
+    isUnlimitedGoalFrontendEnabled() &&
+    unlimitedHint;
+  // Cache key includes userId so account A never hydrates account B's "You"/roster.
+  const initialCache =
+    raceId && typeof raceId === "string"
+      ? screenCache.getSync<LiveRaceDetailCache>(
+          liveRaceDetailCacheKey(raceId, user?.id),
+        )
+      : null;
+  const parsedTargetSteps = Number(paramTargetSteps);
+  const parsedDurationDays = Number(paramDurationDays);
+  const instantShell = useMemo(() => {
+    if (initialCache?.race || !raceId || typeof raceId !== "string") return null;
+    return buildInstantLiveRaceShell({
+      raceId,
+      unlimited: unlimitedHint && isUnlimitedGoalFrontendEnabled(),
+      trackLayout: initialTrackLayout,
+      challengeType: paramChallengeType,
+      capacityMode: paramCapacityMode,
+      title: paramTitle,
+      targetSteps: Number.isFinite(parsedTargetSteps) ? parsedTargetSteps : null,
+      durationDays: Number.isFinite(parsedDurationDays) ? parsedDurationDays : null,
+      userId: user?.id,
+      username: user?.username,
+    });
+    // Rebuild once when auth user id arrives so the shell includes "You" immediately.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [raceId, user?.id]);
+
+  // ── Mic Pass / voice-chat state ─────────────────────────────────────────────
+  // NOTE: Mic Pass is purely social — it has zero effect on steps, race
+  // progress, rank, prizes, or leaderboard logic.
+  const {
+    hasMicPass,
+    micState,
+    isSpeaking,
+    activeSpeakerIds,
+    mutedParticipantIds,
+    locallyMutedUserIds,
+    audioRoute,
+    bluetoothAvailable,
+    btDeviceName,
+    showMicMenu,
+    closeMicMenu,
+    selectSpeaker,
+    selectPhone,
+    selectBluetooth,
+    selectMute,
+    showPurchaseModal,
+    closePurchaseModal,
+    grantMicPass,
+    handleMicTap,
+    disconnectVoice,
+    notifyRaceStarted,
+    localMuteParticipant,
+    localUnmuteParticipant,
+    muteAllRemoteParticipants,
+    unmuteAllRemoteParticipants,
+    isRemoteLocallyMuted,
+    muteAllActive,
+  } = useMicPass(raceId);
+
+  // Participants who are speaking AND not muted (remote or local) — used by all speaking indicators.
+  const visibleSpeakerIds = activeSpeakerIds.filter(
+    (id) => !mutedParticipantIds.includes(id) && !isRemoteLocallyMuted(id),
+  );
+
+  const { setUserStatus } = usePresenceActions();
+  const {
+    setRaceTargetSteps,
+    resumeLiveRace,
+    setActiveRace,
+    catchUpLiveRaceSteps,
+    recordFinishedRaceStepsForWalk,
+    stopRaceStepTracking,
+    cancelRace,
+    raceVerification,
+    racePhase,
+    raceId: contextRaceId,
+  } = useRace();
+  const { userRaceSteps } = useRaceUiProgress();
+  const { resumeStepWatching, refreshTodaySteps, triggerSync } = useWalkContext();
+  const raceProgress = useRaceProgress();
+  const canonicalRaceSteps = raceProgress.raceSteps;
+  const liveRaceSteps = resolveLiveRaceDisplaySteps(canonicalRaceSteps, userRaceSteps);
+  /**
+   * Unlimited Live = dual lane:
+   *   verifiedTodaySteps  (HC/HK) — qualification / settlement
+   *   provisionalTodaySteps (sensor) — responsive live UX
+   * displayedLiveSteps = max(verified, provisional) — display only
+   */
+  const stepOwnerOk =
+    !user?.id ||
+    !raceProgress.userId ||
+    raceProgress.userId === user.id;
+  const unlimitedVerifiedSteps = Math.max(
+    0,
+    Math.floor(stepOwnerOk ? (raceProgress.verifiedTodaySteps ?? 0) : 0),
+  );
+  const unlimitedProvisionalSteps = Math.max(
+    0,
+    Math.floor(
+      stepOwnerOk
+        ? (raceProgress.provisionalSensorTodaySteps ??
+            (raceProgress.todaySteps != null &&
+            raceProgress.todaySteps > unlimitedVerifiedSteps
+              ? raceProgress.todaySteps
+              : 0))
+        : 0,
+    ),
+  );
+  // After local midnight Redux zeros verified/provisional, but a leftover
+  // sensor absolute can briefly reappear before HC/HK rebases. Never paint that
+  // leftover as "today" while verified is still 0 inside the fresh-day window.
+  const unlimitedDailySteps =
+    isFreshLocalDay() && unlimitedVerifiedSteps <= 0
+      ? 0
+      : resolveUnlimitedDisplayedLiveSteps(
+          unlimitedVerifiedSteps,
+          unlimitedProvisionalSteps,
+        );
+  const unlimitedProgressSource =
+    unlimitedProvisionalSteps > unlimitedVerifiedSteps
+      ? unlimitedVerifiedSteps > 0
+        ? "mixed"
+        : "provisional"
+      : unlimitedVerifiedSteps > 0
+        ? "verified"
+        : "unavailable";
+  const unlimitedHcPending =
+    unlimitedProvisionalSteps > unlimitedVerifiedSteps ||
+    (unlimitedVerifiedSteps <= 0 && unlimitedProvisionalSteps > 0);
+  const canonicalRank = raceProgress.rank;
+  /** True when this screen's race is already being tracked (same as regular live races). */
+  const trackingThisRace =
+    !!raceId &&
+    racePhase === "in_race" &&
+    (contextRaceId === raceId || raceProgress.activeRaceId === raceId);
+  const localStepsRef = useRef(liveRaceSteps);
+  // Classic: race session steps. Unlimited: overwrite below once isUnlimitedHeader is known.
+  localStepsRef.current = liveRaceSteps;
+  const raceResumedRef = useRef(false);
+  const raceCompletedRef = useRef(false);
+  // Throttle Unlimited's verified-daily-steps refresh so rapid roster/Pusher
+  // churn (e.g. a large-roster live race) can't fire overlapping native
+  // Health Connect / HealthKit reads — a transient failure on one of those
+  // overlapping calls was causing the live daily step count to flicker
+  // between 0 and the real total. Classic races never use this ref.
+  const unlimitedStepsRefreshGateRef = useRef(0);
+  const requestUnlimitedStepsRefresh = useCallback(() => {
+    const now = Date.now();
+    if (now - unlimitedStepsRefreshGateRef.current < 4_000) return;
+    unlimitedStepsRefreshGateRef.current = now;
+    void refreshTodaySteps({ rehydrateBackend: true, mergeNative: true });
+    void triggerSync({ force: true });
+  }, [refreshTodaySteps, triggerSync]);
+  const [finalRaceSteps, setFinalRaceSteps] = useState<number | null>(null);
+  // Declared above finalizeLiveRace so the callback can read race.targetSteps safely.
+  const [race, setRace] = useState<RaceData | null>(
+    initialCache?.race ?? instantShell?.race ?? null,
+  );
+  const { status: resultStatus, refresh: refreshResultStatus } = useRaceResultStatus(
+    typeof raceId === "string" ? raceId : null,
+    {
+      enabled: !!raceId && race?.status === "completed",
+      pollWhilePending: true,
+    },
+  );
+  const finalizeLiveRace = useCallback((
+    backendSteps?: number,
+    allResults?: Array<{ userId?: string; currentSteps?: number }>,
+  ) => {
+    if (raceCompletedRef.current) return;
+    // Unlimited multi-day challenges never use classic race finalize / walk race overlay.
+    const unlimitedFinalize =
+      isUnlimitedGoalFrontendEnabled() &&
+      !!race &&
+      isUnlimitedGoalChallenge({
+        challengeType: race.challengeType,
+        entryType: race.entryType,
+        type: race.type,
+        capacityMode: race.capacityMode,
+        maxPlayers: race.maxPlayers,
+      });
+    if (unlimitedFinalize) {
+      raceCompletedRef.current = true;
+      const daily = Math.max(
+        0,
+        Math.floor(
+          backendSteps ??
+            store.getState().raceProgress.verifiedTodaySteps ??
+            0,
+        ),
+      );
+      setFinalRaceSteps(daily);
+      stepEngineLog(
+        "RaceComplete",
+        `unlimited_challenge_end raceId=${raceId ?? "none"} dailyVerified=${daily}`,
+      );
+      if (raceId) {
+        registerUnlimitedClassicProgressBlock(raceId, {
+      challengeDayKey:
+        race?.challengeDayKey ??
+        formatChallengeDayKey(Date.now(), race?.challengeTimezone) ??
+        undefined,
+      timezone: race?.challengeTimezone ?? undefined,
+    });
+        if (
+          store.getState().raceProgress.activeRaceId === raceId ||
+          contextRaceId === raceId
+        ) {
+          stopRaceStepTracking("unlimited_challenge_end");
+          clearActiveRaceProgress("finished", { raceId });
+        }
+        void switchDailyStepsNotification(daily);
+      }
+      return;
+    }
+    raceCompletedRef.current = true;
+    const target = race?.targetSteps ?? 10_000;
+    const local = Math.max(0, Math.floor(localStepsRef.current));
+    const backend =
+      backendSteps !== undefined ? Math.max(0, Math.floor(backendSteps)) : undefined;
+    // Backend-status authority — never max(local, verified, reconciled).
+    const rp = store.getState().raceProgress;
+    const authority = resolveFinalRaceAuthority({
+      targetSteps: target,
+      backendAcceptedLiveSteps:
+        backend ?? rp.backendAcceptedLiveSteps ?? null,
+      backendReconciledSteps: rp.backendReconciledSteps,
+      reconciliationStatus: rp.reconciliationStatus,
+      localLiveSteps: local,
+    });
+    // If backend sent completion steps but status not yet finalized, treat
+    // completion payload as accepted live (provisional result UI).
+    const displaySteps = resolveFinishedRaceDisplaySteps(
+      authority.kind === "provisional" && backend !== undefined
+        ? resolveFinalRaceAuthority({
+            targetSteps: target,
+            backendAcceptedLiveSteps: backend,
+            backendReconciledSteps: rp.backendReconciledSteps,
+            reconciliationStatus:
+              rp.reconciliationStatus === "finalized"
+                ? "finalized"
+                : rp.reconciliationStatus === "review_required"
+                  ? "review_required"
+                  : "pending",
+            localLiveSteps: local,
+          })
+        : authority,
+    );
+    const reconciled = displaySteps;
+    if (authority.kind === "finalized" && authority.finalAuthoritativeSteps != null) {
+      store.dispatch(
+        raceProgressActions.setBackendReconciliation({
+          status: "finalized",
+          backendReconciledSteps: authority.finalAuthoritativeSteps,
+          finalAuthoritativeSteps: authority.finalAuthoritativeSteps,
+        }),
+      );
+    }
+    setFinalRaceSteps(reconciled);
+    stepEngineLog(
+      "RaceComplete",
+      `detected raceId=${raceId ?? "none"} finalSteps=${reconciled} localRaceSteps=${local} serverRaceSteps=${backend ?? "n/a"}`,
+    );
+    stepEngineLog(
+      "LiveRace",
+      `normalizedRaceSteps=${reconciled} raceId=${raceId ?? "none"} status=completed`,
+    );
+    stopRaceStepTracking("race_completed");
+    if (allResults?.length) {
+      setParticipants((prev) => {
+        const byUserId = new Map(
+          allResults
+            .filter((r) => r.userId)
+            .map((r) => [
+              r.userId!,
+              Math.min(target, Math.max(0, Math.floor(r.currentSteps ?? 0))),
+            ]),
+        );
+        return prev.map((p) => {
+          const server = byUserId.get(p.userId);
+          if (server !== undefined) return { ...p, currentSteps: server };
+          const isMe = p.userId === user?.id;
+          return isMe ? { ...p, currentSteps: reconciled } : p;
+        });
+      });
+    } else if (user?.id) {
+      setParticipants((prev) =>
+        prev.map((p) =>
+          p.userId === user.id ? { ...p, currentSteps: reconciled } : p,
+        ),
+      );
+    }
+    clearActiveRaceProgress("finished", {
+      preserveWalkDisplay: reconciled > 0 ? reconciled : undefined,
+      raceId: raceId ?? undefined,
+    });
+    recordFinishedRaceStepsForWalk(reconciled);
+  }, [
+    race,
+    raceId,
+    stopRaceStepTracking,
+    recordFinishedRaceStepsForWalk,
+    user?.id,
+    contextRaceId,
+  ]);
+  const sessionTokenRef = useRef(sessionToken);
+  const setRaceTargetStepsRef = useRef(setRaceTargetSteps);
+  sessionTokenRef.current = sessionToken;
+  setRaceTargetStepsRef.current = setRaceTargetSteps;
+  const loadedRaceIdRef = useRef<string | null>(null);
+  const colors             = useColors();
+  const { safeTop, safeBottom } = useSafeLayout();
+  // Floor clears Android 3-button / gesture nav and iOS home indicator on all devices.
+  const liveBottomInset = Math.max(
+    safeBottom,
+    Platform.OS === "android" ? 48 : 20,
+  );
+  const { width: screenW } = useWindowDimensions();
+  const { getAvatarVersion } = useAvatarVersionContext();
+  // Unified with @/utils/responsive getLayoutScaleFactor (phone 0.87–1.1×; tablet ≤1.25×).
+  const isTablet           = screenW >= 768;
+  const rsFactor           = getLayoutScaleFactor(screenW);
+  const rs = (n: number) => Math.round(n * rsFactor);
+
+  // ── Shared race state ─────────────────────────────────────────────────────
+  const [participants,   setParticipants]   = useState<RaceParticipant[]>(
+    initialCache?.participants?.length
+      ? initialCache.participants
+      : instantShell?.participants ?? [],
+  );
+  const [comments,       setComments]       = useState<RaceComment[]>([]);
+  const [reactionCounts, setReactionCounts] = useState<ReactionCount[]>([]);
+  // Never block the full Live Race chrome on network — paint cache/shell instantly.
+  const [loading,        setLoading]        = useState(false);
+  const [detailMissing,  setDetailMissing]  = useState(false);
+  const [cheerText,      setCheerText]      = useState("");
+  const [cheerToast,     setCheerToast]     = useState<string | null>(null);
+  const [spectatorCount, setSpectatorCount] = useState(0);
+  const cheerToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [selectedView,   setSelectedView]   = useState<"race_track" | "live_board">("race_track");
+  const [isTrackFullscreen, setIsTrackFullscreen] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  // Reason the race ended — captured from the race:completed Pusher event so
+  // we can show forfeit-specific messaging without a DB round-trip.
+  const [forfeitReason, setForfeitReason] = useState<string | null>(null);
+  /** True while others forfeit / leave and we wait for race:completed (avoids LIVE vs winner flicker). */
+  const [pendingMatchEnd, setPendingMatchEnd] = useState(false);
+  const forfeitInFlightRef = useRef(false);
+  // Coins Battle win: show a "You won X coins!" banner when race:completed fires
+  const [coinWinAmount, setCoinWinAmount] = useState<number | null>(null);
+  const [pendingCoinWinAmount, setPendingCoinWinAmount] = useState<number | null>(null);
+  // Map of userId → prizeCoins from race:completed Pusher event (all participants)
+  const [pusherPrizeMap, setPusherPrizeMap] = useState<Map<string, number>>(new Map());
+  // Queue-based top banner (replaces local finishGoalBanner overlay)
+  const { enqueueBanner } = useTopBanner();
+
+  // Promote coins-battle win banner only after verification finalized (or feature off).
+  useEffect(() => {
+    if (pendingCoinWinAmount == null || coinWinAmount != null) return;
+    const feature = resultStatus?.featureEnabled ?? isRaceVerifyFeatureEnabled();
+    const recon = resultStatus
+      ? verificationStatusToReconciliation(resultStatus.verificationStatus)
+      : store.getState().raceProgress.reconciliationStatus;
+    if (
+      canShowFinalRaceOutcome(recon, {
+        verificationFeatureEnabled: feature === false ? false : feature ?? null,
+      })
+    ) {
+      setCoinWinAmount(pendingCoinWinAmount);
+      setPendingCoinWinAmount(null);
+    }
+  }, [
+    pendingCoinWinAmount,
+    coinWinAmount,
+    resultStatus?.featureEnabled,
+    resultStatus?.verificationStatus,
+  ]);
+
+  // ── Step-delta animation for other participants ────────────────────────────
+  // prevStepsMapRef tracks the last known step count per userId (keyed by userId).
+  // stepDeltaFlash holds userId → deltaSteps for "+N" badges in the live board.
+  // Entries are cleared after 2 s so the animation is ephemeral.
+  const prevStepsMapRef   = useRef<Record<string, number>>({});
+  const stepDeltaTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const [stepDeltaFlash, setStepDeltaFlash] = useState<Record<string, number>>({});
+  const [profileUserId, setProfileUserId] = useState<string | null>(null);
+  const [profileInitialData, setProfileInitialData] = useState<PublicProfileInitialData | undefined>(undefined);
+
+  const { resetForRace, setConfirmedSteps, setConfirmedStepsBatch, getDisplaySteps } = useParticipantStepAnimator();
+
+  // ── Track-specific state ──────────────────────────────────────────────────
+  const [completionPollArmed, setCompletionPollArmed] = useState(false);
+  const [heroHeight,           setHeroHeight]           = useState(400);
+  const [isLeaderboardVisible, setIsLeaderboardVisible] = useState(true);
+  const [showReactionPicker,   setShowReactionPicker]   = useState(false);
+  const [showUnlimitedDayProgress, setShowUnlimitedDayProgress] = useState(false);
+  const [unlimitedHistoryRows, setUnlimitedHistoryRows] = useState<UnlimitedDayRow[] | null>(null);
+  const [trackLayoutId, setTrackLayoutId] = useState<TrackLayoutId>(() => {
+    if (isTrackLayoutId(initialTrackLayout)) {
+      return initialTrackLayout;
+    }
+    const cachedLayout = initialCache?.race?.trackLayout;
+    if (isTrackLayoutId(cachedLayout)) {
+      return cachedLayout;
+    }
+    return "bg";
+  });
+
+  // Apply nav/cache theme immediately when re-entering (no wait for API).
+  useEffect(() => {
+    if (isTrackLayoutId(initialTrackLayout)) {
+      setTrackLayoutId(initialTrackLayout);
+      return;
+    }
+    if (!raceId || typeof raceId !== "string") return;
+    const cached = screenCache.getSync<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId, user?.id));
+    const cachedLayout = cached?.race?.trackLayout;
+    if (isTrackLayoutId(cachedLayout)) {
+      setTrackLayoutId(cachedLayout);
+    }
+  }, [raceId, initialTrackLayout, user?.id]);
+
+  // Disk warm: after app kill, mem cache is empty — hydrate from AsyncStorage before API.
+  useEffect(() => {
+    if (!raceId || typeof raceId !== "string" || !user?.id) return;
+    if (screenCache.getSync<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId, user.id))) return;
+    let cancelled = false;
+    void screenCache.get<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId, user.id)).then((cached) => {
+      if (cancelled || !cached?.race) return;
+      setRace((prev) => prev ?? cached.race);
+      setParticipants((prev) => {
+        if (prev.length > 0) {
+          return mergeParticipantsPreservingSteps(prev, cached.participants, {
+            viewerUserId: user.id,
+            dayAware: true,
+          });
+        }
+        return cached.participants;
+      });
+      if (isTrackLayoutId(cached.race.trackLayout)) {
+        setTrackLayoutId(cached.race.trackLayout);
+      }
+      setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [raceId, user?.id]);
+
+  // Instant "You" seed for Unlimited — don't wait on detail API / late auth hydrate.
+  useEffect(() => {
+    if (!user?.id) return;
+    if (!(unlimitedHint && isUnlimitedGoalFrontendEnabled())) return;
+    setParticipants((prev) => {
+      const idx = prev.findIndex(
+        (p) =>
+          p.userId === user.id ||
+          (!!user.username &&
+            !!p.username &&
+            p.username.toLowerCase() === user.username.toLowerCase()),
+      );
+      if (idx >= 0) {
+        const cur = prev[idx]!;
+        if (cur.userId === user.id && cur.username === "You") return prev;
+        const next = prev.slice();
+        next[idx] = { ...cur, userId: user.id, username: "You" };
+        return next;
+      }
+      // Empty / single shell roster only — never invent membership on a full remote roster.
+      if (prev.length > 1) return prev;
+      return [
+        {
+          id: user.id,
+          userId: user.id,
+          currentSteps: 0,
+          status: "active",
+          rank: 1,
+          username: "You",
+          countryFlag: null,
+          avatarColor: "#00E676",
+          isHost: true,
+        },
+        ...prev,
+      ];
+    });
+  }, [user?.id, user?.username, unlimitedHint]);
+
+  const scrollRef     = useRef<ScrollView>(null);
+  const cheerScrollRef = useRef<ScrollView>(null);
+  const reactionCooldownRef = useRef<Record<string, number>>({});
+  useEffect(() => {
+    if (!raceId) return;
+    stepEngineLog(
+      "LiveRace",
+      `mounted raceId=${raceId} status=${race?.status ?? "unknown"} userId=${user?.id ?? "none"}`,
+    );
+  }, [raceId, user?.id, race?.status]);
+
+  const fetchInFlightRef = useRef(false);
+  const raceDetailFetchInFlightRef = useRef(false);
+  const currentUserId = user?.id ?? null;
+
+  // ── Countdown state ────────────────────────────────────────────────────────
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownActiveRef   = useRef(false);
+  /** Skip start countdown when opening an already-live race (rejoin). */
+  const raceAlreadyStartedRef = useRef(false);
+
+  const triggerCountdown = useCallback(() => {
+    if (raceAlreadyStartedRef.current) return;
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    countdownActiveRef.current = true;
+    setCountdown(3);
+    let n = 3;
+    countdownIntervalRef.current = setInterval(() => {
+      n -= 1;
+      if (n <= 0) {
+        clearInterval(countdownIntervalRef.current!);
+        countdownIntervalRef.current = null;
+        countdownActiveRef.current = false;
+        setCountdown(null); } else {
+        setCountdown(n); } }, 1000); }, []);
+
+  useEffect(() => () => {
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current); }, []);
+
+  // ── Animated values ───────────────────────────────────────────────────────
+  const progress          = useSharedValue(0);
+  const leaderboardProgress = useSharedValue(1);
+  const pulseOpacity      = useSharedValue(0);
+  // Mic animation
+  const micPulseOpacity   = useSharedValue(0);
+  const micPulseScale     = useSharedValue(1);
+  const micConnRot        = useSharedValue(0);
+  const leaderboardW      = isTablet
+    ? Math.min(300, Math.max(220, screenW * 0.32))
+    : Math.min(240, Math.max(200, screenW * 0.52));
+  const leaderboardWShared = useSharedValue(leaderboardW);
+
+  // Prefetch as soon as theme code is known (nav param) — don't wait for race JSON.
+  useEffect(() => {
+    prefetchTrackTheme(
+      {
+        code: trackLayoutId,
+        trackLayout: trackLayoutId,
+        imageSet: race?.imageSet ?? null,
+        imageUrl: race?.imageUrl ?? null,
+        assetVersion: race?.assetVersion,
+      },
+      "full",
+    );
+  }, [trackLayoutId, race?.imageSet, race?.imageUrl, race?.assetVersion]);
+
+  // Kick off prefetch immediately on first paint for nav-param themes.
+  useEffect(() => {
+    if (isTrackLayoutId(initialTrackLayout)) {
+      prefetchTrackTheme({ code: initialTrackLayout, trackLayout: initialTrackLayout }, "full");
+    }
+  }, [initialTrackLayout]);
+
+  useEffect(() => { leaderboardWShared.value = leaderboardW; }, [leaderboardW, leaderboardWShared]);
+  useEffect(() => {
+    leaderboardProgress.value = withTiming(isLeaderboardVisible ? 1 : 0, { duration: 260 }); }, [isLeaderboardVisible, leaderboardProgress]);
+
+  const trackAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: -8 * leaderboardProgress.value },
+      { scale: 1.02 - 0.035 * leaderboardProgress.value },
+    ], }));
+  const leaderboardAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: leaderboardProgress.value,
+    transform: [{ translateX: (1 - leaderboardProgress.value) * leaderboardWShared.value }], }));
+  const progressBarStyle = useAnimatedStyle(() => ({
+    width: `${Math.min(progress.value * 100, 100)}%`, }));
+  const pulseStyle = useAnimatedStyle(() => ({ opacity: pulseOpacity.value }));
+  const micPulseRingStyle = useAnimatedStyle(() => ({
+    opacity:   micPulseOpacity.value,
+    transform: [{ scale: micPulseScale.value }],
+  }));
+  const micConnStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${micConnRot.value}deg` }],
+  }));
+
+  useEffect(() => {
+    if (loading) {
+      pulseOpacity.value = withRepeat(
+        withSequence(withTiming(1, { duration: 550 }), withTiming(0.25, { duration: 550 })),
+        -1, false,
+      ); } else {
+      cancelAnimation(pulseOpacity);
+      pulseOpacity.value = withTiming(0, { duration: 200 }); } }, [loading, pulseOpacity]);
+
+  // Mic pulse ring — slow gentle pulse while listening, fast energetic pulse while speaking.
+  useEffect(() => {
+    cancelAnimation(micPulseOpacity);
+    cancelAnimation(micPulseScale);
+    if (micState === "active") {
+      if (isSpeaking) {
+        // Fast energetic burst when actively speaking
+        micPulseOpacity.value = withRepeat(
+          withSequence(
+            withTiming(0.9,  { duration: 190, easing: Easing.out(Easing.quad) }),
+            withTiming(0.0,  { duration: 280, easing: Easing.in(Easing.quad) }),
+          ), -1, false,
+        );
+        micPulseScale.value = withRepeat(
+          withSequence(
+            withTiming(2.1,  { duration: 190, easing: Easing.out(Easing.quad) }),
+            withTiming(1.0,  { duration: 280, easing: Easing.in(Easing.quad) }),
+          ), -1, false,
+        );
+      } else {
+        // Slow relaxed pulse while listening
+        micPulseOpacity.value = withRepeat(
+          withSequence(
+            withTiming(0.75, { duration: 700, easing: Easing.out(Easing.quad) }),
+            withTiming(0.0,  { duration: 900, easing: Easing.in(Easing.quad) }),
+          ), -1, false,
+        );
+        micPulseScale.value = withRepeat(
+          withSequence(
+            withTiming(1.5,  { duration: 700, easing: Easing.out(Easing.quad) }),
+            withTiming(1.0,  { duration: 900, easing: Easing.in(Easing.quad) }),
+          ), -1, false,
+        );
+      }
+    } else {
+      micPulseOpacity.value = withTiming(0, { duration: 150 });
+      micPulseScale.value   = withTiming(1, { duration: 150 });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [micState, isSpeaking]);
+
+  // Connecting spinner rotation.
+  useEffect(() => {
+    if (micState === "connecting") {
+      micConnRot.value = withRepeat(
+        withTiming(360, { duration: 850, easing: Easing.linear }),
+        -1,
+        false,
+      );
+    } else {
+      cancelAnimation(micConnRot);
+      micConnRot.value = 0;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [micState]);
+
+  // ── Derived from race/participants ─────────────────────────────────────────
+  // Match regular live races: once RaceContext is tracking this id, treat as LIVE
+  // even if Unlimited detail briefly still says "waiting".
+  const isCompleted = race?.status === "completed";
+  const isActive =
+    !isCompleted &&
+    (race?.status === "in_progress" || trackingThisRace);
+  const isFree      = race?.entryType === "free";
+  const isSponsored = race?.type === "sponsored";
+  const isUnlimitedHeader =
+    isUnlimitedGoalFrontendEnabled() &&
+    !!race &&
+    isUnlimitedGoalChallenge({
+      challengeType: race.challengeType,
+      entryType: race.entryType,
+      type: race.type,
+      capacityMode: race.capacityMode,
+      maxPlayers: race.maxPlayers,
+    });
+
+  const currentParticipant = useMemo(
+    () => participants.find((p) =>
+      p.userId === user?.id ||
+      (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase()),
+    ) ?? null,
+    [participants, user?.id, user?.username],
+  );
+
+  /**
+   * Multi-day end strip — alternates with tagline every 3s in the same slot.
+   * Unlimited: computed from the viewer's own locked-timezone day schedule
+   * (never Math.ceil against the shared challengeEndAt/device-now pair, which
+   * can be wrong across DST and ignores per-participant timezone locking).
+   *
+   * Also used below to gate every self-steps consumer (progress bar,
+   * localStepsRef, participant-list self row) on the viewer's OWN
+   * `viewerStatus` — never the race-level `isActive` flag, which flips true as
+   * soon as ANY participant's local midnight passes. Without this, a
+   * participant whose own challenge day hasn't started yet (e.g. an earlier
+   * timezone than the host) would see their ordinary daily HC/HK step count
+   * (unrelated to this challenge) merged into "today's goal progress".
+   */
+  const unlimitedTaglineSchedule = useMemo(() => {
+    if (!isUnlimitedHeader || !race) return null;
+    return computeUnlimitedViewerSchedule(
+      {
+        startAtUtc: race.scheduledStartAt ?? race.startedAt ?? null,
+        challengeTimezone: race.challengeTimezone ?? null,
+        durationDays: race.challengeDurationDays ?? null,
+        dailyGoalSteps: race.targetSteps,
+        challengeStatus: race.status,
+      },
+      {
+        liveDay: currentParticipant
+          ? {
+              timezone: currentParticipant.timezone,
+              dayNumber: currentParticipant.dayNumber,
+              localDate: currentParticipant.challengeDayKey,
+              dailyGoalSteps: currentParticipant.dailyGoalSteps,
+              qualificationStatus: currentParticipant.qualificationStatus,
+              completedDays: currentParticipant.completedDays,
+            }
+          : null,
+        fallbackTimezone: getDeviceTimezone(),
+      },
+    );
+  }, [
+    isUnlimitedHeader,
+    race?.scheduledStartAt,
+    race?.startedAt,
+    race?.challengeTimezone,
+    race?.challengeDurationDays,
+    race?.targetSteps,
+    race?.status,
+    currentParticipant,
+  ]);
+  /** True once the viewer's OWN local day has begun (or for classic races, always true). */
+  const unlimitedViewerDayStarted =
+    !isUnlimitedHeader || unlimitedTaglineSchedule?.viewerStatus !== "scheduled";
+  // Keep localStepsRef aligned with the correct progress lane for Pusher / finalize.
+  localStepsRef.current =
+    isUnlimitedHeader
+      ? (unlimitedViewerDayStarted ? unlimitedDailySteps : 0)
+      : liveRaceSteps;
+
+  // Unlimited: block classic progress POSTs and keep walk sync active for the whole screen life.
+  useEffect(() => {
+    if (!raceId || !isUnlimitedHeader) return;
+    const liveDay = resolveUnlimitedLiveDayContext({
+      participantChallengeDayKey: currentParticipant?.challengeDayKey,
+      participantTimezone: currentParticipant?.timezone,
+      raceChallengeDayKey: race?.challengeDayKey,
+      raceChallengeTimezone: race?.challengeTimezone,
+      deviceTimezone: getDeviceTimezone(),
+      formattedDeviceDayKey:
+        formatChallengeDayKey(
+          Date.now(),
+          currentParticipant?.timezone ?? race?.challengeTimezone ?? getDeviceTimezone(),
+        ) ?? undefined,
+    });
+    registerUnlimitedClassicProgressBlock(raceId, {
+      challengeDayKey: liveDay?.challengeDayKey,
+      timezone: liveDay?.timezone,
+    });
+    setWalkBackendSyncPaused(false);
+    // Drop classic RaceContext sensor tracking only — do NOT clearActiveRaceProgress
+    // here. Unlimited now owns the same live-race ongoing notification tray as
+    // classic/sponsored once the viewer's day has started.
+    if (
+      racePhase === "in_race" &&
+      (contextRaceId === raceId ||
+        store.getState().raceProgress.activeRaceId === raceId)
+    ) {
+      stopRaceStepTracking("unlimited_daily_mode");
+    }
+    void (async () => {
+      // Shell-first: independent init in parallel — do not block interactivity on sync.
+      await Promise.allSettled([
+        (async () => {
+          try {
+            const { startHybridLiveDailyDisplay } = await import(
+              "@/services/steps/hybridLiveDailyDisplay"
+            );
+            await startHybridLiveDailyDisplay();
+          } catch {
+            /* optional */
+          }
+        })(),
+        handleMidnightRolloverIfNeeded().catch(() => false),
+        refreshTodaySteps({ rehydrateBackend: true, mergeNative: true }).catch(
+          () => undefined,
+        ),
+      ]);
+      // Background reconcile — never gate first paint on this POST.
+      void triggerSync({ force: true }).catch(() => undefined);
+      const rp = store.getState().raceProgress;
+      const notifSteps =
+        unlimitedViewerDayStarted && !(isFreshLocalDay() && (rp.verifiedTodaySteps ?? 0) <= 0)
+          ? resolveWalkNotificationSteps({
+              verifiedTodaySteps: rp.verifiedTodaySteps ?? 0,
+              provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
+              todaySteps: rp.todaySteps,
+            })
+          : 0;
+      if (unlimitedViewerDayStarted && user?.id) {
+        ensureActiveRaceInStore({
+          raceId,
+          raceStartTime: new Date(
+            race?.startedAt ?? race?.scheduledStartAt ?? Date.now(),
+          ).toISOString(),
+          userId: user.id,
+          username: user.username ?? "Runner",
+          goalSteps: race?.targetSteps ?? 0,
+          totalParticipants: race?.currentPlayers ?? participants.length,
+          bootSteps: notifSteps,
+          participantConfirmed: true,
+          unlimitedDailyMode: true,
+          challengeEndAt: race?.challengeEndAt ?? undefined,
+        });
+        updateRankFromBackend({
+          raceSteps: notifSteps,
+          goalSteps: race?.targetSteps ?? undefined,
+          totalParticipants: race?.currentPlayers ?? participants.length,
+        });
+      } else {
+        // Before the viewer's own day starts, keep the ordinary daily walk tray.
+        void switchDailyStepsNotification(0, race?.targetSteps);
+      }
+      const dayKey = liveDay?.challengeDayKey ?? "";
+      const dayTz =
+        liveDay?.timezone ||
+        Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const provisional = Math.max(
+        0,
+        Math.floor(rp.provisionalSensorTodaySteps ?? 0),
+      );
+      const verified = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
+      if (
+        unlimitedViewerDayStarted &&
+        dayKey &&
+        provisional > 0 &&
+        !(verified > 0 && provisional > verified + 250)
+      ) {
+        void uploadUnlimitedProvisionalProgress({
+          challengeId: raceId,
+          challengeDayKey: dayKey,
+          timezone: dayTz,
+          provisionalCumulativeSteps: Math.max(verified, provisional),
+        });
+      }
+    })();
+    // Periodically refresh HC/HK, sync verified, and keep the live-race tray
+    // notification in sync with today's daily steps while Live Detail is open.
+    const syncIv = setInterval(() => {
+      void (async () => {
+        await handleMidnightRolloverIfNeeded().catch(() => false);
+        await refreshTodaySteps({ rehydrateBackend: false, mergeNative: true }).catch(
+          () => undefined,
+        );
+        await triggerSync({ force: true }).catch(() => undefined);
+        const rp = store.getState().raceProgress;
+        const verified = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
+        const provisional = Math.max(
+          0,
+          Math.floor(rp.provisionalSensorTodaySteps ?? 0),
+        );
+        const notifSteps =
+          unlimitedViewerDayStarted && !(isFreshLocalDay() && verified <= 0)
+            ? resolveWalkNotificationSteps({
+                verifiedTodaySteps: verified,
+                provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
+                todaySteps: rp.todaySteps,
+              })
+            : 0;
+        if (unlimitedViewerDayStarted && user?.id) {
+          if (store.getState().raceProgress.activeRaceId !== raceId) {
+            ensureActiveRaceInStore({
+              raceId,
+              raceStartTime: new Date(
+                race?.startedAt ?? race?.scheduledStartAt ?? Date.now(),
+              ).toISOString(),
+              userId: user.id,
+              username: user.username ?? "Runner",
+              goalSteps: race?.targetSteps ?? 0,
+              totalParticipants: race?.currentPlayers ?? participants.length,
+              bootSteps: notifSteps,
+              participantConfirmed: true,
+              unlimitedDailyMode: true,
+              challengeEndAt: race?.challengeEndAt ?? undefined,
+            });
+          }
+          updateRankFromBackend({
+            raceSteps: notifSteps,
+            goalSteps: race?.targetSteps ?? undefined,
+            totalParticipants: race?.currentPlayers ?? participants.length,
+          });
+        } else {
+          void switchDailyStepsNotification(notifSteps, race?.targetSteps);
+        }
+        const tickDay = resolveUnlimitedLiveDayContext({
+          participantChallengeDayKey: currentParticipant?.challengeDayKey,
+          participantTimezone: currentParticipant?.timezone,
+          raceChallengeDayKey: race?.challengeDayKey,
+          raceChallengeTimezone: race?.challengeTimezone,
+          deviceTimezone: getDeviceTimezone(),
+          formattedDeviceDayKey:
+            formatChallengeDayKey(
+              Date.now(),
+              currentParticipant?.timezone ?? race?.challengeTimezone ?? getDeviceTimezone(),
+            ) ?? undefined,
+        });
+        const dayKey = tickDay?.challengeDayKey ?? "";
+        const dayTz =
+          tickDay?.timezone ||
+          Intl.DateTimeFormat().resolvedOptions().timeZone;
+        // Upload when provisional leads verified (same gate as first upload).
+        if (
+          unlimitedViewerDayStarted &&
+          dayKey &&
+          provisional > 0 &&
+          !(verified > 0 && provisional > verified + 250)
+        ) {
+          void uploadUnlimitedProvisionalProgress({
+            challengeId: raceId,
+            challengeDayKey: dayKey,
+            timezone: dayTz,
+            provisionalCumulativeSteps: Math.max(verified, provisional),
+          });
+        }
+      })();
+    }, 5_000);
+    return () => {
+      clearInterval(syncIv);
+      // Keep classic progress blocked after unmount — Unlimited IDs must never
+      // hit POST /api/races/:id/progress for the rest of this session.
+    };
+  }, [
+    raceId,
+    isUnlimitedHeader,
+    refreshTodaySteps,
+    triggerSync,
+    racePhase,
+    contextRaceId,
+    stopRaceStepTracking,
+    currentParticipant?.challengeDayKey,
+    currentParticipant?.timezone,
+    race?.challengeDayKey,
+    race?.challengeTimezone,
+    race?.targetSteps,
+    race?.startedAt,
+    race?.scheduledStartAt,
+    race?.challengeEndAt,
+    race?.currentPlayers,
+    unlimitedViewerDayStarted,
+    user?.id,
+    user?.username,
+    participants.length,
+  ]);
+
+  // Keep global Live header "racing" count aligned while this screen is open.
+  useEffect(() => {
+    if (!raceId || useDummyRace) return;
+    if (isActive) {
+      setUserStatus("racing");
+      return () => setUserStatus("online");
+    }
+    setUserStatus("online");
+    return undefined;
+  }, [raceId, useDummyRace, isActive, setUserStatus]);
+
+  const resolveParticipantRaceSteps = useCallback(
+    (p: RaceParticipant, isMe = false): number => {
+      if (isMe && isCompleted && finalRaceSteps !== null) return finalRaceSteps;
+      // Unlimited: local avatar uses daily HC/HK totals, not classic raceSteps —
+      // but only once the viewer's OWN local day has started (see unlimitedViewerDayStarted).
+      if (isMe && isUnlimitedHeader && (isActive || race?.status === "in_progress")) {
+        return unlimitedViewerDayStarted ? unlimitedDailySteps : 0;
+      }
+      // Own steps always come from the live tracker while this race is active —
+      // same as classic Live Race (never show stale API 0 for self).
+      if (isMe && (isActive || trackingThisRace)) return liveRaceSteps;
+      return Math.max(0, p.currentSteps);
+    },
+    [
+      isActive,
+      isCompleted,
+      finalRaceSteps,
+      liveRaceSteps,
+      trackingThisRace,
+      isUnlimitedHeader,
+      unlimitedDailySteps,
+      unlimitedViewerDayStarted,
+      race?.status,
+    ],
+  );
+
+  const startedAtMs   = race?.startedAt   ? new Date(race.startedAt).getTime()   : null;
+  const completedAtMs = race?.completedAt ? new Date(race.completedAt).getTime() : null;
+
+  // Clock display is isolated in RaceClockInfoBar (useTickingNow).
+  // Only arm completion-poll once elapsed crosses 60s — no parent 1s setState.
+  useEffect(() => {
+    if (!isActive || isCompleted || !startedAtMs) {
+      setCompletionPollArmed(false);
+      return;
+    }
+    const armIfDue = () => {
+      const elapsedS = Math.floor((Date.now() - startedAtMs) / 1000);
+      if (elapsedS >= 60) setCompletionPollArmed(true);
+    };
+    armIfDue();
+    if (completionPollArmed) return;
+    const id = setInterval(armIfDue, 1000);
+    return () => clearInterval(id);
+  }, [isActive, isCompleted, startedAtMs, completionPollArmed]);
+
+  useEffect(() => { if (!isActive) setShowReactionPicker(false); }, [isActive]);
+  // Disconnect voice when race ends — never keep mic active after the race.
+  useEffect(() => { if (!isActive) disconnectVoice(); }, [isActive, disconnectVoice]);
+  // Auto-connect all participants as listeners when race becomes active so
+  // everyone hears voice without needing to tap the mic button.
+  useEffect(() => { if (isActive) notifyRaceStarted(); }, [isActive, notifyRaceStarted]);
+  // Close all transient modals when navigating away — prevents stuck overlays.
+  useFocusEffect(useCallback(() => {
+    return () => {
+      closeMicMenu();
+      setShowReactionPicker(false);
+    };
+  }, [closeMicMenu]));
+  const raceTitle   = race?.title ?? "Live Race";
+  const headerRaceTitle = isSponsored
+    ? localizeSponsoredEventTitle(raceTitle, race?.startedAt)
+    : isUnlimitedHeader
+      ? UNLIMITED_COPY.challengeName
+      : raceTitle.replace(/^LIVE\s+/i, "");
+
+  const unlimitedLiveViewTrackedRef = useRef(false);
+  useEffect(() => {
+    if (!isUnlimitedHeader || !raceId || unlimitedLiveViewTrackedRef.current) return;
+    unlimitedLiveViewTrackedRef.current = true;
+    trackEvent("unlimited_live_race_viewed", { raceId });
+  }, [isUnlimitedHeader, raceId]);
+
+  const statusLabel = isCompleted ? "FINISHED" : isActive ? "LIVE" : race ? "WAITING" : "NO RACE";
+
+  const challengeEndsLabel = useMemo(() => {
+    if (isUnlimitedHeader) {
+      if (!unlimitedTaglineSchedule) return null;
+      const { remainingDaysAfterToday, currentDayIndex, durationDays } = unlimitedTaglineSchedule;
+      if (durationDays < 2) return null;
+      return remainingDaysAfterToday > 0
+        ? `${remainingDaysAfterToday} ${remainingDaysAfterToday === 1 ? "day" : "days"} left after today • Day ${currentDayIndex} of ${durationDays}`
+        : `Final day • Day ${currentDayIndex} of ${durationDays}`;
+    }
+    return getChallengeDaysLeftLabel(
+        {
+          challengeEndAt: race?.challengeEndAt,
+          challengeDurationDays: race?.challengeDurationDays,
+          startedAt: race?.startedAt ?? race?.createdAt,
+          targetSteps: race?.targetSteps,
+          timeLeftSeconds: race?.timeLeftSeconds,
+          daysLeft: race?.daysLeft,
+          hoursLeft: race?.hoursLeft,
+          timeLeftLabel: race?.timeLeftLabel ?? race?.remainingLabel,
+        },
+        Date.now(),
+      );
+  }, [
+    isUnlimitedHeader,
+    unlimitedTaglineSchedule,
+    race?.challengeEndAt,
+    race?.challengeDurationDays,
+    race?.startedAt,
+    race?.createdAt,
+    race?.targetSteps,
+    race?.timeLeftSeconds,
+    race?.daysLeft,
+    race?.hoursLeft,
+    race?.timeLeftLabel,
+    race?.remainingLabel,
+  ]);
+
+  const sponsoredStartIso = useMemo(() => {
+    if (!isSponsored) return null;
+    return race?.scheduledStartAt ?? race?.startedAt ?? null;
+  }, [isSponsored, race?.scheduledStartAt, race?.startedAt]);
+
+  const sponsoredEndIso = useMemo(() => {
+    if (!isSponsored) return null;
+    if (race?.endsAt) return race.endsAt;
+    const start = race?.startedAt ?? race?.scheduledStartAt;
+    if (!start) return null;
+    return new Date(new Date(start).getTime() + 3 * 60 * 60 * 1000).toISOString();
+  }, [isSponsored, race?.endsAt, race?.startedAt, race?.scheduledStartAt]);
+
+  // Freeze Start time / ends label once per race for the tagline rotator.
+  const taglineFrozenRaceIdRef = useRef<string | null>(null);
+  const taglineFrozenRef = useRef<LiveTaglineAlt | null>(null);
+  const raceKeyForTagline = race?.id != null ? String(race.id) : null;
+
+  if (isCompleted) {
+    taglineFrozenRaceIdRef.current = null;
+    taglineFrozenRef.current = null;
+  } else if (
+    raceKeyForTagline != null &&
+    taglineFrozenRaceIdRef.current != null &&
+    taglineFrozenRaceIdRef.current !== raceKeyForTagline
+  ) {
+    taglineFrozenRaceIdRef.current = null;
+    taglineFrozenRef.current = null;
+  } else if (
+    raceKeyForTagline != null &&
+    taglineFrozenRef.current != null &&
+    taglineFrozenRaceIdRef.current == null
+  ) {
+    // Race id arrived after freeze — attach without dropping Start time.
+    taglineFrozenRaceIdRef.current = raceKeyForTagline;
+  }
+
+  if (!isCompleted && !taglineFrozenRef.current) {
+    let frozen: LiveTaglineAlt | null = null;
+    if (isSponsored) {
+      if (sponsoredStartIso) {
+        frozen = {
+          kind: "sponsored",
+          start: sponsoredStartIso,
+          end: sponsoredEndIso,
+        };
+      }
+    } else if (challengeEndsLabel) {
+      frozen = { kind: "ends", label: challengeEndsLabel };
+    }
+    if (frozen) {
+      taglineFrozenRaceIdRef.current = raceKeyForTagline;
+      taglineFrozenRef.current = frozen;
+    }
+  }
+
+  const taglineAlt = !isCompleted && taglineFrozenRef.current ? taglineFrozenRef.current : null;
+
+  // Feed confirmed step values into the animator (local user + Pusher/backend).
+  // Batched into a single state commit — with a large Unlimited roster (100+),
+  // one setState per participant made the live screen feel laggy / hard to
+  // scroll or switch tabs.
+  useEffect(() => {
+    if (!isActive && !isCompleted) return;
+    const entries: Array<{ userId: string; steps: number; allowRollback?: boolean; instant?: boolean }> = [];
+    for (const p of participants) {
+      const isMe =
+        p.userId === user?.id ||
+        (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase());
+      const confirmed = resolveParticipantRaceSteps(p, isMe);
+      entries.push({
+        userId: p.userId,
+        steps: confirmed,
+        instant: isMe && isUnlimitedHeader,
+        allowRollback: isMe && isUnlimitedHeader,
+      });
+      if (isMe) {
+        stepEngineLog(
+          "LiveRace",
+          `renderedHeaderSteps=${confirmed} localRaceSteps=${liveRaceSteps} serverRaceSteps=${p.currentSteps} unlimitedVerified=${unlimitedDailySteps}`,
+        );
+      }
+    }
+    setConfirmedStepsBatch(entries);
+  }, [
+    participants,
+    liveRaceSteps,
+    isActive,
+    isCompleted,
+    user?.id,
+    user?.username,
+    setConfirmedStepsBatch,
+    resolveParticipantRaceSteps,
+    isUnlimitedHeader,
+    unlimitedDailySteps,
+  ]);
+
+  const sortedPlayers = useMemo(() => {
+    // Deduplicate by both participant id AND userId — same user can appear
+    // with two different participant rows if a reconnect creates a duplicate.
+    const seenIds = new Set<string>();
+    const seenUserIds = new Set<string>();
+    const unique = (
+      isUnlimitedHeader
+        ? filterUnlimitedParticipantsForDisplay(participants)
+        : filterRaceParticipantsForDisplay(participants)
+    ).filter((p) => {
+      if (seenIds.has(p.id) || seenUserIds.has(p.userId)) return false;
+      seenIds.add(p.id);
+      seenUserIds.add(p.userId);
+      return true;
+    });
+    const hostId = race?.creatorId;
+    // For the current user, substitute real-time local steps so that the sort
+    // order, Track Position rank label, and side panel step count all match
+    // the Race Track avatar position — one shared source of truth.
+    const withEffective = unique.map((p) => {
+      const isMe = p.userId === user?.id ||
+        (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase());
+      const effectiveSteps = resolveParticipantRaceSteps(p, isMe);
+      const displaySteps = getDisplaySteps(p.userId, effectiveSteps);
+      const isHost = p.isHost || (!!hostId && p.userId === hostId);
+      return { p, isMe, effectiveSteps: displaySteps, isHost };
+    });
+    // True step standings (for rank number) vs display order (host pinned on top).
+    const byStepsOnly = [...withEffective].sort((a, b) => {
+      if (b.effectiveSteps !== a.effectiveSteps) return b.effectiveSteps - a.effectiveSteps;
+      return a.p.userId.localeCompare(b.p.userId);
+    });
+    const stepRankByUserId = new Map(
+      byStepsOnly.map((row, i) => [row.p.userId, i + 1] as const),
+    );
+    const sorted = [...withEffective].sort((a, b) => {
+      if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
+      return b.effectiveSteps - a.effectiveSteps;
+    });
+    return sorted.map<Player>(({ p, isMe, effectiveSteps, isHost }) => {
+      const stepRank = stepRankByUserId.get(p.userId) ?? 0;
+      const rank =
+        isMe && isActive && canonicalRank != null && canonicalRank > 0
+          ? canonicalRank
+          : stepRank > 0
+            ? stepRank
+            : p.rank && p.rank > 0
+              ? p.rank
+              : 1;
+      const username = p.username || "Runner";
+      const avatarAccent = accentColorForUser(p.userId, p.avatarColor);
+      return {
+        id: p.id, userId: p.userId, rank,
+        name: isMe ? "You" : username,
+        steps: effectiveSteps,
+        isMe,
+        // Profile ring = per-user accent (You = green). Avoid identical dummy avatarColors.
+        rankColor: p.status === "forfeited"
+          ? "#FF4444"
+          : isMe
+            ? RANK_CURRENT_USER_GREEN
+            : avatarAccent,
+        initial: username.slice(0, 1).toUpperCase() || "R",
+        country: p.countryFlag ?? undefined,
+        isHost,
+        isForfeited: p.status === "forfeited",
+        // Only build an image URI when the profile actually has a photo — otherwise
+        // /api/profile/avatar 404s and RN Image paints a blank/black circle over the letter.
+        avatarUrl:
+          p.avatarUrl && p.userId
+            ? `${getApiBase()}/api/profile/avatar/${p.userId}?v=${p.avatarVersion ?? 0}`
+            : null,
+        avatarVersion: p.avatarVersion ?? null,
+      };
+    });
+  }, [participants, user?.id, user?.username, isActive, liveRaceSteps, canonicalRank, getDisplaySteps, resolveParticipantRaceSteps, race?.creatorId, isUnlimitedHeader]);
+
+  /** Drop monotonic step memory when the signed-in user changes (logout → other account). */
+  useEffect(() => {
+    prevStepsMapRef.current = {};
+    if (raceId) resetForRace(raceId);
+  }, [user?.id, raceId, resetForRace]);
+  const trackPlayers = useMemo(() => {
+    const byStepsDesc = [...sortedPlayers].sort((a, b) => {
+      if (b.steps !== a.steps) return b.steps - a.steps;
+      return a.id.localeCompare(b.id);
+    });
+    return selectTopParticipantsForRaceTrack(byStepsDesc, LIVE_RACE_TRACK_TOP_N);
+  }, [sortedPlayers]);
+
+  /** Side panel / mute list: Unlimited may list ~100; other races cap at 10. */
+  const panelPlayers = useMemo(() => {
+    if (isUnlimitedHeader) return sortedPlayers;
+    return sortedPlayers.slice(0, LIVE_RACE_TRACK_TOP_N);
+  }, [sortedPlayers, isUnlimitedHeader]);
+
+  const myPlayer = useMemo(
+    () => sortedPlayers.find((p) => p.isMe) ?? trackPlayers[0] ?? sortedPlayers[0] ?? null,
+    [sortedPlayers, trackPlayers],
+  );
+
+  // Leave / forfeit / DQ / complete: stop participant-only live race notification for this race.
+  useEffect(() => {
+    if (!raceId || !user?.id || !currentParticipant) return;
+    if (findEligibleLiveRaceParticipant([currentParticipant], user)) return;
+    void suppressLiveRaceNotification(raceId, `participant_${currentParticipant.status ?? "ineligible"}`);
+    stopRaceStepTracking(`participant_${currentParticipant.status ?? "ineligible"}`);
+  }, [raceId, user?.id, user?.username, currentParticipant, currentParticipant?.status, stopRaceStepTracking]);
+
+  // Unlimited Results: never auto-navigate from Live — only via "View Results" tap.
+
+  // Prefetch verified per-day history as soon as Unlimited Live mounts (modal opens instantly).
+  useEffect(() => {
+    if (!isUnlimitedHeader || !raceId) return;
+    let cancelled = false;
+    void fetchUnlimitedDailyHistory(raceId, currentUserId).then((payload) => {
+      if (cancelled) return;
+      const rows = dayRowsFromDailyHistory(payload, {
+        schedule: unlimitedTaglineSchedule ?? null,
+        todaySteps: unlimitedDailySteps,
+      });
+      if (rows) setUnlimitedHistoryRows(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isUnlimitedHeader,
+    raceId,
+    currentUserId,
+    unlimitedTaglineSchedule,
+    unlimitedDailySteps,
+  ]);
+
+  const winners = useMemo(() => {
+    const nonForfeited = participants.filter((p) => p.status !== "forfeited");
+    if (!nonForfeited.length) return [];
+
+    if (isCompleted) {
+      // Completed race: only show prize-eligible winners (1 for 2p, 2 for 3p, 3 for 4p+).
+      // Non-prize ranks should not appear with "Winner" badges or coin amounts.
+      const winnerSlots = getWinnerCount(race?.currentPlayers ?? participants.length);
+      const limit = winnerSlots > 0 ? winnerSlots : 3; // graceful fallback
+      const withRank = nonForfeited.filter((p) => p.rank != null);
+      if (withRank.length > 0) {
+        return [...withRank]
+          .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
+          .slice(0, limit);
+      }
+      // Fallback when results not yet written: top-N by steps
+      return [...nonForfeited]
+        .sort((a, b) => {
+          const aMe = a.userId === user?.id;
+          const bMe = b.userId === user?.id;
+          return resolveParticipantRaceSteps(b, bMe) - resolveParticipantRaceSteps(a, aMe);
+        })
+        .slice(0, limit);
+    }
+
+    // Live race: show top-step players (tied for lead)
+    const sorted = [...nonForfeited].sort((a, b) => {
+      const aMe = a.userId === user?.id;
+      const bMe = b.userId === user?.id;
+      return resolveParticipantRaceSteps(b, bMe) - resolveParticipantRaceSteps(a, aMe);
+    });
+    const topSteps = sorted[0] ? resolveParticipantRaceSteps(sorted[0], sorted[0].userId === user?.id) : 0;
+    const seenIds = new Set<string>();
+    return sorted.filter((p) => {
+      const isMe = p.userId === user?.id;
+      const steps = resolveParticipantRaceSteps(p, isMe);
+      if (steps !== topSteps) return false;
+      if (seenIds.has(p.userId)) return false;
+      seenIds.add(p.userId);
+      return true;
+    });
+  }, [participants, isCompleted, race?.currentPlayers, user?.id, resolveParticipantRaceSteps]);
+
+  // For the local user, prefer the real-time local step count.
+  // Classic: RaceContext raceSteps. Unlimited: Walk/HC daily totals, but only
+  // once the VIEWER'S OWN local day has started — the race-level `isActive`
+  // flag alone flips true as soon as any participant's midnight passes, which
+  // would otherwise show this viewer's ordinary (unrelated) daily step count
+  // before their own Day 1 has actually begun.
+  const mySteps = myPlayer?.isMe
+    ? (isActive
+        ? (isUnlimitedHeader
+            ? (unlimitedViewerDayStarted ? unlimitedDailySteps : 0)
+            : liveRaceSteps)
+        : (finalRaceSteps ?? myPlayer.steps ?? 0))
+    : (myPlayer?.steps ?? 0);
+  const myProgress = Math.min(mySteps / Math.max(race?.targetSteps ?? 1, 1), 1);
+  const trackPositionText = myPlayer
+    ? isUnlimitedHeader
+      ? `#${canonicalRank ?? myPlayer.rank} · ${formatPlayerCountDisplay({
+          current:
+            race?.currentPlayers ??
+            participants.length ??
+            raceProgress.totalParticipants ??
+            Math.max(sortedPlayers.length, 1),
+          isUnlimited: true,
+        })}`
+      : `#${canonicalRank ?? myPlayer.rank} of ${race?.currentPlayers ?? participants.length ?? raceProgress.totalParticipants ?? Math.max(sortedPlayers.length, 1)}`
+    : "Waiting";
+  const trackStatusText = isCompleted ? "FINISHED" : isActive ? "LIVE" : "WAITING";
+
+  useEffect(() => {
+    progress.value = withTiming(myProgress, { duration: 900 }); }, [myProgress, progress]);
+
+  // ── TrackMove debug (race-level) ──────────────────────────────────────────
+  useEffect(() => {
+    if (!race) return;
+    const bottomY = heroHeight * 0.87;
+    const fzY = getFinishZoneY(trackLayoutId, heroHeight);
+    if (__DEV__) console.log(
+      `[TrackMove] raceId:${raceId} theme:${trackLayoutId}` +
+      ` targetSteps:${race.targetSteps}` +
+      ` startY:${bottomY.toFixed(1)} finishZoneY:${fzY.toFixed(1)} finishFrac:${(TRACK_FINISH_ZONE[trackLayoutId] ?? DEFAULT_FINISH_ZONE_FRAC).toFixed(2)}`,
+    );
+  }, [raceId, race?.id, race?.targetSteps, trackLayoutId, heroHeight]);
+
+  // ── Data fetch (race + participants only — does NOT reset comments) ──────────
+  const hydrateInProgressRace = useCallback((
+    raceData: RaceData | null | undefined,
+    parts: RaceParticipant[],
+  ) => {
+    if (!raceId || !raceData || !user?.id) return;
+
+    const isUnlimited = isUnlimitedGoalChallenge({
+      challengeType: raceData.challengeType,
+      entryType: raceData.entryType,
+      type: raceData.type,
+      capacityMode: raceData.capacityMode,
+      maxPlayers: raceData.maxPlayers,
+    });
+
+    const alreadyTracking =
+      !isUnlimited &&
+      racePhase === "in_race" &&
+      (contextRaceId === raceId ||
+        store.getState().raceProgress.activeRaceId === raceId);
+
+    // Unlimited detail can lag as "waiting" after Waiting Room start — coerce live
+    // the same way regular races hydrate once the client is tracking.
+    let liveRaceData: RaceData = raceData;
+    if (raceData.status !== "in_progress" && raceData.status !== "completed") {
+      const scheduledStartAt =
+        (raceData as { scheduledStartAt?: string | null }).scheduledStartAt ?? null;
+      const startMs = Date.parse(
+        String(raceData.startedAt ?? scheduledStartAt ?? ""),
+      );
+      const scheduleSaysLive = Number.isFinite(startMs) && startMs <= Date.now();
+      if (alreadyTracking || scheduleSaysLive) {
+        liveRaceData = {
+          ...raceData,
+          status: "in_progress",
+          startedAt:
+            raceData.startedAt ??
+            scheduledStartAt ??
+            new Date().toISOString(),
+        };
+      }
+    }
+
+    if (liveRaceData.status !== "in_progress") return;
+    raceAlreadyStartedRef.current = true;
+
+    // Spectators may view the race + Pusher updates, but must NOT enter participant
+    // race tracking or the live race progress notification.
+    const me =
+      findEligibleLiveRaceParticipant(parts, user) ??
+      (alreadyTracking && user.id
+        ? ({
+            id: user.id,
+            userId: user.id,
+            currentSteps: localStepsRef.current ?? 0,
+            status: "active",
+            username: user.username ?? "You",
+          } as RaceParticipant)
+        : null);
+
+    // ── Unlimited Daily Goal: NEVER start classic RaceContext / pause walk sync ──
+    if (isUnlimited) {
+      registerUnlimitedClassicProgressBlock(raceId, {
+        challengeDayKey:
+          liveRaceData.challengeDayKey ??
+          formatChallengeDayKey(Date.now(), liveRaceData.challengeTimezone) ??
+          undefined,
+        timezone: liveRaceData.challengeTimezone ?? undefined,
+      });
+      setWalkBackendSyncPaused(false);
+      // Ensure we are not holding a classic race session for this challenge id.
+      if (
+        racePhase === "in_race" &&
+        (contextRaceId === raceId ||
+          store.getState().raceProgress.activeRaceId === raceId)
+      ) {
+        stopRaceStepTracking("unlimited_daily_mode");
+      }
+      // Unlimited uses the same live-race ongoing notification as classic/sponsored
+      // once the viewer's own day has started. Classic progress POSTs stay blocked.
+      const meInUnlimitedRoster = parts.some(
+        (p) =>
+          p.userId === user.id ||
+          (!!user.username &&
+            !!p.username &&
+            p.username.toLowerCase() === user.username.toLowerCase()),
+      );
+      if (meInUnlimitedRoster) {
+        const rp = store.getState().raceProgress;
+        const v = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
+        const notifSteps =
+          unlimitedViewerDayStarted && !(isFreshLocalDay() && v <= 0)
+            ? resolveWalkNotificationSteps({
+                verifiedTodaySteps: v,
+                provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
+                todaySteps: rp.todaySteps,
+              })
+            : 0;
+        if (unlimitedViewerDayStarted) {
+          ensureActiveRaceInStore({
+            raceId,
+            raceStartTime: new Date(
+              liveRaceData.startedAt ?? Date.now(),
+            ).toISOString(),
+            userId: user.id,
+            username: user.username ?? "Runner",
+            goalSteps: liveRaceData.targetSteps ?? 0,
+            totalParticipants: liveRaceData.currentPlayers ?? parts.length,
+            bootSteps: notifSteps,
+            participantConfirmed: true,
+            unlimitedDailyMode: true,
+            challengeEndAt: liveRaceData.challengeEndAt ?? undefined,
+          });
+          updateRankFromBackend({
+            raceSteps: notifSteps,
+            goalSteps: liveRaceData.targetSteps ?? undefined,
+            totalParticipants: liveRaceData.currentPlayers ?? parts.length,
+          });
+        } else {
+          void switchDailyStepsNotification(0, liveRaceData.targetSteps);
+        }
+      } else {
+        void suppressSpectatorLiveRaceNotifications(raceId);
+      }
+      requestUnlimitedStepsRefresh();
+      const dayKey =
+        liveRaceData.challengeDayKey ??
+        formatChallengeDayKey(
+          Date.now(),
+          liveRaceData.challengeTimezone,
+        );
+      const batchEntries: Array<{ userId: string; steps: number; allowRollback?: boolean; instant?: boolean }> = [];
+      for (const p of parts) {
+        const isMe =
+          p.userId === user.id ||
+          (!!user.username &&
+            p.username.toLowerCase() === user.username.toLowerCase());
+        if (isMe) {
+          // Only blend local Redux when it belongs to this signed-in user.
+          // Otherwise a previous account's ~1.6K can overwrite today's server total.
+          const rp = store.getState().raceProgress;
+          const localOk = rp.userId === user.id;
+          const serverToday = Math.max(0, Math.floor(p.currentSteps ?? 0));
+          // Never treat multi-day totals as today.
+          const totalChallenge = Math.max(
+            0,
+            Math.floor((p as RaceParticipant).totalChallengeSteps ?? 0),
+          );
+          const safeServer =
+            totalChallenge > 0 &&
+            serverToday === totalChallenge &&
+            serverToday > 500
+              ? 0
+              : serverToday;
+          const localDisplay = localOk ? unlimitedDailySteps : 0;
+          const steps = mergeUnlimitedSelfHydrateSteps({
+            viewerDayStarted: unlimitedViewerDayStarted,
+            localDailySteps: localDisplay,
+            serverTodaySteps: safeServer,
+          });
+          batchEntries.push({ userId: p.userId, steps, instant: true, allowRollback: true });
+          prevStepsMapRef.current[p.userId] = steps;
+          continue;
+        }
+        // Day-aware: same day monotonic; new day may be 0.
+        const prev = prevStepsMapRef.current[p.userId] ?? 0;
+        let incoming = Math.max(0, Math.floor(p.currentSteps ?? 0));
+        const totalChallenge = Math.max(
+          0,
+          Math.floor((p as RaceParticipant).totalChallengeSteps ?? 0),
+        );
+        // Guard: leaderboard enrichment must not paint multi-day totals as today.
+        if (
+          totalChallenge > 0 &&
+          incoming === totalChallenge &&
+          incoming > 500
+        ) {
+          incoming = 0;
+        }
+        const prevDay = (p as RaceParticipant).challengeDayKey;
+        const steps =
+          dayKey && prevDay && dayKey !== prevDay
+            ? incoming
+            : Math.max(prev, incoming);
+        batchEntries.push({ userId: p.userId, steps, instant: true });
+        prevStepsMapRef.current[p.userId] = steps;
+      }
+      setConfirmedStepsBatch(batchEntries);
+      stepEngineLog(
+        "LiveRace",
+        `backendHydrated=unlimited_daily raceId=${raceId} walkSync=active dayKey=${dayKey ?? "n/a"} roster=${parts.length}`,
+      );
+      return;
+    }
+
+    if (!me) {
+      void suppressSpectatorLiveRaceNotifications(raceId);
+      stopRaceStepTracking("spectator_or_ineligible");
+      stepEngineLog(
+        "LiveRace",
+        `backendHydrated=spectator raceId=${raceId} participantNotifications=false`,
+      );
+      setConfirmedStepsBatch(
+        parts.map((p) => {
+          const steps = Math.max(prevStepsMapRef.current[p.userId] ?? 0, p.currentSteps ?? 0);
+          prevStepsMapRef.current[p.userId] = steps;
+          return { userId: p.userId, steps, instant: true };
+        }),
+      );
+      return;
+    }
+
+    const prevActiveId = store.getState().raceProgress.activeRaceId;
+    const preserveAsCompanion = !!prevActiveId && prevActiveId !== raceId;
+    const resolvedGoal =
+      typeof liveRaceData.targetSteps === "number" && liveRaceData.targetSteps > 0
+        ? liveRaceData.targetSteps
+        : undefined;
+    // Keep RaceContext target in sync BEFORE resumeLiveRace — otherwise it
+    // restarts the ongoing notification with the default 1000-step goal.
+    if (resolvedGoal != null) {
+      setRaceTargetSteps(resolvedGoal);
+    }
+    setActiveRace(raceId, false);
+    const challengeEndAt =
+      liveRaceData.type === "sponsored"
+        ? liveRaceData.challengeEndAt ??
+          (liveRaceData.startedAt
+            ? new Date(
+                new Date(liveRaceData.startedAt).getTime() + 3 * 60 * 60 * 1000,
+              ).toISOString()
+            : undefined)
+        : liveRaceData.challengeEndAt ?? undefined;
+    // Never boot/catch-up from API 0 when local race steps are already higher.
+    const preservedSteps = Math.max(
+      me.currentSteps ?? 0,
+      localStepsRef.current ?? 0,
+      store.getState().raceProgress.raceSteps ?? 0,
+    );
+    ensureActiveRaceInStore({
+      raceId,
+      raceStartTime: new Date(liveRaceData.startedAt ?? Date.now()).toISOString(),
+      userId: user.id,
+      username: user.username ?? "Runner",
+      goalSteps: resolvedGoal ?? store.getState().raceProgress.goalSteps ?? 0,
+      totalParticipants: liveRaceData.currentPlayers ?? parts.length,
+      bootSteps: preservedSteps,
+      participantConfirmed: true,
+      preserveAsCompanion,
+      isSponsored: liveRaceData.type === "sponsored",
+      challengeEndAt,
+    });
+    if (!raceResumedRef.current) {
+      raceResumedRef.current = true;
+      resumeLiveRace(
+        liveRaceData.currentPlayers ?? parts.length,
+        new Date(liveRaceData.startedAt ?? Date.now()),
+        preservedSteps,
+        liveRaceData.type === "sponsored" && liveRaceData.startedAt
+          ? new Date(new Date(liveRaceData.startedAt).getTime() + 3 * 60 * 60 * 1000)
+          : null,
+      );
+    }
+    // Always raise the floor on re-hydrate (close/open or late server steps).
+    if (preservedSteps > 0 && user?.id) {
+      void import("@/services/steps/raceBaselineStorage")
+        .then(({ setRaceStepSeed }) => setRaceStepSeed(raceId, user.id, preservedSteps))
+        .catch(() => {});
+    }
+    void catchUpLiveRaceSteps(preservedSteps, true);
+    stepEngineLog("LiveRace", `backendHydrated=true raceId=${raceId} participantNotifications=true`);
+    setConfirmedStepsBatch(
+      parts
+        .filter((p) => {
+          const isMe =
+            p.userId === user.id ||
+            (!!user.username && p.username.toLowerCase() === user.username.toLowerCase());
+          return !isMe;
+        })
+        .map((p) => {
+          // Never reset remote walkers to 0 when Unlimited detail omits live steps.
+          const steps = Math.max(prevStepsMapRef.current[p.userId] ?? 0, p.currentSteps ?? 0);
+          prevStepsMapRef.current[p.userId] = steps;
+          return { userId: p.userId, steps, instant: true };
+        }),
+    );
+  }, [
+    raceId,
+    user,
+    racePhase,
+    contextRaceId,
+    setActiveRace,
+    setRaceTargetSteps,
+    resumeLiveRace,
+    catchUpLiveRaceSteps,
+    setConfirmedStepsBatch,
+    stopRaceStepTracking,
+    unlimitedDailySteps,
+    requestUnlimitedStepsRefresh,
+    unlimitedViewerDayStarted,
+  ]);
+
+  const fetchRaceDetails = useCallback(async (
+    force = false,
+    options?: { gateKey?: string; minIntervalMs?: number },
+  ) => {
+    if (useDummyRace) return;
+    if (!raceId || !sessionTokenRef.current || raceDetailFetchInFlightRef.current) return;
+    const gateKey = options?.gateKey ?? `${raceId}:detail`;
+    const minIntervalMs = options?.minIntervalMs ?? STEP_SYNC_CONFIG.LIVE_RACE_DETAIL_REFRESH_MS;
+    if (
+      !liveRaceFetchAllowed(
+        gateKey,
+        minIntervalMs,
+        force,
+        STEP_SYNC_CONFIG.LIVE_RACE_FORCE_FETCH_MIN_GAP_MS,
+      )
+    ) {
+      return;
+    }
+    raceDetailFetchInFlightRef.current = true;
+    try {
+      let applied = false;
+      const forceLive =
+        racePhase === "in_race" &&
+        (contextRaceId === raceId ||
+          store.getState().raceProgress.activeRaceId === raceId);
+      if (preferUnlimitedDetail) {
+        const unlimited = await fetchUnlimitedLiveDetailPayload(raceId, {
+          currentUserId: user?.id,
+          currentUsername: user?.username,
+          forceLive,
+        });
+        if (unlimited) {
+          markLiveRaceFetched(gateKey);
+          setRace(unlimited.race);
+          if (unlimited.race.status === "in_progress" || unlimited.race.status === "completed") {
+            raceAlreadyStartedRef.current = true;
+          }
+          const raceDone = unlimited.race.status === "completed";
+          // Prefer detail roster; preserve higher live steps from prior poll/Pusher.
+          // Hydrate from the *merged* list (same as regular live races) — never from
+          // a raw empty Unlimited paint that would mark us spectator and stop steps.
+          let mergedParts = unlimited.participants;
+          setParticipants((prev) => {
+            if (!unlimited.participants.length) {
+              mergedParts = prev;
+              return prev;
+            }
+            mergedParts = mergeParticipantsPreservingSteps(prev, unlimited.participants, {
+              raceCompleted: raceDone,
+              dayAware: true,
+              viewerUserId: user?.id,
+            });
+            return mergedParts;
+          });
+          hydrateInProgressRace(unlimited.race, mergedParts);
+          if (isTrackLayoutId(unlimited.race.trackLayout)) {
+            setTrackLayoutId(unlimited.race.trackLayout);
+          }
+          void screenCache.set(liveRaceDetailCacheKey(raceId, user?.id), {
+            race: unlimited.race,
+            participants: mergedParts,
+          });
+          applied = true;
+        }
+      }
+      if (!applied) {
+        const res = await authFetch(`/api/races/${raceId}`);
+        if (res.ok) {
+          markLiveRaceFetched(gateKey);
+          const data = await res.json() as { race?: RaceData; participants?: RaceParticipant[] };
+          setRace(data.race ?? null);
+          if (data.race?.status === "in_progress" || data.race?.status === "completed") {
+            raceAlreadyStartedRef.current = true;
+          }
+          const nextParts = Array.isArray(data.participants) ? data.participants : [];
+          const raceDone = data.race?.status === "completed";
+          let mergedParts = nextParts;
+          setParticipants((prev) => {
+            if (!nextParts.length) {
+              mergedParts = prev;
+              return prev;
+            }
+            mergedParts = mergeParticipantsPreservingSteps(prev, nextParts, {
+              raceCompleted: raceDone,
+              viewerUserId: user?.id,
+            });
+            return mergedParts;
+          });
+          hydrateInProgressRace(data.race, mergedParts);
+          if (isTrackLayoutId(data.race?.trackLayout)) {
+            setTrackLayoutId(data.race.trackLayout);
+          }
+          if (data.race) {
+            void screenCache.set(liveRaceDetailCacheKey(raceId, user?.id), {
+              race: data.race,
+              participants: mergedParts,
+            });
+          }
+          applied = true;
+        } else if (!preferUnlimitedDetail) {
+          // Race id may be an Unlimited challenge opened without nav hints.
+          const unlimited = await fetchUnlimitedLiveDetailPayload(raceId, {
+            currentUserId: user?.id,
+            currentUsername: user?.username,
+            forceLive,
+          });
+          if (unlimited) {
+            markLiveRaceFetched(gateKey);
+            setRace(unlimited.race);
+            if (unlimited.race.status === "in_progress" || unlimited.race.status === "completed") {
+              raceAlreadyStartedRef.current = true;
+            }
+            let mergedParts = unlimited.participants;
+            setParticipants((prev) => {
+              if (!unlimited.participants.length) {
+                mergedParts = prev;
+                return prev;
+              }
+              mergedParts = mergeParticipantsPreservingSteps(prev, unlimited.participants, {
+                raceCompleted: unlimited.race.status === "completed",
+                dayAware: true,
+                viewerUserId: user?.id,
+              });
+              return mergedParts;
+            });
+            hydrateInProgressRace(unlimited.race, mergedParts);
+            if (isTrackLayoutId(unlimited.race.trackLayout)) {
+              setTrackLayoutId(unlimited.race.trackLayout);
+            }
+            void screenCache.set(liveRaceDetailCacheKey(raceId, user?.id), {
+              race: unlimited.race,
+              participants: mergedParts,
+            });
+          }
+        }
+      }
+    } finally {
+      raceDetailFetchInFlightRef.current = false;
+    }
+  }, [
+    raceId,
+    hydrateInProgressRace,
+    preferUnlimitedDetail,
+    useDummyRace,
+    user?.id,
+    user?.username,
+    racePhase,
+    contextRaceId,
+  ]);
+
+  // Pause step reads when leaving the screen; catch up from device + server on return.
+  const catchUpStepsRef = useRef(catchUpLiveRaceSteps);
+  catchUpStepsRef.current = catchUpLiveRaceSteps;
+  const fetchDetailsOnFocusRef = useRef(fetchRaceDetails);
+  fetchDetailsOnFocusRef.current = fetchRaceDetails;
+  const participantsOnFocusRef = useRef(participants);
+  participantsOnFocusRef.current = participants;
+
+  useFocusEffect(useCallback(() => {
+    const focusLive =
+      race?.status === "in_progress" ||
+      (race?.status !== "completed" &&
+        racePhase === "in_race" &&
+        (contextRaceId === raceId ||
+          store.getState().raceProgress.activeRaceId === raceId));
+    if (!raceId || !focusLive || raceCompletedRef.current || !user?.id) return;
+
+    // Unlimited: never bind classic race store / race FGS / catch-up (§10.2).
+    const unlimitedFocus =
+      isUnlimitedGoalFrontendEnabled() &&
+      !!race &&
+      isUnlimitedGoalChallenge({
+        challengeType: race.challengeType,
+        entryType: race.entryType,
+        type: race.type,
+        capacityMode: race.capacityMode,
+        maxPlayers: race.maxPlayers,
+      });
+    if (unlimitedFocus) {
+      registerUnlimitedClassicProgressBlock(raceId, {
+      challengeDayKey:
+        race?.challengeDayKey ??
+        formatChallengeDayKey(Date.now(), race?.challengeTimezone) ??
+        undefined,
+      timezone: race?.challengeTimezone ?? undefined,
+    });
+      setWalkBackendSyncPaused(false);
+      // Stop classic RaceContext sensor path only — keep/start live-race tray notif.
+      if (
+        racePhase === "in_race" &&
+        (contextRaceId === raceId ||
+          store.getState().raceProgress.activeRaceId === raceId)
+      ) {
+        stopRaceStepTracking("unlimited_focus");
+      }
+      requestUnlimitedStepsRefresh();
+      void handleMidnightRolloverIfNeeded().catch(() => false);
+      const rp = store.getState().raceProgress;
+      const v = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
+      const notifSteps =
+        unlimitedViewerDayStarted && !(isFreshLocalDay() && v <= 0)
+          ? resolveWalkNotificationSteps({
+              verifiedTodaySteps: v,
+              provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
+              todaySteps: rp.todaySteps,
+            })
+          : 0;
+      if (unlimitedViewerDayStarted && user?.id) {
+        ensureActiveRaceInStore({
+          raceId,
+          raceStartTime: new Date(
+            race?.startedAt ?? race?.scheduledStartAt ?? Date.now(),
+          ).toISOString(),
+          userId: user.id,
+          username: user.username ?? "Runner",
+          goalSteps: race?.targetSteps ?? 0,
+          totalParticipants: race?.currentPlayers ?? participantsOnFocusRef.current.length,
+          bootSteps: notifSteps,
+          participantConfirmed: true,
+          unlimitedDailyMode: true,
+          challengeEndAt: race?.challengeEndAt ?? undefined,
+        });
+        updateRankFromBackend({
+          raceSteps: notifSteps,
+          goalSteps: race?.targetSteps ?? undefined,
+          totalParticipants: race?.currentPlayers ?? participantsOnFocusRef.current.length,
+        });
+      } else {
+        void switchDailyStepsNotification(0, race?.targetSteps);
+      }
+      void fetchDetailsOnFocusRef.current(true);
+      stepEngineLog(
+        "LiveScreen",
+        `focus unlimited raceId=${raceId} walkSync=active classicRace=skipped`,
+      );
+      return () => {
+        setTimeout(() => {
+          void resumeStepWatching();
+        }, 0);
+      };
+    }
+
+    const me = findEligibleLiveRaceParticipant(participantsOnFocusRef.current, user);
+    if (me) {
+      const prevActiveId = store.getState().raceProgress.activeRaceId;
+      const preserveAsCompanion = !!prevActiveId && prevActiveId !== raceId;
+      const resolvedGoal =
+        typeof race?.targetSteps === "number" && race.targetSteps > 0
+          ? race.targetSteps
+          : undefined;
+      if (resolvedGoal != null) {
+        setRaceTargetSteps(resolvedGoal);
+      }
+      const challengeEndAt =
+        race?.type === "sponsored"
+          ? race.challengeEndAt ??
+            (race.startedAt
+              ? new Date(new Date(race.startedAt).getTime() + 3 * 60 * 60 * 1000).toISOString()
+              : undefined)
+          : race?.challengeEndAt ?? undefined;
+      ensureActiveRaceInStore({
+        raceId,
+        raceStartTime: new Date(race?.startedAt ?? Date.now()).toISOString(),
+        userId: user.id,
+        username: user.username ?? "Runner",
+        goalSteps: resolvedGoal ?? store.getState().raceProgress.goalSteps ?? 0,
+        totalParticipants: race?.currentPlayers ?? participantsOnFocusRef.current.length,
+        bootSteps: Math.max(me.currentSteps ?? 0, localStepsRef.current),
+        participantConfirmed: true,
+        preserveAsCompanion,
+        isSponsored: race?.type === "sponsored",
+        challengeEndAt,
+      });
+      stepEngineLog(
+        "LiveScreen",
+        `focus raceId=${raceId} userId=${user.id} renderedSteps=${localStepsRef.current} participantNotifications=true`,
+      );
+      void catchUpStepsRef.current(
+        Math.max(me.currentSteps ?? 0, localStepsRef.current ?? 0),
+        true,
+      );
+      stepEngineLog("LiveRace", `rejoinStart raceId=${raceId} cachedStateRendered=true`);
+    } else if (
+      !(
+        racePhase === "in_race" &&
+        (contextRaceId === raceId ||
+          store.getState().raceProgress.activeRaceId === raceId)
+      )
+    ) {
+      void suppressSpectatorLiveRaceNotifications(raceId);
+      stopRaceStepTracking("spectator_or_ineligible");
+      stepEngineLog(
+        "LiveScreen",
+        `focus raceId=${raceId} userId=${user.id} participantNotifications=false`,
+      );
+    }
+    void fetchDetailsOnFocusRef.current(true);
+    void refreshTodaySteps();
+
+    return () => {
+      // Defer so back navigation paints first.
+      setTimeout(() => {
+        void resumeStepWatching();
+      }, 0);
+    };
+  }, [raceId, race, user?.id, user?.username, resumeStepWatching, refreshTodaySteps, triggerSync, stopRaceStepTracking, setRaceTargetSteps, racePhase, contextRaceId, requestUnlimitedStepsRefresh, unlimitedViewerDayStarted]));
+
+  useEffect(() => {
+    if (!raceId || !user?.id) return;
+    stepEngineLog(
+      "LiveScreen",
+      `receivedStepUpdate raceId=${raceId} canonical=${canonicalRaceSteps} context=${userRaceSteps ?? 0} rendered=${liveRaceSteps}`,
+    );
+  }, [raceId, user?.id, canonicalRaceSteps, userRaceSteps, liveRaceSteps]);
+
+  useEffect(() => {
+    if (!raceId) return;
+    const sub = AppState.addEventListener("change", (nextState) => {
+      if (nextState !== "active") return;
+      stepEngineLog("Lifecycle", "appState=active live-detail");
+      void refreshTodaySteps();
+      if (race?.status === "completed") {
+        if (!raceCompletedRef.current) {
+          const me = participantsOnFocusRef.current.find(
+            (p) =>
+              p.userId === user?.id ||
+              (!!user?.username &&
+                p.username.toLowerCase() === user.username.toLowerCase()),
+          );
+          finalizeLiveRace(me?.currentSteps);
+        }
+        return;
+      }
+      if (race?.status !== "in_progress" || !user?.id) return;
+      // Unlimited: refresh verified daily + walk sync — never classic catch-up.
+      if (
+        isUnlimitedGoalFrontendEnabled() &&
+        isUnlimitedGoalChallenge({
+          challengeType: race.challengeType,
+          entryType: race.entryType,
+          type: race.type,
+          capacityMode: race.capacityMode,
+          maxPlayers: race.maxPlayers,
+        })
+      ) {
+        setWalkBackendSyncPaused(false);
+        requestUnlimitedStepsRefresh();
+        stepEngineLog("Resume", "unlimited walkSync refresh");
+        return;
+      }
+      const me = participantsOnFocusRef.current.find(
+        (p) =>
+          p.userId === user.id ||
+          (!!user.username && p.username.toLowerCase() === user.username.toLowerCase()),
+      );
+      stepEngineLog("Resume", "refreshedSteps=true liveRace");
+      void catchUpStepsRef.current(me?.currentSteps ?? 0, true);
+    });
+    return () => sub.remove();
+  }, [raceId, race, user?.id, user?.username, refreshTodaySteps, triggerSync, finalizeLiveRace, requestUnlimitedStepsRefresh]);
+
+  // ── Full fetch (initial load — race first, comments/reactions in background) ─
+  const fetchRace = useCallback(async () => {
+    if (useDummyRace) return;
+    if (!raceId || !sessionTokenRef.current || fetchInFlightRef.current) return;
+    fetchInFlightRef.current = true;
+    try {
+      let racePayload: LiveRaceDetailCache | null = null;
+      const forceLive =
+        racePhase === "in_race" &&
+        (contextRaceId === raceId ||
+          store.getState().raceProgress.activeRaceId === raceId);
+      let confirmedMissing = false;
+      if (preferUnlimitedDetail) {
+        racePayload = await fetchUnlimitedLiveDetailPayload(raceId, {
+          currentUserId: user?.id,
+          currentUsername: user?.username,
+          forceLive,
+        });
+      }
+      if (!racePayload) {
+        const detailRes = await authFetch(`/api/races/${raceId}`);
+        if (detailRes.ok) {
+          const data = await detailRes.json() as { race?: RaceData; participants?: RaceParticipant[] };
+          racePayload = {
+            race: data.race as RaceData,
+            participants: Array.isArray(data.participants) ? data.participants : [],
+          };
+        } else if (detailRes.status === 404 && preferUnlimitedDetail) {
+          confirmedMissing = true;
+        } else if (!preferUnlimitedDetail) {
+          racePayload = await fetchUnlimitedLiveDetailPayload(raceId, {
+            currentUserId: user?.id,
+            currentUsername: user?.username,
+            forceLive,
+          });
+          if (!racePayload && detailRes.status === 404) confirmedMissing = true;
+        }
+      }
+
+      if (racePayload?.race) {
+        markLiveRaceFetched(`${raceId}:detail`);
+        setDetailMissing(false);
+        const parts = racePayload.participants;
+        setRace(racePayload.race);
+        if (racePayload.race.status === "in_progress" || racePayload.race.status === "completed") {
+          raceAlreadyStartedRef.current = true;
+        }
+        const raceDone = racePayload.race.status === "completed";
+        // First paint: use detail roster directly so users always show.
+        let mergedParts = parts;
+        setParticipants((prev) => {
+          mergedParts =
+            prev.length === 0
+              ? parts
+              : mergeParticipantsPreservingSteps(prev, parts, {
+                  raceCompleted: raceDone,
+                  viewerUserId: user?.id,
+                });
+          return mergedParts;
+        });
+        hydrateInProgressRace(racePayload.race, mergedParts);
+        if (racePayload.race.status === "completed") {
+          const me = mergedParts.find(
+            (p) =>
+              p.userId === user?.id ||
+              (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase()),
+          );
+          if (!raceCompletedRef.current) {
+            finalizeLiveRace(me?.currentSteps);
+          } else if (me?.currentSteps != null) {
+            const reconciled = Math.max(finalRaceSteps ?? 0, me.currentSteps);
+            if (reconciled > 0) setFinalRaceSteps(reconciled);
+          }
+        }
+        if (typeof racePayload.race.targetSteps === "number" && racePayload.race.targetSteps > 0) {
+          setRaceTargetStepsRef.current(racePayload.race.targetSteps);
+        }
+        if (isTrackLayoutId(racePayload.race.trackLayout)) {
+          setTrackLayoutId(racePayload.race.trackLayout);
+        }
+        void screenCache.set(liveRaceDetailCacheKey(raceId, user?.id), {
+          race: racePayload.race,
+          participants: mergedParts,
+        });
+        setLoading(false);
+      } else if (confirmedMissing) {
+        // Explicit 404 from the expected endpoint — drop the instant shell.
+        setDetailMissing(true);
+        setRace(null);
+        setLoading(false);
+      }
+      // Transient network errors: keep shell/cache painted; focus/poll will retry.
+
+      // Unlimited chat uses dedicated endpoints (classic /races/:id/comments 403s —
+      // membership is checked against race_participants, not unlimited participants).
+      const chatIsUnlimited =
+        preferUnlimitedDetail || isUnlimitedGoalChallenge(racePayload?.race ?? null);
+      const chatBase = chatIsUnlimited
+        ? `/api/unlimited-challenges/${raceId}`
+        : `/api/races/${raceId}`;
+      void Promise.all([
+        authFetch(`${chatBase}/comments`),
+        authFetch(`${chatBase}/reactions`),
+      ]).then(async ([commentsRes, reactionsRes]) => {
+        if (commentsRes.ok) {
+          const body = await commentsRes.json() as { comments?: RaceCommentPayload[] };
+          const normalized = Array.isArray(body.comments)
+            ? body.comments.map(normalizeIncomingComment).filter((c): c is RaceComment => c !== null)
+            : [];
+          setComments(dedupeComments(normalized));
+        }
+        if (reactionsRes.ok) {
+          const body = await reactionsRes.json() as { reactions?: ReactionCount[] };
+          setReactionCounts(Array.isArray(body.reactions) ? body.reactions : []);
+        }
+      }).catch(() => {});
+    } finally {
+      fetchInFlightRef.current = false;
+    }
+  }, [
+    raceId,
+    hydrateInProgressRace,
+    preferUnlimitedDetail,
+    useDummyRace,
+    user?.id,
+    user?.username,
+    racePhase,
+    contextRaceId,
+  ]);
+
+  // Frontend-only dummy Unlimited Race session (Waiting Room → Live Race).
+  useEffect(() => {
+    if (!useDummyRace || !user?.id) return;
+    const session = createDummyUnlimitedRaceSession({
+      currentUserId: user.id,
+      currentUsername: user.username,
+      status: "in_progress",
+    });
+    const racePayload = {
+      ...session.race,
+      id: typeof raceId === "string" && raceId ? raceId : session.race.id,
+    } as RaceData;
+    setRace(racePayload);
+    setParticipants(session.participants as RaceParticipant[]);
+    setLoading(false);
+    raceAlreadyStartedRef.current = true;
+    if (typeof racePayload.targetSteps === "number" && racePayload.targetSteps > 0) {
+      setRaceTargetStepsRef.current(racePayload.targetSteps);
+    }
+    return startDummyUnlimitedRaceSimulation(
+      { ...session, race: { ...session.race, id: racePayload.id } },
+      (next) => {
+        setRace({
+          ...next.race,
+          id: racePayload.id,
+        } as RaceData);
+        setParticipants(next.participants as RaceParticipant[]);
+      },
+    );
+  }, [useDummyRace, user?.id, user?.username, raceId]);
+
+  useEffect(() => {
+    if (useDummyRace) return;
+    if (!raceId || !sessionToken) return;
+    const isNewRace = loadedRaceIdRef.current !== raceId;
+    let hadWarmShell = false;
+    if (isNewRace) {
+      loadedRaceIdRef.current = raceId;
+      resetLiveRaceFetchGate(raceId);
+      prevStepsMapRef.current = {};
+      setStepDeltaFlash({});
+      resetForRace(raceId);
+      raceAlreadyStartedRef.current = false;
+      raceResumedRef.current = false;
+      raceCompletedRef.current = false;
+
+      const cached = screenCache.getSync<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId, user?.id));
+      if (cached?.race) {
+        setRace(cached.race);
+        setParticipants(cached.participants);
+        if (isTrackLayoutId(cached.race.trackLayout)) {
+          setTrackLayoutId(cached.race.trackLayout);
+        }
+        if (cached.race.status === "in_progress" || cached.race.status === "completed") {
+          raceAlreadyStartedRef.current = true;
+        }
+        setDetailMissing(false);
+        setLoading(false);
+        hadWarmShell = true;
+      } else if (instantShell?.race) {
+        // Keep painting the shell — never flash SkeletonLiveDetail while API loads.
+        setRace(instantShell.race);
+        setParticipants(instantShell.participants);
+        setLoading(false);
+        hadWarmShell = true;
+      } else {
+        // No cache/shell (rare) — still avoid skeleton; fetch fills race.
+        setLoading(false);
+      }
+    } else if (
+      screenCache.getSync<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId, user?.id))?.race ||
+      instantShell?.race
+    ) {
+      hadWarmShell = true;
+    }
+    // Incomplete roster (self-only shell): fetch immediately so all players appear ASAP.
+    // Rich roster already in mem: defer slightly so JSON parse doesn't fight the transition.
+    const cachedParts =
+      screenCache.getSync<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId, user?.id))
+        ?.participants ??
+      instantShell?.participants ??
+      [];
+    const expectedPlayers = Math.max(
+      0,
+      Number(
+        screenCache.getSync<LiveRaceDetailCache>(liveRaceDetailCacheKey(raceId, user?.id))
+          ?.race?.currentPlayers ??
+          instantShell?.race?.currentPlayers ??
+          0,
+      ) || 0,
+    );
+    const rosterCompleteEnough =
+      cachedParts.length >= 2 &&
+      (expectedPlayers <= 1 || cachedParts.length >= Math.min(expectedPlayers, 100));
+
+    if (hadWarmShell && rosterCompleteEnough) {
+      const task = InteractionManager.runAfterInteractions(() => {
+        void fetchRace().finally(() => setLoading(false));
+      });
+      return () => task.cancel();
+    }
+    void fetchRace().finally(() => setLoading(false));
+  }, [raceId, sessionToken, fetchRace, resetForRace, useDummyRace, instantShell, user?.id]);
+
+  // If press-in prefetch finishes after mount with a richer roster, merge it in
+  // without waiting for the main fetchRace path (feels instant for all players).
+  useEffect(() => {
+    if (!raceId || typeof raceId !== "string" || !user?.id) return;
+    if (useDummyRace) return;
+    let cancelled = false;
+    let tries = 0;
+    const tick = () => {
+      if (cancelled) return;
+      tries += 1;
+      const cached = screenCache.getSync<LiveRaceDetailCache>(
+        liveRaceDetailCacheKey(raceId, user.id),
+      );
+      const cachedN = cached?.participants?.length ?? 0;
+      if (cachedN >= 2) {
+        setParticipants((prev) => {
+          if (cachedN <= prev.length) return prev;
+          return mergeParticipantsPreservingSteps(prev, cached!.participants, {
+            viewerUserId: user.id,
+          });
+        });
+        if (cached?.race) {
+          setRace((prev) => prev ?? cached.race);
+        }
+        return;
+      }
+      if (tries < 20) {
+        setTimeout(tick, 100);
+      }
+    };
+    const t = setTimeout(tick, 50);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [raceId, user?.id, useDummyRace]);
+
+  useEffect(() => {
+    return () => {
+      if (raceId) resetLiveRaceFetchGate(raceId);
+    };
+  }, [raceId]);
+
+  // ── Completion-poll fallback ────────────────────────────────────────────────
+  // If elapsed >= 60s and race is still "in_progress", the Pusher completion
+  // event may have been missed. Poll every 3s until backend confirms completion.
+  // Use a boolean threshold so this effect only re-runs once (false → true),
+  // not every second — otherwise the interval is cleared before it can fire.
+  const shouldPoll = isActive && completionPollArmed;
+  useEffect(() => {
+    if (!shouldPoll || !sessionToken) return;
+    const id = setInterval(() => {
+      fetchRaceDetails().catch(() => {});
+    }, STEP_SYNC_CONFIG.LIVE_RACE_COMPLETION_POLL_MS);
+    return () => clearInterval(id);
+  }, [shouldPoll, fetchRaceDetails, sessionToken]);
+
+  // Periodic participant refresh — Pusher-first; slow fallback when healthy.
+  useEffect(() => {
+    if (!isActive || !raceId || race?.status !== "in_progress" || !sessionToken) return;
+    const { isPusherHealthy, adaptivePollMs } = require("@/services/pusherHealth") as typeof import("@/services/pusherHealth");
+    const tick = () => {
+      const minIntervalMs = adaptivePollMs(STEP_SYNC_CONFIG.LIVE_RACE_PARTICIPANTS_POLL_MS);
+      void fetchRaceDetails(false, {
+        gateKey: `${raceId}:participants`,
+        minIntervalMs,
+      });
+    };
+    // Immediate reconcile once; then adaptive cadence (slower while Pusher healthy).
+    tick();
+    const id = setInterval(() => {
+      if (isPusherHealthy()) {
+        // Soft reconcile ~4× slower than cold fallback when realtime is healthy.
+        void fetchRaceDetails(false, {
+          gateKey: `${raceId}:participants`,
+          minIntervalMs: STEP_SYNC_CONFIG.LIVE_RACE_PARTICIPANTS_POLL_MS * 4,
+        });
+      } else {
+        tick();
+      }
+    }, STEP_SYNC_CONFIG.LIVE_RACE_PARTICIPANTS_POLL_MS * 2);
+    return () => clearInterval(id);
+  }, [isActive, raceId, race?.status, sessionToken, fetchRaceDetails]);
+
+  // Waiting Unlimited Challenges: no in_progress poll above — refresh roster so joins
+  // appear even if Pusher is missed (Waiting Room already polls; live-detail did not).
+  useEffect(() => {
+    if (!raceId || !sessionToken || useDummyRace) return;
+    const status = String(race?.status ?? "").toLowerCase();
+    const waitingOpen =
+      status === "waiting" || status === "starting" || status === "scheduled";
+    const unlimitedOpen =
+      preferUnlimitedDetail ||
+      unlimitedHint ||
+      isUnlimitedGoalChallenge(race);
+    if (!waitingOpen || !unlimitedOpen) return;
+    const id = setInterval(() => {
+      void fetchRaceDetails(false, {
+        gateKey: `${raceId}:waiting-roster`,
+        minIntervalMs: STEP_SYNC_CONFIG.MATCHMAKING_ROOM_POLL_MS,
+      });
+    }, STEP_SYNC_CONFIG.MATCHMAKING_ROOM_POLL_MS);
+    return () => clearInterval(id);
+  }, [
+    raceId,
+    sessionToken,
+    useDummyRace,
+    race?.status,
+    race?.challengeType,
+    race?.capacityMode,
+    race?.entryType,
+    preferUnlimitedDetail,
+    unlimitedHint,
+    fetchRaceDetails,
+  ]);
+
+  // ── Spectator heartbeat ───────────────────────────────────────────────────
+  // All viewers (participants + spectators) register every 60s for watch count.
+  useEffect(() => {
+    if (!raceId || !isActive) return;
+
+    let cancelled = false;
+    let inFlight = false;
+    const gateKey = `${raceId}:spectate`;
+    const heartbeatMs = STEP_SYNC_CONFIG.LIVE_RACE_SPECTATE_HEARTBEAT_MS;
+
+    const postSpectate = async () => {
+      if (cancelled || inFlight || !sessionTokenRef.current) return;
+      if (!liveRaceFetchAllowed(gateKey, heartbeatMs)) return;
+
+      inFlight = true;
+      try {
+        const res = await authFetch(`/api/races/${raceId}/spectate`, { method: "POST" });
+        if (cancelled) return;
+        if (res.ok) {
+          markLiveRaceFetched(gateKey);
+          const body = await res.json() as { count?: number };
+          if (typeof body.count === "number") setSpectatorCount(body.count);
+        }
+      } catch {
+        // silent — watch count is best-effort
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void postSpectate();
+    const id = setInterval(() => void postSpectate(), heartbeatMs);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [raceId, isActive]);
+
+  // ── Cheer toast helper ────────────────────────────────────────────────────
+  const showCheerToast = useCallback((text: string) => {
+    setCheerToast(text);
+    if (cheerToastTimerRef.current) clearTimeout(cheerToastTimerRef.current);
+    cheerToastTimerRef.current = setTimeout(() => setCheerToast(null), 2000); }, []);
+
+  useEffect(() => {
+    return () => { if (cheerToastTimerRef.current) clearTimeout(cheerToastTimerRef.current); }; }, []);
+
+  // Clean up all pending step-delta flash timers on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(stepDeltaTimersRef.current).forEach(clearTimeout);
+    };
+  }, []);
+
+  const fetchRaceDetailsRef = useRef(fetchRaceDetails);
+  fetchRaceDetailsRef.current = fetchRaceDetails;
+
+  const raceRef = useRef(race);
+  raceRef.current = race;
+  const participantsRef = useRef(participants);
+  participantsRef.current = participants;
+  const currentUserIdRef = useRef(currentUserId);
+  currentUserIdRef.current = currentUserId;
+  const raceProgressRef = useRef(raceProgress);
+  raceProgressRef.current = raceProgress;
+  const finalizeLiveRaceRef = useRef(finalizeLiveRace);
+  finalizeLiveRaceRef.current = finalizeLiveRace;
+
+  // ── Pusher subscription ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!raceId || useDummyRace || !user?.id || !sessionToken) return;
+    const realtimeGuard = captureRaceRealtimeGuard({
+      userId: user.id,
+      raceId,
+    });
+    if (!realtimeGuard) return;
+    connectPusher();
+    const channelName = `public-live-race-${raceId}`;
+    const channel = subscribeToChannel(channelName);
+    // Always bind the canonical unlimited channel when the feature is on — dual-emit
+    // covers joins even when this screen was opened without challengeType nav params.
+    const unlimitedChannelName = CHANNELS.unlimitedChallenge(raceId);
+    const unlimitedChannel = isUnlimitedGoalFrontendEnabled()
+      ? subscribeToChannel(unlimitedChannelName)
+      : null;
+    if (!channel && !unlimitedChannel) return;
+    if (__DEV__) {
+      stepEngineLog(
+        "Pusher",
+        `subscribed raceId=${raceId} userId=${user.id} gen=${realtimeGuard.generation} channel=${channelName}`,
+      );
+    }
+    stepEngineLog("Pusher", `connected=true channel=${channelName}`);
+    stepEngineLog("LiveRace", `realtimeSubscribed=true raceId=${raceId}`);
+
+    const refresh = (force = false) => {
+      debounceKeyed(`race-detail:${raceId}`, () => {
+        void fetchRaceDetailsRef.current(force);
+      }, 400);
+    };
+
+    const flushFinalSteps = () => {
+      if (!raceId) return;
+      // Unlimited progress is owned by POST /api/walk/steps — never flush classic race progress.
+      if (isUnlimitedClassicProgressBlocked(raceId)) return;
+      const steps = localStepsRef.current;
+      if (steps <= 0) return;
+      void raceStepSyncService.flushGoal(
+        raceId,
+        steps,
+        stepProviderManager.toRaceProgressSource(),
+      );
+    };
+
+    const onCompleted = (data?: {
+      endedReason?: string;
+      challengeType?: string;
+      results?: Array<{ userId?: string; prizeCoins?: number; currentSteps?: number }>;
+    }) => {
+      flushFinalSteps();
+      setPendingMatchEnd(false);
+      const meResult = currentUserId ? data?.results?.find((r) => r.userId === currentUserId) : undefined;
+      finalizeLiveRaceRef.current(
+        meResult?.currentSteps ?? localStepsRef.current,
+        data?.results,
+      );
+      void refreshResultStatus();
+      if (data?.endedReason) setForfeitReason(data.endedReason);
+      setRace((prev) => prev ? { ...prev, status: "completed", completedAt: prev.completedAt ?? new Date().toISOString() } : prev);
+      emitChallengeStatusesRefresh("race_completed");
+      if (data?.challengeType === "coins_battle" && Array.isArray(data.results)) {
+        // Store prizes for ALL participants so the finished card can show each person's prize
+        const map = new Map<string, number>();
+        for (const r of data.results) {
+          if (r.userId && (r.prizeCoins ?? 0) > 0) map.set(r.userId, r.prizeCoins!);
+        }
+        if (map.size > 0) setPusherPrizeMap(map);
+        // Also keep the current-user banner amount for backward compat
+        if (currentUserId) {
+          const myResult = data.results.find((r) => r.userId === currentUserId);
+          if (myResult && (myResult.prizeCoins ?? 0) > 0) {
+            // Hold banner until result-status is finalized (or verify feature is off).
+            setPendingCoinWinAmount(myResult.prizeCoins!);
+          }
+        }
+      }
+      refresh(true); };
+    const onProgress = (data: {
+      raceId?: string;
+      participantId?: string;
+      userId?: string;
+      steps?: number;
+      todaySteps?: number;
+      currentSteps?: number;
+      displayedLiveSteps?: number;
+      verifiedTodaySteps?: number;
+      provisionalTodaySteps?: number;
+      rank?: number;
+      challengeDayKey?: string;
+      localDate?: string;
+      updatedAt?: string;
+      leaderboard?: Array<{
+        participantId?: string;
+        id?: string;
+        userId?: string;
+        steps?: number;
+        currentSteps?: number;
+        rank?: number;
+        username?: string;
+        updatedAt?: string | null;
+        challengeDayKey?: string | null;
+      }>;
+    }) => {
+      if (!realtimeGuard.accepts(data.raceId ?? raceId)) return;
+      if (raceCompletedRef.current || raceRef.current?.status === "completed") return;
+      const raceMeta = raceRef.current;
+      const unlimitedLive =
+        !!raceMeta &&
+        isUnlimitedGoalChallenge({
+          challengeType: raceMeta.challengeType,
+          entryType: raceMeta.entryType,
+          type: raceMeta.type,
+          capacityMode: raceMeta.capacityMode,
+          maxPlayers: raceMeta.maxPlayers,
+        });
+      const newSteps = unlimitedLive
+        ? pickUnlimitedRealtimeDisplaySteps(data)
+        : typeof data.steps === "number"
+          ? data.steps
+          : typeof data.todaySteps === "number"
+            ? data.todaySteps
+            : typeof data.currentSteps === "number"
+              ? data.currentSteps
+              : null;
+      if (newSteps == null && !Array.isArray(data.leaderboard)) return;
+      const uid = data.userId ?? data.participantId ?? "";
+      const meId = currentUserIdRef.current;
+      if (uid === meId && countdownActiveRef.current) return;
+
+      const expectedDayKey =
+        raceMeta?.challengeDayKey ??
+        formatChallengeDayKey(Date.now(), raceMeta?.challengeTimezone) ??
+        null;
+      const eventDayKey = data.challengeDayKey ?? data.localDate ?? null;
+      if (unlimitedLive && expectedDayKey && eventDayKey && eventDayKey !== expectedDayKey) {
+        stepEngineLog(
+          "Realtime",
+          `ignoredCrossDayEvent=true userId=${uid} eventDay=${eventDayKey} expected=${expectedDayKey}`,
+        );
+        return;
+      }
+
+      if (newSteps != null) {
+        stepEngineLog(
+          "Pusher",
+          `raceStepEvent raceId=${raceId} userId=${uid} steps=${newSteps}`,
+        );
+
+        if (uid === meId && !unlimitedLive) {
+          const target = raceRef.current?.targetSteps ?? 10_000;
+          const cappedSteps = Math.min(target, Math.max(0, newSteps));
+          updateRankFromBackend({
+            raceSteps: cappedSteps,
+            rank: data.rank,
+            totalParticipants:
+              raceRef.current?.currentPlayers ??
+              participantsRef.current.length ??
+              raceProgressRef.current.totalParticipants ??
+              undefined,
+            goalSteps: raceRef.current?.targetSteps,
+          });
+        }
+
+        // Step delta + animator feed so other participants see catch-up after background sync.
+        // Unlimited may legitimately show 0 after a day rollover.
+        if (uid && uid !== meId) {
+          const prev = prevStepsMapRef.current[uid] ?? 0;
+          const allowZero =
+            unlimitedLive &&
+            eventDayKey &&
+            expectedDayKey &&
+            eventDayKey === expectedDayKey &&
+            newSteps === 0 &&
+            prev > 0;
+          if (newSteps > 0 || allowZero) {
+            const delta = newSteps - prev;
+            if (delta < 0 && !allowZero) {
+              stepEngineLog("Realtime", `ignoredDuplicate=true userId=${uid} steps=${newSteps}`);
+            } else if (delta === 0 && !allowZero) {
+              stepEngineLog("Realtime", `ignoredDuplicate=true userId=${uid} steps=${newSteps}`);
+            } else {
+              setConfirmedSteps(uid, newSteps, { instant: Math.abs(delta) >= 20 || !!allowZero });
+              if (delta > 0) {
+                setStepDeltaFlash((f) => ({ ...f, [uid]: delta }));
+                if (stepDeltaTimersRef.current[uid]) clearTimeout(stepDeltaTimersRef.current[uid]);
+                stepDeltaTimersRef.current[uid] = setTimeout(() => {
+                  setStepDeltaFlash((f) => { const n = { ...f }; delete n[uid]; return n; });
+                }, 2000);
+              }
+              prevStepsMapRef.current[uid] = allowZero
+                ? newSteps
+                : Math.max(prev, newSteps);
+            }
+          }
+        }
+      }
+
+      setParticipants((prev) => {
+        let next = prev;
+        let changed = false;
+        if (newSteps != null && uid) {
+          const applied = applyParticipantProgressEvent(
+            next,
+            {
+              ...data,
+              steps: newSteps,
+              challengeDayKey: eventDayKey,
+              updatedAt: data.updatedAt,
+            },
+            {
+              currentUserId: meId,
+              targetSteps: raceRef.current?.targetSteps,
+              raceCompleted: raceCompletedRef.current,
+              dayAware: unlimitedLive,
+              expectedChallengeDayKey: expectedDayKey,
+            },
+          );
+          next = applied.next;
+          changed = applied.changed;
+        }
+        if (Array.isArray(data.leaderboard) && data.leaderboard.length > 0) {
+          const board = applyLeaderboardSnapshot(next, data.leaderboard, {
+            currentUserId: meId,
+            targetSteps: raceRef.current?.targetSteps,
+            raceCompleted: raceCompletedRef.current,
+            dayAware: unlimitedLive,
+            expectedChallengeDayKey: expectedDayKey,
+          });
+          if (board.changed) {
+            next = board.next;
+            changed = true;
+          }
+        }
+        if (changed) {
+          stepEngineLog(
+            "LiveRace",
+            `normalizedParticipantCount=${next.length} allSectionsSynced=true`,
+          );
+        }
+        return changed ? next : prev;
+      });
+    };
+    const onComment = (data: RaceCommentPayload) => {
+      const comment = normalizeIncomingComment(data);
+      if (!comment) return;
+      setComments((prev) => mergeOrAppendComment(prev, comment));
+      setTimeout(() => cheerScrollRef.current?.scrollToEnd({ animated: true }), 50);
+      showCheerToast(`${comment.countryFlag ?? ""} ${comment.username}: ${comment.text}`.trim()); };
+    const onReaction = (data: { counts?: ReactionCount[] }) => {
+      if (Array.isArray(data.counts)) setReactionCounts(data.counts); };
+    const onSpectatorCount = (data: { count?: number }) => {
+      if (typeof data.count === "number") setSpectatorCount(data.count); };
+
+    const onStarted = () => {
+      emitChallengeStatusesRefresh("race_started");
+      if (raceAlreadyStartedRef.current || raceRef.current?.status === "in_progress") {
+        raceAlreadyStartedRef.current = true;
+        void fetchRaceDetailsRef.current(true);
+        return;
+      }
+      triggerCountdown();
+      setTimeout(() => {
+        void fetchRaceDetailsRef.current(true);
+      }, 250);
+    };
+
+    const onFinishedGoal = (data: {
+      raceId?: string; userId?: string; username?: string;
+      currentSteps?: number; targetSteps?: number;
+      finishRank?: number; finishedAt?: string;
+    }) => {
+      if (!data.username || typeof data.finishRank !== "number") return;
+      const rank = data.finishRank;
+      const ordinal = rank === 1 ? "1st" : rank === 2 ? "2nd" : rank === 3 ? "3rd" : `${rank}th`;
+      const emoji = rank === 1 ? "🏁" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : "🏅";
+      const msgText = `finished goal in ${ordinal} place ${emoji}`;
+      const username = data.username;
+      const userId = data.userId ?? `finish-${rank}`;
+
+      if (__DEV__) console.log(
+        `[RaceFinish] user reached goal: ${username}` +
+        `  finishRank:${rank}  currentSteps:${data.currentSteps}` +
+        `  targetSteps:${data.targetSteps}  finishedAt:${data.finishedAt}`,
+      );
+
+      if (data.userId === currentUserId) {
+        const finalSteps = Math.max(
+          localStepsRef.current,
+          data.currentSteps ?? 0,
+        );
+        if (raceId && finalSteps > 0) {
+          void raceStepSyncService.flushGoal(
+            raceId,
+            finalSteps,
+            stepProviderManager.toRaceProgressSource(),
+          );
+        }
+      }
+
+      const syntheticComment: RaceComment = {
+        id: `finish-goal-${raceId}-${userId}`,
+        userId,
+        username,
+        countryFlag: "",
+        avatarColor: rank === 1 ? "#FFD700" : rank === 2 ? "#C0C0C0" : rank === 3 ? "#CD7F32" : "#00E676",
+        text: msgText,
+        createdAt: data.finishedAt ?? new Date().toISOString(),
+        status: "sent",
+      };
+
+      setComments((prev) => {
+        // Deduplicate — one finish message per participant per race
+        if (prev.some((c) => c.id === syntheticComment.id)) return prev;
+        return [...prev, syntheticComment].slice(-60);
+      });
+      setTimeout(() => cheerScrollRef.current?.scrollToEnd({ animated: true }), 50);
+
+      // Show queued top banner (deduped, sequenced with other banners)
+      const ordinalText = rank === 1 ? "1st" : rank === 2 ? "2nd" : rank === 3 ? "3rd" : `${rank}th`;
+      const isMe = data.userId === currentUserId;
+      enqueueBanner({
+        id: `finish-goal-${raceId}-${data.userId ?? rank}`,
+        type: "finish_goal",
+        headline: "FINISH!",
+        username,
+        body: `completed the goal in ${ordinalText} place!`,
+        isMe,
+        emoji,
+        isGold: rank === 1,
+        haptic: "success",
+        durationMs: 4000,
+      });
+
+      showCheerToast(`${username} finished goal in ${ordinal} place ${emoji}`);
+    };
+
+    const refreshParticipants = () => refresh(true);
+
+    const stillRacing = (p: RaceParticipant) => {
+      const s = (p.status ?? "").toLowerCase();
+      return s !== "forfeited" && s !== "left" && s !== "quit" && s !== "disqualified";
+    };
+
+    const markParticipantOut = (uid: string, status: "forfeited" | "left") => {
+      if (!uid) {
+        refreshParticipants();
+        return;
+      }
+      setParticipants((prev) => {
+        let changed = false;
+        const next = prev.map((p) => {
+          if (p.userId !== uid && p.id !== uid) return p;
+          if (p.status === status) return p;
+          changed = true;
+          return { ...p, status };
+        });
+        if (!changed) return prev;
+        const racing = next.filter(stillRacing);
+        // 0 left racing → all out; 1 left → winner-by-forfeit pending server settle.
+        if (racing.length <= 1) setPendingMatchEnd(true);
+        return next;
+      });
+      // Background reconcile (gated); UI already updated optimistically.
+      refreshParticipants();
+    };
+
+    const onParticipantForfeited = (data: { userId?: string }) => {
+      markParticipantOut(data?.userId ?? "", "forfeited");
+    };
+    const onParticipantLeft = (data?: { userId?: string; participantId?: string }) => {
+      const uid = data?.userId ?? data?.participantId ?? "";
+      if (!uid) {
+        refreshParticipants();
+        return;
+      }
+      markParticipantOut(uid, "left");
+    };
+
+    const bindRaceEvents = (ch: NonNullable<typeof channel>) => {
+      ch.bind("race:started",          onStarted);
+      ch.bind("race:player-joined",    refreshParticipants);
+      ch.bind("race:player-left",           onParticipantLeft);
+      ch.bind("race:participant_left",      onParticipantLeft);
+      ch.bind("race:participant-forfeited", onParticipantForfeited);
+      // Unlimited join/leave also emit room:participant_* on the live-race channel.
+      ch.bind("room:participant_joined", refreshParticipants);
+      ch.bind("room:participant_left", onParticipantLeft);
+      ch.bind("race:progress_updated", onProgress);
+      ch.bind("race:comment_new",      onComment);
+      ch.bind("race:reaction_updated", onReaction);
+      ch.bind("race:completed",        onCompleted);
+      ch.bind("race:winners",          refresh);
+      ch.bind("race:spectator_count",  onSpectatorCount);
+      ch.bind("participant_finished_goal", onFinishedGoal);
+      const onVerificationEvent = () => {
+        void refreshResultStatus();
+      };
+      ch.bind("participant:verification_status_changed", onVerificationEvent);
+      ch.bind("participant:reconciled_progress_changed", onVerificationEvent);
+      ch.bind("race:verification_delayed", onVerificationEvent);
+      ch.bind("race:review_required", onVerificationEvent);
+      ch.bind("race:final_progress_confirmed", onVerificationEvent);
+      return onVerificationEvent;
+    };
+
+    const onVerificationEvent = channel ? bindRaceEvents(channel) : null;
+
+    const onUnlimitedProgress = (data: {
+      participantId?: string;
+      userId?: string;
+      steps?: number;
+      todaySteps?: number;
+      currentSteps?: number;
+      rank?: number;
+      challengeDayKey?: string;
+      localDate?: string;
+      updatedAt?: string;
+    }) => {
+      onProgress({
+        ...data,
+        steps:
+          typeof data.steps === "number"
+            ? data.steps
+            : typeof data.todaySteps === "number"
+              ? data.todaySteps
+              : data.currentSteps,
+      });
+    };
+    if (unlimitedChannel) {
+      unlimitedChannel.bind("progress_updated", onUnlimitedProgress);
+      unlimitedChannel.bind("participant_joined", refreshParticipants);
+      unlimitedChannel.bind("participant_left", onParticipantLeft);
+      unlimitedChannel.bind("challenge_started", onStarted);
+      unlimitedChannel.bind("challenge_completed", onCompleted);
+      unlimitedChannel.bind("challenge_cancelled", onCompleted);
+    }
+
+    return () => {
+      if (channel && onVerificationEvent) {
+        channel.unbind("race:started",          onStarted);
+        channel.unbind("race:player-joined",    refreshParticipants);
+        channel.unbind("race:player-left",           onParticipantLeft);
+        channel.unbind("race:participant_left",      onParticipantLeft);
+        channel.unbind("race:participant-forfeited", onParticipantForfeited);
+        channel.unbind("room:participant_joined", refreshParticipants);
+        channel.unbind("room:participant_left", onParticipantLeft);
+        channel.unbind("race:progress_updated", onProgress);
+        channel.unbind("race:comment_new",      onComment);
+        channel.unbind("race:reaction_updated", onReaction);
+        channel.unbind("race:completed",        onCompleted);
+        channel.unbind("race:winners",          refresh);
+        channel.unbind("race:spectator_count",  onSpectatorCount);
+        channel.unbind("participant_finished_goal", onFinishedGoal);
+        channel.unbind("participant:verification_status_changed", onVerificationEvent);
+        channel.unbind("participant:reconciled_progress_changed", onVerificationEvent);
+        channel.unbind("race:verification_delayed", onVerificationEvent);
+        channel.unbind("race:review_required", onVerificationEvent);
+        channel.unbind("race:final_progress_confirmed", onVerificationEvent);
+        unsubscribeFromChannel(channelName);
+      }
+      if (unlimitedChannel) {
+        unlimitedChannel.unbind("progress_updated", onUnlimitedProgress);
+        unlimitedChannel.unbind("participant_joined", refreshParticipants);
+        unlimitedChannel.unbind("participant_left", onParticipantLeft);
+        unlimitedChannel.unbind("challenge_started", onStarted);
+        unlimitedChannel.unbind("challenge_completed", onCompleted);
+        unlimitedChannel.unbind("challenge_cancelled", onCompleted);
+        unsubscribeFromChannel(unlimitedChannelName);
+      }
+    };
+  }, [raceId, refreshResultStatus, useDummyRace, user?.id, sessionToken]);
+
+  // ── Cheer send ────────────────────────────────────────────────────────────
+  const sendMessage = useCallback((text: string, isQuickReaction = false): boolean => {
+    if (!raceId || !isActive || !text.trim()) return false;
+    const trimmed = text.trim();
+
+    // Per-button 1-second cooldown for quick reactions
+    if (isQuickReaction) {
+      const now = Date.now();
+      const last = reactionCooldownRef.current[trimmed] ?? 0;
+      if (now - last < 1000) return false;
+      reactionCooldownRef.current[trimmed] = now;
+    }
+
+    // Generate a stable client-side ID for this message
+    const clientMsgId = `opt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Find sender's profile data from participants
+    const me = participants.find((p) => p.userId === currentUserId);
+    const myAvatarUrl = user?.profileImageUrl ?? null;
+
+    // Immediately add optimistic message
+    const optimistic: RaceComment = {
+      id: `optimistic-${clientMsgId}`,
+      userId:        currentUserId ?? "",
+      username:      me?.username ?? user?.username ?? "You",
+      countryFlag:   me?.countryFlag ?? user?.countryFlag ?? "",
+      avatarColor:   me?.avatarColor ?? user?.avatarColor ?? "#00E676",
+      avatarUrl:     myAvatarUrl,
+      avatarVersion: me?.avatarVersion ?? user?.avatarVersion ?? null,
+      text:          trimmed,
+      createdAt:     new Date().toISOString(),
+      clientMessageId: clientMsgId,
+      status:        "sending",
+      isOptimistic:  true,
+    };
+    setComments((prev) => [...prev, optimistic].slice(-60));
+    setTimeout(() => cheerScrollRef.current?.scrollToEnd({ animated: true }), 50);
+
+    // Dummy / offline preview — keep local message, no backend.
+    if (useDummyRace) {
+      setComments((prev) =>
+        prev.map((c) =>
+          c.clientMessageId === clientMsgId ? { ...c, status: "sent", isOptimistic: false } : c,
+        ),
+      );
+      return true;
+    }
+
+    // Fire-and-forget POST in background
+    void (async () => {
+      const markFailed = () => {
+        setComments((prev) =>
+          prev.map((c) =>
+            c.clientMessageId === clientMsgId ? { ...c, status: "failed" } : c,
+          ),
+        );
+      };
+      const markSentLocal = () => {
+        setComments((prev) =>
+          prev.map((c) =>
+            c.clientMessageId === clientMsgId
+              ? { ...c, status: "sent", isOptimistic: false }
+              : c,
+          ),
+        );
+      };
+      try {
+        const chatBase = isUnlimitedHeader
+          ? `/api/unlimited-challenges/${raceId}`
+          : `/api/races/${raceId}`;
+        // Unlimited accepts clientMessageId for dedupe; classic races ignore extras.
+        const res = await authFetch(`${chatBase}/comments`, {
+          method: "POST",
+          body: JSON.stringify(
+            isUnlimitedHeader
+              ? { text: trimmed, clientMessageId: clientMsgId }
+              : { text: trimmed },
+          ),
+        });
+        if (res.ok) {
+          const body = await res.json().catch(() => null) as {
+            comment?: RaceComment;
+            data?: RaceComment;
+          } | RaceComment | null;
+          const rawComment =
+            body && typeof body === "object"
+              ? ("comment" in body && body.comment
+                  ? body.comment
+                  : "data" in body && body.data
+                    ? body.data
+                    : "id" in body && "text" in body
+                      ? (body as RaceComment)
+                      : null)
+              : null;
+          if (rawComment) {
+            const normalized = normalizeIncomingComment({
+              ...rawComment,
+              clientMessageId: clientMsgId,
+            });
+            if (normalized) {
+              setComments((prev) => mergeOrAppendComment(prev, normalized));
+              return;
+            }
+          }
+          // 200 without a parseable comment — still treat as delivered so UI doesn't stick on "sending".
+          markSentLocal();
+        } else {
+          if (__DEV__) {
+            const errBody = await res.text().catch(() => "");
+            console.warn(
+              `[LiveChat] POST ${chatBase}/comments → ${res.status}`,
+              errBody.slice(0, 200),
+            );
+          }
+          markFailed();
+        }
+      } catch (err) {
+        if (__DEV__) {
+          console.warn(`[LiveChat] send failed raceId=${raceId}`, err);
+        }
+        markFailed();
+      }
+    })();
+    return true;
+  }, [raceId, isActive, participants, currentUserId, user, useDummyRace, isUnlimitedHeader]);
+
+  const handleSendCheer = useCallback(() => {
+    if (!cheerText.trim()) return;
+    const text = cheerText.trim();
+    // Only clear the input after send is accepted (avoids wiping text when race isn't LIVE).
+    if (sendMessage(text)) setCheerText("");
+  }, [cheerText, sendMessage]);
+
+  const handleReact = useCallback(async (emoji: string) => {
+    if (!raceId || !isActive) return;
+    // Optimistic update — show the bump immediately, API response will confirm
+    setReactionCounts((prev) => {
+      const existing = prev.find((c) => c.emoji === emoji);
+      if (existing) return prev.map((c) => c.emoji === emoji ? { ...c, count: c.count + 1 } : c);
+      return [...prev, { emoji, count: 1 }];
+    });
+    try {
+      const chatBase = isUnlimitedHeader
+        ? `/api/unlimited-challenges/${raceId}`
+        : `/api/races/${raceId}`;
+      const res = await authFetch(`${chatBase}/reactions`, {
+        method: "POST",
+        body: JSON.stringify({ emoji }),
+      });
+      if (res.ok) {
+        const body = await res.json().catch(() => null) as { counts?: ReactionCount[] } | null;
+        // Replace with authoritative server counts
+        if (Array.isArray(body?.counts)) setReactionCounts(body!.counts!);
+      } else if (res.status === 403) {
+        // Unlimited reactions require membership (stricter than classic race endpoint).
+        setReactionCounts((prev) => {
+          const existing = prev.find((c) => c.emoji === emoji);
+          if (!existing) return prev;
+          if (existing.count <= 1) return prev.filter((c) => c.emoji !== emoji);
+          return prev.map((c) => (c.emoji === emoji ? { ...c, count: c.count - 1 } : c));
+        });
+      }
+    } catch { /* silent — optimistic update stays */ }
+  }, [raceId, isActive, isUnlimitedHeader]);
+
+  // ── Loading / not found ───────────────────────────────────────────────────
+  // Full-screen skeleton only if we somehow have nothing to paint (should be rare).
+  if (loading && !race) {
+    return <SkeletonLiveDetail />;
+  }
+  if (!race || detailMissing) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 8, padding: 24, backgroundColor: "#050711" }}>
+        <Text style={{ color: "#FFFFFF", fontSize: rf(18), fontWeight: "800" }}>Race not found</Text>
+        <TouchableOpacity style={{ borderRadius: 14, paddingHorizontal: 24, paddingVertical: 12, backgroundColor: "#00E676" }} onPress={leaveLiveDetail}>
+          <Text style={{ color: "#000", fontWeight: "700" }}>Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    ); }
+
+  if (currentParticipant?.status === "forfeited" && isActive) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 32, backgroundColor: "#050711" }}>
+        <Text style={{ fontSize: rf(40) }}>🚩</Text>
+        <Text style={{ color: "#FF4444", fontSize: rf(20), fontWeight: "800" }}>You Quit This Race</Text>
+        <Text style={{ color: "#888", fontSize: rf(14), textAlign: "center", lineHeight: 20 }}>
+          You forfeited this race. You can watch other races or start a new one.
+        </Text>
+        <TouchableOpacity
+          style={{ marginTop: 8, borderRadius: 14, paddingHorizontal: 28, paddingVertical: 13, backgroundColor: "#00E676" }}
+          onPress={leaveLiveDetail}
+        >
+          <Text style={{ color: "#000", fontWeight: "700", fontSize: rf(15) }}>Back to Races</Text>
+        </TouchableOpacity>
+      </View>
+    ); }
+
+  const isUnlimitedLive =
+    isUnlimitedGoalFrontendEnabled() &&
+    isUnlimitedGoalChallenge({
+      challengeType: race.challengeType,
+      entryType: race.entryType,
+      type: race.type,
+      capacityMode: race.capacityMode,
+      maxPlayers: race.maxPlayers,
+    });
+  const participantValue = formatPlayerCountDisplay({
+    current: Math.max(race.currentPlayers || 0, participants.length, 1),
+    max: race.maxPlayers,
+    isUnlimited: isUnlimitedLive,
+  });
+
+  // ── Unlimited Daily Goal: viewer-personalized day/countdown schedule ──────
+  // Plain computation (not useMemo): sits after early returns — do not use hooks here.
+  // Never the host's timezone / a shared UTC end instant — see utils/unlimitedViewerSchedule.ts.
+  const unlimitedViewerSchedule = isUnlimitedLive
+    ? computeUnlimitedViewerSchedule(
+        {
+          startAtUtc: race.scheduledStartAt ?? race.startedAt ?? null,
+          challengeTimezone: race.challengeTimezone ?? null,
+          durationDays: race.challengeDurationDays ?? null,
+          dailyGoalSteps: race.targetSteps,
+          challengeStatus: race.status,
+        },
+        {
+          liveDay: currentParticipant
+            ? {
+                timezone: currentParticipant.timezone,
+                dayNumber: currentParticipant.dayNumber,
+                localDate: currentParticipant.challengeDayKey,
+                dailyGoalSteps: currentParticipant.dailyGoalSteps,
+                qualificationStatus: currentParticipant.qualificationStatus,
+                completedDays: currentParticipant.completedDays,
+              }
+            : null,
+          fallbackTimezone: getDeviceTimezone(),
+        },
+      )
+    : null;
+
+  const unlimitedResultStatus = isUnlimitedLive
+    ? resolveUnlimitedResultStatus({
+        resultsStatus: race.resultsStatus,
+        challengeStatus: race.rawStatus ?? race.status,
+        settlementStatus: race.settlementStatus,
+        viewerPersonallyFinished:
+          unlimitedViewerSchedule?.viewerStatus === "completed" ||
+          unlimitedViewerSchedule?.viewerStatus === "failed" ||
+          unlimitedViewerSchedule?.viewerStatus === "left",
+      })
+    : "challenge_in_progress";
+  const unlimitedEligibility = isUnlimitedLive
+    ? resolvePrizePoolEligibilityStatus({
+        resultStatus: unlimitedResultStatus,
+        qualificationStatus: currentParticipant?.qualificationStatus,
+        prizePoolEligibilityStatus:
+          currentParticipant?.prizePoolEligibilityStatus ?? race.prizePoolEligibilityStatus,
+      })
+    : "pending";
+  const goToUnlimitedResults = () => {
+    if (!raceId) return;
+    router.push({ pathname: "/race/unlimited-results", params: { challengeId: raceId } } as never);
+  };
+
+  // Info-bar Prize Pool chip — same row as TIME / PARTICIPANTS for every race type.
+  // Plain computation (not useMemo): sits after early returns — do not use hooks here.
+  const prizePoolChip = (() => {
+    const players = Math.max(participants.length, race.currentPlayers, 1);
+    if (isUnlimitedLive) {
+      const cents =
+        typeof race.prizePoolCents === "number" && race.prizePoolCents > 0
+          ? race.prizePoolCents
+          : Math.round((race.prizePool ?? 0) * 100);
+      if (cents > 0) {
+        const dollars = cents / 100;
+        return {
+          value: "$" + (dollars % 1 === 0 ? dollars.toFixed(0) : dollars.toFixed(2)),
+          color: "#FFD700",
+        };
+      }
+      return { value: "equal split", color: "#FFD700" };
+    }
+    if (race.entryType === "coins_battle") {
+      const entryAmt = race.coinEntryAmount ?? 0;
+      const totalPool =
+        race.coinPrizePool && race.coinPrizePool > 0
+          ? race.coinPrizePool
+          : entryAmt * players;
+      return { value: fmtCoins(totalPool), color: "#F59E0B" };
+    }
+    if (race.type === "sponsored") {
+      const cents =
+        typeof race.prizePoolCents === "number" && race.prizePoolCents > 0
+          ? race.prizePoolCents
+          : Math.round((race.prizePool ?? 0) * 100);
+      if (cents > 0) {
+        const dollars = cents / 100;
+        return {
+          value: "$" + (dollars % 1 === 0 ? dollars.toFixed(0) : dollars.toFixed(2)),
+          color: "#FFD700",
+        };
+      }
+      return { value: "Gift cards", color: "#FF9900" };
+    }
+    if (race.entryType === "free") {
+      // Backend only awards free-race coins when targetSteps >= 1000.
+      // Short goals (e.g. 100 steps) must not show a fake "50" pool.
+      if (freeRaceAwardsCoinPrizes(race.targetSteps)) {
+        const coinPool = freeRaceCoinPrizePool(players, race.targetSteps);
+        if (coinPool > 0) {
+          return { value: fmtCoins(coinPool), color: "#F59E0B", label: "PRIZE POOL" };
+        }
+      }
+      return { value: "Coins + Badges", color: "#6EE7B7", label: "REWARDS" };
+    }
+    const cents =
+      typeof race.prizePoolCents === "number" && race.prizePoolCents > 0
+        ? race.prizePoolCents
+        : Math.round((race.prizePool ?? 0) * 100);
+    if (cents > 0) {
+      const dollars = cents / 100;
+      return {
+        value: "$" + (dollars % 1 === 0 ? dollars.toFixed(0) : dollars.toFixed(2)),
+        color: "#FFD700",
+      };
+    }
+    return { value: "$0", color: "#FFD700" };
+  })();
+
+  const trackMedia = {
+    code: trackLayoutId,
+    trackLayout: trackLayoutId,
+    imageSet: race.imageSet ?? null,
+    imageUrl: race.imageUrl ?? null,
+    assetVersion: race.assetVersion,
+    width: race.width,
+    height: race.height,
+  };
+
+  // ── Race Finished banner (shared) ─────────────────────────────────────────
+  const everyoneForfeitedLocal =
+    participants.length > 0 &&
+    participants.every((p) => {
+      const s = (p.status ?? "").toLowerCase();
+      return s === "forfeited" || s === "left" || s === "quit";
+    });
+  const allForfeited =
+    forfeitReason === "all_forfeited" || (isCompleted && everyoneForfeitedLocal);
+  const winnerByForfeit = forfeitReason === "winner_by_forfeit";
+  const sponsoredMeQualified =
+    !!currentParticipant &&
+    (
+      currentParticipant.eligibleForPrize === true ||
+      currentParticipant.isWinner === true ||
+      (currentParticipant.prizeAmount ?? 0) > 0
+    );
+  const MatchEndingBanner =
+    pendingMatchEnd && !isCompleted ? (
+      <View style={[s.finishedBanner, { borderColor: "#F59E0B55" }]}>
+        <View style={s.finishedBannerHeader}>
+          <Text style={{ fontSize: rf(22) }}>⏳</Text>
+          <Text style={s.finishedBannerTitle}>Match ending…</Text>
+        </View>
+        <Text style={{ color: "#9CA3AF", fontSize: rf(13), paddingHorizontal: 4, paddingBottom: 4 }}>
+          {everyoneForfeitedLocal
+            ? "All players are out. Finalizing the result…"
+            : "A player left the race. Declaring the winner…"}
+        </Text>
+      </View>
+    ) : null;
+  const FinishedBanner = isCompleted && !bannerDismissed ? (
+    <View style={[s.finishedBanner]}>
+      <View style={s.finishedBannerHeader}>
+        <Text style={{ fontSize: rf(22) }}>{allForfeited ? "🚩" : "🏆"}</Text>
+        <Text style={s.finishedBannerTitle}>
+          {allForfeited
+            ? "No Winners — All Forfeited"
+            : winnerByForfeit
+              ? "Won by Forfeit"
+              : "Race Finished"}
+        </Text>
+        <TouchableOpacity onPress={() => setBannerDismissed(true)} style={s.bannerClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+          <Feather name="x" size={18} color="#888" />
+        </TouchableOpacity>
+      </View>
+      {isSponsored && currentParticipant ? (
+        <View style={s.sponsoredFinishBody}>
+          <Text style={s.sponsoredFinishMsg}>
+            {sponsoredMeQualified
+              ? "Congratulations! You reached the target steps and qualified for the event reward"
+              : "Oops! Target steps not completed, so you’re not eligible for this event’s reward. Better luck next time—keep walking!"}
+          </Text>
+        </View>
+      ) : (
+        <>
+      {allForfeited && (
+        <Text style={{ color: "#9CA3AF", fontSize: rf(13), paddingHorizontal: 4, paddingBottom: 4 }}>
+          Match ended — all participants forfeited. No winners were declared.
+        </Text>
+      )}
+      {!allForfeited && winnerByForfeit && winners.length === 0 && (
+        <Text style={{ color: "#9CA3AF", fontSize: rf(13), paddingHorizontal: 4, paddingBottom: 4 }}>
+          Opponent forfeited. Confirming the winner…
+        </Text>
+      )}
+      {!allForfeited && winners.map((w, i) => {
+        const rank = w.displayRank ?? w.rank ?? (i + 1);
+        const rankNum = rank === 1 ? "#1" : rank === 2 ? "#2" : `#${rank}`;
+        const tiedInGroup = w.isTied && (w.tieGroupSize ?? 1) > 1;
+        const rankCrown = rank === 1 ? "👑" : rank === 2 ? "🥈" : "🥉";
+        const badgeColor = rank === 1 ? "#F59E0B" : rank === 2 ? "#9CA3AF" : "#CD7C2E";
+        let badgeLabel: string;
+        const winnerSlotsFin = getWinnerCount(race.currentPlayers);
+        if (tiedInGroup) badgeLabel = `Tied ${rankNum} 🤝`;
+        else if (winnerByForfeit && rank === 1) badgeLabel = "Won by Forfeit 🏳️";
+        else badgeLabel = rank <= winnerSlotsFin ? `${rankNum} Winner` : `${rankNum} Place`;
+
+        // Per-rank free coin amounts (combined if tied, zero for non-prize ranks).
+        // Backend only grants free-race coins when targetSteps >= 1000.
+        const freeCoins = (() => {
+          if (!freeRaceAwardsCoinPrizes(race.targetSteps)) return 0;
+          const FREE_TIERS = FREE_TIER_COIN_REWARDS;
+          const wSlots = getWinnerCount(race.currentPlayers);
+          if (rank > wSlots) return 0; // not a prize-eligible rank
+          if (!tiedInGroup) return FREE_TIERS[rank - 1] ?? 0;
+          let pool = 0;
+          for (let s = 0; s < (w.tieGroupSize ?? 1); s++) pool += FREE_TIERS[(rank - 1) + s] ?? 0;
+          return Math.floor(pool / (w.tieGroupSize ?? 1));
+        })();
+
+        return (
+          <View key={`${w.userId}-${i}`} style={s.winnerRow}>
+            <Text style={s.winnerCrown}>{rankCrown}</Text>
+            <View style={[s.winnerAv, { backgroundColor: (w.avatarColor ?? "#00E676") + "25", borderColor: w.avatarColor ?? "#00E676" }]}>
+              <Text style={[s.winnerAvTxt, { color: w.avatarColor ?? "#00E676" }]}>
+                {w.username.charAt(0).toUpperCase() || "?"}
+              </Text>
+              {w.avatarUrl && w.userId ? (
+                <Image
+                  source={{ uri: `${getApiBase()}/api/profile/avatar/${w.userId}?v=${getAvatarVersion(w.userId, w.avatarVersion ?? 0)}` }}
+                  style={[s.winnerAvImg, StyleSheet.absoluteFillObject]}
+                />
+              ) : null}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.winnerName}>@{w.username} {w.countryFlag}</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+                <BlueShoe size={12} />
+                <Text style={s.winnerSteps}>
+                  {resolveParticipantRaceSteps(w, w.userId === user?.id).toLocaleString()} steps
+                </Text>
+              </View>
+              {race.entryType === "free"
+                ? freeCoins > 0
+                    ? <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 2 }}>
+                        <Image source={require("@/assets/images/game-coin.png")} style={{ width: 13, height: 13 }} />
+                        <Text style={s.winnerPrize}>{freeCoins} coins{tiedInGroup ? " (split)" : ""}</Text>
+                      </View>
+                    : null
+                : race.entryType === "coins_battle"
+                ? (() => {
+                    // Prize resolution order:
+                    // 1. DB-confirmed prizeCoins on participant (most accurate)
+                    // 2. Pusher race:completed event (all-participant map, fires before DB write completes)
+                    // 3. Current-user coinWinAmount (legacy single-user fallback)
+                    // 4. Calculated from known prize pool × split ratio for this rank
+                    const rankIdx = (w.displayRank ?? w.rank ?? 1) - 1;
+                    const winnersPool = race.coinWinnersPool && race.coinWinnersPool > 0
+                      ? race.coinWinnersPool
+                      : (race.coinPrizePool ?? 0);
+                    const splits = coinsPrizeSplits(race.currentPlayers);
+                    const calcCoins = rankIdx < splits.length && winnersPool > 0
+                      ? Math.floor(winnersPool * splits[rankIdx])
+                      : 0;
+                    const displayCoins =
+                      (w.prizeCoins ?? 0) > 0 ? w.prizeCoins! :
+                      pusherPrizeMap.get(w.userId) ??
+                      (w.userId === currentUserId && coinWinAmount !== null ? coinWinAmount : null) ??
+                      calcCoins;
+                    return displayCoins > 0
+                      ? <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 2 }}>
+                          <Image source={require("@/assets/images/game-coin.png")} style={{ width: 13, height: 13 }} />
+                          <Text style={s.winnerPrize}>{fmtCoins(displayCoins)} coins{tiedInGroup ? " (split)" : ""}</Text>
+                        </View>
+                      : null;
+                  })()
+                : (() => {
+                    const prize = w.prizeAmount != null && w.prizeAmount > 0 ? w.prizeAmount : 0;
+                    return prize > 0 ? <Text style={s.winnerPrize}>💰 ${prize.toFixed(2)}{tiedInGroup ? " (split)" : ""}</Text> : null;
+                  })()
+              }
+            </View>
+            <View style={[s.winnerBadge, { backgroundColor: badgeColor + "22", borderColor: badgeColor + "66", borderWidth: 1 }]}>
+              <Text style={[s.winnerBadgeTxt, { color: badgeColor }]}>{badgeLabel}</Text>
+            </View>
+          </View>
+        );
+      })}
+        </>
+      )}
+    </View>
+  ) : null;
+  const OutcomeBanner = FinishedBanner ?? MatchEndingBanner;
+
+  return (
+    <SafeAreaView
+      style={{
+        flex: 1,
+        backgroundColor: "#050711",
+        paddingBottom: liveBottomInset,
+      }}
+      edges={["left", "right"]}
+    >
+    <KeyboardAvoidingView
+      style={st.screen}
+      behavior="padding"
+      keyboardVerticalOffset={0}
+    >
+      {/* ── Header ── */}
+      <View style={[s.header, { paddingTop: safeTop + 6 }]}>
+        <TouchableOpacity
+          style={s.backBtn}
+          onPress={() => {
+            // Navigate immediately — do not await voice/step teardown (was causing multi-second lag).
+            leaveLiveDetail();
+          }}
+        >
+          <Feather name="chevron-left" size={25} color="#fff" />
+        </TouchableOpacity>
+        <View style={s.hCenter}>
+          {isActive && !pendingMatchEnd && (
+            <Text style={[s.hLive, isSponsored && s.hLiveSponsored]}>LIVE </Text>
+          )}
+          {isActive && pendingMatchEnd && (
+            <Text style={[s.hLive, isSponsored && s.hLiveSponsored, { color: "#F59E0B" }]}>ENDING </Text>
+          )}
+          {isCompleted && <Text style={[s.hLive, isSponsored && s.hLiveSponsored, { color: "#FFD700" }]}>FINISHED </Text>}
+          <Text
+            style={[s.hTitle, isSponsored && s.hTitleSponsored]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.72}
+          >
+            {headerRaceTitle}
+          </Text>
+        </View>
+        {currentParticipant && isActive && currentParticipant.status !== "forfeited" ? (
+          <TouchableOpacity activeOpacity={0.85} onPress={() =>
+            AppAlert.alert(
+              "Forfeit Race?",
+              "Forfeiting counts as a loss. Remaining players keep racing until the match settles.",
+              [
+              { text: "Cancel" },
+              { text: "Forfeit", style: "destructive", onPress: () => {
+                if (forfeitInFlightRef.current) return;
+                forfeitInFlightRef.current = true;
+
+                // Optimistic local exit — never wait on the leave API for UI.
+                if (user?.id) {
+                  setParticipants((prev) =>
+                    prev.map((p) =>
+                      p.userId === user.id || p.id === user.id
+                        ? { ...p, status: "forfeited" }
+                        : p,
+                    ),
+                  );
+                }
+                if (raceId) {
+                  void suppressLiveRaceNotification(raceId, "user_forfeit");
+                  stopRaceStepTracking("user_forfeit");
+                  emitChallengeLeft(raceId);
+                }
+                cancelRace();
+                setActiveRace(null, false);
+                emitChallengeStatusesRefresh("user_forfeit");
+                leaveLiveDetail();
+
+                const leavePath = isUnlimitedHeader
+                  ? `/api/unlimited-challenges/${raceId}/leave`
+                  : `/api/races/${raceId}/leave`;
+                void authFetch(leavePath, {
+                  method: "POST",
+                  body: JSON.stringify({ reason: "user_quit" }),
+                }).catch(() => { /* best-effort */ });
+              }},
+            ]) }>
+            <LinearGradient colors={["#FF3333", "#BB0000"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.leaveBtn}>
+              <Text style={s.leaveTxt}>Forfeit</Text>
+              <Feather name="log-out" size={12} color="#fff" />
+            </LinearGradient>
+          </TouchableOpacity>
+        ) : (
+          <View style={s.headerSpacer} />
+        )}
+      </View>
+
+      {/* ── Tagline: Start time ↔ Beat your friends (or Spectating badge), 5s each ──
+          Unlimited: hide tagline entirely (no day rotator, no “Beat your friends”). */}
+      {!isUnlimitedLive ? (
+        <LiveTaglineRotator
+          raceId={raceKeyForTagline}
+          alt={taglineAlt}
+          visible={!isCompleted}
+          isSpectator={!currentParticipant}
+        />
+      ) : null}
+
+      {/* ── Info bar ── */}
+      <View style={[s.infoBar, isUnlimitedLive && s.infoBarUnlimited]}>
+        <RaceClockInfoBar
+          enabled={!!race}
+          isActive={isActive}
+          isCompleted={isCompleted}
+          isSponsored={isSponsored}
+          startedAtMs={startedAtMs}
+          completedAtMs={completedAtMs}
+          statusLabel={statusLabel}
+          participantValue={participantValue}
+          prizePoolValue={prizePoolChip.value}
+          prizePoolColor={prizePoolChip.color}
+          prizePoolLabel={"label" in prizePoolChip ? prizePoolChip.label : undefined}
+          styles={{
+            infoCard: s.infoCard,
+            infoRow: s.infoRow,
+            infoIcon: s.infoIcon,
+            infoLbl: s.infoLbl,
+            infoVal: s.infoVal,
+          }}
+        />
+      </View>
+
+      {/* ── Unlimited Daily Goal: today goal / countdown (no Day N of Y — avoids chip overlap) ── */}
+      {isUnlimitedLive && unlimitedViewerSchedule ? (
+        <UnlimitedCurrentDayCard
+          schedule={unlimitedViewerSchedule}
+          todaySteps={unlimitedDailySteps}
+          onPressInfo={() => setShowUnlimitedDayProgress(true)}
+          eligibility={unlimitedEligibility}
+          historyRows={unlimitedHistoryRows}
+          qualificationStatus={currentParticipant?.qualificationStatus}
+          onPressViewResults={goToUnlimitedResults}
+        />
+      ) : null}
+      {isUnlimitedLive ? (
+        <UnlimitedDayProgressModal
+          visible={showUnlimitedDayProgress}
+          onClose={() => setShowUnlimitedDayProgress(false)}
+          schedule={unlimitedViewerSchedule}
+          todaySteps={unlimitedDailySteps}
+          historyRows={unlimitedHistoryRows}
+        />
+      ) : null}
+
+      {/* ── View toggle ── */}
+      <RaceViewToggle
+        selectedView={selectedView}
+        onSelect={(v) => {
+          if (v === "live_board" && isTrackFullscreen) setIsTrackFullscreen(false);
+          setSelectedView(v);
+        }}
+        colors={colors}
+      />
+
+      {/* ══ Content area: race track stays mounted; Live Board shares flex space above steps/chat ══ */}
+      <View style={{ flex: 1, position: "relative" }}>
+
+        {/* ── RACE TRACK — always mounted (hidden while Live Board is selected) ── */}
+        <View
+          style={{
+            flex: selectedView === "race_track" ? 1 : 0,
+            opacity: selectedView === "race_track" ? 1 : 0,
+            overflow: "hidden",
+            // Collapse fully so Live Board gets the full column above steps/chat.
+            ...(selectedView === "live_board"
+              ? { height: 0, minHeight: 0, maxHeight: 0 }
+              : null),
+          }}
+          pointerEvents={selectedView === "race_track" ? "auto" : "none"}
+          importantForAccessibility={
+            selectedView === "race_track" ? "yes" : "no-hide-descendants"
+          }
+        >
+          {OutcomeBanner}
+
+          <View style={{ flex: 1, position: "relative" }}>
+          <View
+            style={[st.hero, { width: screenW, flex: 1, minHeight: rs(240) }]}
+            onLayout={(e) => setHeroHeight(Math.max(rs(240), e.nativeEvent.layout.height))}
+          >
+            <Animated.View style={[StyleSheet.absoluteFill, trackAnimatedStyle]}>
+              {/* Only the active theme — rendering every track bg made back-nav lag badly. */}
+              <TrackThemeImageBackground
+                key={`${trackLayoutId}:${race.assetVersion ?? 0}`}
+                media={trackMedia}
+                variant="full"
+                contentFit="fill"
+                style={[
+                  StyleSheet.absoluteFill,
+                  trackLayoutId === "bg1" && st.bg1Background,
+                ]}
+              />
+              <LinearGradient
+                colors={["#02030A66", "#02030A33", "#02030A99"]}
+                style={StyleSheet.absoluteFill}
+                pointerEvents="none"
+              />
+              {/* ── Animated theme overlay — above bg, below avatars ── */}
+              <AnimatedTrackOverlay themeCode={trackLayoutId} />
+              {trackPlayers.map((player, index) => (
+                <RunnerMarker
+                  key={player.id}
+                  player={player}
+                  index={index}
+                  width={screenW}
+                  height={heroHeight}
+                  targetSteps={race.targetSteps}
+                  finishZoneY={getFinishZoneY(trackLayoutId, heroHeight)}
+                  themeId={trackLayoutId}
+                  rsFactor={rsFactor}
+                  isSpeakingVoice={visibleSpeakerIds.includes(player.userId)}
+                  overrideSteps={player.isMe ? mySteps : undefined}
+                  meAvatarUrl={user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` : null}
+                  onPress={(uid) => {
+                    const p = participants.find(pt => pt.userId === uid);
+                    setProfileInitialData(p ? {
+                      username: p.username,
+                      country: null,
+                      countryFlag: p.countryFlag ?? null,
+                      avatarColor: p.avatarColor ?? null,
+                      avatarUrl: p.avatarUrl ?? null,
+                      avatarVersion: p.avatarVersion ?? 0,
+                      isHost: p.isHost,
+                      isCurrentUser: p.userId === currentUserId,
+                      activeTitle: null,
+                      friendStatus: "none",
+                      friendRequestId: null,
+                    } : undefined);
+                    setProfileUserId(uid);
+                  }}
+                />
+              ))}
+              <Animated.View style={[st.syncPill, pulseStyle]} pointerEvents="none">
+                <View style={st.syncDot} />
+                <Text style={st.syncText}>Syncing…</Text>
+              </Animated.View>
+            </Animated.View>
+
+            {selectedView === "race_track" && (
+            <LeaderboardOverlay
+              visible={isLeaderboardVisible}
+              players={panelPlayers}
+              width={leaderboardW}
+              height={heroHeight}
+              animatedStyle={leaderboardAnimatedStyle}
+              positionText={trackPositionText}
+              statusText={trackStatusText}
+              meAvatarUrl={user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` : null}
+              rsFactor={rsFactor}
+              isRemoteLocallyMuted={isRemoteLocallyMuted}
+              onLocalMute={localMuteParticipant}
+              onLocalUnmute={localUnmuteParticipant}
+              showMuteControls={panelPlayers.length > 1}
+              isActiveRace={isActive}
+              muteAllActive={muteAllActive}
+              onMuteAll={() =>
+                muteAllRemoteParticipants(
+                  panelPlayers
+                    .filter((p) => !p.isMe && !p.isForfeited)
+                    .map((p) => p.userId || p.id),
+                )
+              }
+              onUnmuteAll={unmuteAllRemoteParticipants}
+            />
+            )}
+
+            {selectedView === "race_track" && (
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => setIsTrackFullscreen((v) => !v)}
+                style={st.zoomBtn}
+              >
+                <Feather
+                  name={isTrackFullscreen ? "minimize-2" : "maximize-2"}
+                  size={16}
+                  color="#FFFFFF"
+                />
+              </TouchableOpacity>
+            )}
+
+          </View>
+
+          {selectedView === "race_track" && (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => setIsLeaderboardVisible((v) => !v)}
+              style={st.toggleHandle}
+              accessibilityRole="button"
+              accessibilityLabel={isLeaderboardVisible ? "Hide track position panel" : "Show track position panel"}
+            >
+              <Feather name={isLeaderboardVisible ? "chevron-right" : "chevron-left"} size={22} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
+
+          </View>
+
+        </View>
+
+        {/* ── LIVE BOARD — flex sibling above steps/chat (not absoluteFill under them) ── */}
+        {selectedView === "live_board" && (
+        <View
+          style={{ flex: 1, backgroundColor: "#050711", minHeight: 0 }}
+        >
+          <LiveBoardPanel
+            race={race}
+            participants={participants.map((p) => {
+              const isMe = p.userId === currentUserId;
+              const steps = resolveParticipantRaceSteps(p, isMe);
+              return {
+                ...p,
+                currentSteps: getDisplaySteps(p.userId, steps),
+              };
+            })}
+            currentUserId={currentUserId}
+            stepDeltas={stepDeltaFlash}
+            userAvatarUrl={user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` : null}
+            onAvatarPress={(p) => {
+              setProfileInitialData({
+                username: p.username,
+                country: null,
+                countryFlag: p.countryFlag ?? null,
+                avatarColor: p.avatarColor ?? null,
+                avatarUrl: p.avatarUrl ?? null,
+                avatarVersion: p.avatarVersion ?? 0,
+                isHost: p.isHost,
+                isCurrentUser: p.userId === currentUserId,
+                activeTitle: null,
+                friendStatus: "none",
+                friendRequestId: null,
+              });
+              setProfileUserId(p.userId);
+            }}
+            colors={colors}
+            listHeader={OutcomeBanner}
+            listFooter={
+              race.entryType === "free" ||
+              race.type === "sponsored" ||
+              (isUnlimitedGoalFrontendEnabled() &&
+                isUnlimitedGoalChallenge({
+                  challengeType: race.challengeType,
+                  entryType: race.entryType,
+                  type: race.type,
+                  capacityMode: race.capacityMode,
+                  maxPlayers: race.maxPlayers,
+                }))
+                ? null
+                : <PrizePanel race={race} participants={participants} colors={colors} />
+            }
+          />
+        </View>
+        )}
+      </View>
+
+      {/* ── Progress tracker — hidden in fullscreen so track fills more space ── */}
+      {!isTrackFullscreen && <View style={st.progSection}>
+        <View style={st.progLeft}>
+          <BlueShoe size={rs(24)} />
+          <View style={st.progMain}>
+            <Text>
+              <Text style={[st.progMine, { fontSize: rs(17) }]}>{formatSteps(mySteps)}</Text>
+              <Text style={[st.progTarget, { fontSize: rs(13) }]}> / {formatSteps(race.targetSteps)} steps</Text>
+            </Text>
+            <View style={st.progBarBg}>
+              <Animated.View style={[st.progBarFill, progressBarStyle]} />
+            </View>
+            <Text
+              style={[
+                st.progSub,
+                {
+                  fontSize: Math.max(8, rs(9)),
+                  ...(isUnlimitedHeader && unlimitedEligibility === "not_eligible"
+                    ? { color: "#FF6B6B", fontWeight: "700" as const }
+                    : null),
+                },
+              ]}
+            >
+              {isUnlimitedHeader && unlimitedEligibility === "not_eligible"
+                ? UNLIMITED_COPY.lostAfterMiss
+                : myPlayer
+                  ? isUnlimitedHeader
+                    ? (() => {
+                        const myRank = myPlayer.rank ?? 0;
+                        const sorted = [...participants].sort(
+                          (a, b) => (b.currentSteps ?? 0) - (a.currentSteps ?? 0),
+                        );
+                        const myIdx = sorted.findIndex((p) => p.userId === myPlayer.userId);
+                        const aboveSteps =
+                          myIdx > 0 ? sorted[myIdx - 1]?.currentSteps ?? mySteps : mySteps;
+                        const gap = Math.max(0, aboveSteps - mySteps + (myIdx > 0 ? 1 : 0));
+                        return myIdx > 0
+                          ? `Rank #${myRank} · ${formatSteps(gap)} steps to next rank`
+                          : `Rank #${myRank} · Leading`;
+                      })()
+                    : `Rank #${myPlayer.rank} · ${formatSteps(Math.max(0, race.targetSteps - mySteps))} steps to goal`
+                  : "Waiting for live race data"}
+            </Text>
+            {isActive && !(isUnlimitedHeader && unlimitedEligibility === "not_eligible") ? (
+              <Text style={[st.progSub, { fontSize: Math.max(8, rs(9)), marginTop: 2, opacity: 0.85 }]}>
+                {isUnlimitedHeader
+                  ? unlimitedHcPending
+                    ? `Live · ${formatSteps(mySteps)} steps · verification pending`
+                    : unlimitedProgressSource === "verified"
+                      ? `Verified daily · ${formatSteps(unlimitedVerifiedSteps)} steps`
+                      : `Live tracking · ${formatSteps(mySteps)} steps`
+                  : FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR
+                    ? `Live tracking · ${formatSteps(mySteps)} race steps`
+                    : "Live tracking"}
+                {isUnlimitedHeader
+                  ? unlimitedHcPending
+                    ? " · Sensor live; prizes use Health Connect / HealthKit"
+                    : unlimitedVerifiedSteps > 0
+                      ? " · Walk sync verifying"
+                      : " · Walk with Health Connect enabled to verify"
+                  : raceVerification
+                    ? raceVerification.status === "verification_delayed" ||
+                      raceVerification.status === "provider_unavailable"
+                      ? " · Health verification pending"
+                      : raceVerification.status === "matched" ||
+                          raceVerification.status === "within_tolerance"
+                        ? ` · Verified ${formatSteps(raceVerification.verifiedRaceSteps)}`
+                        : " · Health verification pending"
+                    : FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR
+                      ? " · Health verification pending"
+                      : ""}
+              </Text>
+            ) : null}
+          </View>
+          {race.entryType === "coins_battle" ? (
+            <LivePrizeStrip race={race} colors={colors} />
+          ) : (
+            <Text style={[st.progPct, { fontSize: rs(15) }]}>{Math.round(myProgress * 100)}%</Text>
+          )}
+        </View>
+      </View>}
+
+      {/* ── Live chat + cheers — same visibility as the send bar (both Race Track + Live Board) ── */}
+      {isActive && !isTrackFullscreen && (
+        <>
+          {/* Message feed */}
+          <View style={[st.liveChatPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={st.liveChatHeader}>
+              <Text style={{ fontSize: rf(12) }}>💬</Text>
+              <Text style={[st.liveChatTitle, { color: colors.mutedForeground }]}>Live Chat</Text>
+              {spectatorCount > 0 && (
+                <Text style={[st.liveChatTitle, { color: colors.mutedForeground, marginLeft: "auto" }]}>
+                  👁 {spectatorCount} watching
+                </Text>
+              )}
+            </View>
+            <ScrollView
+              ref={cheerScrollRef}
+              style={st.liveChatScroll}
+              showsVerticalScrollIndicator={false}
+              onContentSizeChange={() => cheerScrollRef.current?.scrollToEnd({ animated: true })}
+            >
+              {comments.length === 0 ? (
+                <Text style={[st.liveChatEmpty, { color: colors.mutedForeground }]}>No messages yet — be the first!</Text>
+              ) : dedupeComments(comments).slice(-20).map((cheer, i) => {
+                const isFailed = cheer.status === "failed";
+                const retryHandler = isFailed ? () => {
+                  setComments((prev) => prev.filter((c) => c.clientMessageId !== cheer.clientMessageId));
+                  sendMessage(cheer.text);
+                } : undefined;
+                const RowWrapper = isFailed ? TouchableOpacity : View;
+                return (
+                  <RowWrapper
+                    key={`${cheer.id}-${cheer.clientMessageId ?? i}`}
+                    style={[st.liveChatRow, cheer.status === "sending" && { opacity: 0.55 }, isFailed && { opacity: 0.8 }]}
+                    {...(isFailed ? { onPress: retryHandler, activeOpacity: 0.6 } : {})}
+                  >
+                    <LiveChatAvatar
+                      username={cheer.username}
+                      avatarColor={cheer.avatarColor ?? colors.primary}
+                      avatarUrl={cheer.avatarUrl}
+                      userId={cheer.userId}
+                      avatarVersion={cheer.avatarVersion}
+                      getAvatarVersion={getAvatarVersion}
+                      primary={colors.primary}
+                    />
+                    <View style={[st.liveChatBubble, { flex: 1 }]}>
+                      <Text style={[st.liveChatName, { color: colors.primary }]}>{cheer.countryFlag} {cheer.username}</Text>
+                      <Text style={[st.liveChatMsg, { color: colors.foreground }]}>{cheer.text}</Text>
+                      {isFailed && (
+                        <Text style={{ fontSize: rf(10), color: "#EF4444", marginTop: 2 }}>⚠ Failed — tap to retry</Text>
+                      )}
+                    </View>
+                  </RowWrapper>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* Quick cheer buttons */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={[st.quickRow, { borderColor: colors.border }]}
+            contentContainerStyle={st.quickContent}
+          >
+            {["🔥 Let's go!", "👏 Amazing!", "💪 Keep it up!", "👑 You got this!", "🏃 Go faster!", "😮 Wow!", "🎯 Almost there!"].map((msg) => (
+              <TouchableOpacity
+                key={msg}
+                activeOpacity={0.75}
+                style={[st.quickBtn, { backgroundColor: colors.primary + "18", borderColor: colors.primary + "40" }]}
+                onPress={() => {
+                  sendMessage(msg, true);
+                  const leadingEmoji = [...msg][0];
+                  if (REACTIONS.includes(leadingEmoji)) void handleReact(leadingEmoji);
+                }}
+              >
+                <Text style={[st.quickTxt, { color: colors.primary }]}>{msg}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          {/* Reaction picker popup */}
+          {showReactionPicker && (
+            <View style={st.reactionBar}>
+              {REACTIONS.map((emoji) => {
+                const cnt = reactionCounts.find((c) => c.emoji === emoji)?.count ?? 0;
+                return (
+                  <TouchableOpacity key={emoji} activeOpacity={0.75} style={st.reactionBtn} onPress={() => handleReact(emoji)}>
+                    <Text style={st.reactionEmoji}>{emoji}</Text>
+                    {cnt > 0 && <Text style={st.reactionCount}>{cnt}</Text>}
+                  </TouchableOpacity>
+                ); })}
+            </View>
+          )}
+        </>
+      )}
+
+      {isActive && !isTrackFullscreen && (
+        <>
+          {/* Backdrop — closes the audio route capsule when tapping outside */}
+          {showMicMenu && (
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={closeMicMenu}
+              accessibilityLabel="Close audio menu"
+            />
+          )}
+
+          {/* Text input — bottom nav inset is on the root SafeAreaView */}
+          <View style={[st.inputBar, { paddingBottom: 12 }]}>
+            {/* ── Inline voice mic control ── */}
+            <View style={[st.micWrapper, { width: 52, height: 52 }]}>
+              {/* ── CONNECTED STATE: vertical capsule panel + big button ── */}
+              {(micState === "active" || micState === "muted") && (
+                <>
+                  {/* Floating capsule above the big button — only shown when mic menu is open */}
+                  {showMicMenu && (
+                    <View style={micPanelSt.floatAbove} pointerEvents="box-none">
+                      <View style={micPanelSt.capsule}>
+
+                        {/* ── Speaker ── */}
+                        <TouchableOpacity
+                          style={[micPanelSt.iconBtn, audioRoute === "speaker" && micPanelSt.iconBtnActive]}
+                          onPress={selectSpeaker}
+                          activeOpacity={0.75}
+                        >
+                          <Feather
+                            name="volume-2"
+                            size={15}
+                            color={audioRoute === "speaker" ? "#818CF8" : "#6E7284"}
+                          />
+                        </TouchableOpacity>
+
+                        <View style={micPanelSt.dot} />
+
+                        {/* ── Bluetooth (only when a BT device is connected) ── */}
+                        {bluetoothAvailable && (
+                          <>
+                            <TouchableOpacity
+                              style={[micPanelSt.iconBtn, audioRoute === "bluetooth" && micPanelSt.iconBtnActive]}
+                              onPress={selectBluetooth}
+                              activeOpacity={0.75}
+                            >
+                              <MaterialCommunityIcons
+                                name="bluetooth"
+                                size={15}
+                                color={audioRoute === "bluetooth" ? "#818CF8" : "#6E7284"}
+                              />
+                            </TouchableOpacity>
+                            <View style={micPanelSt.dot} />
+                          </>
+                        )}
+
+                        {/* ── Phone / Earpiece ── */}
+                        <TouchableOpacity
+                          style={[micPanelSt.iconBtn, audioRoute === "phone" && micPanelSt.iconBtnActive]}
+                          onPress={selectPhone}
+                          activeOpacity={0.75}
+                        >
+                          <Feather
+                            name="phone"
+                            size={15}
+                            color={audioRoute === "phone" ? "#818CF8" : "#6E7284"}
+                          />
+                        </TouchableOpacity>
+
+                        <View style={micPanelSt.dot} />
+
+                        {/* ── Mute toggle (icon = current mic state, same as big button) ── */}
+                        <TouchableOpacity
+                          style={[micPanelSt.iconBtn, micState === "muted" && micPanelSt.iconBtnMuted]}
+                          onPress={selectMute}
+                          activeOpacity={0.75}
+                          accessibilityLabel={micState === "muted" ? "Unmute microphone" : "Mute microphone"}
+                        >
+                          <Feather
+                            name={micState === "muted" ? "mic-off" : "mic"}
+                            size={15}
+                            color={micState === "muted" ? "#F59E0B" : "#6E7284"}
+                          />
+                        </TouchableOpacity>
+
+                      </View>
+
+                      {/* Stem connecting capsule to big button */}
+                      <View style={micPanelSt.stem} />
+                    </View>
+                  )}
+
+                  {/* Pulsing outer ring — visible when speaking */}
+                  {micState === "active" && (
+                    <Animated.View
+                      style={[micPanelSt.pulseRing, isSpeaking ? { borderColor: "#818CF8" } : { borderColor: "#5B5FFF50" }, micPulseRingStyle]}
+                      pointerEvents="none"
+                    />
+                  )}
+
+                  {/* Big glowing mic button — tap to toggle mute, long-press to open audio route picker */}
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={selectMute}
+                    onLongPress={handleMicTap}
+                    delayLongPress={350}
+                    style={micPanelSt.bigBtn}
+                  >
+                    <View style={[micPanelSt.bigRing, micState === "muted" && { borderColor: "#F59E0B35" }]} />
+                    <View style={[
+                      micPanelSt.bigInner,
+                      micState === "muted" && { borderColor: "#F59E0B60", backgroundColor: "#1E1408" },
+                      micState === "active" && isSpeaking && { borderColor: "#818CF8", backgroundColor: "#13133A" },
+                    ]}>
+                      <Feather
+                        name={micState === "muted" ? "mic-off" : "mic"}
+                        size={22}
+                        color={micState === "muted" ? "#F59E0B" : isSpeaking ? "#818CF8" : "#6366F1"}
+                      />
+                    </View>
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {/* ── LISTENING STATE: headphones icon — auto-connected as listener ── */}
+              {micState === "listening" && (
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  style={[st.inputMicBtn, { backgroundColor: "rgba(99,102,241,0.12)" }]}
+                  onPress={handleMicTap}
+                >
+                  <Feather name="headphones" size={20} color="#818CF8" />
+                </TouchableOpacity>
+              )}
+
+              {/* ── CONNECTING STATE: spinner button — same 32×32 size as other states ── */}
+              {micState === "connecting" && (
+                <TouchableOpacity activeOpacity={0.75} style={[st.inputMicBtn, { backgroundColor: "rgba(99,102,241,0.10)" }]} onPress={() => {}}>
+                  <Animated.View style={micConnStyle}>
+                    <Feather name="loader" size={18} color="#A78BFA" />
+                  </Animated.View>
+                </TouchableOpacity>
+              )}
+
+              {/* ── IDLE / ERROR / LOCKED states: compact button ── */}
+              {micState !== "active" && micState !== "muted" && micState !== "connecting" && micState !== "listening" && (
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  style={[
+                    st.inputMicBtn,
+                    micState === "error" && { backgroundColor: "rgba(239,68,68,0.15)" },
+                    micState === "unsupported_runtime" && { backgroundColor: "rgba(107,114,128,0.15)" },
+                  ]}
+                  onPress={handleMicTap}
+                >
+                  {!hasMicPass ? (
+                    <View>
+                      <Feather name="mic-off" size={20} color="#6B7280" />
+                      <View style={st.lockBadge}><Feather name="lock" size={7} color="#6B7280" /></View>
+                    </View>
+                  ) : micState === "unsupported_runtime" ? (
+                    <View>
+                      <Feather name="mic-off" size={20} color="#6B7280" />
+                      <View style={st.lockBadge}><Feather name="alert-circle" size={7} color="#6B7280" /></View>
+                    </View>
+                  ) : micState === "error" ? (
+                    <Feather name="mic-off" size={20} color="#EF4444" />
+                  ) : micState === "permission_denied" ? (
+                    <Feather name="mic-off" size={20} color="#EF4444" />
+                  ) : micState === "coming_soon" ? (
+                    <Feather name="mic" size={20} color="#6B7280" />
+                  ) : (
+                    <Feather name="mic" size={20} color="#6EE7B7" />
+                  )}
+                </TouchableOpacity>
+              )}
+            </View>
+            <TextInput
+              style={st.inputField}
+              value={cheerText}
+              onChangeText={setCheerText}
+              placeholder="Send a cheer..."
+              placeholderTextColor="#6E7284"
+              returnKeyType="send"
+              onSubmitEditing={handleSendCheer}
+            />
+            <TouchableOpacity disabled={!cheerText.trim()} onPress={handleSendCheer}>
+              <LinearGradient colors={["#7C3AED", "#A855F7"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={[st.sendBtn, !cheerText.trim() && st.sendBtnDisabled]}>
+                <Text style={st.sendTxt}>Send</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
+    </KeyboardAvoidingView>
+
+    {/* ── Cheer toast overlay (floating, 2s) ── */}
+    {cheerToast !== null && (
+      <View style={ctStyles.overlay} pointerEvents="none">
+        <View style={ctStyles.pill}>
+          <Text style={ctStyles.text} numberOfLines={2}>{cheerToast}</Text>
+        </View>
+      </View>
+    )}
+
+    {/* ── Countdown overlay ── */}
+    {countdown !== null && (
+      <View style={cdStyles.overlay} pointerEvents="box-only">
+        <Text style={cdStyles.label}>RACE STARTING</Text>
+        <Text style={cdStyles.number}>{countdown}</Text>
+        <Text style={cdStyles.ready}>Get Ready!</Text>
+      </View>
+    )}
+
+
+    {/* ── Mic Pass purchase modal ── */}
+    <MicPassModal
+      visible={showPurchaseModal}
+      onClose={closePurchaseModal}
+      onGranted={grantMicPass}
+    />
+
+    {/* ── Public profile modal ── */}
+    <PublicProfileModal
+      visible={!!profileUserId}
+      userId={profileUserId}
+      onClose={() => { setProfileUserId(null); setProfileInitialData(undefined); }}
+      initialData={profileInitialData}
+    />
+
+    {/* ── Coins Battle win banner ── */}
+    {coinWinAmount !== null && (
+      <View
+        pointerEvents="none"
+        style={[cwStyles.overlay, { paddingBottom: Math.max(80, liveBottomInset + 40) }]}
+      >
+        <View style={cwStyles.card}>
+          <Text style={cwStyles.emoji}>🎉</Text>
+          <View>
+            <Text style={cwStyles.title}>You Won!</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 5, justifyContent: "center" }}>
+              <Image source={require("@/assets/images/game-coin.png")} style={{ width: 18, height: 18 }} />
+              <Text style={cwStyles.coins}>{fmtCoins(coinWinAmount)} coins</Text>
+            </View>
+            <Text style={cwStyles.sub}>added to your balance</Text>
+          </View>
+        </View>
+      </View>
+    )}
+    </SafeAreaView>
+  ); }
+
+const cwStyles = StyleSheet.create({
+  overlay: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "flex-end", paddingBottom: 80, zIndex: 100, pointerEvents: "none" },
+  card:    { backgroundColor: "#1A1F36EE", borderRadius: 20, borderWidth: 1.5, borderColor: "#F59E0B66", paddingHorizontal: 28, paddingVertical: 18, alignItems: "center", gap: 6, shadowColor: "#F59E0B", shadowOpacity: 0.4, shadowRadius: 20, elevation: 20 },
+  emoji:   { fontSize: rf(32) },
+  title:   { fontSize: rf(22), fontWeight: "900", color: "#FFFFFF", textAlign: "center", marginBottom: 2 },
+  coins:   { fontSize: rf(24), fontWeight: "800", color: "#F59E0B" },
+  sub:     { fontSize: rf(12), color: "#9CA3AF", textAlign: "center", marginTop: 2 },
+});
+
+const ctStyles = StyleSheet.create({
+  overlay: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", zIndex: 50, pointerEvents: "none" },
+  pill:    { backgroundColor: "#111421EE", borderRadius: 24, borderWidth: 1, borderColor: "#7C3AED80", paddingHorizontal: 20, paddingVertical: 12, maxWidth: "80%", alignItems: "center", shadowColor: "#7C3AED", shadowOpacity: 0.5, shadowRadius: 16, elevation: 16 },
+  text:    { color: "#FFFFFF", fontSize: rf(15), fontWeight: "800", textAlign: "center" }, });
+
+const cdStyles = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#050711E8",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12, },
+  label:  { fontSize: rf(13), color: "#FFFFFF99", fontWeight: "800", letterSpacing: 2 },
+  number: { fontSize: rf(120), fontWeight: "900", color: "#00E676", letterSpacing: -4, lineHeight: 130 },
+  ready:  { fontSize: rf(26), fontWeight: "800", color: "#FFFFFF" }, });
+
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+
+const s = StyleSheet.create({
+  header:      { paddingHorizontal: 12, paddingBottom: 2, flexDirection: "row", alignItems: "center" },
+  backBtn:     { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
+  hCenter:     { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", minWidth: 0 },
+  hLive:       { fontSize: rf(18), fontWeight: "900", color: "#00E676" },
+  hLiveSponsored: { fontSize: rf(14) },
+  hTitle:      { fontSize: rf(18), fontWeight: "900", color: "#FFFFFF", maxWidth: "62%", flexShrink: 1 },
+  hTitleSponsored: { fontSize: rf(13), maxWidth: "78%", letterSpacing: -0.2 },
+  hShoe:       { fontSize: rf(18) },
+  leaveBtn:    { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 },
+  leaveTxt:    { color: "#FFFFFF", fontSize: rf(13), fontWeight: "800", marginRight: 4 },
+  headerSpacer: { width: 68 },
+  infoBar:  { flexDirection: "row", paddingHorizontal: 12, gap: 6, minHeight: 44, alignItems: "center" },
+  infoBarUnlimited: { marginTop: 4, marginBottom: 8 },
+  infoCard: {
+    flex: 1,
+    backgroundColor: "#111421",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#22263A",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    minWidth: 0,
+    alignItems: "center",
+  },
+  infoRow:  { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3 },
+  infoIcon: { fontSize: rf(10) },
+  infoLbl:  { fontSize: rf(7), color: "#858A9C", fontWeight: "800", letterSpacing: 0.4, textAlign: "center" },
+  infoVal:  { fontSize: rf(14), fontWeight: "900", color: "#FFFFFF", marginTop: 0, textAlign: "center", width: "100%" },
+
+  bannerClose:          { marginLeft: "auto" as unknown as number, padding: 2 },
+  finishedBanner:       { marginHorizontal: 12, marginTop: 8, borderRadius: 16, borderWidth: 1.5, padding: 14, gap: 10, backgroundColor: "#FFD70012", borderColor: "#FFD70044" },
+  finishedBannerHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  finishedBannerTitle:  { fontSize: rf(17), fontWeight: "800", flex: 1, color: "#FFD700" },
+  sponsoredFinishBody:  {
+    backgroundColor: "rgba(0,0,0,0.28)",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  sponsoredFinishMsg:   {
+    color: "#F5F3FF",
+    fontSize: rf(13.5),
+    fontWeight: "600",
+    lineHeight: 20,
+  },
+  finishedDuration:     { fontSize: rf(13), fontWeight: "600", color: "#888" },
+  winnerRow:    { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 12, borderWidth: 1, padding: 10, backgroundColor: "#FFD70018", borderColor: "#FFD70044" },
+  winnerCrown:  { fontSize: rf(20), color: "#FFD700" },
+  winnerAv:     { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  winnerAvImg:  { width: 36, height: 36 },
+  winnerAvTxt:  { fontSize: rf(14), fontWeight: "800" },
+  winnerName:   { fontSize: rf(14), fontWeight: "700", color: "#FFFFFF" },
+  winnerSteps:  { fontSize: rf(12), marginTop: 1, color: "#888" },
+  winnerPrize:  { fontSize: rf(11), fontWeight: "700", color: "#FFD700", marginTop: 2 },
+  winnerBadge:  { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: "#FFD700" },
+  winnerBadgeTxt: { fontSize: rf(10), fontWeight: "800", color: "#000" },
+});
+
+const st = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: "#050711" },
+
+  hero: { position: "relative", overflow: "hidden", borderTopWidth: 1, borderBottomWidth: 1, borderColor: "#171B2E", backgroundColor: "#02030A" },
+  bg1Background: { transform: [{ translateY: 10 }] },
+
+  syncPill: { position: "absolute", bottom: 10, left: 12, flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#0D0F1AE0", borderRadius: 20, borderWidth: 1, borderColor: "#2A2D3E", paddingHorizontal: 10, paddingVertical: 5, zIndex: 30 },
+  syncDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: "#00E676" },
+  syncText: { color: "#9EA5BC", fontSize: rf(10), fontWeight: "700", letterSpacing: 0.4 },
+
+  runner:       { position: "absolute", alignItems: "center", justifyContent: "center", zIndex: 8, overflow: "visible" },
+  runnerTrail:  { position: "absolute", width: 14, height: 46, borderRadius: 10, shadowOpacity: 0.9, shadowRadius: 9 },
+  runnerAvatar: { alignItems: "center", justifyContent: "center", shadowOpacity: 0.95, shadowRadius: 11, elevation: 11, overflow: "hidden" },
+  runnerInitial: { fontSize: rf(14), fontWeight: "900" },
+  runnerRank:   { position: "absolute", alignItems: "center", justifyContent: "center" },
+  runnerRankText: { color: "#050711", fontWeight: "900" },
+  runnerLabel:  {
+    position: "absolute",
+    borderRadius: 8,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    backgroundColor: "#050713EE",
+    borderWidth: 1,
+    borderColor: "#FFFFFF22",
+    zIndex: 9,
+  },
+  runnerName:   { fontWeight: "900" },
+  runnerSteps:  { color: "#B2B8CA", fontWeight: "700", marginTop: 0 },
+
+  lbOverlay:    { position: "absolute", right: 0, top: 0, backgroundColor: "#0B0D1AF2", borderLeftWidth: 1, borderLeftColor: "#1A1D2E", paddingLeft: 8, paddingRight: 38, paddingTop: 8, paddingBottom: 4, zIndex: 15, overflow: "visible" as const },
+  lbHead:       { flexDirection: "row", alignItems: "flex-start", marginBottom: 8, gap: 6 },
+  lbHeadText:   { flex: 1, minWidth: 0 },
+  lbTitle:      { color: "#CCCCCC", fontWeight: "700", letterSpacing: 0.5 },
+  lbPosition:   { color: "#00E676", fontWeight: "900", marginTop: 2 },
+  lbStatusPill: { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: 8, backgroundColor: "#111421", borderWidth: 1, borderColor: "#252A3E", paddingHorizontal: 5, paddingVertical: 3 },
+  lbStatusText: { color: "#FFFFFF", fontWeight: "900" },
+  lbDot:        { width: 7, height: 7, borderRadius: 4, backgroundColor: "#FF4444" },
+  lbEmpty:      { paddingVertical: 18, alignItems: "center" },
+  lbEmptyText:  { color: "#8A8FA3", textAlign: "center" },
+  lbRow:        { flexDirection: "row", alignItems: "center", paddingVertical: 5, paddingHorizontal: 3, marginBottom: 2, borderRadius: 8 },
+  lbRowMe:      { backgroundColor: "#00E67614", borderWidth: 1, borderColor: "#00E67640" },
+  lbBadge:      { borderWidth: 1.5, alignItems: "center", justifyContent: "center", marginRight: 5 },
+  lbBadgeN:     { fontWeight: "800" },
+  lbAvatar:     { borderWidth: 2, backgroundColor: "#1A1D2E", alignItems: "center", justifyContent: "center", marginRight: 5, overflow: "hidden" },
+  lbAvatarI:    { fontWeight: "800" },
+  lbInfo:       { flex: 1, minWidth: 0 },
+  lbNameRow:    { flexDirection: "row", alignItems: "center", gap: 4, minWidth: 0 },
+  lbName:       { fontWeight: "700" },
+  lbMuteColSpacer: { width: 28, height: 28, flexShrink: 0, marginLeft: 4 },
+  panelMicBtn:        { flexShrink: 0, width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: "#3A3F52", borderWidth: 1, borderColor: "#5B6078", marginLeft: 4 },
+  panelMicBtnMuted:   { backgroundColor: "#1A1D2E", borderColor: "#9CA3AF", opacity: 0.9 },
+  lbSteps:      { fontWeight: "800", color: "#FFFFFF", lineHeight: 14 },
+  lbUnit:       { color: "#8899BB" },
+  toggleHandle: { position: "absolute", right: 0, top: "47%", marginTop: -37, width: 34, height: 74, borderTopLeftRadius: 14, borderBottomLeftRadius: 14, borderWidth: 1, borderColor: "#3A3F52", backgroundColor: "#202431", alignItems: "center", justifyContent: "center", zIndex: 100, elevation: 100 },
+  zoomBtn:           { position: "absolute", top: 10, left: 10, width: 32, height: 32, borderRadius: 8, backgroundColor: "#202431CC", borderWidth: 1, borderColor: "#3A3F5280", alignItems: "center", justifyContent: "center", zIndex: 25 },
+  prizeChipsOverlay: { position: "absolute", top: 50, left: 10, zIndex: 24 },
+
+  progSection: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, minHeight: 66, paddingVertical: 10, backgroundColor: "#050711", borderTopWidth: 1, borderTopColor: "#1A1D2E" },
+  progLeft:    { flex: 1, flexDirection: "row", alignItems: "center", gap: 8 },
+  progEmoji:   { fontSize: rf(27) },
+  progMain:    { flex: 1 },
+  progMine:    { fontWeight: "900", color: "#00E676" },
+  progTarget:  { color: "#858A9C" },
+  progSub:     { color: "#858A9C", marginTop: 3 },
+  progBarBg:   { height: 7, backgroundColor: "#20263A", borderRadius: 4, marginTop: 5, overflow: "hidden" },
+  progBarFill: { height: "100%", backgroundColor: "#00E676", borderRadius: 4 },
+  progPct:     { fontWeight: "900", color: "#00E676", marginLeft: 6 },
+  milestoneBtn: { alignItems: "center", paddingLeft: 12, gap: 3, flexDirection: "row" },
+  milestoneIcon: { fontSize: rf(20) },
+  milestoneLbl:  { color: "#C9A227", fontWeight: "800" },
+
+  reactionBar:  { flexDirection: "row", alignItems: "center", justifyContent: "space-around", paddingHorizontal: 12, height: 42, backgroundColor: "#090B16", borderTopWidth: 1, borderTopColor: "#1A1D2E" },
+  reactionBtn:  { minWidth: 42, height: 30, borderRadius: 15, backgroundColor: "#111421", borderWidth: 1, borderColor: "#24283D", alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 3 },
+  reactionEmoji: { fontSize: rf(17) },
+  reactionCount: { color: "#C7CDDA", fontSize: rf(10), fontWeight: "800" },
+
+  quickRow:       { borderTopWidth: 1, maxHeight: 44, backgroundColor: "#050711" },
+  quickContent:   { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 6 },
+  quickBtn:       { borderRadius: 20, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 6, flexShrink: 0 },
+  quickTxt:       { fontSize: rf(12), fontWeight: "700" },
+
+  liveChatPanel:  { borderTopWidth: 1, minHeight: 80, maxHeight: 115, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4 },
+  liveChatHeader: { flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 4 },
+  liveChatTitle:  { fontSize: rf(11), fontWeight: "700", letterSpacing: 0.5 },
+  liveChatScroll: { flex: 1 },
+  liveChatEmpty:  { fontSize: rf(12), paddingVertical: 4, fontStyle: "italic" },
+  liveChatRow:    { flexDirection: "row", alignItems: "flex-start", gap: 8, marginBottom: 6 },
+  liveChatAv:     { width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, alignItems: "center", justifyContent: "center", flexShrink: 0, overflow: "hidden" },
+  liveChatAvImg:  { width: 24, height: 24 },
+  liveChatAvTxt:  { fontSize: rf(10), fontWeight: "800" },
+  liveChatBubble: { flex: 1, minWidth: 0 },
+  liveChatName:   { fontSize: rf(11), fontWeight: "700" },
+  liveChatMsg:    { fontSize: rf(12), flexWrap: "wrap" },
+
+  inputBar:       { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingTop: 8, backgroundColor: "#050711", borderTopWidth: 1, borderTopColor: "#1A1D2E" },
+  inputMicBtn:        { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
+  inputMicBtnActive:  { backgroundColor: "#0D2A1A", borderWidth: 1, borderColor: "#22C55E40" },
+  lockBadge: { position: "absolute", bottom: -2, right: -3, width: 12, height: 12, borderRadius: 6, backgroundColor: "#1A1D2E", alignItems: "center", justifyContent: "center" },
+  micWrapper:          { position: "relative" as const, alignItems: "center", justifyContent: "center" },
+  micPulseRing:        { position: "absolute" as const, top: -6, left: -6, right: -6, bottom: -6, borderRadius: 22, borderWidth: 1.5 },
+  micListeningLabel:   { position: "absolute" as const, top: -16, left: -6, width: 44, textAlign: "center" as const, fontSize: rf(8), fontWeight: "700" as const, letterSpacing: 0.2 },
+  inputField:     { flex: 1, backgroundColor: "#111421", borderRadius: 20, borderWidth: 1, borderColor: "#24283D", color: "#FFFFFF", paddingHorizontal: 14, paddingVertical: 10, fontSize: rf(14) },
+  sendBtn:        { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20 },
+  sendBtnDisabled: { opacity: 0.55 },
+  sendTxt:        { color: "#FFFFFF", fontSize: rf(13), fontWeight: "900" }, });
+
+// ── Mic menu styles ────────────────────────────────────────────────────────────
+const micMenuStyles = StyleSheet.create({
+  // Full-screen transparent backdrop — tapping outside closes the menu.
+  backdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "flex-end",
+  },
+  // Floating card positioned above the input bar, anchored to the left edge.
+  card: {
+    position: "absolute",
+    bottom: 64,
+    left: 12,
+    width: 188,
+    backgroundColor: "#12152A",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#A3E63530",
+    shadowColor: "#A3E635",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    elevation: 18,
+    overflow: "hidden",
+  },
+  option: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    gap: 11,
+  },
+  optionSelected: {
+    backgroundColor: "#A3E63510",
+  },
+  optionMuted: {
+    backgroundColor: "#F59E0B0D",
+  },
+  optionIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "#1E2138",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#2A2D42",
+  },
+  optionIconSelected: {
+    backgroundColor: "#A3E63518",
+    borderColor: "#A3E63540",
+  },
+  optionIconMuted: {
+    backgroundColor: "#F59E0B18",
+    borderColor: "#F59E0B40",
+  },
+  optionLabel: {
+    fontSize: rf(14),
+    fontWeight: "700",
+    color: "#D1D5DB",
+  },
+  optionLabelSelected: {
+    color: "#A3E635",
+  },
+  optionLabelMuted: {
+    color: "#F59E0B",
+  },
+  optionSub: {
+    fontSize: rf(10),
+    color: "#6B7280",
+    marginTop: 1,
+  },
+  optionSubMuted: {
+    fontSize: rf(10),
+    color: "#F59E0B80",
+    marginTop: 1,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: "#1E2138",
+    marginHorizontal: 14,
+  },
+  checkDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#A3E635",
+    marginLeft: "auto",
+  },
+  checkDotMuted: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#F59E0B",
+    marginLeft: "auto",
+  },
+});
+
+// ── Inline voice mic panel styles ──────────────────────────────────────────────
+const micPanelSt = StyleSheet.create({
+  // Absolutely-positioned container that floats above the big button.
+  // React Native does not clip absolutely-positioned children unless
+  // overflow:"hidden" is set, so this safely escapes the 52×52 micWrapper.
+  floatAbove: {
+    position: "absolute",
+    bottom: 54,
+    left: 1,
+    width: 50,
+    alignItems: "center",
+    zIndex: 100,
+  },
+  // Tall dark rounded-pill — neon indigo border + glow matching the reference image
+  capsule: {
+    width: 50,
+    backgroundColor: "#09091D",
+    borderRadius: 25,
+    borderWidth: 1.5,
+    borderColor: "#5253CC70",
+    paddingVertical: 8,
+    paddingHorizontal: 5,
+    alignItems: "center",
+    shadowColor: "#5B5FFF",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.7,
+    shadowRadius: 18,
+    elevation: 22,
+  },
+  // Dark circle buttons inside the capsule
+  iconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#13132B",
+    borderWidth: 1,
+    borderColor: "#252545",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  // Highlighted state — indigo tint matching image selection glow
+  iconBtnActive: {
+    backgroundColor: "#1C1C48",
+    borderColor: "#6366F180",
+    shadowColor: "#6366F1",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  // Amber tint when muted
+  iconBtnMuted: {
+    backgroundColor: "#F59E0B18",
+    borderColor: "#F59E0B50",
+  },
+  // Small dot separator between each button (matches image)
+  dot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#252545",
+    marginVertical: 4,
+  },
+  // Thin connector stem from capsule down to the big mic circle
+  stem: {
+    width: 2,
+    height: 10,
+    backgroundColor: "#5253CC60",
+  },
+  // Outer pulsing ring (animated, reanimated-driven)
+  pulseRing: {
+    position: "absolute",
+    top: -8,
+    left: -8,
+    right: -8,
+    bottom: -8,
+    borderRadius: 34,
+    borderWidth: 1.5,
+  },
+  // Hit area for the big circle tap
+  bigBtn: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+  // Secondary outer ring glow
+  bigRing: {
+    position: "absolute",
+    top: -5,
+    left: -5,
+    right: -5,
+    bottom: -5,
+    borderRadius: 31,
+    borderWidth: 1.5,
+    borderColor: "#5B5FFF40",
+  },
+  // Main circle — deep dark bg + indigo border + neon glow
+  bigInner: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: "#0D0D24",
+    borderWidth: 1.5,
+    borderColor: "#5B5FFF70",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#5B5FFF",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 14,
+    elevation: 14,
+  },
+});

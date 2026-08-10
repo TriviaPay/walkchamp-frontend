@@ -1,6 +1,7 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { getBadgeColor } from "@/utils/mockData";
+import { rf, rs } from "@/utils/responsive";
 
 interface BadgePillProps {
   badge: string;
@@ -10,9 +11,9 @@ interface BadgePillProps {
 export function BadgePill({ badge, size = "md" }: BadgePillProps) {
   const color = getBadgeColor(badge);
 
-  const textSize = size === "sm" ? 10 : size === "lg" ? 14 : 12;
-  const padH = size === "sm" ? 6 : size === "lg" ? 12 : 8;
-  const padV = size === "sm" ? 2 : size === "lg" ? 5 : 3;
+  const textSize = size === "sm" ? rf(10) : size === "lg" ? rf(14) : rf(12);
+  const padH = size === "sm" ? rs(6) : size === "lg" ? rs(12) : rs(8);
+  const padV = size === "sm" ? rs(2) : size === "lg" ? rs(5) : rs(3);
 
   return (
     <View style={[styles.pill, { backgroundColor: color + "20", borderColor: color + "60", paddingHorizontal: padH, paddingVertical: padV }]}>

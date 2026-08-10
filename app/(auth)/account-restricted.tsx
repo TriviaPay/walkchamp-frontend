@@ -6,6 +6,7 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
+import { rf } from "@/utils/responsive";
 
 export default function AccountRestrictedScreen() {
   const colors = useColors();
@@ -59,10 +60,10 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   inner: { flex: 1, paddingHorizontal: 28, justifyContent: "center", alignItems: "center", gap: 20 },
   iconWrap: { width: 90, height: 90, borderRadius: 28, borderWidth: 1, alignItems: "center", justifyContent: "center", marginBottom: 4 },
-  title: { fontSize: 26, fontWeight: "800", textAlign: "center", letterSpacing: -0.5 },
-  body: { fontSize: 15, textAlign: "center", lineHeight: 24 },
+  title: { fontSize: rf(26), fontWeight: "800", textAlign: "center", letterSpacing: -0.5 },
+  body: { fontSize: rf(15), textAlign: "center", lineHeight: 24 },
   card: { flexDirection: "row", gap: 12, borderRadius: 14, borderWidth: 1, padding: 16, alignItems: "flex-start" },
-  cardText: { fontSize: 14, lineHeight: 22, flex: 1 },
+  cardText: { fontSize: rf(14), lineHeight: 22, flex: 1 },
   logoutBtn: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 14, borderWidth: 1, paddingHorizontal: 24, paddingVertical: 14, marginTop: 8 },
-  logoutText: { fontSize: 16, fontWeight: "600" },
+  logoutText: { fontSize: rf(16), fontWeight: "600" },
 });

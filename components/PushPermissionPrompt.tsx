@@ -11,6 +11,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useWalkContext } from "@/context/WalkContext";
+import { useWalkTodaySteps } from "@/services/walkTodayStepsStore";
 import { useAppSelector } from "@/store/hooks";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf } from "@/utils/responsive";
@@ -36,7 +37,8 @@ export function PushPermissionPrompt() {
   const isAuthenticated = useAppSelector((s) => s.auth.isAuthenticated);
   const colors = useColors();
   const { safeBottom } = useSafeLayout();
-  const { todaySteps, todayDailyGoal } = useWalkContext();
+  const { todayDailyGoal } = useWalkContext();
+  const todaySteps = useWalkTodaySteps();
   const [visible, setVisible] = useState(false);
   const [requesting, setRequesting] = useState(false);
   const handledUserRef = React.useRef<string | null>(null);

@@ -2,10 +2,16 @@ import React, { useCallback, useEffect, useRef } from "react";
 import { Animated, Image, StyleSheet, Text, View } from "react-native";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useAuth } from "@/context/AuthContext";
-import { CHANNELS, EVENTS, subscribeToChannel } from "@/services/realtimeService";
+import {
+  CHANNELS,
+  EVENTS,
+  subscribeToChannel,
+  unsubscribeFromChannel,
+} from "@/services/realtimeService";
 import CoinIcon from "@/components/CoinIcon";
 import * as Haptics from "@/utils/haptics";
 import { useTopBanner, type BannerItem } from "@/context/TopBannerContext";
+import { rf } from "@/utils/responsive";
 
 // ── Individual animated banner card ──────────────────────────────────────────
 
@@ -86,7 +92,8 @@ function CoinRewardListener() {
 
   useEffect(() => {
     if (!user?.id) return;
-    const channel = subscribeToChannel(CHANNELS.privateUser(user.id));
+    const channelName = CHANNELS.privateUser(user.id);
+    const channel = subscribeToChannel(channelName);
     if (!channel) return;
 
     const onCoinsEarned = (data: CoinEarnedPayload) => {
@@ -101,7 +108,10 @@ function CoinRewardListener() {
     };
 
     channel.bind(EVENTS.COINS_EARNED, onCoinsEarned);
-    return () => { channel.unbind(EVENTS.COINS_EARNED, onCoinsEarned); };
+    return () => {
+      channel.unbind(EVENTS.COINS_EARNED, onCoinsEarned);
+      unsubscribeFromChannel(channelName);
+    };
   }, [user?.id, enqueueBanner]);
 
   return null;
@@ -166,10 +176,10 @@ const fg = StyleSheet.create({
     shadowColor: "#FFD700",
     shadowOpacity: 0.55,
   },
-  rankEmoji: { fontSize: 28 },
+  rankEmoji: { fontSize: rf(28) },
   textCol:   { flex: 1 },
-  headline:  { fontSize: 10, fontWeight: "900", letterSpacing: 2.5, color: "#FFD700", marginBottom: 2 },
-  body:      { fontSize: 14, fontWeight: "700", color: "#FFFFFF", lineHeight: 20 },
+  headline:  { fontSize: rf(10), fontWeight: "900", letterSpacing: 2.5, color: "#FFD700", marginBottom: 2 },
+  body:      { fontSize: rf(14), fontWeight: "700", color: "#FFFFFF", lineHeight: 20 },
   meHighlight:   { color: "#00E676", fontWeight: "900" },
   nameHighlight: { color: "#FFFFFF", fontWeight: "900" },
 });
@@ -192,7 +202,7 @@ const ce = StyleSheet.create({
     elevation: 12,
     maxWidth: 340,
   },
-  amount: { fontSize: 16, fontWeight: "900", color: "#FFD700" },
+  amount: { fontSize: rf(16), fontWeight: "900", color: "#FFD700" },
   sep:    { width: 1, height: 14, backgroundColor: "#FFD70040" },
-  desc:   { fontSize: 13, fontWeight: "600", color: "#FFF9E6", flexShrink: 1 },
+  desc:   { fontSize: rf(13), fontWeight: "600", color: "#FFF9E6", flexShrink: 1 },
 });

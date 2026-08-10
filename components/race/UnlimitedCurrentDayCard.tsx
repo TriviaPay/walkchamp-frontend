@@ -15,6 +15,7 @@ import {
   resolveUnlimitedMissedDayIndex,
 } from "@/utils/unlimitedLiveUiCopy";
 import type { UnlimitedDayRow } from "@/utils/unlimitedDayProgress";
+import { rf } from "@/utils/responsive";
 
 type Props = {
   schedule: UnlimitedViewerSchedule;
@@ -73,7 +74,7 @@ const cal = StyleSheet.create({
     backgroundColor: "#0E0A18",
   },
   star: {
-    fontSize: 18,
+    fontSize: rf(18),
     color: "#A78BFA",
     fontWeight: "900",
     marginTop: -1,
@@ -224,7 +225,7 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   goalLabel: {
-    fontSize: 13,
+    fontSize: rf(13),
     fontWeight: "700",
     color: "#E2E8F8",
   },
@@ -232,12 +233,12 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   stepsNow: {
-    fontSize: 18,
+    fontSize: rf(18),
     fontWeight: "800",
     color: "#00E676",
   },
   stepsGoal: {
-    fontSize: 15,
+    fontSize: rf(15),
     fontWeight: "600",
     color: "#C7CDDA",
   },
@@ -254,7 +255,7 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   lostBadgeText: {
-    fontSize: 9,
+    fontSize: rf(9),
     fontWeight: "900",
     color: "#FFFFFF",
     letterSpacing: 0.2,
@@ -265,10 +266,10 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   flameEmoji: {
-    fontSize: 13,
+    fontSize: rf(13),
   },
   daysLeft: {
-    fontSize: 12,
+    fontSize: rf(12),
     fontWeight: "800",
     color: "#FFB020",
   },
@@ -279,7 +280,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   footerText: {
-    fontSize: 11,
+    fontSize: rf(11),
     fontWeight: "600",
     color: "#A8B0C4",
   },
@@ -291,7 +292,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   lostFooterText: {
-    fontSize: 11,
+    fontSize: rf(11),
     fontWeight: "600",
     color: "#8B9AC0",
     flexShrink: 1,
@@ -307,5 +308,5 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingVertical: 8,
   },
-  viewResultsText: { fontSize: 13, fontWeight: "800", color: "#0B0F1A" },
+  viewResultsText: { fontSize: rf(13), fontWeight: "800", color: "#0B0F1A" },
 });

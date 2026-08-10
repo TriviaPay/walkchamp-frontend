@@ -18,6 +18,7 @@ import CoinIcon from "@/components/CoinIcon";
 import { Image } from "react-native";
 import { SkeletonCoinsBalance } from "@/components/SkeletonRows";
 import EarnTasksSection from "@/components/EarnTasksSection";
+import { rf } from "@/utils/responsive";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 const shopImage = require("@/assets/images/shop-icon.png");
@@ -162,22 +163,22 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, borderBottomWidth: StyleSheet.hairlineWidth },
   headerLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
-  headerTitle: { fontSize: 22, fontWeight: "800" },
+  headerTitle: { fontSize: rf(22), fontWeight: "800" },
   scroll: { paddingHorizontal: 20, paddingTop: 20 },
   balanceCard: { borderRadius: 20, borderWidth: 1, padding: 20, marginBottom: 14, alignItems: "center" },
-  balanceLabel: { fontSize: 13, marginBottom: 6 },
+  balanceLabel: { fontSize: rf(13), marginBottom: 6 },
   balanceBigRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  balanceBig: { fontSize: 42, fontWeight: "900" },
+  balanceBig: { fontSize: rf(42), fontWeight: "900" },
   statsDivider: { height: 1, width: "100%", marginVertical: 14 },
   statsRow: { flexDirection: "row", alignItems: "center", width: "100%" },
   statItem: { flex: 1, alignItems: "center", gap: 4 },
   statDivider: { width: 1, height: 32 },
-  statLabel: { fontSize: 11 },
-  statValue: { fontSize: 18, fontWeight: "800" },
+  statLabel: { fontSize: rf(11) },
+  statValue: { fontSize: rf(18), fontWeight: "800" },
   errorRow: { flexDirection: "row", alignItems: "center", gap: 8, padding: 12 },
-  errorText: { flex: 1, fontSize: 13 },
-  retryText: { fontSize: 13, fontWeight: "700" },
+  errorText: { flex: 1, fontSize: rf(13) },
+  retryText: { fontSize: rf(13), fontWeight: "700" },
   storeBtn: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 14, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 24 },
   storeBtnIcon: { width: 28, height: 28 },
-  storeBtnText: { flex: 1, fontSize: 15, fontWeight: "700" },
+  storeBtnText: { flex: 1, fontSize: rf(15), fontWeight: "700" },
 });

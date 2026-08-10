@@ -5,6 +5,7 @@ import { router } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { FaqAccordionList } from "@/components/FaqAccordionList";
+import { rf } from "@/utils/responsive";
 
 export default function FAQScreen() {
   const colors = useColors();
@@ -43,6 +44,6 @@ const s = StyleSheet.create({
     paddingBottom: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  headerTitle: { fontSize: 17, fontWeight: "700" },
+  headerTitle: { fontSize: rf(17), fontWeight: "700" },
   list: { paddingHorizontal: 16, paddingTop: 20 },
 });

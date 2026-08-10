@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from "react";
 import { Animated, Text, StyleSheet, View } from "react-native";
 import Svg, { Circle, Defs, LinearGradient, Stop } from "react-native-svg";
 import { useColors } from "@/hooks/useColors";
+import { rf } from "@/utils/responsive";
 
 interface StepRingProps {
   steps: number;
@@ -103,17 +104,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   steps: {
-    fontSize: 36,
+    fontSize: rf(36),
     fontWeight: "700",
     letterSpacing: -1,
   },
   label: {
-    fontSize: 13,
+    fontSize: rf(13),
     fontWeight: "500",
     marginTop: 2,
   },
   percent: {
-    fontSize: 14,
+    fontSize: rf(14),
     fontWeight: "600",
     marginTop: 4,
   },

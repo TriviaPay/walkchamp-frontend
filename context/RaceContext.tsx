@@ -45,6 +45,15 @@ import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { waitForAppStartupReady } from "@/services/appStartup";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import {
+  getRaceStartAtMs,
+  getRaceUiProgressSnapshot,
+  resetRaceUiProgress,
+  setRaceStartAtMs,
+  setRaceUiUserSteps,
+  setRaceUiWalkDisplaySteps,
+} from "@/services/raceUiProgressStore";
+import { perf } from "@/utils/perfLogger";
+import {
   startRaceHealthVerification,
   stopRaceHealthVerification,
   type RaceVerificationResult,
@@ -1014,9 +1023,8 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       });
     }
 
-    raceTimerRef.current = setInterval(() => {
-      setRaceTimerSeconds((s) => s + 1);
-    }, 1000);
+    // Elapsed race time is derived from raceStartTimeUTC via useRaceElapsedSeconds /
+    // LiveClockText — do not tick raceTimerSeconds into provider (1Hz fan-out).
 
     // ── Real step tracking for race (iOS HealthKit / Android HC or legacy sensor) ──
     if (useRealSteps) {
@@ -1989,11 +1997,31 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     clearRaceJsTimers();
   }, []);
 
+  // Mirror high-frequency fields into external stores (provider stays stable).
+  useEffect(() => {
+    setRaceUiUserSteps(userRaceSteps);
+  }, [userRaceSteps]);
+  useEffect(() => {
+    setRaceUiWalkDisplaySteps(walkRaceStepsDisplay);
+  }, [walkRaceStepsDisplay]);
+  useEffect(() => {
+    setRaceStartAtMs(raceStartTimeUTC ? raceStartTimeUTC.getTime() : null);
+  }, [raceStartTimeUTC]);
+  useEffect(() => {
+    if (racePhase === "idle") resetRaceUiProgress();
+  }, [racePhase]);
+
   const value = useMemo(
-    () => ({
+    () => {
+      if (__DEV__) perf.providerUpdate("RaceContext", racePhase);
+      return {
       racePhase, raceEntryFee, raceMaxPlayers,
       playersJoined, participants, countdown,
-      raceTimerSeconds, userRaceSteps, walkRaceStepsDisplay, results, userFinishRank,
+      // Placeholders — useRace() overlays store snapshots (no 1Hz subscription).
+      raceTimerSeconds: 0,
+      userRaceSteps: 0,
+      walkRaceStepsDisplay: 0,
+      results, userFinishRank,
       totalPool: prizeState.totalPool,
       winnersPool: prizeState.winnersPool,
       platformFee: prizeState.platformFee,
@@ -2005,10 +2033,11 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
       joinRace, startRaceManually, notifyRaceStarted, resumeLiveRace, cancelRace, resetRace, setActiveRace,
       stopRaceStepTracking, pauseRaceStepTracking, resumeRaceStepTracking, catchUpLiveRaceSteps,
       recordFinishedRaceStepsForWalk,
-    }),
+    };
+    },
     [
       racePhase, raceEntryFee, raceMaxPlayers, playersJoined, participants, countdown,
-      raceTimerSeconds, userRaceSteps, walkRaceStepsDisplay, results, userFinishRank,
+      results, userFinishRank,
       prizeState.totalPool, prizeState.winnersPool, prizeState.platformFee, prizeState.prizes,
       isSuspicious, raceVerification, raceId, isHost, raceStartTimeUTC, raceTargetSteps, setRaceTargetSteps,
       joinRace, startRaceManually, notifyRaceStarted, resumeLiveRace, cancelRace, resetRace, setActiveRace,
@@ -2024,8 +2053,34 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * Lifecycle + actions. Progress/timer fields are snapshots (not live subscriptions).
+ * For live steps use `useRaceUiProgress`; for elapsed UI use `useRaceElapsedSeconds`.
+ */
 export function useRace(): RaceContextType {
   const ctx = useContext(RaceContext);
   if (!ctx) throw new Error("useRace must be used within RaceProvider");
+  const progress = getRaceUiProgressSnapshot();
+  const start = getRaceStartAtMs();
+  const raceTimerSeconds =
+    start != null ? Math.max(0, Math.floor((Date.now() - start) / 1000)) : 0;
+  return {
+    ...ctx,
+    userRaceSteps: progress.userRaceSteps,
+    walkRaceStepsDisplay: progress.walkRaceStepsDisplay,
+    raceTimerSeconds,
+  };
+}
+
+/** Stable race identity / actions — does not re-render on step ticks. */
+export function useRaceActions(): Omit<
+  RaceContextType,
+  "raceTimerSeconds" | "userRaceSteps" | "walkRaceStepsDisplay"
+> {
+  const ctx = useContext(RaceContext);
+  if (!ctx) throw new Error("useRaceActions must be used within RaceProvider");
   return ctx;
 }
+
+export { useRaceUiProgress, useRaceStartAtMs } from "@/services/raceUiProgressStore";
+export { useElapsedSeconds as useRaceElapsedSeconds } from "@/hooks/useElapsedSeconds";

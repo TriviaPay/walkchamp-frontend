@@ -22,6 +22,14 @@ import React, {
 } from "react";
 import { AppState, AppStateStatus, Alert, Platform } from "react-native";
 import { useAuth } from "@/context/AuthContext";
+import {
+  getWalkTodayStepsSnapshot,
+  setWalkTodayStepsSnapshot,
+} from "@/services/walkTodayStepsStore";
+import {
+  getWalkSessionStartedAtMs,
+  setWalkSessionStartedAtMs,
+} from "@/services/walkSessionElapsedStore";
 import { storageGet, storageSet, storageFlushDebounced } from "@/utils/storage";
 import { stepsToCalories, stepsToDistance, getTodayKey } from "@/utils/format";
 import { msUntilNextLocalMidnight } from "@/utils/timezone";
@@ -150,6 +158,10 @@ interface WalkContextType {
   isWalking: boolean;
   isPaused: boolean;
   session: WalkSession;
+  /**
+   * Display today steps. Prefer `useWalkTodaySteps()` in hot UI so step ticks
+   * do not re-render every WalkContext consumer.
+   */
   todaySteps: number;
   weeklySteps: number;
   allTimeSteps: number;
@@ -443,6 +455,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   const lastTrayMirrorAtRef = useRef(0);
   useEffect(() => {
     todayStepsRef.current = todaySteps;
+    setWalkTodayStepsSnapshot(todaySteps);
     if (syncingFromReduxRef.current) return;
     if (!stepsSourceReady && todaySteps === 0) return;
     let cancelled = false;
@@ -2661,12 +2674,23 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       }, 2000);
     }
 
+    // Elapsed session time is derived from sessionStartTimeRef via
+    // useWalkSessionElapsed — do not tick duration into provider (1Hz fan-out).
+    // Refresh activeDurationMinutes on a slower cadence for streak/stats only.
+    const startedAt = sessionStartTimeRef.current?.getTime() ?? Date.now();
+    setWalkSessionStartedAtMs(startedAt);
     timerIntervalRef.current = setInterval(() => {
-      setSession((prev) => ({
-        ...prev,
-        durationSeconds: prev.durationSeconds + 1,
-      }));
-      setActiveDurationMinutes((prev) => prev + 1 / 60);
+      const start = sessionStartTimeRef.current?.getTime();
+      if (start == null) return;
+      const elapsedSec = Math.max(0, Math.floor((Date.now() - start) / 1000));
+      sessionRef.current = {
+        ...sessionRef.current,
+        durationSeconds: elapsedSec,
+      };
+      // ~1/min provider update instead of 1Hz
+      if (elapsedSec > 0 && elapsedSec % 60 === 0) {
+        setActiveDurationMinutes(elapsedSec / 60);
+      }
     }, 1000);
   }, []);
 
@@ -2678,6 +2702,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     if (autoPauseTimerRef.current) clearTimeout(autoPauseTimerRef.current);
     stepIntervalRef.current = null;
     timerIntervalRef.current = null;
+    setWalkSessionStartedAtMs(null);
   }, []);
 
   // ── Save daily steps ──────────────────────────────────────────────────────────
@@ -2806,13 +2831,15 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   const isWalking = trackingStatus === "walking";
   const isPaused = trackingStatus === "paused";
 
+  // Omit todaySteps from memo deps — high-frequency ticks must not rebuild the
+  // provider value (and re-render Profile / Live / Wearable consumers). Hot UI
+  // should use useWalkTodaySteps(); useWalk() still exposes a snapshot field.
   const value = useMemo(
     () => ({
       trackingStatus,
       isWalking,
       isPaused,
       session,
-      todaySteps,
       weeklySteps,
       allTimeSteps,
       currentStreak,
@@ -2843,7 +2870,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       authReady,
     }),
     [
-      trackingStatus, isWalking, isPaused, session, todaySteps, weeklySteps, allTimeSteps,
+      trackingStatus, isWalking, isPaused, session, weeklySteps, allTimeSteps,
       currentStreak, activeDurationMinutes, milestoneReached, autoTrackingEnabled, usingRealTracking,
       stepPermissionStatus, hcAvailability, activeStepSource, verificationLevel, todayActiveMinutes,
       todayDailyRank, todayDailyGoal, setTrackingStatus, togglePause, clearMilestone,
@@ -2853,7 +2880,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <WalkContext.Provider value={value}>
+    <WalkContext.Provider value={value as WalkContextType}>
       {children}
     </WalkContext.Provider>
   );
@@ -2862,8 +2889,25 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 export function useWalk(): WalkContextType {
   const ctx = useContext(WalkContext);
   if (!ctx) throw new Error("useWalk must be used inside WalkProvider");
-  return ctx;
+  // Snapshot only — does not subscribe to step/timer ticks.
+  const startMs = getWalkSessionStartedAtMs();
+  const durationSeconds =
+    startMs != null
+      ? Math.max(0, Math.floor((Date.now() - startMs) / 1000))
+      : ctx.session.durationSeconds;
+  return {
+    ...ctx,
+    todaySteps: getWalkTodayStepsSnapshot(),
+    session: {
+      ...ctx.session,
+      durationSeconds,
+    },
+  };
 }
 
 /** Alias kept for backwards compatibility with existing screen imports. */
 export const useWalkContext = useWalk;
+
+export { useWalkTodaySteps } from "@/services/walkTodayStepsStore";
+export { useWalkSessionStartedAtMs } from "@/services/walkSessionElapsedStore";
+export { useElapsedSeconds as useWalkSessionElapsed } from "@/hooks/useElapsedSeconds";

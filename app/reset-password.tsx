@@ -14,6 +14,7 @@ import {
   TextInput,
   View} from "react-native";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
+import { rf } from "@/utils/responsive";
 
 import { useColors } from "@/hooks/useColors";
 import { completePasswordReset } from "@/services/authService";
@@ -485,7 +486,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   title: {
-    fontSize: 26,
+    fontSize: rf(26),
     fontWeight: "800",
     letterSpacing: -0.5,
     textAlign: "center",
@@ -500,15 +501,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 7,
   },
-  emailBadgeText: { fontSize: 14, fontWeight: "500", maxWidth: 260 },
+  emailBadgeText: { fontSize: rf(14), fontWeight: "500", maxWidth: 260 },
   subtitle: {
-    fontSize: 15,
+    fontSize: rf(15),
     textAlign: "center",
     marginBottom: 24,
     lineHeight: 22,
   },
   hint: {
-    fontSize: 13,
+    fontSize: rf(13),
     textAlign: "center",
     lineHeight: 18,
   },
@@ -523,10 +524,10 @@ const styles = StyleSheet.create({
     width: "100%",
     marginBottom: 14,
   },
-  errorText: { color: "#FF4444", fontSize: 13, flex: 1 },
+  errorText: { color: "#FF4444", fontSize: rf(13), flex: 1 },
   label: {
     alignSelf: "flex-start",
-    fontSize: 12,
+    fontSize: rf(12),
     fontWeight: "600",
     marginBottom: 6,
     letterSpacing: 0.4,
@@ -542,7 +543,7 @@ const styles = StyleSheet.create({
     width: "100%",
     marginBottom: 14,
   },
-  input: { flex: 1, fontSize: 16 },
+  input: { flex: 1, fontSize: rf(16) },
   checklist: {
     width: "100%",
     borderRadius: 12,
@@ -553,7 +554,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   checkRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  checkLabel: { fontSize: 13 },
+  checkLabel: { fontSize: rf(13) },
   submitBtn: {
     borderRadius: 14,
     overflow: "hidden",
@@ -566,7 +567,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     minHeight: 54,
   },
-  submitText: { fontSize: 17, fontWeight: "700" },
+  submitText: { fontSize: rf(17), fontWeight: "700" },
   primaryBtn: {
     borderRadius: 14,
     paddingVertical: 16,
@@ -574,12 +575,12 @@ const styles = StyleSheet.create({
     width: "100%",
     marginBottom: 8,
   },
-  primaryBtnText: { fontSize: 17, fontWeight: "700" },
+  primaryBtnText: { fontSize: rf(17), fontWeight: "700" },
   linkBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     paddingVertical: 16,
   },
-  linkBtnText: { fontSize: 15 },
+  linkBtnText: { fontSize: rf(15) },
 });

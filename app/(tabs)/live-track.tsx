@@ -56,7 +56,7 @@ import { isUnlimitedGoalChallenge } from "@/utils/unlimitedGoal";
 import { isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
 import { STORAGE_KEYS, storageGet } from "@/utils/storage";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
-import { rf, rs } from "@/utils/responsive";
+import { getLayoutScaleFactor, rf, rs } from "@/utils/responsive";
 import {
   isTrackLayoutId,
   type TrackLayoutId,
@@ -408,10 +408,7 @@ export default function LiveTrackTab() {
   const canonicalRank = raceProgress.rank;
   const { width: screenW } = useWindowDimensions();
   const isTablet = screenW >= 768;
-  // Scale UI elements proportionally: 0.87× on 320px phones, 1.0× on 390px, up to 1.5× on tablets
-  const rsFactor = isTablet
-    ? Math.min(1.5, screenW / 520)
-    : Math.max(0.87, Math.min(1.1, screenW / 390));
+  const rsFactor = getLayoutScaleFactor(screenW);
   const rs = (n: number) => Math.round(n * rsFactor);
   const cheerScrollRef = useRef<ScrollView | null>(null);
 
@@ -1520,10 +1517,10 @@ const st = StyleSheet.create({
 
   // ── Dev calibration debug overlay ─────────────────────────────────────────
   dbgLine:  { position: "absolute", left: 0, right: 0, borderTopWidth: 2, opacity: 0.85 },
-  dbgLabel: { position: "absolute", left: 6, color: "#FFFFFF", fontSize: 9, fontWeight: "900", backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 4 },
+  dbgLabel: { position: "absolute", left: 6, color: "#FFFFFF", fontSize: rf(9), fontWeight: "900", backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 4 },
   dbgDot:   { position: "absolute", width: 8, height: 8, borderRadius: 4, backgroundColor: "#FFD700", opacity: 0.9 },
-  dbgInfo:  { position: "absolute", color: "#FFD700", fontSize: 9, fontWeight: "900", backgroundColor: "rgba(0,0,0,0.55)", paddingHorizontal: 3 },
-  dbgTheme: { position: "absolute", bottom: 4, left: 4, color: "#00FFCC", fontSize: 9, fontWeight: "900", backgroundColor: "rgba(0,0,0,0.65)", paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4 },
+  dbgInfo:  { position: "absolute", color: "#FFD700", fontSize: rf(9), fontWeight: "900", backgroundColor: "rgba(0,0,0,0.55)", paddingHorizontal: 3 },
+  dbgTheme: { position: "absolute", bottom: 4, left: 4, color: "#00FFCC", fontSize: rf(9), fontWeight: "900", backgroundColor: "rgba(0,0,0,0.65)", paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4 },
 
   runner: { position: "absolute", alignItems: "center", justifyContent: "center", zIndex: 8 },
   runnerTrail: { position: "absolute", width: 14, height: 46, borderRadius: 10, top: 21, shadowOpacity: 0.9, shadowRadius: 9 },
@@ -1582,7 +1579,7 @@ const st = StyleSheet.create({
 
   progSection: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, backgroundColor: "#0B0D1A", borderTopWidth: 1, borderTopColor: "#1A1D2E" },
   progLeft: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8 },
-  progEmoji: { fontSize: 27 },
+  progEmoji: { fontSize: rf(27) },
   progMain: { flex: 1 },
   progMine: { fontSize: rf(17), fontWeight: "900", color: "#00E676" },
   progTarget: { fontSize: rf(13), color: "#858A9C" },
@@ -1611,7 +1608,7 @@ const st = StyleSheet.create({
   inputBar: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, paddingTop: 8, backgroundColor: "#050711", borderTopWidth: 1, borderTopColor: "#1A1D2E" },
   inputEmojiBtn: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
   inputEmojiBtnActive: { backgroundColor: "#111421", borderWidth: 1, borderColor: "#24283D" },
-  inputEmoji: { fontSize: 20 },
+  inputEmoji: { fontSize: rf(20) },
   inputField: { flex: 1, backgroundColor: "#111421", borderRadius: 20, borderWidth: 1, borderColor: "#24283D", color: "#FFFFFF", paddingHorizontal: rs(14), paddingVertical: rs(10), fontSize: rf(14) },
   sendBtn: { paddingHorizontal: rs(16), paddingVertical: rs(10), borderRadius: 20 },
   sendBtnDisabled: { opacity: 0.55 },

@@ -13,6 +13,7 @@ import { Feather } from "@expo/vector-icons";
 import { useTitleUnlock } from "@/context/TitleUnlockContext";
 import { TitleBadge } from "@/components/TitleBadge";
 import { useColors } from "@/hooks/useColors";
+import { rf } from "@/utils/responsive";
 
 function difficultyColor(d: string): string {
   switch (d) {
@@ -207,12 +208,12 @@ const st = StyleSheet.create({
     borderRadius: 110,
   },
   headerRow:   { flexDirection: "row", alignItems: "center", gap: 7 },
-  headerEmoji: { fontSize: 18 },
-  headerLabel: { fontSize: 12, fontWeight: "800", letterSpacing: 0.8, textTransform: "uppercase" },
+  headerEmoji: { fontSize: rf(18) },
+  headerLabel: { fontSize: rf(12), fontWeight: "800", letterSpacing: 0.8, textTransform: "uppercase" },
   badgeWrap:   { marginVertical: 6 },
-  titleText:   { fontSize: 24, fontWeight: "900", textAlign: "center", letterSpacing: -0.4 },
+  titleText:   { fontSize: rf(24), fontWeight: "900", textAlign: "center", letterSpacing: -0.4 },
   diffPill:    { paddingHorizontal: 14, paddingVertical: 5, borderRadius: 20, borderWidth: 1 },
-  diffText:    { fontSize: 11, fontWeight: "700" },
+  diffText:    { fontSize: rf(11), fontWeight: "700" },
   divider:     { width: "100%", height: StyleSheet.hairlineWidth, marginVertical: 4 },
   equipWrap:   { width: "100%", borderRadius: 14, overflow: "hidden" },
   equipGradient: {
@@ -223,7 +224,7 @@ const st = StyleSheet.create({
     paddingVertical: 15,
     paddingHorizontal: 20,
   },
-  equipText:   { fontSize: 15, fontWeight: "800", color: "#fff" },
+  equipText:   { fontSize: rf(15), fontWeight: "800", color: "#fff" },
   laterBtn:    { paddingVertical: 8, paddingHorizontal: 16 },
-  laterText:   { fontSize: 14, fontWeight: "600" },
+  laterText:   { fontSize: rf(14), fontWeight: "600" },
 });

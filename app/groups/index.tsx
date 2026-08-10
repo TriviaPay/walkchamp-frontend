@@ -30,10 +30,11 @@ import { profileAvatarImageUri } from "@/services/mediaApi";
 import { useAuth } from "@/context/AuthContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SkeletonGroupsScreen } from "@/components/SkeletonRows";
-import { useWalk } from "@/context/WalkContext";
+import { useWalkTodaySteps } from "@/services/walkTodayStepsStore";
 import { subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
 import { useUnread } from "@/context/UnreadContext";
 import { AppAlert } from "@/components/AppAlert";
+import { rf } from "@/utils/responsive";
 
 // ── Theme ────────────────────────────────────────────────────────────────────
 const T = {
@@ -244,7 +245,7 @@ function AvatarStack({ avatars, borderColor }: { avatars: MemberAvatar[]; border
           backgroundColor: "#1E2A50", borderWidth: 2, borderColor,
           marginLeft: -9, alignItems: "center", justifyContent: "center",
         }}>
-          <Text style={{ fontSize: 8, color: T.textSecondary, fontWeight: "700" }}>+{extra}</Text>
+          <Text style={{ fontSize: rf(8), color: T.textSecondary, fontWeight: "700" }}>+{extra}</Text>
         </View>
       )}
     </View>
@@ -278,7 +279,7 @@ function GroupImagePlaceholder({ group, c }: { group: UserGroup; c: TypeCfg }) {
 function GroupCard({ group, onPress }: { group: UserGroup; onPress: () => void }) {
   const c = cfg(group.groupType, group.colorThemeKey);
   const pct = group.progressPercent;
-  const { todaySteps: liveSteps } = useWalk();
+  const liveSteps = useWalkTodaySteps();
   const { user } = useAuth();
   const isTopWalker = !!group.topWalker && group.topWalker.userId === user?.id;
   const mySteps = Math.max(group.currentUserTodaySteps, liveSteps);
@@ -396,7 +397,7 @@ function GroupsScreenContent() {
   useScreenMountPerf("Groups");
   const router = useRouter();
   const { user } = useAuth();
-  const { todaySteps: liveSteps } = useWalk();
+  const liveSteps = useWalkTodaySteps();
   const { pendingGroupInvites: groupInviteCount, clearGroupInvites } = useUnread();
 
   const [loading, setLoading] = useState(
@@ -936,7 +937,7 @@ function GroupsScreenContent() {
                 onChangeText={setCreateGoal}
                 keyboardType="number-pad"
               />
-              <Text style={{ color: T.textMuted, fontSize: 12, marginTop: 6 }}>
+              <Text style={{ color: T.textMuted, fontSize: rf(12), marginTop: 6 }}>
                 Min 1,000 · Max 100,000
               </Text>
 
@@ -980,8 +981,8 @@ const s = StyleSheet.create({
 
   header: { flexDirection: "row", alignItems: "flex-start", gap: 12, paddingTop: 8, paddingBottom: 16 },
   backBtn: { marginTop: 2, padding: 4 },
-  headerTitle: { fontSize: 20, fontWeight: "800", color: T.textPrimary, letterSpacing: 0.3 },
-  headerSub: { fontSize: 12, color: T.textMuted, marginTop: 2 },
+  headerTitle: { fontSize: rf(20), fontWeight: "800", color: T.textPrimary, letterSpacing: 0.3 },
+  headerSub: { fontSize: rf(12), color: T.textMuted, marginTop: 2 },
 
   summaryCard: {
     borderRadius: 16, padding: 18, marginBottom: 18,
@@ -991,8 +992,8 @@ const s = StyleSheet.create({
   },
   summaryRow: { flexDirection: "row", alignItems: "center" },
   summaryItem: { flex: 1, alignItems: "center" },
-  summaryVal: { fontSize: 24, fontWeight: "800", color: T.textPrimary },
-  summaryLabel: { fontSize: 11, color: T.textSecondary, marginTop: 3 },
+  summaryVal: { fontSize: rf(24), fontWeight: "800", color: T.textPrimary },
+  summaryLabel: { fontSize: rf(11), color: T.textSecondary, marginTop: 3 },
   summaryDivider: { width: 1, height: 40, backgroundColor: T.cardBorder },
 
   filtersRow: { paddingBottom: 14, gap: 8 },
@@ -1002,30 +1003,30 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: "rgba(255,255,255,0.1)",
     backgroundColor: "rgba(16,20,42,0.8)",
   },
-  filterChipText: { fontSize: 13, color: T.textSecondary, fontWeight: "600" },
+  filterChipText: { fontSize: rf(13), color: T.textSecondary, fontWeight: "600" },
   filterChipActive: {
     flexDirection: "row", alignItems: "center", gap: 5,
     paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
   },
-  filterChipActiveText: { fontSize: 13, color: "#fff", fontWeight: "700" },
+  filterChipActiveText: { fontSize: rf(13), color: "#fff", fontWeight: "700" },
   filterChipCount: {
     width: 18, height: 18, borderRadius: 9,
     backgroundColor: "rgba(255,255,255,0.15)",
     alignItems: "center", justifyContent: "center",
   },
-  filterChipCountText: { fontSize: 10, color: T.textSecondary, fontWeight: "700" },
+  filterChipCountText: { fontSize: rf(10), color: T.textSecondary, fontWeight: "700" },
   filterChipCountActive: {
     width: 18, height: 18, borderRadius: 9,
     backgroundColor: "rgba(0,0,0,0.3)",
     alignItems: "center", justifyContent: "center",
   },
-  filterChipCountTextActive: { fontSize: 10, color: "#fff", fontWeight: "700" },
+  filterChipCountTextActive: { fontSize: rf(10), color: "#fff", fontWeight: "700" },
 
   sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
-  sectionTitle: { fontSize: 16, fontWeight: "700", color: T.textPrimary },
+  sectionTitle: { fontSize: rf(16), fontWeight: "700", color: T.textPrimary },
   newGroupBtn: { borderRadius: 10, overflow: "hidden" },
   newGroupGrad: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10 },
-  newGroupBtnText: { fontSize: 13, color: "#fff", fontWeight: "700" },
+  newGroupBtnText: { fontSize: rf(13), color: "#fff", fontWeight: "700" },
 
   // ── Group card ──────────────────────────────────────────────────────────────
   groupCard: {
@@ -1046,25 +1047,25 @@ const s = StyleSheet.create({
     overflow: "hidden",
     flexShrink: 0,
   },
-  gcName: { fontSize: 16, fontWeight: "800", color: T.textPrimary, marginBottom: 3 },
-  gcTypeLine: { fontSize: 12, color: T.textSecondary },
+  gcName: { fontSize: rf(16), fontWeight: "800", color: T.textPrimary, marginBottom: 3 },
+  gcTypeLine: { fontSize: rf(12), color: T.textSecondary },
 
   gcAdminBadge: {
     paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6,
     backgroundColor: "rgba(255,200,61,0.15)", borderWidth: 1, borderColor: "rgba(255,200,61,0.5)",
   },
-  gcAdminText: { fontSize: 9, color: T.gold, fontWeight: "800", letterSpacing: 0.4 },
+  gcAdminText: { fontSize: rf(9), color: T.gold, fontWeight: "800", letterSpacing: 0.4 },
 
   gcProgressRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
   gcProgressBg: { flex: 1, height: 8, borderRadius: 4, backgroundColor: "rgba(255,255,255,0.05)", overflow: "hidden" },
   gcProgressFill: { height: "100%", borderRadius: 4 },
-  gcPct: { fontSize: 12, fontWeight: "800", minWidth: 36, textAlign: "right" },
+  gcPct: { fontSize: rf(12), fontWeight: "800", minWidth: 36, textAlign: "right" },
 
-  gcToday: { fontSize: 12, color: T.textMuted, marginBottom: 10 },
+  gcToday: { fontSize: rf(12), color: T.textMuted, marginBottom: 10 },
 
   gcFooter: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between" },
-  gcYou: { fontSize: 14, color: T.textSecondary, fontWeight: "600" },
-  gcTop: { fontSize: 11, color: T.textMuted, marginTop: 1 },
+  gcYou: { fontSize: rf(14), color: T.textSecondary, fontWeight: "600" },
+  gcTop: { fontSize: rf(11), color: T.textMuted, marginTop: 1 },
 
   // Empty state
   emptyBox: { alignItems: "center", paddingVertical: 52, gap: 8 },
@@ -1073,11 +1074,11 @@ const s = StyleSheet.create({
     borderColor: T.cardBorder, backgroundColor: "rgba(0,216,255,0.08)",
     alignItems: "center", justifyContent: "center", marginBottom: 8,
   },
-  emptyTitle: { fontSize: 17, color: T.textSecondary, fontWeight: "800", marginTop: 4 },
-  emptySub: { fontSize: 13, color: T.textMuted, textAlign: "center", maxWidth: 240 },
+  emptyTitle: { fontSize: rf(17), color: T.textSecondary, fontWeight: "800", marginTop: 4 },
+  emptySub: { fontSize: rf(13), color: T.textMuted, textAlign: "center", maxWidth: 240 },
   emptyCreateBtn: { marginTop: 20, borderRadius: 14, overflow: "hidden" },
   emptyCreateGrad: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 28, paddingVertical: 14, borderRadius: 14 },
-  emptyCreateText: { fontSize: 15, color: "#fff", fontWeight: "700" },
+  emptyCreateText: { fontSize: rf(15), color: "#fff", fontWeight: "700" },
 
   // Invite cards
   inviteCard: {
@@ -1086,19 +1087,19 @@ const s = StyleSheet.create({
     marginBottom: 10, borderWidth: 1,
   },
   inviteIconWrap: { width: 42, height: 42, borderRadius: 13, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  inviteName: { fontSize: 14, fontWeight: "700", color: T.textPrimary },
-  inviteMeta: { fontSize: 12, color: T.textSecondary, marginTop: 2 },
-  inviteGoal: { fontSize: 11, color: T.textMuted, marginTop: 2 },
+  inviteName: { fontSize: rf(14), fontWeight: "700", color: T.textPrimary },
+  inviteMeta: { fontSize: rf(12), color: T.textSecondary, marginTop: 2 },
+  inviteGoal: { fontSize: rf(11), color: T.textMuted, marginTop: 2 },
   inviteActions: { gap: 6, alignItems: "flex-end" },
   inviteAcceptBtn: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 9, backgroundColor: T.green + "22", borderWidth: 1, borderColor: T.green + "60" },
-  inviteAcceptText: { fontSize: 12, color: T.green, fontWeight: "700" },
+  inviteAcceptText: { fontSize: rf(12), color: T.green, fontWeight: "700" },
   inviteDeclineBtn: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 9, backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.1)" },
-  inviteDeclineText: { fontSize: 12, color: T.textMuted, fontWeight: "600" },
+  inviteDeclineText: { fontSize: rf(12), color: T.textMuted, fontWeight: "600" },
 
   // Create CTA
   createCta: { marginTop: 16, borderRadius: 14, overflow: "hidden", shadowColor: T.cyan, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 12, elevation: 6 },
   createCtaGrad: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 16, borderRadius: 14 },
-  createCtaText: { fontSize: 16, color: "#fff", fontWeight: "800" },
+  createCtaText: { fontSize: rf(16), color: "#fff", fontWeight: "800" },
 
   // Modal
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "flex-end" },
@@ -1108,12 +1109,12 @@ const s = StyleSheet.create({
   },
   modalHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: T.cardBorder, alignSelf: "center", marginBottom: 16 },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 },
-  modalTitle: { fontSize: 18, fontWeight: "800", color: T.textPrimary },
-  modalLabel: { fontSize: 13, color: T.textSecondary, marginBottom: 6, marginTop: 14 },
+  modalTitle: { fontSize: rf(18), fontWeight: "800", color: T.textPrimary },
+  modalLabel: { fontSize: rf(13), color: T.textSecondary, marginBottom: 6, marginTop: 14 },
   modalInput: {
     backgroundColor: "rgba(255,255,255,0.05)", borderRadius: 10,
     borderWidth: 1, borderColor: T.cardBorder,
-    padding: 12, color: T.textPrimary, fontSize: 15,
+    padding: 12, color: T.textPrimary, fontSize: rf(15),
   },
   typeRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   typeChip: {
@@ -1122,14 +1123,14 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: "rgba(255,255,255,0.1)",
     backgroundColor: "rgba(16,20,42,0.8)",
   },
-  typeChipText: { fontSize: 13, color: T.textMuted, fontWeight: "600" },
+  typeChipText: { fontSize: rf(13), color: T.textMuted, fontWeight: "600" },
   typeChipActive: {
     flexDirection: "row", alignItems: "center", gap: 5,
     paddingHorizontal: 13, paddingVertical: 8, borderRadius: 10,
   },
-  typeChipActiveText: { fontSize: 13, color: "#fff", fontWeight: "700" },
+  typeChipActiveText: { fontSize: rf(13), color: "#fff", fontWeight: "700" },
   modalCreateBtn: { paddingVertical: 15, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  modalCreateText: { fontSize: 16, color: "#fff", fontWeight: "800" },
+  modalCreateText: { fontSize: rf(16), color: "#fff", fontWeight: "800" },
 
   colorPickerRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 2 },
   colorSwatch: {

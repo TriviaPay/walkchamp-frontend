@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
 import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
+import { safeGoBack } from "@/utils/safeGoBack";
 import * as Haptics from "expo-haptics";
 import { parseSponsoredEventsResponse } from "@/utils/sponsoredEventsApi";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -145,7 +146,7 @@ function SponsoredWaitingRoomContent() {
 
   const handleBack = useCallback(() => {
     if (from === "sponsored-events") {
-      router.back();
+      safeGoBack("/sponsored-events");
       return;
     }
     router.replace("/sponsored-events");
@@ -285,7 +286,7 @@ function SponsoredWaitingRoomContent() {
       }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       dispatch(fetchCoinBalance());
-      router.back();
+      safeGoBack("/sponsored-events");
     } catch {
       Alert.alert("Error", "Failed to leave. Please try again.");
     } finally {
@@ -574,7 +575,7 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: "rgba(255,255,255,0.08)",
     paddingVertical: rs(12),
   },
-  statIcon: { fontSize: 14 },
+  statIcon: { fontSize: rf(14) },
   statVal: { fontSize: rf(15), fontWeight: "800", color: "#FFF" },
   statLbl: { fontSize: rf(9), color: "rgba(255,255,255,0.35)", fontWeight: "600" },
 

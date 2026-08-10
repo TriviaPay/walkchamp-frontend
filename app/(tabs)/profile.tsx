@@ -1417,8 +1417,8 @@ const styles = StyleSheet.create({
   achievementsCard: { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 14, borderWidth: 1, padding: rs(12) },
   achievementsIcon: { width: rs(40), height: rs(40), borderRadius: rs(20), alignItems: "center", justifyContent: "center" },
   achievementsInfo: { flex: 1, gap: 3 },
-  achievementsLabel:   { fontSize: 14, fontWeight: "700" },
-  achievementsSubtext: { fontSize: 12 },
+  achievementsLabel:   { fontSize: rf(14), fontWeight: "700" },
+  achievementsSubtext: { fontSize: rf(12) },
 
   // Badge / follow
   badgeFollowRow:    { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },

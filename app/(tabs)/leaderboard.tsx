@@ -27,6 +27,7 @@ import { useColors } from "@/hooks/useColors";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
 import { useAuth } from "@/context/AuthContext";
 import { useWalkContext } from "@/context/WalkContext";
+import { useWalkTodaySteps } from "@/services/walkTodayStepsStore";
 import { getBadgeColor } from "@/utils/mockData";
 import { formatSteps } from "@/utils/format";
 import { getLocalDateStr, getLocalWeekStart, getLocalMonthStart } from "@/utils/timezone";
@@ -419,7 +420,8 @@ export default function LeaderboardScreen() {
   const colors       = useColors();
   const { safeTop }  = useSafeLayout();
   const { user }     = useAuth();
-  const { todaySteps, triggerSync } = useWalkContext();
+  const { triggerSync } = useWalkContext();
+  const todaySteps = useWalkTodaySteps();
   const tabBarHeight = useTabBarHeight();
 
   // Navigation state
@@ -630,18 +632,18 @@ export default function LeaderboardScreen() {
     triggerSync().catch(() => {}).finally(() => void fetchData(true));
   };
 
-  // Whenever the Ranks tab gains focus, flush any unsynced steps to the backend
-  // first, then silently refresh the leaderboard. This closes the gap between
-  // the live device step count (polled every 15 s from HealthKit/Health Connect)
-  // and the backend's step_daily_totals row (written every 30 s by the background
-  // sync interval), which was the root cause of Walk tab / Leaderboard mismatches.
+  // Whenever the Ranks tab gains focus, sync steps and refresh leaderboard in
+  // parallel (do not block paint/refresh on sync completion). Throttle repeats.
   useFocusEffect(
     useCallback(() => {
-      // Always sync any unsynced steps to the backend first, then refresh the
-      // leaderboard. This closes the gap between the live device step count
-      // (updated every 15 s by HealthKit/Health Connect) and the backend's
-      // step_daily_totals row (written every 30 s by the background interval).
-      triggerSync().catch(() => {}).finally(() => void fetchData(true));
+      if (!apiFetchAllowed("leaderboard_tab_focus", 30_000)) {
+        // Still flush steps in background; skip duplicate leaderboard GET.
+        void triggerSync().catch(() => {});
+        return;
+      }
+      markApiFetched("leaderboard_tab_focus");
+      void triggerSync().catch(() => {});
+      void fetchData(true);
     }, [fetchData, triggerSync]),
   );
 
@@ -934,7 +936,7 @@ export default function LeaderboardScreen() {
             style={[st.retryBtn, { backgroundColor: colors.primary }]}
             onPress={() => fetchData()}
           >
-            <Text style={{ color: colors.primaryForeground, fontWeight: "700", fontSize: 14 }}>Retry</Text>
+            <Text style={{ color: colors.primaryForeground, fontWeight: "700", fontSize: rf(14) }}>Retry</Text>
           </TouchableOpacity>
         </View>
       ) : entries.length === 0 ? (

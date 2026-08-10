@@ -198,7 +198,9 @@ class WalkChampRaceForegroundService : Service() {
         intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
-      val title = if (isSponsored) "Sponsored Event" else "Live Race"
+      // Custom views own the tray copy; keep system title empty so "Live Race"
+      // only appears under the Live Race PNG (not on the left).
+      val title = ""
       val builder = NotificationCompat.Builder(ctx, CHANNEL_RACE)
         .setContentTitle(title)
         .setContentText(body)
@@ -218,19 +220,21 @@ class WalkChampRaceForegroundService : Service() {
         .setChronometerCountDown(false)
         .setWhen(0L)
 
+      var usedCustomRaceViews = false
       if (!forceLegacy && state != null) {
         try {
-          val usedCustom = WalkChampNotificationViews.applyRaceCustomViews(ctx, builder, state)
-          if (!usedCustom) {
+          usedCustomRaceViews = WalkChampNotificationViews.applyRaceCustomViews(ctx, builder, state)
+          if (!usedCustomRaceViews) {
             builder
-              .setContentTitle(title)
+              .setContentTitle("Live Race")
               .setContentText(body)
               .setStyle(NotificationCompat.BigTextStyle().bigText(body))
           }
         } catch (e: Exception) {
           Log.w(TAG, "Custom race notification rendering failed — legacy content kept: ${e.message}")
+          usedCustomRaceViews = false
           builder
-            .setContentTitle(title)
+            .setContentTitle("Live Race")
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
         }
@@ -240,7 +244,15 @@ class WalkChampRaceForegroundService : Service() {
         TAG,
         "[OngoingNotification] trackingType=race title=$title chronometerEnabled=false raceId=$raceId",
       )
-      return builder.build()
+      val notification = builder.build()
+      // Force collapsed == expanded so OEM shade does not offer an expand chevron.
+      if (usedCustomRaceViews && notification.contentView != null) {
+        notification.bigContentView = notification.contentView
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+          notification.headsUpContentView = notification.contentView
+        }
+      }
+      return notification
     }
 
     fun buildWalkNotification(
@@ -1648,23 +1660,40 @@ class WalkChampRaceForegroundService : Service() {
   /**
    * Re-post the daily-steps ongoing notification after race foreground promotion.
    * Android allows one FGS slot (race) plus a separate notify() for walk steps.
+   *
+   * startForeground(race) cancels the previous FGS tray (often walk) — this must
+   * run after every race promote so Daily Walk stays visible like before.
    */
   private fun ensureWalkNotificationVisible() {
-    val walkActive = walkRunning || prefs().getBoolean("walk_active", false)
-    if (!walkActive) return
+    val p = prefs()
+    val walkActive = walkRunning || p.getBoolean("walk_active", false)
+    if (!walkActive) {
+      Log.d(TAG, "[StepFGS] ensureWalkNotificationVisible skipped — walk inactive")
+      return
+    }
 
-    val notification = lastWalkNotification ?: run {
-      val p = prefs()
-      if (!p.getBoolean("walk_active", false)) return
-      val body = p.getString("walk_body", null) ?: return
-      val deepLink = p.getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
-      val title = p.getString("walk_title", "Walk Champ") ?: "Walk Champ"
-      buildCurrentWalkNotification(body, deepLink, title)
+    val storedBody = p.getString("walk_body", null)
+    val stepsFromPrefs = p.getInt("walk_steps_at_baseline", -1)
+    val stepsFromBody = storedBody?.let { parseStepsFromWalkBody(it) } ?: -1
+    val stepsFromNative = NativeStepState.load(this)?.todaySteps ?: -1
+    val steps = maxOf(stepsFromPrefs, stepsFromBody, stepsFromNative, 0)
+    val goal = p.getInt("walk_daily_goal", 10_000).coerceAtLeast(1)
+    val deepLink = p.getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
+    val title = p.getString("walk_title", "Walk Champ") ?: "Walk Champ"
+    val body = storedBody ?: formatWalkNotificationBody(steps)
+
+    // Prefer a freshly built companion tray so RemoteViews match current theme/assets
+    // after race stole the FGS notification id.
+    val notification = try {
+      buildCurrentWalkNotification(body, deepLink, title, steps, goal)
+    } catch (e: Exception) {
+      Log.w(TAG, "[StepFGS] rebuild walk companion failed — using cached: ${e.message}")
+      lastWalkNotification ?: return
     }
     lastWalkNotification = notification
     walkRunning = true
     postOngoingNotification(NOTIFICATION_ID_WALK, notification)
-    Log.d(TAG, "[StepFGS] ensureWalkNotificationVisible id=$NOTIFICATION_ID_WALK")
+    Log.d(TAG, "[StepFGS] ensureWalkNotificationVisible id=$NOTIFICATION_ID_WALK steps=$steps")
   }
 
   private fun publishRaceNotification() {
@@ -1677,6 +1706,8 @@ class WalkChampRaceForegroundService : Service() {
     val display = raceDisplayState(anchored)
     if (display == lastRaceDisplayState) {
       Log.d(TAG, "[RaceNotification] skip notify — display state unchanged raceId=${anchored.raceId}")
+      // Race tray unchanged, but walk companion may have been cleared by startForeground.
+      ensureWalkNotificationVisible()
       return
     }
     val body = anchored.toNotificationBody()
@@ -1697,10 +1728,11 @@ class WalkChampRaceForegroundService : Service() {
   private fun raceDisplayState(state: RaceNotificationState): RaceNotificationDisplayState {
     val goal = state.goalSteps.coerceAtLeast(0)
     val steps = state.raceSteps.coerceAtLeast(0)
-    val visual = NotificationVisuals.forOngoingRace(state.isSponsored)
+    // Match ongoing custom views: one Live Race illustration + label for all types.
+    val visual = NotificationVisualType.LIVE_RACE
     return RaceNotificationDisplayState(
       raceId = state.raceId,
-      raceTypeLabel = NotificationVisuals.raceTypeLabel(state.isSponsored),
+      raceTypeLabel = "Live Race",
       steps = steps,
       goal = goal,
       percentage = NotificationVisuals.clampPercent(steps, if (goal > 0) goal else 1),
@@ -2297,8 +2329,12 @@ class WalkChampRaceForegroundService : Service() {
           // Cancel+repost clears sticky chronometer UI left by older builds.
           notificationManager().cancel(NOTIFICATION_ID_RACE)
           val notification = buildRaceNotification(this, raceState!!)
+          // startForeground(race) replaces the previous FGS tray (often Daily Walk).
           promoteRaceForegroundNow(notification)
           postOngoingNotification(NOTIFICATION_ID_RACE, notification)
+          lastRaceDisplayState = raceDisplayState(raceState!!)
+          // Immediately restore Daily Walk as companion notify (same as before).
+          ensureWalkNotificationVisible()
         }
         ensureWorker()
         workerHandler?.post {
@@ -2307,6 +2343,8 @@ class WalkChampRaceForegroundService : Service() {
             if (action == ACTION_START) (raceState ?: incoming) else incoming
           applyRaceState(toApply, allowReset)
           startRaceLoops()
+          // Belt-and-suspenders: walk companion after race loops arm.
+          ensureWalkNotificationVisible()
         }
       }
       ACTION_STOP_WALK -> {

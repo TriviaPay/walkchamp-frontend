@@ -22,6 +22,7 @@ import {
   setupPurchaseListeners,
 } from "@/services/iapService";
 import { getApiBase } from "@/utils/apiUrl";
+import { rf } from "@/utils/responsive";
 
 // ── MicPassModal ──────────────────────────────────────────────────────────────
 // Shown when a user without Mic Pass taps the mic icon.
@@ -325,27 +326,27 @@ const st = StyleSheet.create({
   header:          { alignItems: "center", paddingTop: 28, paddingBottom: 24, paddingHorizontal: 24 },
   micIconWrap:     { marginBottom: 14 },
   micIconBg:       { width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center" },
-  title:           { fontSize: 22, fontWeight: "800", color: "#FFFFFF", marginBottom: 6 },
-  subtitle:        { fontSize: 14, color: "#C4B5FD", textAlign: "center", lineHeight: 20 },
+  title:           { fontSize: rf(22), fontWeight: "800", color: "#FFFFFF", marginBottom: 6 },
+  subtitle:        { fontSize: rf(14), color: "#C4B5FD", textAlign: "center", lineHeight: 20 },
   body:            { paddingHorizontal: 24, paddingBottom: 36, paddingTop: 16 },
-  note:            { fontSize: 13, color: "#9CA3AF", lineHeight: 19, marginBottom: 16, textAlign: "center" },
+  note:            { fontSize: rf(13), color: "#9CA3AF", lineHeight: 19, marginBottom: 16, textAlign: "center" },
   pricingWrap:     { backgroundColor: "#1A0533", borderRadius: 14, borderWidth: 1, borderColor: "#7C3AED50", padding: 14, alignItems: "center", marginBottom: 18, gap: 6 },
   promoBadge:      { backgroundColor: "#7C3AED", borderRadius: 20, paddingHorizontal: 12, paddingVertical: 4 },
-  promoBadgeText:  { color: "#fff", fontSize: 12, fontWeight: "900", letterSpacing: 0.5 },
+  promoBadgeText:  { color: "#fff", fontSize: rf(12), fontWeight: "900", letterSpacing: 0.5 },
   priceRow:        { flexDirection: "row", alignItems: "center", gap: 12 },
-  originalPrice:   { fontSize: 18, color: "#6B7280", textDecorationLine: "line-through", fontWeight: "600" },
-  salePrice:       { fontSize: 30, color: "#A855F7", fontWeight: "900" },
-  promoLabel:      { fontSize: 11, color: "#7C3AED", fontWeight: "700", letterSpacing: 0.3 },
+  originalPrice:   { fontSize: rf(18), color: "#6B7280", textDecorationLine: "line-through", fontWeight: "600" },
+  salePrice:       { fontSize: rf(30), color: "#A855F7", fontWeight: "900" },
+  promoLabel:      { fontSize: rf(11), color: "#7C3AED", fontWeight: "700", letterSpacing: 0.3 },
   benefitsList:    { marginBottom: 16 },
   benefitRow:      { flexDirection: "row", alignItems: "center", marginBottom: 10 },
   benefitIcon:     { marginRight: 10 },
-  benefitText:     { fontSize: 14, color: "#E5E7EB", flex: 1 },
-  errorText:       { fontSize: 13, color: "#F87171", textAlign: "center", marginBottom: 12 },
+  benefitText:     { fontSize: rf(14), color: "#E5E7EB", flex: 1 },
+  errorText:       { fontSize: rf(13), color: "#F87171", textAlign: "center", marginBottom: 12 },
   purchaseBtn:     { marginBottom: 10 },
   purchaseBtnGrad: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 14, borderRadius: 14 },
-  purchaseBtnText: { color: "#FFFFFF", fontSize: 15, fontWeight: "800", textAlign: "center" },
+  purchaseBtnText: { color: "#FFFFFF", fontSize: rf(15), fontWeight: "800", textAlign: "center" },
   laterBtn:        { alignItems: "center", paddingVertical: 12 },
-  laterText:       { color: "#6B7280", fontSize: 14 },
+  laterText:       { color: "#6B7280", fontSize: rf(14) },
   restoreBtn:      { alignItems: "center", paddingVertical: 6 },
-  restoreText:     { color: "#7C3AED", fontSize: 12, textDecorationLine: "underline" },
+  restoreText:     { color: "#7C3AED", fontSize: rf(12), textDecorationLine: "underline" },
 });

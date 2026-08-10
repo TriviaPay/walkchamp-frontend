@@ -6,6 +6,7 @@ import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { RaceJoinBadge, JoinProgressOverlay } from "@/components/RaceJoinBadge";
 import { useTheme } from "@/context/ThemeContext";
 import themeColors from "@/constants/colors";
+import { rf } from "@/utils/responsive";
 
 export const ENABLE_CHALLENGE_CATEGORY_CARDS = true;
 
@@ -205,7 +206,7 @@ const lbStyles = StyleSheet.create({
     borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5,
   },
   dot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: "#713F12" },
-  text: { fontSize: 11, fontWeight: "900", color: "#422006", letterSpacing: 0.3 },
+  text: { fontSize: rf(11), fontWeight: "900", color: "#422006", letterSpacing: 0.3 },
 });
 
 const cStyles = StyleSheet.create({
@@ -249,8 +250,8 @@ const cStyles = StyleSheet.create({
   iconBox:   { width: 46, height: 46, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   iconImg:   { width: 28, height: 28 },
   textBlock: { flex: 1 },
-  title:     { fontSize: 17, fontWeight: "800", color: "#FFF" },
-  sub:       { fontSize: 12, color: "rgba(255,255,255,0.78)", marginTop: 2 },
+  title:     { fontSize: rf(17), fontWeight: "800", color: "#FFF" },
+  sub:       { fontSize: rf(12), color: "rgba(255,255,255,0.78)", marginTop: 2 },
   rightBlock:{ alignItems: "flex-end", justifyContent: "center", alignSelf: "center", gap: 6 },
 
   actionRow: {
@@ -271,7 +272,7 @@ const cStyles = StyleSheet.create({
     borderColor: "rgba(255,92,92,0.65)",
     backgroundColor: "rgba(255,92,92,0.12)",
   },
-  watchBtnText: { fontSize: 13, fontWeight: "700", color: "#FF5C5C" },
+  watchBtnText: { fontSize: rf(13), fontWeight: "700", color: "#FF5C5C" },
   hostBtn: {
     flex: 1,
     flexDirection: "row",
@@ -284,5 +285,5 @@ const cStyles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.28)",
     backgroundColor: "rgba(255,255,255,0.08)",
   },
-  hostBtnText: { fontSize: 13, fontWeight: "700", color: "rgba(255,255,255,0.88)" },
+  hostBtnText: { fontSize: rf(13), fontWeight: "700", color: "rgba(255,255,255,0.88)" },
 });

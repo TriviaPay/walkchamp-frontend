@@ -9,6 +9,7 @@ import React, { memo } from "react";
 import { Platform, Text, View } from "react-native";
 import Constants from "expo-constants";
 import { areAdsConfiguredForCurrentEnv, getBannerAdUnitId } from "@/config/adsConfig";
+import { rf } from "@/utils/responsive";
 
 type AdModule = typeof import("react-native-google-mobile-ads");
 
@@ -73,7 +74,7 @@ function BannerAdView({ style }: { style?: object }) {
         style,
       ]}
     >
-      <Text style={{ color: "#4B5563", fontSize: 10, fontWeight: "600", letterSpacing: 0.3 }}>
+      <Text style={{ color: "#4B5563", fontSize: rf(10), fontWeight: "600", letterSpacing: 0.3 }}>
         Test ad · 320×50
       </Text>
     </View>

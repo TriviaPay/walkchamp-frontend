@@ -13,6 +13,7 @@ import { useColors } from "@/hooks/useColors";
 import { useRace, RACE_DEFAULTS } from "@/context/RaceContext";
 import { useApp } from "@/context/AppContext";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
+import { rf } from "@/utils/responsive";
 
 const ENTRY_FEE = 1;
 const MAX_PLAYERS = 10;
@@ -167,35 +168,35 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 20, paddingBottom: 12, },
-  headerTitle: { fontSize: 18, fontWeight: "700" },
+  headerTitle: { fontSize: rf(18), fontWeight: "700" },
   scroll: { paddingHorizontal: 20 },
   heroSection: { alignItems: "center", gap: 12, marginBottom: 24, paddingTop: 8 },
   heroIcon: { width: 96, height: 96, borderRadius: 28, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  heroTitle: { fontSize: 26, fontWeight: "800", letterSpacing: -0.5 },
-  heroSub: { fontSize: 15, textAlign: "center", lineHeight: 22 },
+  heroTitle: { fontSize: rf(26), fontWeight: "800", letterSpacing: -0.5 },
+  heroSub: { fontSize: rf(15), textAlign: "center", lineHeight: 22 },
   detailsCard: { borderRadius: 16, borderWidth: 1, padding: 16, marginBottom: 20 },
-  cardTitle: { fontSize: 16, fontWeight: "700", marginBottom: 14 },
+  cardTitle: { fontSize: rf(16), fontWeight: "700", marginBottom: 14 },
   infoRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 8 },
-  infoLabel: { fontSize: 14 },
-  infoValue: { fontSize: 14, fontWeight: "600" },
+  infoLabel: { fontSize: rf(14) },
+  infoValue: { fontSize: rf(14), fontWeight: "600" },
   divider: { height: StyleSheet.hairlineWidth },
-  sectionTitle: { fontSize: 17, fontWeight: "700", marginBottom: 10 },
+  sectionTitle: { fontSize: rf(17), fontWeight: "700", marginBottom: 10 },
   prizeRow: {
     flexDirection: "row", alignItems: "center", gap: 10,
     borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 8, },
-  prizeIcon: { fontSize: 22 },
-  prizePlace: { fontWeight: "700", fontSize: 15, width: 70 },
-  prizeSplit: { flex: 1, fontSize: 13 },
-  prizeAmount: { fontSize: 18, fontWeight: "800" },
+  prizeIcon: { fontSize: rf(22) },
+  prizePlace: { fontWeight: "700", fontSize: rf(15), width: 70 },
+  prizeSplit: { flex: 1, fontSize: rf(13) },
+  prizeAmount: { fontSize: rf(18), fontWeight: "800" },
   noticeCard: { flexDirection: "row", gap: 10, alignItems: "flex-start", borderRadius: 12, borderWidth: 1, padding: 14, marginBottom: 14, marginTop: 4 },
-  noticeText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  noticeText: { flex: 1, fontSize: rf(13), lineHeight: 18 },
   walletRow: {
     flexDirection: "row", alignItems: "center", gap: 8,
     borderRadius: 14, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 12, marginBottom: 16, },
-  walletLabel: { fontSize: 14 },
-  walletBalance: { fontSize: 17, fontWeight: "700", flex: 1 },
-  insufficientText: { fontSize: 13, fontWeight: "600" },
+  walletLabel: { fontSize: rf(14) },
+  walletBalance: { fontSize: rf(17), fontWeight: "700", flex: 1 },
+  insufficientText: { fontSize: rf(13), fontWeight: "600" },
   joinBtn: { borderRadius: 16, overflow: "hidden", marginBottom: 12 },
   joinGradient: { paddingVertical: 18, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 },
-  joinText: { fontSize: 18, fontWeight: "700" },
-  fine: { fontSize: 12, textAlign: "center", lineHeight: 18 }, });
+  joinText: { fontSize: rf(18), fontWeight: "700" },
+  fine: { fontSize: rf(12), textAlign: "center", lineHeight: 18 }, });

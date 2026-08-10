@@ -15,6 +15,7 @@ import { getLocalDateStr } from "@/utils/timezone";
 import CoinIcon from "@/components/CoinIcon";
 import { useColors } from "@/hooks/useColors";
 import { SkeletonEarnTaskCard } from "@/components/SkeletonRows";
+import { rf } from "@/utils/responsive";
 
 const blueShoe = require("../assets/images/footstep.png") as number;
 
@@ -140,23 +141,23 @@ const row = StyleSheet.create({
   wrap:         { flexDirection: "row", alignItems: "flex-start", paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10 },
   wrapLast:     { borderBottomWidth: 0 },
   wrapClaimed:  { opacity: 0.65 },
-  icon:         { fontSize: 20, width: 28, textAlign: "center", marginTop: 1 },
+  icon:         { fontSize: rf(20), width: 28, textAlign: "center", marginTop: 1 },
   shoeImg:      { width: 28, height: 28, marginTop: 1 },
   mid:          { flex: 1, gap: 2 },
-  title:        { fontSize: 13, fontWeight: "700" },
-  desc:         { fontSize: 11, color: "#6B7280", lineHeight: 15 },
+  title:        { fontSize: rf(13), fontWeight: "700" },
+  desc:         { fontSize: rf(11), color: "#6B7280", lineHeight: 15 },
   progressRow:  { gap: 4, marginTop: 4 },
   progressBar:  { height: 3, borderRadius: 2, overflow: "hidden" },
   progressFill: { height: "100%", borderRadius: 2 },
-  progressTxt:  { fontSize: 10, fontWeight: "700" },
+  progressTxt:  { fontSize: rf(10), fontWeight: "700" },
   compoundRow:  { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 },
   compoundPart: { flexDirection: "row", alignItems: "center", gap: 2 },
-  compoundTxt:  { fontSize: 10, fontWeight: "700" },
+  compoundTxt:  { fontSize: rf(10), fontWeight: "700" },
   right:        { alignItems: "flex-end", paddingTop: 2 },
   rewardRow:    { flexDirection: "row", alignItems: "center", gap: 3 },
-  rewardNum:    { fontSize: 14, fontWeight: "900" },
+  rewardNum:    { fontSize: rf(14), fontWeight: "900" },
   claimedBadge: { flexDirection: "row", alignItems: "center", gap: 3, backgroundColor: "#14532D", paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8 },
-  claimedTxt:   { fontSize: 10, fontWeight: "700", color: "#22C55E" },
+  claimedTxt:   { fontSize: rf(10), fontWeight: "700", color: "#22C55E" },
 });
 
 // ── Group card ────────────────────────────────────────────────────────────────
@@ -217,12 +218,12 @@ const card = StyleSheet.create({
   wrap:       { borderRadius: 14, borderWidth: 1, overflow: "hidden", marginBottom: 12 },
   header:     { flexDirection: "row", alignItems: "center", gap: 10, padding: 14 },
   badge:      { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, flexShrink: 0 },
-  badgeTxt:   { fontSize: 9, fontWeight: "900", letterSpacing: 0.8 },
+  badgeTxt:   { fontSize: rf(9), fontWeight: "900", letterSpacing: 0.8 },
   headerMid:  { flex: 1, gap: 2 },
-  title:      { fontSize: 14, fontWeight: "800" },
-  desc:       { fontSize: 11, color: "#6B7280", lineHeight: 15 },
+  title:      { fontSize: rf(14), fontWeight: "800" },
+  desc:       { fontSize: rf(11), color: "#6B7280", lineHeight: 15 },
   headerRight:{ alignItems: "flex-end", gap: 4 },
-  progress:   { fontSize: 11, fontWeight: "700" },
+  progress:   { fontSize: rf(11), fontWeight: "700" },
   tasks:      { borderTopWidth: 1 },
 });
 
@@ -312,11 +313,11 @@ export default function EarnTasksSection({ visible }: Props) {
 
 const s = StyleSheet.create({
   sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 },
-  sectionTitle:  { fontSize: 17, fontWeight: "800" },
-  sectionSub:    { fontSize: 12, color: "#6B7280", marginBottom: 14, lineHeight: 17 },
+  sectionTitle:  { fontSize: rf(17), fontWeight: "800" },
+  sectionSub:    { fontSize: rf(12), color: "#6B7280", marginBottom: 14, lineHeight: 17 },
   center:        { alignItems: "center", justifyContent: "center", paddingVertical: 40, gap: 10 },
-  loadingTxt:    { fontSize: 13, color: "#6B7280" },
-  errorTxt:      { fontSize: 14, fontWeight: "600", textAlign: "center" },
+  loadingTxt:    { fontSize: rf(13), color: "#6B7280" },
+  errorTxt:      { fontSize: rf(14), fontWeight: "600", textAlign: "center" },
   retryBtn:      { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4, backgroundColor: "#0B2A1A", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
-  retryTxt:      { fontSize: 13, color: "#22C55E", fontWeight: "700" },
+  retryTxt:      { fontSize: rf(13), color: "#22C55E", fontWeight: "700" },
 });

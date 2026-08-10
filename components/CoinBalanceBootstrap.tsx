@@ -56,8 +56,14 @@ export function CoinBalanceBootstrap() {
     });
 
     // Immediate network refresh for the active account.
-    void dispatch(fetchCoinBalance());
-    void dispatch(fetchTrackThemes());
+    void dispatch(fetchCoinBalance()).then(() => {
+      const { markHydrated, HYDRATION_KEYS } = require("@/services/loginHydration") as typeof import("@/services/loginHydration");
+      markHydrated(HYDRATION_KEYS.coinBalance);
+    });
+    void dispatch(fetchTrackThemes()).then(() => {
+      const { markHydrated, HYDRATION_KEYS } = require("@/services/loginHydration") as typeof import("@/services/loginHydration");
+      markHydrated(HYDRATION_KEYS.trackThemes);
+    });
 
     return () => {
       cancelled = true;

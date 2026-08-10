@@ -9,6 +9,7 @@ import React, { memo } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { UnlimitedDaySummary } from "@/utils/unlimitedDayProgress";
 import { liveEligibilityLabel, type PrizePoolEligibilityStatus } from "@/utils/unlimitedResults";
+import { rf } from "@/utils/responsive";
 
 type Props = {
   summary: UnlimitedDaySummary;
@@ -66,11 +67,11 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 10,
   },
-  heading: { fontSize: 13, fontWeight: "800", color: "#E2E8F8" },
+  heading: { fontSize: rf(13), fontWeight: "800", color: "#E2E8F8" },
   grid: { flexDirection: "row", justifyContent: "space-between" },
   stat: { alignItems: "center", flex: 1 },
-  statValue: { fontSize: 16, fontWeight: "800", color: "#fff" },
-  statLabel: { fontSize: 10.5, color: "#8B9AC0", marginTop: 2, fontWeight: "600" },
+  statValue: { fontSize: rf(16), fontWeight: "800", color: "#fff" },
+  statLabel: { fontSize: rf(10.5), color: "#8B9AC0", marginTop: 2, fontWeight: "600" },
   eligibilityRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -79,6 +80,6 @@ const styles = StyleSheet.create({
     borderTopColor: "rgba(255,255,255,0.08)",
     paddingTop: 8,
   },
-  eligibilityLabel: { fontSize: 12, color: "#8B9AC0", fontWeight: "600" },
-  eligibilityValue: { fontSize: 13, fontWeight: "800" },
+  eligibilityLabel: { fontSize: rf(12), color: "#8B9AC0", fontWeight: "600" },
+  eligibilityValue: { fontSize: rf(13), fontWeight: "800" },
 });

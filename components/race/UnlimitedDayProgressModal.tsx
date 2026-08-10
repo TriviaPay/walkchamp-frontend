@@ -24,6 +24,7 @@ import {
   type UnlimitedDayStatus,
 } from "@/utils/unlimitedDayProgress";
 import { UNLIMITED_COPY } from "@/utils/unlimitedLiveUiCopy";
+import { rf } from "@/utils/responsive";
 
 export type { UnlimitedDayStatus, UnlimitedDayRow } from "@/utils/unlimitedDayProgress";
 
@@ -347,7 +348,7 @@ const styles = StyleSheet.create({
   scrollContent: { paddingTop: 4, paddingBottom: 8, gap: 12 },
   modalTitle: {
     textAlign: "center",
-    fontSize: 18,
+    fontSize: rf(18),
     fontWeight: "800",
     color: "#FFFFFF",
     marginTop: 2,
@@ -371,7 +372,7 @@ const styles = StyleSheet.create({
   },
   brand: {
     textAlign: "center",
-    fontSize: 17,
+    fontSize: rf(17),
     fontWeight: "800",
     color: "#FFFFFF",
     marginTop: -2,
@@ -379,7 +380,7 @@ const styles = StyleSheet.create({
   infinity: { color: "#A78BFA", fontWeight: "900" },
   dayOf: {
     textAlign: "center",
-    fontSize: 14,
+    fontSize: rf(14),
     fontWeight: "800",
     color: "#00E676",
     marginTop: -4,
@@ -392,10 +393,10 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 8,
   },
-  todayLabel: { fontSize: 12, color: "#8B9AC0", fontWeight: "600" },
+  todayLabel: { fontSize: rf(12), color: "#8B9AC0", fontWeight: "600" },
   todayValue: {},
-  todaySteps: { fontSize: 28, fontWeight: "800", color: "#00E676" },
-  todayGoal: { fontSize: 20, fontWeight: "700", color: "#FFFFFF" },
+  todaySteps: { fontSize: rf(28), fontWeight: "800", color: "#00E676" },
+  todayGoal: { fontSize: rf(20), fontWeight: "700", color: "#FFFFFF" },
   barBg: {
     height: 10,
     borderRadius: 999,
@@ -404,7 +405,7 @@ const styles = StyleSheet.create({
   },
   barFill: { height: "100%", backgroundColor: "#00E676", borderRadius: 999 },
   remainRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  remainText: { fontSize: 12, color: "#8B9AC0", fontWeight: "600" },
+  remainText: { fontSize: rf(12), color: "#8B9AC0", fontWeight: "600" },
   section: { gap: 6 },
   dayRowFit: {
     flexDirection: "row",
@@ -431,7 +432,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
   },
   dayCellFailed: { backgroundColor: "rgba(255,68,68,0.08)" },
-  dayCellLabel: { fontSize: 10, fontWeight: "700", color: "#C7CDDA" },
+  dayCellLabel: { fontSize: rf(10), fontWeight: "700", color: "#C7CDDA" },
   dayIconCircle: {
     width: 28,
     height: 28,
@@ -447,9 +448,9 @@ const styles = StyleSheet.create({
     borderColor: "#5A6A8A",
     borderStyle: "dashed",
   },
-  daySteps: { fontSize: 10, fontWeight: "800", color: "#00E676" },
-  dayStepsMuted: { fontSize: 9, fontWeight: "700", color: "#6B7A99" },
-  dayMissed: { fontSize: 10, fontWeight: "800", color: "#FF6B6B" },
+  daySteps: { fontSize: rf(10), fontWeight: "800", color: "#00E676" },
+  dayStepsMuted: { fontSize: rf(9), fontWeight: "700", color: "#6B7A99" },
+  dayMissed: { fontSize: rf(10), fontWeight: "800", color: "#FF6B6B" },
   warnBox: {
     flexDirection: "row",
     gap: 10,
@@ -460,7 +461,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
   },
-  warnText: { flex: 1, fontSize: 13, fontWeight: "600", color: "#FFB4B4", lineHeight: 18 },
+  warnText: { flex: 1, fontSize: rf(13), fontWeight: "600", color: "#FFB4B4", lineHeight: 18 },
   infoBox: {
     flexDirection: "row",
     gap: 10,
@@ -471,7 +472,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
   },
-  infoText: { flex: 1, fontSize: 13, fontWeight: "600", color: "#B7D0FF", lineHeight: 18 },
+  infoText: { flex: 1, fontSize: rf(13), fontWeight: "600", color: "#B7D0FF", lineHeight: 18 },
   infoHighlight: { color: "#7EB6FF", fontWeight: "800" },
   cta: {
     marginTop: 10,
@@ -481,5 +482,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  ctaText: { fontSize: 16, fontWeight: "900", color: "#0B0F1A" },
+  ctaText: { fontSize: rf(16), fontWeight: "900", color: "#0B0F1A" },
 });

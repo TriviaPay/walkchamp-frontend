@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { Animated, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import { rf } from "@/utils/responsive";
 
 export const ENABLE_JOIN_CARD_ANIMATION = true;
 
@@ -170,14 +171,14 @@ const bjStyles = StyleSheet.create({
   // Generic small pill (active/forfeited/host)
   pill:  { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5, borderWidth: 1 },
   dot:   { width: 6, height: 6, borderRadius: 3 },
-  text:  { fontSize: 11, fontWeight: "800" },
+  text:  { fontSize: rf(11), fontWeight: "800" },
 
   // "Join" pill — solid gradient, bold
   joinPill:     { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
   joinDot:      { width: 7, height: 7, borderRadius: 3.5, backgroundColor: "#004D26" },
-  joinText:     { fontSize: 13, fontWeight: "900", color: "#003820", letterSpacing: 0.2 },
+  joinText:     { fontSize: rf(13), fontWeight: "900", color: "#003820", letterSpacing: 0.2 },
   joinCountBox: { backgroundColor: "rgba(0,0,0,0.22)", borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  joinCountText:{ fontSize: 12, fontWeight: "900", color: "#FFF" },
+  joinCountText:{ fontSize: rf(12), fontWeight: "900", color: "#FFF" },
 
   // Waiting pill — green gradient (matches Join); count sits inline, no separate box
   waitingPill: {
@@ -189,24 +190,24 @@ const bjStyles = StyleSheet.create({
     paddingVertical: 6,
   },
   waitingDot:       { width: 7, height: 7, borderRadius: 3.5, backgroundColor: "#FFFFFF" },
-  waitingLabel:     { fontSize: 11, fontWeight: "800", color: "#FFFFFF", letterSpacing: 0.2 },
-  waitingCountText: { fontSize: 15, fontWeight: "900", color: "#FFFFFF" },
+  waitingLabel:     { fontSize: rf(11), fontWeight: "800", color: "#FFFFFF", letterSpacing: 0.2 },
+  waitingCountText: { fontSize: rf(15), fontWeight: "900", color: "#FFFFFF" },
 
   // Hosting pill — solid amber gradient (mirrors join pill prominence)
   hostingPill:     { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
   hostingDot:      { width: 7, height: 7, borderRadius: 3.5, backgroundColor: "#7C2D00" },
-  hostingLabel:    { fontSize: 13, fontWeight: "900", color: "#1C0A00", letterSpacing: 0.2 },
+  hostingLabel:    { fontSize: rf(13), fontWeight: "900", color: "#1C0A00", letterSpacing: 0.2 },
   hostingCountBox: { backgroundColor: "rgba(0,0,0,0.22)", borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  hostingCountText:{ fontSize: 12, fontWeight: "900", color: "#FFF" },
+  hostingCountText:{ fontSize: rf(12), fontWeight: "900", color: "#FFF" },
 
   // Active HOSTING pill — solid amber gradient, compact
   activeHostPill: { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5 },
-  activeHostText: { fontSize: 11, fontWeight: "800", color: "#1C0A00" },
+  activeHostText: { fontSize: rf(11), fontWeight: "800", color: "#1C0A00" },
 
   // Active RACING pill — solid green (same weight as Join), only for racing
   racingPill: { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5 },
   racingDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: "#004D26" },
-  racingText: { fontSize: 11, fontWeight: "900", color: "#003820", letterSpacing: 0.3 },
+  racingText: { fontSize: rf(11), fontWeight: "900", color: "#003820", letterSpacing: 0.3 },
 });
 
 // ── JoinProgressOverlay ───────────────────────────────────────────────────────
@@ -295,6 +296,6 @@ const ovStyles = StyleSheet.create({
     paddingVertical: 9,
   },
   matchingDot:  { width: 8, height: 8, borderRadius: 4, backgroundColor: "#00E676" },
-  text:         { color: "#FFF", fontSize: 15, fontWeight: "900", letterSpacing: 0.5, textShadowColor: "rgba(0,0,0,0.8)", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
-  dots:         { color: "#00E676", fontSize: 15, fontWeight: "900", textShadowColor: "rgba(0,0,0,0.8)", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
+  text:         { color: "#FFF", fontSize: rf(15), fontWeight: "900", letterSpacing: 0.5, textShadowColor: "rgba(0,0,0,0.8)", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
+  dots:         { color: "#00E676", fontSize: rf(15), fontWeight: "900", textShadowColor: "rgba(0,0,0,0.8)", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
 });

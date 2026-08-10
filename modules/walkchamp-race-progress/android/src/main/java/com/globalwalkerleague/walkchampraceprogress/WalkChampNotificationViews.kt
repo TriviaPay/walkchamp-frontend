@@ -58,32 +58,24 @@ object WalkChampNotificationViews {
     val statusLine = if (pct >= 100) "Goal Complete" else "Daily Walk"
 
     return try {
-      val collapsed = RemoteViews(ctx.packageName, R.layout.notification_daily_walk).also {
-        bindBrandIconOnly(it, typeIcon)
-        it.setTextViewText(R.id.notification_subtitle, statusLine)
-        it.setTextViewText(R.id.notification_steps_line, stepsLine)
-        applyTextTheme(
-          ctx,
-          it,
-          primaryIds = intArrayOf(R.id.notification_subtitle, R.id.notification_steps_line),
-        )
-      }
-      val expanded = RemoteViews(ctx.packageName, R.layout.notification_daily_walk_expanded).also {
+      // Full progress in the tray view; same RemoteViews for content + big → no expand.
+      val full = RemoteViews(ctx.packageName, R.layout.notification_daily_walk).also {
         bindBrandIconOnly(it, typeIcon)
         it.setTextViewText(R.id.notification_subtitle, statusLine)
         it.setTextViewText(R.id.notification_steps_line, stepsLine)
         it.setTextViewText(R.id.notification_percent, "$pct%")
-        it.setTextViewText(R.id.notification_remaining, remainingLine)
         it.setProgressBar(R.id.notification_progress, 100, pct, false)
         applyTextTheme(
           ctx,
           it,
-          primaryIds = intArrayOf(R.id.notification_subtitle, R.id.notification_steps_line),
-          secondaryIds = intArrayOf(R.id.notification_remaining),
+          primaryIds = intArrayOf(R.id.notification_steps_line),
+          secondaryIds = intArrayOf(R.id.notification_subtitle),
           accentIds = intArrayOf(R.id.notification_percent),
         )
       }
-      finishCustomBuilder(builder, collapsed, expanded)
+      // Keep legacy remaining text available via contentText for accessibility / OEM fallbacks.
+      builder.setContentText(remainingLine)
+      finishNonExpandableCustomBuilder(builder, full)
       true
     } catch (e: Exception) {
       Log.w(TAG, "Custom walk notification rendering failed: ${e.message}")
@@ -97,18 +89,11 @@ object WalkChampNotificationViews {
     state: RaceNotificationState,
     brandTitle: String = "Walk Champ",
   ): Boolean {
-    val visual = NotificationVisuals.forOngoingRace(state.isSponsored)
-    val typeLabel = NotificationVisuals.raceTypeLabel(state.isSponsored)
-    val typeIcon = NotificationVisuals.resolveDrawable(visual)
+    // Always notification_live.png for every ongoing race type (sponsored / free / cash / etc.).
+    val typeIcon = R.drawable.notification_live
     val steps = state.raceSteps.coerceAtLeast(0)
     val goal = state.goalSteps.coerceAtLeast(0)
     val pct = NotificationVisuals.clampPercent(steps, if (goal > 0) goal else 1)
-    val timeLeft = NotificationVisuals.formatTimeLeft(state.timeLeftSeconds)
-    val statusLine = "$typeLabel • $timeLeft"
-    val headline = when {
-      state.rank == 1 -> "You're in the lead!"
-      else -> "Keep going, every step counts."
-    }
     val stepsLine = if (goal > 0) {
       "${NotificationVisuals.formatSteps(steps)} / ${NotificationVisuals.formatSteps(goal)} steps"
     } else {
@@ -117,39 +102,41 @@ object WalkChampNotificationViews {
     val rankLine = "Rank #${state.rank.coerceAtLeast(1)} of ${state.totalParticipants.coerceAtLeast(1)}"
     val participantsLine =
       "${state.totalParticipants.coerceAtLeast(1)} Participants"
+    val typeLabel = "Live Race"
 
     return try {
-      val collapsed = RemoteViews(ctx.packageName, R.layout.notification_live_race).also {
-        bindBrandIconOnly(it, typeIcon)
-        it.setTextViewText(R.id.notification_subtitle, statusLine)
-        it.setTextViewText(R.id.notification_headline, headline)
+      fun bindFullRaceLayout(views: RemoteViews) {
+        bindBrandIconOnly(views, typeIcon)
+        // Never show status / lead / "Live Race" on the left.
+        views.setViewVisibility(R.id.notification_subtitle, View.GONE)
+        views.setViewVisibility(R.id.notification_headline, View.GONE)
+        views.setTextViewText(R.id.notification_steps_line, stepsLine)
+        views.setTextViewText(R.id.notification_percent, if (goal > 0) "$pct%" else "")
+        views.setProgressBar(R.id.notification_progress, 100, if (goal > 0) pct else 0, false)
+        views.setTextViewText(R.id.notification_rank_line, rankLine)
+        views.setTextViewText(R.id.notification_participants_line, participantsLine)
+        // Label sits under the PNG on the right.
+        views.setTextViewText(R.id.notification_type_label, typeLabel)
+        views.setImageViewResource(R.id.notification_type_icon, typeIcon)
         applyTextTheme(
           ctx,
-          it,
-          primaryIds = intArrayOf(R.id.notification_subtitle, R.id.notification_headline),
-        )
-      }
-      val expanded = RemoteViews(ctx.packageName, R.layout.notification_live_race_expanded).also {
-        bindBrandIconOnly(it, typeIcon)
-        it.setTextViewText(R.id.notification_subtitle, statusLine)
-        it.setTextViewText(R.id.notification_headline, headline)
-        it.setTextViewText(R.id.notification_steps_line, stepsLine)
-        it.setTextViewText(R.id.notification_percent, if (goal > 0) "$pct%" else "")
-        it.setProgressBar(R.id.notification_progress, 100, if (goal > 0) pct else 0, false)
-        it.setTextViewText(R.id.notification_rank_line, rankLine)
-        it.setTextViewText(R.id.notification_participants_line, participantsLine)
-        applyTextTheme(
-          ctx,
-          it,
-          primaryIds = intArrayOf(R.id.notification_subtitle, R.id.notification_headline, R.id.notification_steps_line),
+          views,
+          primaryIds = intArrayOf(R.id.notification_steps_line),
           secondaryIds = intArrayOf(
             R.id.notification_rank_line,
             R.id.notification_participants_line,
+            R.id.notification_type_label,
           ),
           accentIds = intArrayOf(R.id.notification_percent),
         )
       }
-      finishCustomBuilder(builder, collapsed, expanded)
+
+      // One full layout in the collapsed tray — no big-content view → nothing to expand.
+      val full = RemoteViews(ctx.packageName, R.layout.notification_live_race).also(::bindFullRaceLayout)
+      // Clear system title/text so "Live Race" is only under the PNG, not on the left.
+      builder.setContentTitle("")
+      builder.setContentText("")
+      finishNonExpandableCustomBuilder(builder, full)
       true
     } catch (e: Exception) {
       Log.w(TAG, "Custom race notification rendering failed: ${e.message}")
@@ -322,6 +309,23 @@ object WalkChampNotificationViews {
       .setStyle(NotificationCompat.DecoratedCustomViewStyle())
       .setCustomContentView(collapsed)
       .setCustomBigContentView(expanded)
+  }
+
+  /**
+   * Full tray layout with no expand affordance.
+   * Use the **same** RemoteViews for content + big + heads-up — setting big to
+   * null with DecoratedCustomViewStyle still shows the expand/collapse chevron
+   * on many OEMs.
+   */
+  private fun finishNonExpandableCustomBuilder(
+    builder: NotificationCompat.Builder,
+    content: RemoteViews,
+  ) {
+    builder
+      .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+      .setCustomContentView(content)
+      .setCustomBigContentView(content)
+      .setCustomHeadsUpContentView(content)
   }
 
   /** Device dark mode → white text; light mode → black text. Percent/reward use green. */

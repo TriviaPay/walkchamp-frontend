@@ -21,6 +21,7 @@ import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { PROFILE_ME_CACHE_KEY } from "@/hooks/useAvatarCache";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { SkeletonEditForm } from '@/components/SkeletonRows';
+import { rf } from "@/utils/responsive";
 
 // Same palette used throughout the app. Not red by default (#006B3F dark green is the first entry).
 const AVATAR_COLORS = [
@@ -287,27 +288,27 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, alignItems: "center", justifyContent: "center" },
   header:           { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 14, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
   headerBtn:        { width: 36, alignItems: "flex-start" },
-  headerTitle:      { flex: 1, fontSize: 18, fontWeight: "700", textAlign: "center" },
+  headerTitle:      { flex: 1, fontSize: rf(18), fontWeight: "700", textAlign: "center" },
   saveBtn:          { borderRadius: 10, paddingHorizontal: 18, paddingVertical: 8 },
-  saveBtnText:      { fontSize: 14, fontWeight: "700", color: "#000" },
+  saveBtnText:      { fontSize: rf(14), fontWeight: "700", color: "#000" },
   body:             { padding: 20, gap: 24 },
   avatarSection:    { alignItems: "center", gap: 6, marginBottom: 4 },
-  flagBig:          { fontSize: 48 },
-  countryLabel:     { fontSize: 14 },
+  flagBig:          { fontSize: rf(48) },
+  countryLabel:     { fontSize: rf(14) },
   field:            { gap: 8 },
-  label:            { fontSize: 13, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.5 },
-  input:            { borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 13, fontSize: 16 },
+  label:            { fontSize: rf(13), fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.5 },
+  input:            { borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 13, fontSize: rf(16) },
   inputRow:         { flexDirection: "row", alignItems: "center", borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 13, gap: 4 },
-  atSign:           { fontSize: 16 },
-  inputInner:       { flex: 1, fontSize: 16 },
-  bioInput:         { borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 13, fontSize: 15, minHeight: 100 },
-  charCount:        { fontSize: 12, textAlign: "right", marginTop: -4 },
-  errorText:        { fontSize: 12 },
-  hintText:         { fontSize: 12 },
+  atSign:           { fontSize: rf(16) },
+  inputInner:       { flex: 1, fontSize: rf(16) },
+  bioInput:         { borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 13, fontSize: rf(15), minHeight: 100 },
+  charCount:        { fontSize: rf(12), textAlign: "right", marginTop: -4 },
+  errorText:        { fontSize: rf(12) },
+  hintText:         { fontSize: rf(12) },
   infoRow:          { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 12, borderWidth: 1, padding: 14 },
-  infoText:         { flex: 1, fontSize: 13, lineHeight: 18 },
+  infoText:         { flex: 1, fontSize: rf(13), lineHeight: 18 },
   colorCard:        { borderRadius: 12, borderWidth: 1, padding: 14, gap: 10 },
   colorRow:         { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   colorDot:         { width: 36, height: 36, borderRadius: 18 },
-  colorHint:        { fontSize: 12, lineHeight: 17 },
+  colorHint:        { fontSize: rf(12), lineHeight: 17 },
 });

@@ -122,19 +122,14 @@ struct WalkChampRaceLiveActivityWidget: Widget {
   }
 
   private func raceTypeLabel(raceStatus: String) -> String {
-    let s = raceStatus.lowercased()
-    if s.contains("sponsor") { return "Sponsored Event" }
-    if s.contains("coin") { return "Coins Battle" }
-    if s.contains("cash") { return "Cash Challenge" }
+    // Ongoing Live Activity always shows "Live Race" for every race type.
+    _ = raceStatus
     return "Live Race"
   }
 
   private func raceVisualName(raceStatus: String) -> String {
-    let s = raceStatus.lowercased()
-    if s.contains("sponsor") { return "notification_sponsored_event" }
-    if s.contains("coin") { return "notification_coins_battle" }
-    if s.contains("cash") { return "notification_cash_challenge" }
-    if s.contains("finish") || s.contains("result") { return "notification_race_finished" }
+    // Always the Live Race PNG — never sponsored / coins / cash variants.
+    _ = raceStatus
     return "notification_live_race"
   }
 }

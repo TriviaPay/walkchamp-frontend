@@ -25,6 +25,7 @@ import { useColors } from "@/hooks/useColors";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useRace } from "@/context/RaceContext";
 import { authFetch } from "@/utils/authFetch";
+import { rf } from "@/utils/responsive";
 
 const CASH_RULES_VERSION = "2026-06";
 
@@ -182,7 +183,7 @@ export default function JoinByCode() {
               value={room.entryAmountCents > 0 ? `$${(room.entryAmountCents / 100).toFixed(2)}` : "Free"}
               valueStyle={room.entryAmountCents > 0 ? {
                 color: "#FBBF24",
-                fontSize: 18,
+                fontSize: rf(18),
                 fontWeight: "900" as const,
                 textShadowColor: "rgba(251,191,36,0.65)",
                 textShadowOffset: { width: 0, height: 0 },
@@ -303,20 +304,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 16,
   },
-  trophy: { fontSize: 56, textAlign: "center" },
-  title: { fontSize: 26, fontWeight: "800", textAlign: "center", letterSpacing: -0.5 },
-  subtitle: { fontSize: 14, textAlign: "center", lineHeight: 20, maxWidth: 280 },
+  trophy: { fontSize: rf(56), textAlign: "center" },
+  title: { fontSize: rf(26), fontWeight: "800", textAlign: "center", letterSpacing: -0.5 },
+  subtitle: { fontSize: rf(14), textAlign: "center", lineHeight: 20, maxWidth: 280 },
   codeBox: { borderRadius: 16, borderWidth: 1.5, padding: 20, alignItems: "center", gap: 6, width: "100%" },
-  codeLabel: { fontSize: 11, letterSpacing: 1, textTransform: "uppercase" },
-  codeValue: { fontSize: 42, fontWeight: "900", letterSpacing: 7, color: "#A855F7" },
+  codeLabel: { fontSize: rf(11), letterSpacing: 1, textTransform: "uppercase" },
+  codeValue: { fontSize: rf(42), fontWeight: "900", letterSpacing: 7, color: "#A855F7" },
   loadingRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  loadingText: { fontSize: 13 },
+  loadingText: { fontSize: rf(13) },
   summaryBox: { width: "100%", borderRadius: 12, borderWidth: 1, padding: 14, gap: 8 },
   summaryRow: { flexDirection: "row", justifyContent: "space-between" },
-  summaryLabel: { fontSize: 13 },
-  summaryValue: { fontSize: 13, fontWeight: "600" },
-  consentHeader: { fontSize: 18, fontWeight: "800", alignSelf: "flex-start" },
-  consentSub: { fontSize: 13, alignSelf: "flex-start" },
+  summaryLabel: { fontSize: rf(13) },
+  summaryValue: { fontSize: rf(13), fontWeight: "600" },
+  consentHeader: { fontSize: rf(18), fontWeight: "800", alignSelf: "flex-start" },
+  consentSub: { fontSize: rf(13), alignSelf: "flex-start" },
   checkRow: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -336,13 +337,13 @@ const styles = StyleSheet.create({
     marginTop: 1,
     flexShrink: 0,
   },
-  checkText: { fontSize: 13, lineHeight: 19, flex: 1 },
+  checkText: { fontSize: rf(13), lineHeight: 19, flex: 1 },
   errorBox: { flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 10, borderWidth: 1, padding: 12, width: "100%" },
-  errorText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  errorText: { flex: 1, fontSize: rf(13), lineHeight: 18 },
   joinBtn: { width: "100%", borderRadius: 14, overflow: "hidden" },
   joinGradient: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 16 },
-  joinBtnText: { fontSize: 17, fontWeight: "700", color: "#FFF" },
+  joinBtnText: { fontSize: rf(17), fontWeight: "700", color: "#FFF" },
   cancelBtn: { width: "100%", borderRadius: 12, borderWidth: 1, paddingVertical: 14, alignItems: "center" },
-  cancelText: { fontSize: 15, fontWeight: "600" },
-  legalNote: { fontSize: 11, textAlign: "center", lineHeight: 16 },
+  cancelText: { fontSize: rf(15), fontWeight: "600" },
+  legalNote: { fontSize: rf(11), textAlign: "center", lineHeight: 16 },
 });

@@ -14,6 +14,7 @@ import {
   UNLIMITED_LOCAL_MIDNIGHT_NOTE,
 } from "@/utils/unlimitedViewerSchedule";
 import { getDeviceTimezone } from "@/utils/timezone";
+import { rf } from "@/utils/responsive";
 
 export interface ActiveRaceInfo {
   room_id: string;
@@ -346,7 +347,7 @@ export default function ActiveRaceModal({
 const styles = StyleSheet.create({
   unlimitedTzNote: {
     marginTop: 8,
-    fontSize: 11,
+    fontSize: rf(11),
     fontWeight: "500",
     color: "#8792A8",
     textAlign: "center",
@@ -398,7 +399,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: "#FFFFFF",
-    fontSize: 18,
+    fontSize: rf(18),
     fontWeight: "700",
     textAlign: "center",
     marginBottom: 10,
@@ -406,7 +407,7 @@ const styles = StyleSheet.create({
   },
   message: {
     color: "#8B9BBE",
-    fontSize: 14,
+    fontSize: rf(14),
     textAlign: "center",
     lineHeight: 22,
     marginBottom: 20,
@@ -436,12 +437,12 @@ const styles = StyleSheet.create({
   },
   detailLabel: {
     color: "#5A6A8A",
-    fontSize: 13,
+    fontSize: rf(13),
     fontWeight: "500",
   },
   detailValue: {
     color: "#FFFFFF",
-    fontSize: 13,
+    fontSize: rf(13),
     fontWeight: "600",
     flexShrink: 1,
     textAlign: "right",
@@ -459,7 +460,7 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: {
     color: "#000000",
-    fontSize: 16,
+    fontSize: rf(16),
     fontWeight: "700",
   },
   dangerBtn: {
@@ -475,7 +476,7 @@ const styles = StyleSheet.create({
   },
   dangerBtnText: {
     color: "#FFFFFF",
-    fontSize: 16,
+    fontSize: rf(16),
     fontWeight: "700",
   },
   btnIcon: {

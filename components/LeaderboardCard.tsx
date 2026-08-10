@@ -4,6 +4,7 @@ import { BlueShoe } from "@/components/BlueShoe";
 import { useColors } from "@/hooks/useColors";
 import { LeaderboardUser, getBadgeColor } from "@/utils/mockData";
 import { formatSteps } from "@/utils/format";
+import { rf } from "@/utils/responsive";
 
 interface LeaderboardCardProps {
   user: LeaderboardUser;
@@ -109,11 +110,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   rankText: {
-    fontSize: 13,
+    fontSize: rf(13),
     fontWeight: "700",
   },
   crown: {
-    fontSize: 20,
+    fontSize: rf(20),
   },
   avatar: {
     width: 40,
@@ -124,7 +125,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   avatarText: {
-    fontSize: 16,
+    fontSize: rf(16),
     fontWeight: "700",
   },
   info: {
@@ -137,12 +138,12 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   username: {
-    fontSize: 14,
+    fontSize: rf(14),
     fontWeight: "600",
     flexShrink: 1,
   },
   flag: {
-    fontSize: 14,
+    fontSize: rf(14),
   },
   verifiedDot: {
     width: 7,
@@ -158,22 +159,22 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   badgeText: {
-    fontSize: 11,
+    fontSize: rf(11),
     fontWeight: "600",
   },
   stepsBox: {
     alignItems: "flex-end",
   },
   stepsText: {
-    fontSize: 16,
+    fontSize: rf(16),
     fontWeight: "700",
   },
   stepsLabel: {
-    fontSize: 11,
+    fontSize: rf(11),
     fontWeight: "400",
   },
   reward: {
-    fontSize: 12,
+    fontSize: rf(12),
     fontWeight: "700",
     marginTop: 2,
   },

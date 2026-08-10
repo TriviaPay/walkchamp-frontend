@@ -7,6 +7,7 @@ import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { TermsAndConditionsDocument } from "@/components/TermsAndConditionsDocument";
 import { TERMS_DOCUMENT } from "@/constants/termsAndConditions";
+import { rf } from "@/utils/responsive";
 
 /**
  * Public Terms and Conditions route (`/terms`).
@@ -61,6 +62,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   headerCenter: { flex: 1, alignItems: "center" },
-  headerTitle: { fontSize: 17, fontWeight: "800" },
-  headerSub: { fontSize: 11, marginTop: 2, fontWeight: "600" },
+  headerTitle: { fontSize: rf(17), fontWeight: "800" },
+  headerSub: { fontSize: rf(11), marginTop: 2, fontWeight: "600" },
 });

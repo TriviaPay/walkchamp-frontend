@@ -16,6 +16,7 @@ import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { getValidSession } from "@/services/authService";
 import { TitleBadge } from "@/components/TitleBadge";
+import { rf } from "@/utils/responsive";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 const SUCCESS_TOAST_ORANGE = "#FF9800";
@@ -548,26 +549,26 @@ const st = StyleSheet.create({
 
   header:      { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
   headerBtn:   { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  headerTitle: { flex: 1, fontSize: 20, fontWeight: "800", textAlign: "center" },
+  headerTitle: { flex: 1, fontSize: rf(20), fontWeight: "800", textAlign: "center" },
   saveBtn:     { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, borderWidth: 1 },
-  saveBtnText: { fontSize: 14, fontWeight: "700" },
+  saveBtnText: { fontSize: rf(14), fontWeight: "700" },
 
   infoStrip:   { flexDirection: "row", alignItems: "center", gap: 10, marginHorizontal: 16, marginTop: 12, padding: 12, borderRadius: 12, borderWidth: 1 },
-  infoText:    { fontSize: 13, fontWeight: "600" },
+  infoText:    { fontSize: rf(13), fontWeight: "600" },
   stripDivider:{ width: 1, height: 18 },
-  infoHint:    { flex: 1, fontSize: 12, lineHeight: 16 },
+  infoHint:    { flex: 1, fontSize: rf(12), lineHeight: 16 },
 
   filterScroll: { flexShrink: 0, flexGrow: 0 },
   filterRow:    { paddingHorizontal: 16, paddingVertical: 10, gap: 8, alignItems: "center" },
   filterChip:   { height: 34, paddingHorizontal: 14, borderRadius: 17, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
-  filterChipText: { fontSize: 12, fontWeight: "600" },
+  filterChipText: { fontSize: rf(12), fontWeight: "600" },
 
   bodyFill:      { flex: 1, minHeight: 0 },
   list:          { paddingHorizontal: 12, paddingVertical: 8, gap: 6 },
 
   sectionHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 4, paddingVertical: 10 },
   sectionBar:    { width: 3, height: 16, borderRadius: 2, marginRight: 8 },
-  sectionTitle:  { fontSize: 13, fontWeight: "700" },
+  sectionTitle:  { fontSize: rf(13), fontWeight: "700" },
   flex1:         { flex: 1 },
 
   // Row
@@ -590,19 +591,19 @@ const st = StyleSheet.create({
 
   // Row sections
   info: { flex: 1, gap: 3, minWidth: 0 },
-  titleText: { fontSize: 13, fontWeight: "700" },
-  descText:  { fontSize: 11, lineHeight: 15 },
+  titleText: { fontSize: rf(13), fontWeight: "700" },
+  descText:  { fontSize: rf(11), lineHeight: 15 },
   progressWrap: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 2 },
   progressTrack: { flex: 1, height: 4, borderRadius: 2, overflow: "hidden" },
   progressFill:  { height: "100%", borderRadius: 2 },
-  progressPct:   { fontSize: 10, fontWeight: "700", width: 30, textAlign: "right" },
+  progressPct:   { fontSize: rf(10), fontWeight: "700", width: 30, textAlign: "right" },
 
   midCol:     { width: 88, alignItems: "flex-end", gap: 6 },
   unlockedRow:{ flexDirection: "row", alignItems: "center", gap: 3 },
-  unlockedText:{ fontSize: 11, fontWeight: "700", color: "#00E676" },
-  goalText:   { fontSize: 11, lineHeight: 15, textAlign: "right" },
+  unlockedText:{ fontSize: rf(11), fontWeight: "700", color: "#00E676" },
+  goalText:   { fontSize: rf(11), lineHeight: 15, textAlign: "right" },
   diffBadge:  { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, borderWidth: 1 },
-  diffText:   { fontSize: 10, fontWeight: "700" },
+  diffText:   { fontSize: rf(10), fontWeight: "700" },
 
   selectorCol: { width: 26, alignItems: "center" },
   radioCircle: { width: 22, height: 22, borderRadius: 11, borderWidth: 2 },
@@ -610,16 +611,16 @@ const st = StyleSheet.create({
   lockCircle:  { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
 
   center:      { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 32 },
-  loadingText: { fontSize: 14, marginTop: 8 },
-  errorText:   { fontSize: 14, textAlign: "center" },
-  retryText:   { fontSize: 13, fontWeight: "600" },
+  loadingText: { fontSize: rf(14), marginTop: 8 },
+  errorText:   { fontSize: rf(14), textAlign: "center" },
+  retryText:   { fontSize: rf(13), fontWeight: "600" },
 
   emptyCard:  { borderRadius: 16, borderWidth: 1, padding: 28, alignItems: "center", gap: 10, marginTop: 8 },
-  emptyTitle: { fontSize: 16, fontWeight: "700" },
-  emptyDesc:  { fontSize: 13, textAlign: "center", lineHeight: 18 },
+  emptyTitle: { fontSize: rf(16), fontWeight: "700" },
+  emptyDesc:  { fontSize: rf(13), textAlign: "center", lineHeight: 18 },
 
   toastOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 200, elevation: 20 },
   toast:        { position: "absolute", left: 16, right: 16, flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: 12, borderWidth: 1.5 },
   toastIconWrap: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
-  toastText: { flex: 1, fontSize: 14, fontWeight: "700" },
+  toastText: { flex: 1, fontSize: rf(14), fontWeight: "700" },
 });

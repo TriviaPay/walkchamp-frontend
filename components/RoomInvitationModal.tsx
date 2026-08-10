@@ -17,6 +17,7 @@ import { getStoredSession } from "@/services/authService";
 import { useRace } from "@/context/RaceContext";
 import { useAuth } from "@/context/AuthContext";
 import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
+import { rf } from "@/utils/responsive";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 const INVITE_TTL = 20;
@@ -318,7 +319,7 @@ const styles = StyleSheet.create({
   // Invite text
   subText: {
     textAlign: "center",
-    fontSize: 12,
+    fontSize: rf(12),
     color: "#8A9AC0",
     marginBottom: 2,
     paddingHorizontal: 20,
@@ -328,7 +329,7 @@ const styles = StyleSheet.create({
   // Challenge type
   challengeType: {
     textAlign: "center",
-    fontSize: 18,
+    fontSize: rf(18),
     fontWeight: "900",
     color: "#FFC107",
     letterSpacing: 0.5,
@@ -353,8 +354,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
   },
-  detailLabel: { fontSize: 12, color: "#8A9AC0", flex: 1 },
-  detailValue: { fontSize: 12, fontWeight: "700", color: "#E8EEFF" },
+  detailLabel: { fontSize: rf(12), color: "#8A9AC0", flex: 1 },
+  detailValue: { fontSize: rf(12), fontWeight: "700", color: "#E8EEFF" },
 
   // Expires pill
   expiresPill: {
@@ -368,8 +369,8 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     marginBottom: 10,
   },
-  expiresText: { fontSize: 12 },
-  expiresBold: { fontWeight: "900", fontSize: 13 },
+  expiresText: { fontSize: rf(12) },
+  expiresBold: { fontWeight: "900", fontSize: rf(13) },
 
   // Buttons
   btnRow: {
@@ -390,7 +391,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 5,
   },
-  declineTxt: { color: "#EF4444", fontSize: 12, fontWeight: "800", letterSpacing: 0.5 },
+  declineTxt: { color: "#EF4444", fontSize: rf(12), fontWeight: "800", letterSpacing: 0.5 },
   acceptBtn: {
     flex: 2,
     height: 42,
@@ -401,11 +402,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 5,
   },
-  acceptTxt: { color: "#000", fontSize: 14, fontWeight: "900", letterSpacing: 0.5 },
+  acceptTxt: { color: "#000", fontSize: rf(14), fontWeight: "900", letterSpacing: 0.5 },
 
   note: {
     textAlign: "center",
-    fontSize: 10,
+    fontSize: rf(10),
     color: "#3A4A70",
     paddingHorizontal: 20,
     marginBottom: 2,

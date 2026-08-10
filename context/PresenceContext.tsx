@@ -23,6 +23,8 @@ import {
   normalizeUserId,
   toOnlineIdSet,
 } from "@/utils/presenceIds";
+import { waitForAppStartupReady } from "@/services/appStartup";
+import { perf } from "@/utils/perfLogger";
 
 export type UserStatus =
   | "online"
@@ -61,6 +63,15 @@ const EMPTY_COUNTS: PresenceCounts = {
   racing: 0,
   spectating: 0,
 };
+
+type PresenceCountsSlice = Pick<PresenceContextType, "counts" | "formatCount">;
+const PresenceCountsContext = createContext<PresenceCountsSlice | null>(null);
+
+type PresenceOnlineSlice = Pick<
+  PresenceContextType,
+  "onlineUserIds" | "isUserOnline" | "refreshOnlineIds" | "setUserStatus" | "userStatus"
+>;
+const PresenceOnlineContext = createContext<PresenceOnlineSlice | null>(null);
 
 async function fetchPresenceSummary(): Promise<PresenceCounts | null> {
   try {
@@ -127,43 +138,40 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
     if (selfId) next.add(selfId);
 
     try {
-      // Scoped friends presence — legacy /online-ids returns 410 by default.
-      const friendsOnlineRes = await authFetch("/api/presence/friends/online", {
-        timeoutMs: PRESENCE_TIMEOUT,
-      });
-      if (friendsOnlineRes.ok) {
-        const data: unknown = await friendsOnlineRes.json();
+      const [friendsOnlineSettled, legacySettled, friendsSettled] =
+        await Promise.allSettled([
+          authFetch("/api/presence/friends/online", {
+            timeoutMs: PRESENCE_TIMEOUT,
+          }),
+          authFetch("/api/presence/online-ids", {
+            timeoutMs: PRESENCE_TIMEOUT,
+          }),
+          authFetch("/api/friends", {
+            timeoutMs: PRESENCE_TIMEOUT,
+          }),
+        ]);
+
+      if (
+        friendsOnlineSettled.status === "fulfilled" &&
+        friendsOnlineSettled.value.ok
+      ) {
+        const data: unknown = await friendsOnlineSettled.value.json();
         for (const id of extractOnlineIdsFromPayload(data)) {
           const n = normalizeUserId(id);
           if (n) next.add(n);
         }
       }
-    } catch {
-      // optional
-    }
 
-    try {
-      const legacyRes = await authFetch("/api/presence/online-ids", {
-        timeoutMs: PRESENCE_TIMEOUT,
-      });
-      if (legacyRes.ok) {
-        const data: unknown = await legacyRes.json();
+      if (legacySettled.status === "fulfilled" && legacySettled.value.ok) {
+        const data: unknown = await legacySettled.value.json();
         for (const id of extractOnlineIdsFromPayload(data)) {
           const n = normalizeUserId(id);
           if (n) next.add(n);
         }
       }
-    } catch {
-      // optional — 410 is expected when legacy endpoint is retired
-    }
 
-    // Friends flagged online — same source Chat conversation dots use.
-    try {
-      const friendsRes = await authFetch("/api/friends", {
-        timeoutMs: PRESENCE_TIMEOUT,
-      });
-      if (friendsRes.ok) {
-        const friendsData = (await friendsRes.json()) as {
+      if (friendsSettled.status === "fulfilled" && friendsSettled.value.ok) {
+        const friendsData = (await friendsSettled.value.json()) as {
           friends?: { id?: string; userId?: string; isOnline?: boolean }[];
         };
         for (const f of friendsData.friends ?? []) {
@@ -176,7 +184,22 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
       // optional enrichment
     }
 
-    setOnlineUserIds(next);
+    setOnlineUserIds((prev) => {
+      if (prev.size === next.size) {
+        let same = true;
+        for (const id of next) {
+          if (!prev.has(id)) {
+            same = false;
+            break;
+          }
+        }
+        if (same) {
+          if (__DEV__) perf.presenceSkippedUnchanged();
+          return prev;
+        }
+      }
+      return next;
+    });
   }, [isSignedIn, selfId]);
 
   const isUserOnline = useCallback(
@@ -198,6 +221,18 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
     [isSignedIn],
   );
 
+  // Gate presence network/realtime until after cold-start (reduces splash hitch).
+  const [startupReady, setStartupReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void waitForAppStartupReady().then(() => {
+      if (!cancelled) setStartupReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Initial summary + online ids
   useEffect(() => {
     if (!isSignedIn) {
@@ -205,16 +240,17 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
       setOnlineUserIds(new Set());
       return;
     }
+    if (!startupReady) return;
     fetchPresenceSummary().then((c) => {
       if (c) setCounts(c);
     });
     void refreshOnlineIds();
-  }, [isSignedIn, refreshOnlineIds]);
+  }, [isSignedIn, refreshOnlineIds, startupReady]);
 
-  // Heartbeat — only while authenticated
+  // Heartbeat — only while authenticated and past startup gate
   useEffect(() => {
     clearHeartbeat();
-    if (!isSignedIn) return;
+    if (!isSignedIn || !startupReady) return;
     sendHeartbeat(userStatus).catch(() => {});
     heartbeatRef.current = setInterval(() => {
       sendHeartbeat(userStatus).catch(() => {});
@@ -222,16 +258,16 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
     return () => {
       clearHeartbeat();
     };
-  }, [userStatus, isSignedIn, clearHeartbeat]);
+  }, [userStatus, isSignedIn, clearHeartbeat, startupReady]);
 
   // Poll online IDs so Chat / Waiting Room / profiles stay in sync
   useEffect(() => {
-    if (!isSignedIn) return;
+    if (!isSignedIn || !startupReady) return;
     const id = setInterval(() => {
       void refreshOnlineIds();
     }, ONLINE_IDS_POLL_MS);
     return () => clearInterval(id);
-  }, [isSignedIn, refreshOnlineIds]);
+  }, [isSignedIn, refreshOnlineIds, startupReady]);
 
   // App lifecycle — mark offline only on true background (not inactive).
   // inactive fires for Control Center / brief overlays and was wiping presence.
@@ -239,7 +275,7 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
     const sub = AppState.addEventListener("change", (next: AppStateStatus) => {
       const prev = appStateRef.current;
       appStateRef.current = next;
-      if (!isSignedIn) return;
+      if (!isSignedIn || !startupReady) return;
       if (next === "background") {
         sendOffline().catch(() => {});
         clearHeartbeat();
@@ -256,11 +292,11 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
       }
     });
     return () => sub.remove();
-  }, [userStatus, isSignedIn, clearHeartbeat, refreshOnlineIds]);
+  }, [userStatus, isSignedIn, clearHeartbeat, refreshOnlineIds, startupReady]);
 
   // Pusher real-time presence updates — only while signed in.
   useEffect(() => {
-    if (!isSignedIn) return;
+    if (!isSignedIn || !startupReady) return;
     connectPusher();
     markPusherConnected(true);
     const channel = subscribeToChannel(CHANNELS.PRESENCE);
@@ -276,8 +312,22 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
       channel.unbind(EVENTS.PRESENCE_UPDATED);
       unsubscribeFromChannel(CHANNELS.PRESENCE);
     };
-  }, [isSignedIn, refreshOnlineIds]);
+  }, [isSignedIn, refreshOnlineIds, startupReady]);
 
+  const countsValue = useMemo(
+    () => ({ counts, formatCount }),
+    [counts],
+  );
+  const onlineValue = useMemo(
+    () => ({
+      onlineUserIds,
+      isUserOnline,
+      refreshOnlineIds,
+      setUserStatus,
+      userStatus,
+    }),
+    [onlineUserIds, isUserOnline, refreshOnlineIds, setUserStatus, userStatus],
+  );
   const value = useMemo(
     () => ({
       counts,
@@ -300,7 +350,11 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <PresenceContext.Provider value={value}>
-      {children}
+      <PresenceCountsContext.Provider value={countsValue}>
+        <PresenceOnlineContext.Provider value={onlineValue}>
+          {children}
+        </PresenceOnlineContext.Provider>
+      </PresenceCountsContext.Provider>
     </PresenceContext.Provider>
   );
 }
@@ -308,5 +362,19 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
 export function usePresence(): PresenceContextType {
   const ctx = useContext(PresenceContext);
   if (!ctx) throw new Error("usePresence must be used within PresenceProvider");
+  return ctx;
+}
+
+/** Counts + formatter only — does not re-render when onlineUserIds Set changes. */
+export function usePresenceCounts(): PresenceCountsSlice {
+  const ctx = useContext(PresenceCountsContext);
+  if (!ctx) throw new Error("usePresenceCounts must be used within PresenceProvider");
+  return ctx;
+}
+
+/** Online checks / status actions — isolated from aggregate count updates. */
+export function usePresenceActions(): PresenceOnlineSlice {
+  const ctx = useContext(PresenceOnlineContext);
+  if (!ctx) throw new Error("usePresenceActions must be used within PresenceProvider");
   return ctx;
 }

@@ -116,7 +116,8 @@ import {
 } from "@/utils/waitingRoomSeed";
 import { screenCache } from "@/utils/screenCache";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { usePresence } from "@/context/PresenceContext";
+import { usePresenceActions } from "@/context/PresenceContext";
+import { useWaitingRoomBootstrap } from "@/hooks/useWaitingRoomBootstrap";
 import {
   extractOnlineIdsFromPayload,
   normalizeUserId,
@@ -935,7 +936,7 @@ function MatchmakingScreenContent() {
         params.initialEntryType === UNLIMITED_GOAL_CHALLENGE_TYPE,
     },
   );
-  const { isUserOnline, refreshOnlineIds, setUserStatus } = usePresence();
+  const { isUserOnline, refreshOnlineIds, setUserStatus } = usePresenceActions();
 
   const {
     racePhase,
@@ -1970,6 +1971,72 @@ function MatchmakingScreenContent() {
       setStart("countdown");
       setCountdownNum(seconds);
 
+      // Warm Live Detail cache + theme during 3-2-1 (do not change countdown timing/UI).
+      if (backendRaceId && user?.id) {
+        try {
+          const { screenCache } = require("@/utils/screenCache") as typeof import("@/utils/screenCache");
+          const cacheKey = `live-race-detail:v1:${user.id}:${backendRaceId}`;
+          if (!screenCache.getSync(cacheKey)) {
+            const roster = participantsRef.current.map((p, i) => ({
+              id: p.userId || `p-${i}`,
+              userId: p.userId,
+              currentSteps: 0,
+              status: "active",
+              rank: i + 1,
+              username: p.isCurrentUser ? "You" : p.username,
+              countryFlag: p.countryFlag ?? null,
+              avatarColor: p.avatarColor ?? "#00E676",
+              avatarUrl: p.avatarUrl ?? null,
+              isHost: !!p.isHost,
+            }));
+            screenCache.primeSync(cacheKey, {
+              race: {
+                id: backendRaceId,
+                title: isUnlimitedGoalRoom
+                  ? `Streak · ${(liveRoom?.targetSteps ?? 0).toLocaleString()} steps/day`
+                  : "Live Race",
+                status: "in_progress",
+                entryType: isUnlimitedGoalRoom
+                  ? UNLIMITED_GOAL_CHALLENGE_TYPE
+                  : liveRoom?.entryType ?? "free",
+                entryAmountCents: liveRoom?.entryAmountCents ?? 0,
+                entryAmountDollars: (liveRoom?.entryAmountCents ?? 0) / 100,
+                targetSteps: liveRoom?.targetSteps ?? 1000,
+                currentPlayers: Math.max(roster.length, playerCount, 1),
+                maxPlayers: isUnlimitedGoalRoom ? null : liveRoom?.maxPlayers ?? 10,
+                startedAt: new Date().toISOString(),
+                completedAt: null,
+                creatorId: user.id,
+                prizePool: 0,
+                prizeTiers: [],
+                spectatorCount: 0,
+                capacityMode: isUnlimitedGoalRoom ? "unlimited" : null,
+                challengeType: isUnlimitedGoalRoom
+                  ? UNLIMITED_GOAL_CHALLENGE_TYPE
+                  : liveRoom?.entryType ?? null,
+                trackLayout: trackLayoutId || "bg",
+                challengeDurationDays: isUnlimitedGoalRoom
+                  ? unlimitedDurationDays ?? 7
+                  : null,
+                challengeTimezone: unlimitedChallengeTimezone,
+              },
+              participants: roster,
+            });
+          }
+          // Safe GET prefetch — detail shell; Live Detail still owns merge/realtime.
+          void import("@/utils/authFetch").then(({ authFetch }) => {
+            void authFetch(`/api/races/${backendRaceId}`, { timeoutMs: 8_000 }).catch(() => {});
+          });
+          if (trackLayoutId) {
+            void import("@/components/TrackThemeImage").then(({ prefetchTrackTheme }) => {
+              prefetchTrackTheme({ trackLayout: trackLayoutId }, "full");
+            });
+          }
+        } catch {
+          /* optional warm */
+        }
+      }
+
       let remaining = seconds;
       if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
 
@@ -1990,7 +2057,20 @@ function MatchmakingScreenContent() {
         }
       }, 1000);
     },
-    [setStart, navigateToRace],
+    [
+      setStart,
+      navigateToRace,
+      backendRaceId,
+      user?.id,
+      isUnlimitedGoalRoom,
+      liveRoom?.targetSteps,
+      liveRoom?.entryType,
+      liveRoom?.entryAmountCents,
+      liveRoom?.maxPlayers,
+      trackLayoutId,
+      unlimitedDurationDays,
+      unlimitedChallengeTimezone,
+    ],
   );
 
   // ── Cleanup timers on unmount ─────────────────────────────────────────────
@@ -2054,8 +2134,27 @@ function MatchmakingScreenContent() {
         if (isUnlimitedGoalRoom) {
           await tryUnlimitedDetail();
         } else if (!looksScheduled) {
-          // Open classic / mis-tagged id: Unlimited detail first (shadow race rows can undercount).
-          await tryUnlimitedDetail();
+          // Type unknown: Unlimited + classic in parallel (no serial waterfall).
+          const classicPromise = authFetch(`/api/races/${backendRaceId}`);
+          const [unlimitedOk, classicRes] = await Promise.all([
+            tryUnlimitedDetail(),
+            classicPromise,
+          ]);
+          if (!unlimitedOk && classicRes.ok) {
+            const data = await classicRes.json();
+            racePayload = data.race as WaitingRoomRacePayload;
+            rawParticipantCollections = [
+              data.participants,
+              data.registrations,
+              data.registeredParticipants,
+              data.race?.participants,
+              data.race?.registrations,
+              data.race?.registeredParticipants,
+            ];
+            usedUnlimitedEndpoint = false;
+            unlimitedMappedCount = null;
+            unlimitedHasExplicitCount = false;
+          }
         }
 
         if (!racePayload || (looksScheduled && !isUnlimitedGoalRoom)) {
@@ -2446,15 +2545,17 @@ function MatchmakingScreenContent() {
     pollRoomRef.current = pollRoom;
   }, [pollRoom]);
 
+  useWaitingRoomBootstrap({
+    enabled: !!backendRaceId,
+    pollRoom: () => pollRoom(false),
+    refreshOnlineIds,
+    pollMs: STEP_SYNC_CONFIG.MATCHMAKING_ROOM_POLL_MS,
+  });
+  // Force one immediate reconcile on focus (bootstrap polls soft; first paint needs force).
   useFocusEffect(
     useCallback(() => {
       if (!backendRaceId) return;
       void pollRoom(true);
-      const interval = setInterval(
-        () => { void pollRoom(false); },
-        STEP_SYNC_CONFIG.MATCHMAKING_ROOM_POLL_MS,
-      );
-      return () => clearInterval(interval);
     }, [backendRaceId, pollRoom]),
   );
 
@@ -3342,8 +3443,9 @@ function MatchmakingScreenContent() {
           <TouchableOpacity
             style={styles.iconBtn}
             onPress={() => {
-              if (router.canGoBack()) router.back();
-              else navigateToWalkInstant();
+              // Always exit via Walk replace + cleanup — avoids GO_BACK on empty
+              // nested race stacks (dev warning) and clears waiting-room state.
+              navigateToWalkInstant();
             }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
@@ -4429,7 +4531,7 @@ const styles = StyleSheet.create({
   },
   hostBadgeSlotText: {
     color: "#1A1200",
-    fontSize: 7,
+    fontSize: rf(7),
     fontWeight: "900",
     letterSpacing: 0.35,
   },
@@ -4474,9 +4576,9 @@ const styles = StyleSheet.create({
     marginTop: 6, paddingTop: 8,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "#A78BFA30",
   },
-  codeLabel: { fontSize: 12, color: "#A78BFA", fontWeight: "600" },
+  codeLabel: { fontSize: rf(12), color: "#A78BFA", fontWeight: "600" },
   codeValue: {
-    flex: 1, fontSize: 17, fontWeight: "800", color: "#FFFFFF",
+    flex: 1, fontSize: rf(17), fontWeight: "800", color: "#FFFFFF",
     letterSpacing: 3, fontVariant: ["tabular-nums"],
   },
   codeActions: { flexDirection: "row", alignItems: "center", gap: 4 },
@@ -4486,7 +4588,7 @@ const styles = StyleSheet.create({
     borderRadius: 8, backgroundColor: "#A78BFA18",
     borderWidth: 1, borderColor: "#A78BFA40",
   },
-  codeBtnText: { fontSize: 12, fontWeight: "700", color: "#A78BFA" },
+  codeBtnText: { fontSize: rf(12), fontWeight: "700", color: "#A78BFA" },
   startBtn: { width: "100%", borderRadius: 16, overflow: "hidden" },
   startBtnGrad: {
     flexDirection: "row", alignItems: "center", justifyContent: "center",
@@ -4534,8 +4636,8 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
     backgroundColor: "#00E67622",
   },
-  inviteBtnTitle: { fontSize: 15, fontWeight: "800", color: "#00E676" },
-  inviteBtnSub: { fontSize: 12, color: "#00E67699", marginTop: 1 },
+  inviteBtnTitle: { fontSize: rf(15), fontWeight: "800", color: "#00E676" },
+  inviteBtnSub: { fontSize: rf(12), color: "#00E67699", marginTop: 1 },
 
   // Right-side drawer
   drawerBackdrop: {
@@ -4557,7 +4659,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18, paddingVertical: 14,
     borderBottomWidth: 1, borderBottomColor: "#1A2040",
   },
-  sheetTitle: { flex: 1, fontSize: 17, fontWeight: "800", color: "#FFFFFF" },
+  sheetTitle: { flex: 1, fontSize: rf(17), fontWeight: "800", color: "#FFFFFF" },
   sheetClose: { padding: 4 },
   tabRow: {
     flexDirection: "row",
@@ -4567,18 +4669,18 @@ const styles = StyleSheet.create({
   },
   tab: { flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: "center" },
   tabActive: { backgroundColor: "#1A2A50" },
-  tabText: { fontSize: 13, color: "#5A6A8A", fontWeight: "600" },
+  tabText: { fontSize: rf(13), color: "#5A6A8A", fontWeight: "600" },
   tabTextActive: { color: "#FFFFFF" },
   sheetList: { paddingHorizontal: 16, marginTop: 10 },
-  sheetEmpty: { textAlign: "center", color: "#5A6A8A", marginTop: 32, fontSize: 14 },
+  sheetEmpty: { textAlign: "center", color: "#5A6A8A", marginTop: 32, fontSize: rf(14) },
   sheetRow: {
     flexDirection: "row", alignItems: "center", gap: 12,
     paddingVertical: 10,
     borderBottomWidth: 1, borderBottomColor: "#1A204030",
   },
   sheetRowInfo: { flex: 1 },
-  sheetRowName: { fontSize: 14, fontWeight: "700", color: "#FFFFFF" },
-  sheetRowSub: { fontSize: 12, color: "#5A6A8A", marginTop: 1 },
+  sheetRowName: { fontSize: rf(14), fontWeight: "700", color: "#FFFFFF" },
+  sheetRowSub: { fontSize: rf(12), color: "#5A6A8A", marginTop: 1 },
   inviteRowBtn: {
     paddingHorizontal: 16, paddingVertical: 8,
     borderRadius: 10, backgroundColor: "#00E676",
@@ -4586,14 +4688,14 @@ const styles = StyleSheet.create({
   },
   inviteRowBtnPending: { backgroundColor: "#1A2040" },
   inviteRowBtnSending: { backgroundColor: "#00E67660" },
-  inviteRowBtnText: { fontSize: 13, fontWeight: "700", color: "#000" },
+  inviteRowBtnText: { fontSize: rf(13), fontWeight: "700", color: "#000" },
   inviteRowBtnJoined: {
     paddingHorizontal: 12, paddingVertical: 8,
     borderRadius: 10, backgroundColor: "#00E67620",
     borderWidth: 1, borderColor: "#00E67650",
     minWidth: 64, alignItems: "center",
   },
-  inviteRowBtnJoinedText: { fontSize: 12, fontWeight: "700", color: "#00E676" },
+  inviteRowBtnJoinedText: { fontSize: rf(12), fontWeight: "700", color: "#00E676" },
 
   // Room expiry timer pill
   expiryPill: {
@@ -4608,7 +4710,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 2,
   },
-  expiryText: { fontSize: 11 },
+  expiryText: { fontSize: rf(11) },
 
   avatarWrap: { position: "relative" },
 
@@ -4660,16 +4762,16 @@ const cStyles = StyleSheet.create({
     zIndex: 100,
   },
   glow: { position: "absolute", top: 0, left: 0, right: 0, height: 300 },
-  preparing: { fontSize: 15, fontWeight: "600", letterSpacing: 0.5, textTransform: "uppercase" },
+  preparing: { fontSize: rf(15), fontWeight: "600", letterSpacing: 0.5, textTransform: "uppercase" },
   numberBox: {
     width: 160, height: 160, borderRadius: 40, borderWidth: 2, overflow: "hidden",
   },
   numberBoxGrad: { flex: 1, alignItems: "center", justifyContent: "center" },
-  number: { fontSize: 80, fontWeight: "900", lineHeight: 90 },
-  sublabel: { fontSize: 28, fontWeight: "800", letterSpacing: -0.5 },
+  number: { fontSize: rf(80), fontWeight: "900", lineHeight: 90 },
+  sublabel: { fontSize: rf(28), fontWeight: "800", letterSpacing: -0.5 },
   pill: {
     flexDirection: "row", alignItems: "center", gap: 6,
     borderRadius: 20, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 7,
   },
-  pillText: { fontSize: 13, fontWeight: "600" },
+  pillText: { fontSize: rf(13), fontWeight: "600" },
 });

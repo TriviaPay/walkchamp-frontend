@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
+import { rf } from "@/utils/responsive";
 
 export type AvatarPickerOption = {
   label: string;
@@ -214,7 +215,7 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   title: {
-    fontSize: 12,
+    fontSize: rf(12),
     fontWeight: "600",
     textAlign: "center",
     letterSpacing: 0.8,
@@ -243,7 +244,7 @@ const styles = StyleSheet.create({
   },
   optionText: {
     flex: 1,
-    fontSize: 16,
+    fontSize: rf(16),
     fontWeight: "500",
   },
   cancelBtn: {
@@ -254,7 +255,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   cancelText: {
-    fontSize: 16,
+    fontSize: rf(16),
     fontWeight: "600",
   },
 });

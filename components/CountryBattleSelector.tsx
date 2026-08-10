@@ -8,6 +8,7 @@ import {
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { COUNTRIES, type Country } from "@/constants/countries";
+import { rf } from "@/utils/responsive";
 
 const POPULAR_MATCHUPS: [string, string][] = [
   ["IN", "US"],
@@ -251,7 +252,7 @@ const s = StyleSheet.create({
   },
   headerBadgeText: {
     color: GREEN,
-    fontSize: 11,
+    fontSize: rf(11),
     fontWeight: "800",
     letterSpacing: 1.4,
   },
@@ -283,17 +284,17 @@ const s = StyleSheet.create({
   },
   teamLabel: {
     color: "#475569",
-    fontSize: 9,
+    fontSize: rf(9),
     fontWeight: "800",
     letterSpacing: 1.2,
   },
   teamFlag: {
-    fontSize: 34,
+    fontSize: rf(34),
     lineHeight: 40,
   },
   teamName: {
     color: "#E2E8F0",
-    fontSize: 12,
+    fontSize: rf(12),
     fontWeight: "700",
     textAlign: "center",
     lineHeight: 17,
@@ -316,7 +317,7 @@ const s = StyleSheet.create({
   },
   changeBtnText: {
     color: "#94A3B8",
-    fontSize: 11,
+    fontSize: rf(11),
     fontWeight: "600",
   },
   changeBtnTextActive: {
@@ -336,7 +337,7 @@ const s = StyleSheet.create({
   },
   lockedBadgeText: {
     color: GREEN,
-    fontSize: 10,
+    fontSize: rf(10),
     fontWeight: "700",
   },
   vsCol: {
@@ -356,7 +357,7 @@ const s = StyleSheet.create({
   },
   vsText: {
     color: GOLD,
-    fontSize: 16,
+    fontSize: rf(16),
     fontWeight: "900",
     letterSpacing: 1,
   },
@@ -367,12 +368,12 @@ const s = StyleSheet.create({
   },
   swapText: {
     color: "#8B9AC0",
-    fontSize: 10,
+    fontSize: rf(10),
     fontWeight: "600",
   },
   hint: {
     color: "#475569",
-    fontSize: 11,
+    fontSize: rf(11),
     textAlign: "center",
     paddingHorizontal: 16,
     paddingBottom: 14,
@@ -389,7 +390,7 @@ const s = StyleSheet.create({
   },
   pickerTitle: {
     color: GREEN,
-    fontSize: 12,
+    fontSize: rf(12),
     fontWeight: "700",
     letterSpacing: 0.5,
     marginBottom: 10,
@@ -417,13 +418,13 @@ const s = StyleSheet.create({
     opacity: 0.3,
   },
   countryChipFlag: {
-    fontSize: 20,
+    fontSize: rf(20),
     width: 26,
     textAlign: "center",
   },
   countryChipName: {
     color: "#CBD5E1",
-    fontSize: 13,
+    fontSize: rf(13),
     fontWeight: "600",
     flex: 1,
   },
@@ -436,7 +437,7 @@ const s = StyleSheet.create({
 
   popularLabel: {
     color: "#94A3B8",
-    fontSize: 12,
+    fontSize: rf(12),
     fontWeight: "700",
     letterSpacing: 0.5,
     marginBottom: 8,
@@ -460,7 +461,7 @@ const s = StyleSheet.create({
   },
   matchupText: {
     color: "#CBD5E1",
-    fontSize: 14,
+    fontSize: rf(14),
     fontWeight: "600",
   },
   matchupTextActive: {

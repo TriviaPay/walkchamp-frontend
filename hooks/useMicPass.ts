@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, Platform } from "react-native";
+import { AppState, InteractionManager, Platform } from "react-native";
 import { getValidSession } from "@/services/authService";
 import { getApiBase } from "@/utils/apiUrl";
 import { ENABLE_MIC_PASS, ENABLE_RACE_VOICE_CHAT, ENABLE_VOICE_SDK } from "@/config/featureFlags";
@@ -108,7 +108,7 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
     return () => { mountedRef.current = false; };
   }, []);
 
-  // Fetch entitlement from backend on mount.
+  // Fetch entitlement after interactions so Live Detail first paint isn't competing.
   useEffect(() => {
     if (!ENABLE_MIC_PASS) {
       setLoadingEntitlement(false);
@@ -118,6 +118,7 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
     const fetchEntitlement = async () => {
       try {
         if (__DEV__) console.log("[MicPass] status fetch started");
+
         const session = await getValidSession();
         if (!session || cancelled) return;
         const res = await fetch(`${getApiBase()}/api/mic-pass/status`, {
@@ -136,8 +137,14 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
         if (!cancelled) setLoadingEntitlement(false);
       }
     };
-    void fetchEntitlement();
-    return () => { cancelled = true; };
+
+    const task = InteractionManager.runAfterInteractions(() => {
+      void fetchEntitlement();
+    });
+    return () => {
+      cancelled = true;
+      task.cancel();
+    };
   }, []);
 
   // Cleanup voice after unmount so back navigation is not blocked.

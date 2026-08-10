@@ -618,7 +618,7 @@ const s = StyleSheet.create({
   guideRow:             { flexDirection: "row", alignItems: "flex-start", justifyContent: "center", gap: 6 },
   guideStep:            { flex: 1, alignItems: "center", gap: 4, maxWidth: 100 },
   guideDot:             { width: 28, height: 28, borderRadius: 14, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  guideDotText:         { fontSize: 12, fontWeight: "800", color: "#4285F4" },
+  guideDotText:         { fontSize: rf(12), fontWeight: "800", color: "#4285F4" },
   guideStepLabel:       { fontSize: rf(11), fontWeight: "700", textAlign: "center" },
   guideStepSub:         { fontSize: rf(10), lineHeight: 14, textAlign: "center" },
   guideFoot:            { fontSize: rf(12), lineHeight: 18, textAlign: "center" },

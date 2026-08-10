@@ -3,8 +3,10 @@ import { BlueShoe } from "@/components/BlueShoe";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { SkeletonList, SkeletonRaceRow } from "@/components/SkeletonRows";
 import { screenCache } from "@/utils/screenCache";
+import { prefetchLiveRaceDetailRoster } from "@/utils/warmLiveRaceDetail";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
+import { LiveClockText } from "@/components/perf/LiveClockText";
 import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -13,6 +15,7 @@ import {
   AppState,
   Dimensions,
   FlatList,
+  InteractionManager,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -35,7 +38,7 @@ import { Feather, Ionicons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useTheme } from "@/context/ThemeContext";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
-import { usePresence } from "@/context/PresenceContext";
+import { usePresenceCounts } from "@/context/PresenceContext";
 import { useAuth } from "@/context/AuthContext";
 import { authFetch } from "@/utils/authFetch";
 import { connectPusher, subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
@@ -55,7 +58,7 @@ import type { TrackThemeImageSet } from "@/utils/trackThemeMedia";
 const NEON_PURPLE  = "#7C3AED";
 const NEON_GREEN   = "#22C55E";
 const CARD_BG      = "#0D0D1E";
-const MUTED        = "#8090A8";
+const MUTED        = "#6B7A94";
 
 // Horizontal carousel card width — leaves ~15% peek of the next card so users
 // can tell the row scrolls sideways. Capped so it never gets absurd on tablets.
@@ -722,19 +725,22 @@ function filterMyRaces(
 }
 
 async function fetchMyActiveRaces(): Promise<{ primary: MyActiveRace | null; all: MyActiveRace[] }> {
-  try {
-    const res = await authFetch(`/api/races/my-active`);
-    if (!res.ok) return { primary: null, all: [] };
-    const data = await res.json() as { race?: MyActiveRace | null; races?: MyActiveRace[] };
-    const all = Array.isArray(data.races) && data.races.length > 0
-      ? data.races
-      : data.race
-        ? [data.race]
-        : [];
-    return { primary: data.race ?? all[0] ?? null, all };
-  } catch {
-    return { primary: null, all: [] };
-  }
+  const { runCoalesced } = require("@/utils/apiRequestCoordinator") as typeof import("@/utils/apiRequestCoordinator");
+  return runCoalesced("api:GET:/api/races/my-active", async () => {
+    try {
+      const res = await authFetch(`/api/races/my-active`);
+      if (!res.ok) return { primary: null, all: [] };
+      const data = await res.json() as { race?: MyActiveRace | null; races?: MyActiveRace[] };
+      const all = Array.isArray(data.races) && data.races.length > 0
+        ? data.races
+        : data.race
+          ? [data.race]
+          : [];
+      return { primary: data.race ?? all[0] ?? null, all };
+    } catch {
+      return { primary: null, all: [] };
+    }
+  });
 }
 
 /** @deprecated use fetchMyActiveRaces — kept for any external callers */
@@ -1082,54 +1088,138 @@ function RaceCardBase({
   };
 
   const openLiveRace = useCallback(() => {
-    prefetchTrackTheme(trackMedia, "full");
+    // 1) Sync mem seed only (no AsyncStorage stringify) so live-detail first paint is warm.
+    // 2) Navigate immediately — disk persist + image prefetch run after push returns.
+    if (myUserId) {
+      const cacheKey = `live-race-detail:v1:${myUserId}:${race.id}`;
+      if (!screenCache.getSync(cacheKey)) {
+        const roster = (race.players ?? []).map((p, i) => ({
+          id: p.userId || p.id || `p-${i}`,
+          userId: p.userId,
+          currentSteps: Math.max(0, p.currentSteps ?? 0),
+          status: "active",
+          rank: p.rank ?? i + 1,
+          username: p.username,
+          countryFlag: p.countryFlag ?? null,
+          avatarColor: p.avatarColor ?? "#00E676",
+          avatarUrl: p.avatarUrl ?? null,
+          isHost: false,
+        }));
+        const shell = {
+          race: {
+            id: race.id,
+            title: race.title || "Live Race",
+            status: race.status || "in_progress",
+            entryType: race.entryType || (isUnlimitedChallengeRace(race) ? "unlimited_goal" : "free"),
+            entryAmountCents: race.entryAmountCents ?? 0,
+            entryAmountDollars: (race.entryAmountCents ?? 0) / 100,
+            targetSteps: race.targetSteps ?? 1000,
+            currentPlayers: Math.max(roster.length, race.playerCount ?? 1),
+            maxPlayers: isUnlimitedChallengeRace(race) ? null : race.maxPlayers ?? 10,
+            startedAt: race.startedAt ?? new Date().toISOString(),
+            completedAt: race.completedAt ?? null,
+            creatorId: race.hostUserId ?? myUserId,
+            prizePool: race.prizePool ?? 0,
+            prizeTiers: [],
+            spectatorCount: 0,
+            capacityMode: race.capacityMode ?? (isUnlimitedChallengeRace(race) ? "unlimited" : null),
+            challengeType:
+              race.challengeType ??
+              (isUnlimitedChallengeRace(race) ? "unlimited_goal" : null),
+            trackLayout: race.trackLayout || "bg",
+            challengeDurationDays: race.challengeDurationDays ?? null,
+          },
+          participants: roster,
+        };
+        screenCache.primeSync(cacheKey, shell);
+        void screenCache.set(cacheKey, shell);
+      }
+    }
     router.push({
       pathname: "/race/live-detail",
       params: {
         id: race.id,
         trackLayout: race.trackLayout,
+        ...(typeof race.targetSteps === "number" && race.targetSteps > 0
+          ? { targetSteps: String(race.targetSteps) }
+          : null),
+        ...(race.title ? { title: race.title } : null),
         ...(race.challengeType === "unlimited_goal" || race.capacityMode === "unlimited"
           ? { challengeType: "unlimited_goal", capacityMode: "unlimited" }
           : null),
       },
     });
+    // Theme decode must not compete with the transition / destination mount.
+    queueMicrotask(() => {
+      prefetchTrackTheme(trackMedia, "full");
+    });
   }, [
-    race.id,
-    race.trackLayout,
-    race.challengeType,
-    race.capacityMode,
-    race.imageSet,
-    race.imageUrl,
-    race.assetVersion,
-    race.width,
-    race.height,
+    myUserId,
+    race,
+    trackMedia,
   ]);
+
+  /** Press-in: lightweight mem seed + theme warm before navigation (no mutations). */
+  const prefetchLiveRaceOnPressIn = useCallback(() => {
+    if (!myUserId) return;
+    const cacheKey = `live-race-detail:v1:${myUserId}:${race.id}`;
+    if (!screenCache.getSync(cacheKey)) {
+      const roster = (race.players ?? []).map((p, i) => ({
+        id: p.userId || p.id || `p-${i}`,
+        userId: p.userId,
+        currentSteps: Math.max(0, p.currentSteps ?? 0),
+        status: "active",
+        rank: p.rank ?? i + 1,
+        username: p.username,
+        countryFlag: p.countryFlag ?? null,
+        avatarColor: p.avatarColor ?? "#00E676",
+        avatarUrl: p.avatarUrl ?? null,
+        isHost: false,
+      }));
+      screenCache.primeSync(cacheKey, {
+        race: {
+          id: race.id,
+          title: race.title || "Live Race",
+          status: race.status || "in_progress",
+          entryType: race.entryType || (isUnlimitedChallengeRace(race) ? "unlimited_goal" : "free"),
+          entryAmountCents: race.entryAmountCents ?? 0,
+          entryAmountDollars: (race.entryAmountCents ?? 0) / 100,
+          targetSteps: race.targetSteps ?? 1000,
+          currentPlayers: Math.max(roster.length, race.playerCount ?? 1),
+          maxPlayers: isUnlimitedChallengeRace(race) ? null : race.maxPlayers ?? 10,
+          startedAt: race.startedAt ?? new Date().toISOString(),
+          completedAt: race.completedAt ?? null,
+          creatorId: race.hostUserId ?? myUserId,
+          prizePool: race.prizePool ?? 0,
+          prizeTiers: [],
+          spectatorCount: 0,
+          capacityMode: race.capacityMode ?? (isUnlimitedChallengeRace(race) ? "unlimited" : null),
+          challengeType:
+            race.challengeType ??
+            (isUnlimitedChallengeRace(race) ? "unlimited_goal" : null),
+          trackLayout: race.trackLayout || "bg",
+          challengeDurationDays: race.challengeDurationDays ?? null,
+        },
+        participants: roster,
+      });
+    }
+    // Always warm full Unlimited roster (card strip is often incomplete).
+    // Classic: only when the card has almost no players yet.
+    if (isUnlimitedChallengeRace(race) || (race.players?.length ?? 0) < 2) {
+      prefetchLiveRaceDetailRoster({
+        raceId: race.id,
+        userId: myUserId,
+        unlimited: isUnlimitedChallengeRace(race),
+      });
+    }
+    prefetchTrackTheme(trackMedia, "thumb");
+  }, [myUserId, race, trackMedia]);
 
   const openSpectatorRace = useCallback(() => {
     // Same real race track / live board as participants — live-detail already
     // supports spectator mode (no step tracking, watch count, etc.).
-    prefetchTrackTheme(trackMedia, "full");
-    router.push({
-      pathname: "/race/live-detail",
-      params: {
-        id: race.id,
-        trackLayout: race.trackLayout,
-        ...(race.challengeType === "unlimited_goal" || race.capacityMode === "unlimited"
-          ? { challengeType: "unlimited_goal", capacityMode: "unlimited" }
-          : null),
-      },
-    });
-  }, [
-    race.id,
-    race.trackLayout,
-    race.challengeType,
-    race.capacityMode,
-    race.imageSet,
-    race.imageUrl,
-    race.assetVersion,
-    race.width,
-    race.height,
-  ]);
+    openLiveRace();
+  }, [openLiveRace]);
 
   const entryColor: Record<string, string> = {
     Free: NEON_GREEN,
@@ -1250,18 +1340,22 @@ function RaceCardBase({
         media={trackMedia}
         variant="preview"
         style={st.cardHero}
-        imageStyle={{ opacity: isDark ? 0.45 : 0.18, borderRadius: 0 }}
+        imageStyle={{ opacity: isDark ? 0.5 : 0.28, borderRadius: 0 }}
       >
         <LinearGradient
-          colors={["transparent", colors.card + "EE", colors.card]}
-          locations={isDark ? [0, 0.7, 1] : [0, 0.35, 1]}
+          colors={
+            isDark
+              ? ["transparent", colors.card + "F2", colors.card]
+              : ["rgba(255,255,255,0.15)", colors.card + "F5", colors.card]
+          }
+          locations={isDark ? [0, 0.65, 1] : [0, 0.4, 1]}
           style={st.cardHeroGrad}
         >
           {/* Top row: badges + spectator */}
           <View style={st.cardTopRow}>
             <View style={st.cardTopLeft}>
               {isFinished ? (
-                <View style={[st.finishedBadge, !isDark && { backgroundColor: "rgba(0,0,0,0.06)" }]}>
+                <View style={[st.finishedBadge, !isDark && { backgroundColor: "rgba(0,0,0,0.12)" }]}>
                   <Feather name="check-circle" size={10} color={NEON_GREEN} />
                   <Text style={st.finishedBadgeText}>FINISHED</Text>
                 </View>
@@ -1271,7 +1365,7 @@ function RaceCardBase({
                   <Text style={st.liveBadgeText}>LIVE</Text>
                 </View>
               )}
-              <View style={[st.entryBadge, { borderColor: ec + "70", backgroundColor: ec + "18" }]}>
+              <View style={[st.entryBadge, { borderColor: ec + "90", backgroundColor: ec + "28" }]}>
                 <Text style={[st.entryBadgeText, { color: ec }]}>
                   {entryBadgeLabel}
                 </Text>
@@ -1362,7 +1456,20 @@ function RaceCardBase({
             <>
               <View style={st.statValueRow}>
                 <Feather name="clock" size={11} color={colors.mutedForeground} />
-                <Text style={[st.statValue, { color: colors.foreground }]}>{formatElapsed(race.elapsedSeconds)}</Text>
+                <LiveClockText
+                  enabled={race.status === "in_progress" && !!race.startedAt}
+                  style={[st.statValue, { color: colors.foreground }]}
+                  format={(now) =>
+                    formatElapsed(
+                      race.startedAt
+                        ? Math.max(
+                            0,
+                            Math.floor((now - new Date(race.startedAt).getTime()) / 1000),
+                          )
+                        : race.elapsedSeconds,
+                    )
+                  }
+                />
               </View>
               <Text style={[st.statLabel, { color: colors.mutedForeground }]}>{elapsedLabel}</Text>
             </>
@@ -1527,6 +1634,7 @@ function RaceCardBase({
       {isFinished ? (
         <TouchableOpacity
           onPress={openLiveRace}
+          onPressIn={prefetchLiveRaceOnPressIn}
           activeOpacity={0.85}
           style={st.ctaBtn}
         >
@@ -1574,6 +1682,7 @@ function RaceCardBase({
       ) : participating ? (
         <TouchableOpacity
           onPress={openLiveRace}
+          onPressIn={prefetchLiveRaceOnPressIn}
           activeOpacity={0.85}
           style={st.ctaBtn}
         >
@@ -1589,6 +1698,7 @@ function RaceCardBase({
       ) : (
         <TouchableOpacity
           onPress={openSpectatorRace}
+          onPressIn={prefetchLiveRaceOnPressIn}
           activeOpacity={0.85}
           style={st.ctaBtn}
         >
@@ -1706,7 +1816,7 @@ const DateGroupRow = React.memo(function DateGroupRow({
         decelerationRate="fast"
         snapToInterval={CAROUSEL_ITEM_W}
         snapToAlignment="start"
-        removeClippedSubviews={false}
+        removeClippedSubviews
       >
         {group.races.map((item) => (
           <View key={item.id} style={{ width: CAROUSEL_CARD_W, marginRight: rs(12) }}>
@@ -1738,13 +1848,27 @@ export default function LiveTab() {
   useScreenMountPerf("Live");
   const colors = useColors();
   const { safeTop } = useSafeLayout();
-  const { counts, formatCount } = usePresence();
+  const { counts, formatCount } = usePresenceCounts();
   const { user } = useAuth();
   const tabBarHeight = useTabBarHeight();
   const [activeFilter, setActiveFilter] = useState<FilterType>("All");
-  const [liveChallenges, setLiveChallenges] = useState<LiveRace[]>([]);
-  const [finishedChallenges, setFinishedChallenges] = useState<LiveRace[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Sync mem seed — first paint can show cards before load() effect runs.
+  const [liveChallenges, setLiveChallenges] = useState<LiveRace[]>(() => {
+    const cached = screenCache.getSync<{ live: LiveRace[]; finished: LiveRace[] }>(
+      `${LIVE_SCREEN_CACHE_PREFIX}All`,
+    );
+    return cached ? racesVisibleOnTab(cached.live, "All") : [];
+  });
+  const [finishedChallenges, setFinishedChallenges] = useState<LiveRace[]>(() => {
+    const cached = screenCache.getSync<{ live: LiveRace[]; finished: LiveRace[] }>(
+      `${LIVE_SCREEN_CACHE_PREFIX}All`,
+    );
+    return cached ? racesVisibleOnTab(cached.finished, "All") : [];
+  });
+  const [loading, setLoading] = useState(() => {
+    const cached = screenCache.getSync(`${LIVE_SCREEN_CACHE_PREFIX}All`);
+    return cached === null;
+  });
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [finishedOffset, setFinishedOffset] = useState(FINISHED_PAGE_SIZE);
@@ -1756,22 +1880,29 @@ export default function LiveTab() {
   const [scheduledLoading, setScheduledLoading] = useState(false);
   // True after the first successful fetch — subsequent filter switches skip the skeleton.
   const scheduledLoadedRef = useRef(false);
-  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const liveChallengesRef = useRef<LiveRace[]>([]);
   useEffect(() => { liveChallengesRef.current = liveChallenges; }, [liveChallenges]);
+  /** Bumps on every load() so late responses cannot overwrite a newer filter/fetch. */
+  const loadGenRef = useRef(0);
+  const finishedChallengesRef = useRef<LiveRace[]>([]);
+  useEffect(() => { finishedChallengesRef.current = finishedChallenges; }, [finishedChallenges]);
 
-  // Warm full-size theme images while browsing the list so live race opens instantly.
+  // Warm theme images after interactions — never compete with list paint / View Race nav.
   useEffect(() => {
-    prefetchTrackThemes(
-      liveChallenges.map((r) => ({
-        code: r.trackLayout,
-        trackLayout: r.trackLayout,
-        imageSet: r.imageSet ?? null,
-        imageUrl: r.imageUrl ?? null,
-        assetVersion: r.assetVersion,
-      })),
-      "full",
-    );
+    if (liveChallenges.length === 0) return;
+    const task = InteractionManager.runAfterInteractions(() => {
+      prefetchTrackThemes(
+        liveChallenges.map((r) => ({
+          code: r.trackLayout,
+          trackLayout: r.trackLayout,
+          imageSet: r.imageSet ?? null,
+          imageUrl: r.imageUrl ?? null,
+          assetVersion: r.assetVersion,
+        })),
+        "full",
+      );
+    });
+    return () => task.cancel();
   }, [liveChallenges]);
   const loadRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const hasFocusedOnceRef = useRef(false);
@@ -1791,37 +1922,32 @@ export default function LiveTab() {
   }, [user?.username]);
 
   const load = useCallback(async () => {
+    const gen = ++loadGenRef.current;
+    const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
     try {
       const cacheKey = `${LIVE_SCREEN_CACHE_PREFIX}${activeFilter}`;
 
-      // ── 1. Show cached data immediately (in-memory hit is synchronous) ──────
+      // ── 1. Sync mem paint (never await disk before starting network) ────────
       let cached = screenCache.getSync<{ live: LiveRace[]; finished: LiveRace[] }>(cacheKey);
-      // First app launch after a kill: warm mem from disk (fast, ~20 ms)
-      if (!cached) cached = await screenCache.get<{ live: LiveRace[]; finished: LiveRace[] }>(cacheKey);
-      // Unlimited tab: also warm from All-tab cache so cards appear instantly like others.
       if (
         !cached &&
         activeFilter === "Streak Challenges"
       ) {
-        const allCached =
-          screenCache.getSync<{ live: LiveRace[]; finished: LiveRace[] }>(
-            `${LIVE_SCREEN_CACHE_PREFIX}All`,
-          ) ??
-          (await screenCache.get<{ live: LiveRace[]; finished: LiveRace[] }>(
-            `${LIVE_SCREEN_CACHE_PREFIX}All`,
-          ));
-        if (allCached) {
-          const ulLive = allCached.live.filter(isUnlimitedChallengeRace);
-          const ulFinished = allCached.finished.filter(isUnlimitedChallengeRace);
+        const allMem = screenCache.getSync<{ live: LiveRace[]; finished: LiveRace[] }>(
+          `${LIVE_SCREEN_CACHE_PREFIX}All`,
+        );
+        if (allMem) {
+          const ulLive = allMem.live.filter(isUnlimitedChallengeRace);
+          const ulFinished = allMem.finished.filter(isUnlimitedChallengeRace);
           if (ulLive.length > 0 || ulFinished.length > 0) {
             cached = { live: ulLive, finished: ulFinished };
           }
         }
       }
-      if (cached) {
-        // Paint tab-isolated rows instantly (no wrong-tab flash, no empty wait).
-        const livePaint = racesVisibleOnTab(cached.live, activeFilter);
-        const finishedPaint = racesVisibleOnTab(cached.finished, activeFilter);
+
+      const paintCached = (data: { live: LiveRace[]; finished: LiveRace[] }) => {
+        const livePaint = racesVisibleOnTab(data.live, activeFilter);
+        const finishedPaint = racesVisibleOnTab(data.finished, activeFilter);
         setLiveChallenges(livePaint);
         setFinishedChallenges(finishedPaint);
         setFinishedOffset(FINISHED_PAGE_SIZE);
@@ -1831,13 +1957,57 @@ export default function LiveTab() {
             : finishedPaint.length >= FINISHED_PAGE_SIZE,
         );
         setLoading(false);
+      };
+
+      if (cached) {
+        paintCached(cached);
       } else {
-        // No cache for this tab — clear previous tab's cards immediately.
-        setLiveChallenges([]);
-        setFinishedChallenges([]);
+        // Clear wrong-tab cards only when we have nothing valid for this filter.
+        const sameTabVisible = racesVisibleOnTab(liveChallengesRef.current, activeFilter);
+        if (sameTabVisible.length === 0) {
+          setLiveChallenges([]);
+          setFinishedChallenges([]);
+        } else {
+          setLoading(false);
+        }
       }
 
-      // ── 2. Fetch once, paint once (no mid-load setState — that caused show/hide) ──
+      // Disk warm in parallel with network — paint if still empty when disk arrives.
+      void (async () => {
+        if (cached) return;
+        let disk = await screenCache.get<{ live: LiveRace[]; finished: LiveRace[] }>(cacheKey);
+        if (
+          !disk &&
+          activeFilter === "Streak Challenges"
+        ) {
+          const allDisk = await screenCache.get<{ live: LiveRace[]; finished: LiveRace[] }>(
+            `${LIVE_SCREEN_CACHE_PREFIX}All`,
+          );
+          if (allDisk) {
+            const ulLive = allDisk.live.filter(isUnlimitedChallengeRace);
+            const ulFinished = allDisk.finished.filter(isUnlimitedChallengeRace);
+            if (ulLive.length > 0 || ulFinished.length > 0) {
+              disk = { live: ulLive, finished: ulFinished };
+            }
+          }
+        }
+        if (gen !== loadGenRef.current || !disk) return;
+        if (
+          liveChallengesRef.current.length > 0 ||
+          finishedChallengesRef.current.length > 0
+        ) {
+          return;
+        }
+        cached = disk;
+        paintCached(disk);
+        if (__DEV__) {
+          const ms = (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0;
+          console.log(`[Perf] Live diskCachePaintMs=${Math.round(ms)} filter=${activeFilter}`);
+        }
+      })();
+
+      // ── 2. Network starts immediately (parallel with disk). Progressive Classic
+      // paint is additive only (no clear→repaint) to avoid historical show/hide flicker. ──
       const wantsUnlimited = shouldMergeUnlimitedLive(activeFilter);
       const unlimitedOnly = activeFilter === "Streak Challenges";
 
@@ -1854,18 +2024,43 @@ export default function LiveTab() {
           fetchLiveChallenges(activeFilter, { viewerUserId: user?.id }),
           fetchMyActiveRaces(),
         ]);
+        if (gen !== loadGenRef.current) return;
         live = ulResult.live;
         finished = ulResult.finished;
         ok = ulResult.ok;
         myRaceResult = mine;
       } else if (wantsUnlimited) {
-        const [classic, unlimited, mine] = await Promise.all([
-          fetchClassicLiveChallenges(activeFilter),
-          import("@/services/unlimitedChallengesListApi")
-            .then((m) => m.fetchLiveUnlimitedChallenges({ viewerUserId: user?.id }))
-            .catch(() => ({ live: [] as LiveRace[], finished: [] as LiveRace[] })),
-          fetchMyActiveRaces(),
-        ]);
+        const classicP = fetchClassicLiveChallenges(activeFilter);
+        const unlimitedP = import("@/services/unlimitedChallengesListApi")
+          .then((m) => m.fetchLiveUnlimitedChallenges({ viewerUserId: user?.id }))
+          .catch(() => ({ live: [] as LiveRace[], finished: [] as LiveRace[] }));
+        const mineP = fetchMyActiveRaces();
+
+        // Progressive: if cold (no mem/disk cards yet), paint Classic as soon as it arrives.
+        void classicP.then((classic) => {
+          if (gen !== loadGenRef.current) return;
+          if (
+            liveChallengesRef.current.length > 0 ||
+            finishedChallengesRef.current.length > 0
+          ) {
+            return;
+          }
+          const livePaint = racesVisibleOnTab(classic.live, activeFilter);
+          const finishedPaint = racesVisibleOnTab(classic.finished, activeFilter);
+          if (livePaint.length === 0 && finishedPaint.length === 0) return;
+          setLiveChallenges(livePaint);
+          setFinishedChallenges(finishedPaint);
+          setFinishedOffset(FINISHED_PAGE_SIZE);
+          setHasMoreFinished(finishedPaint.length >= FINISHED_PAGE_SIZE);
+          setLoading(false);
+          if (__DEV__) {
+            const ms = (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0;
+            console.log(`[Perf] Live classicFirstPaintMs=${Math.round(ms)} filter=${activeFilter}`);
+          }
+        }).catch(() => {});
+
+        const [classic, unlimited, mine] = await Promise.all([classicP, unlimitedP, mineP]);
+        if (gen !== loadGenRef.current) return;
         myRaceResult = mine;
         const ulLive = (unlimited.live as LiveRace[]).filter(isUnlimitedChallengeRace);
         const ulFinished = (unlimited.finished as LiveRace[]).filter(isUnlimitedChallengeRace);
@@ -1883,6 +2078,7 @@ export default function LiveTab() {
           fetchLiveChallenges(activeFilter, { viewerUserId: user?.id }),
           fetchMyActiveRaces(),
         ]);
+        if (gen !== loadGenRef.current) return;
         live = classic.live;
         finished = classic.finished;
         ok = classic.ok;
@@ -1969,6 +2165,8 @@ export default function LiveTab() {
         );
       });
 
+      if (gen !== loadGenRef.current) return;
+
       const freshIsEmpty = visibleLive.length === 0 && visibleFinished.length === 0;
       // Only treat "had visible" as same-tab cards (not leftovers from another chip).
       const sameTabVisible = racesVisibleOnTab(liveChallengesRef.current, activeFilter);
@@ -2006,8 +2204,14 @@ export default function LiveTab() {
         activeChallengeSync.registerMany([...idSet]);
       } catch { /* optional */ }
       setLoading(false);
+      if (__DEV__) {
+        const ms = (typeof performance !== "undefined" ? performance.now() : Date.now()) - t0;
+        console.log(
+          `[Perf] Live loadCompleteMs=${Math.round(ms)} filter=${activeFilter} live=${visibleLive.length} finished=${visibleFinished.length}`,
+        );
+      }
     } catch {
-      setLoading(false);
+      if (gen === loadGenRef.current) setLoading(false);
     }
   }, [activeFilter, user?.id, user?.username]);
 
@@ -2097,10 +2301,17 @@ export default function LiveTab() {
   }, [activeFilter, fetchScheduledEvents]);
 
   useEffect(() => {
-    // Only show the full spinner if there is no cached data for this filter yet.
-    // When cache exists, load() shows it instantly and fetches fresh silently.
-    if (screenCache.getSync(`${LIVE_SCREEN_CACHE_PREFIX}${activeFilter}`) === null) {
+    // Skeleton only when this filter has neither mem cache nor already-visible cards.
+    // Refreshing keeps existing cards; load() never blanks a populated same-tab list.
+    const hasMem =
+      screenCache.getSync(`${LIVE_SCREEN_CACHE_PREFIX}${activeFilter}`) !== null ||
+      (activeFilter === "Streak Challenges" &&
+        screenCache.getSync(`${LIVE_SCREEN_CACHE_PREFIX}All`) !== null);
+    const sameTabVisible = racesVisibleOnTab(liveChallengesRef.current, activeFilter);
+    if (!hasMem && sameTabVisible.length === 0) {
       setLoading(true);
+    } else {
+      setLoading(false);
     }
     void load();
   }, [load, activeFilter]);
@@ -2113,20 +2324,8 @@ export default function LiveTab() {
     return () => clearInterval(id);
   }, [load]);
 
-  useEffect(() => {
-    elapsedTimerRef.current = setInterval(() => {
-      setLiveChallenges((prev) =>
-        prev.map((race) => {
-          if (race.status !== "in_progress") return race;
-          return { ...race, elapsedSeconds: race.elapsedSeconds + 1 };
-        })
-      );
-    }, 1000);
-    return () => {
-      if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
-    };
-  }, []);
-
+  // Elapsed labels tick inside RaceCard via LiveClockText — do not rewrite the
+  // race list every second (that forced full carousel re-renders).
   useEffect(() => {
     connectPusher();
     const handlers: Array<() => void> = [];

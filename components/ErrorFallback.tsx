@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
+import { rf } from "@/utils/responsive";
 
 import { useColors } from "@/hooks/useColors";
 
@@ -188,13 +189,13 @@ const styles = StyleSheet.create({
     maxWidth: 600,
   },
   title: {
-    fontSize: 28,
+    fontSize: rf(28),
     fontWeight: "700",
     textAlign: "center",
     lineHeight: 40,
   },
   message: {
-    fontSize: 16,
+    fontSize: rf(16),
     textAlign: "center",
     lineHeight: 24,
   },
@@ -226,7 +227,7 @@ const styles = StyleSheet.create({
   buttonText: {
     fontWeight: "600",
     textAlign: "center",
-    fontSize: 16,
+    fontSize: rf(16),
   },
   modalOverlay: {
     flex: 1,
@@ -249,7 +250,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
   modalTitle: {
-    fontSize: 20,
+    fontSize: rf(20),
     fontWeight: "600",
   },
   closeButton: {
@@ -271,7 +272,7 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   errorText: {
-    fontSize: 12,
+    fontSize: rf(12),
     lineHeight: 18,
     width: "100%",
   },

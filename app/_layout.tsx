@@ -41,19 +41,7 @@ import { RoomInvitationModal, type RoomInvitation } from "@/components/RoomInvit
 import { WalkChampSplash } from "@/components/WalkChampSplash";
 import { TitleUnlockProvider } from "@/context/TitleUnlockContext";
 import { TopBannerProvider } from "@/context/TopBannerContext";
-
-// Cap OS accessibility font scaling so the whole UI doesn't blow up when
-// system "Font size" / Display size is set high (keeps prior design look).
-const MAX_FONT_MULT = 1.15;
-type TextDefaults = { defaultProps?: { maxFontSizeMultiplier?: number } };
-(Text as unknown as TextDefaults).defaultProps = {
-  ...(Text as unknown as TextDefaults).defaultProps,
-  maxFontSizeMultiplier: MAX_FONT_MULT,
-};
-(TextInput as unknown as TextDefaults).defaultProps = {
-  ...(TextInput as unknown as TextDefaults).defaultProps,
-  maxFontSizeMultiplier: MAX_FONT_MULT,
-};
+import { MAX_FONT_SIZE_MULTIPLIER } from "@/constants/accessibility";
 import TitleUnlockModal from "@/components/TitleUnlockModal";
 import { useAuth } from "@/context/AuthContext";
 import { connectPusher, subscribeToChannel, unsubscribeFromChannel, CHANNELS } from "@/services/realtimeService";
@@ -62,6 +50,8 @@ import { initStepProgressCoordinator } from "@/services/stepProgressCoordinator"
 import { ENABLE_PREMIUM_ONBOARDING } from "@/config/featureFlags";
 import { getOnboardingStatus } from "@/utils/onboardingStorage";
 import { scheduleAppStartupReady, waitForAppStartupReady, isAppStartupReady } from "@/services/appStartup";
+import { beginStartupWarmup } from "@/services/startupWarmup";
+import { warmCriticalDataDuringSplash } from "@/services/startupSplashWarmup";
 import { perf } from "@/utils/perfLogger";
 import { initCrashReporting, setCrashReportingUser } from "@/services/monitoring/sentry";
 import { loadRemoteFeatureFlags } from "@/services/remoteFeatureFlags";
@@ -84,6 +74,17 @@ import { SessionRealtimeGuard } from "@/components/SessionRealtimeGuard";
 import { SessionNoticeHost } from "@/components/SessionNoticeHost";
 import { StepTrackingNotificationPrompt } from "@/components/StepTrackingNotificationPrompt";
 import { logger } from "@/utils/logger";
+
+// Cap OS accessibility font scaling (see constants/accessibility.ts policy).
+type TextDefaults = { defaultProps?: { maxFontSizeMultiplier?: number } };
+(Text as unknown as TextDefaults).defaultProps = {
+  ...(Text as unknown as TextDefaults).defaultProps,
+  maxFontSizeMultiplier: MAX_FONT_SIZE_MULTIPLIER,
+};
+(TextInput as unknown as TextDefaults).defaultProps = {
+  ...(TextInput as unknown as TextDefaults).defaultProps,
+  maxFontSizeMultiplier: MAX_FONT_SIZE_MULTIPLIER,
+};
 
 // ── App startup diagnostics ────────────────────────────────────────────────
 initCrashReporting();
@@ -212,6 +213,12 @@ function AppSplashGate({ onFinish }: { onFinish: () => void }) {
     };
   }, []);
 
+  // While the existing Lottie plays, warm Walk-critical caches (non-blocking).
+  useEffect(() => {
+    if (!user?.id || loading || isAuthenticating) return;
+    warmCriticalDataDuringSplash(user.id);
+  }, [user?.id, loading, isAuthenticating]);
+
   useEffect(() => {
     if (!ENABLE_PREMIUM_ONBOARDING) {
       setOnboardingReady(true);
@@ -275,14 +282,18 @@ function RootLayoutNav() {
   const { isDark } = useTheme();
 
   useEffect(() => {
+    // CRITICAL/VISIBLE: step coordinator soon after gate — keep race/walk tracking alive.
+    // BACKGROUND: dynamic icon after first interactions to avoid post-splash hitch.
     void waitForAppStartupReady().then(() => {
       try {
         logger.debug("Startup", "begin");
         initStepProgressCoordinator();
-        void initDynamicIconService().catch(() => {});
       } catch (err) {
         logger.warn("Startup", "step coordinator failed", err);
       }
+      InteractionManager.runAfterInteractions(() => {
+        void initDynamicIconService().catch(() => {});
+      });
     });
   }, []);
 
@@ -363,30 +374,35 @@ function PushNotificationSetup() {
     let cleanupForeground: (() => void) | undefined;
     let linkingSub: { remove: () => void } | undefined;
 
-    void waitForAppStartupReady().then(async () => {
-      try {
-        await ensureOneSignalInitialized();
-        cleanupClick = await setupNotificationClickHandler(navigateFromRoute);
-        cleanupForeground = await setupForegroundHandler();
+    // BACKGROUND: OneSignal after gate + first interactions (deep links still wired here).
+    void waitForAppStartupReady().then(() => {
+      InteractionManager.runAfterInteractions(() => {
+        void (async () => {
+          try {
+            await ensureOneSignalInitialized();
+            cleanupClick = await setupNotificationClickHandler(navigateFromRoute);
+            cleanupForeground = await setupForegroundHandler();
 
-        const handleDeepLink = (url: string | null) => {
-          if (!url) return;
-          void ingestPaymentReturnUrl(url).then((isPaymentReturn) => {
-            if (isPaymentReturn) {
-              navigateFromRoute("/(tabs)/wallet", { replace: true });
-              return;
-            }
-            const route = resolveDeepLink(url);
-            if (route) navigateFromRoute(route);
-          });
-        };
+            const handleDeepLink = (url: string | null) => {
+              if (!url) return;
+              void ingestPaymentReturnUrl(url).then((isPaymentReturn) => {
+                if (isPaymentReturn) {
+                  navigateFromRoute("/(tabs)/wallet", { replace: true });
+                  return;
+                }
+                const route = resolveDeepLink(url);
+                if (route) navigateFromRoute(route);
+              });
+            };
 
-        const initialUrl = await Linking.getInitialURL();
-        handleDeepLink(initialUrl);
-        linkingSub = Linking.addEventListener("url", ({ url }) => handleDeepLink(url));
-      } catch (err) {
-        logger.warn("Startup", "push setup failed", err);
-      }
+            const initialUrl = await Linking.getInitialURL();
+            handleDeepLink(initialUrl);
+            linkingSub = Linking.addEventListener("url", ({ url }) => handleDeepLink(url));
+          } catch (err) {
+            logger.warn("Startup", "push setup failed", err);
+          }
+        })();
+      });
     });
 
     return () => {
@@ -475,6 +491,11 @@ function RoomInvitationOverlay() {
 export default function RootLayout() {
   const isWeb = Platform.OS === "web";
 
+  // Warm SecureStore + cached profile during font load (parallel with useFonts).
+  useEffect(() => {
+    beginStartupWarmup();
+  }, []);
+
   // On web, pass empty map so fontfaceobserver never queues font checks.
   // Any residual errors are caught by the module-level window handlers above.
   const [fontsLoaded, fontError] = useFonts(
@@ -519,12 +540,25 @@ export default function RootLayout() {
     }
   }, [fontsLoaded, fontError, fontTimedOut]);
 
-  // Initialize AdMob SDK after startup gate (avoids racing native ads on cold APK install)
+  // BACKGROUND lane: stagger noncritical SDKs after gate + first interactions
+  // so they do not burst with OneSignal / step coordinator in the same frame.
   useEffect(() => {
+    let flagsTimer: ReturnType<typeof setTimeout> | null = null;
+    let adsTimer: ReturnType<typeof setTimeout> | null = null;
     void waitForAppStartupReady().then(() => {
-      void initializeAds().catch(() => {});
-      void loadRemoteFeatureFlags().catch(() => {});
+      InteractionManager.runAfterInteractions(() => {
+        flagsTimer = setTimeout(() => {
+          void loadRemoteFeatureFlags().catch(() => {});
+        }, 400);
+        adsTimer = setTimeout(() => {
+          void initializeAds().catch(() => {});
+        }, 1200);
+      });
     });
+    return () => {
+      if (flagsTimer) clearTimeout(flagsTimer);
+      if (adsTimer) clearTimeout(adsTimer);
+    };
   }, []);
 
   if (!fontsLoaded && !fontError && !fontTimedOut) {

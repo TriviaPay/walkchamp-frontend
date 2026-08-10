@@ -51,6 +51,11 @@ export type RaceStartingSoonCardProps = {
    */
   isParticipant?: boolean;
   onPressCta: () => void;
+  /**
+   * Optional press-in handler for safe prefetch (no mutations).
+   * Fires before onPress so Live Detail can warm while the finger is down.
+   */
+  onPressInCta?: () => void;
   /** Optional outer wrapper style (e.g. carousel card width). */
   style?: StyleProp<ViewStyle>;
   /**
@@ -547,6 +552,7 @@ export function RaceStartingSoonCard({
   entryAmountCents,
   isParticipant = true,
   onPressCta,
+  onPressInCta,
   style,
   isUnlimitedGoal = false,
   unlimitedChallengeTimezone,
@@ -863,7 +869,12 @@ export function RaceStartingSoonCard({
           </View>
         )}
 
-        <TouchableOpacity activeOpacity={0.88} onPress={onPressCta} style={styles.ctaTouch}>
+        <TouchableOpacity
+          activeOpacity={0.78}
+          onPress={onPressCta}
+          onPressIn={onPressInCta}
+          style={styles.ctaTouch}
+        >
           <LinearGradient
             colors={isLive ? theme.ctaLiveGrad : theme.ctaGrad}
             start={{ x: 0, y: 0 }}

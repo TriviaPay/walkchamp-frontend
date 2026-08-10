@@ -2,6 +2,7 @@ import React from "react";
 import { View, Text, StyleSheet, ActivityIndicator, Pressable } from "react-native";
 import type { CashChallengePaymentQuote } from "@/services/cashChallengeApi";
 import { formatUsdFromDollars, refundBreakdownFromQuote } from "@/services/cashChallengeApi";
+import { rf } from "@/utils/responsive";
 
 type Props = {
   quote: CashChallengePaymentQuote | null;
@@ -187,10 +188,10 @@ export function CashChallengeRewardSplit({
           key={slot.rank}
           style={[styles.splitRow, { backgroundColor: colors.card, borderColor: colors.border }]}
         >
-          <Text style={{ fontSize: 20 }}>{rankEmojis[i] ?? "🏅"}</Text>
+          <Text style={{ fontSize: rf(20) }}>{rankEmojis[i] ?? "🏅"}</Text>
           <View style={{ flex: 1 }}>
             <Text style={{ fontWeight: "700", color: colors.foreground }}>{slot.label}</Text>
-            <Text style={{ fontSize: 12, color: colors.mutedForeground }}>{slot.percentage}% of pool</Text>
+            <Text style={{ fontSize: rf(12), color: colors.mutedForeground }}>{slot.percentage}% of pool</Text>
           </View>
           <Text style={{ fontWeight: "900", color: colors.primary }}>{formatUsdFromDollars(slot.amount)}</Text>
         </View>
@@ -271,7 +272,7 @@ export function CashChallengeRefundBreakdown({
 
 const styles = StyleSheet.create({
   card: { borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 12 },
-  title: { fontSize: 13, fontWeight: "700", marginBottom: 8 },
+  title: { fontSize: rf(13), fontWeight: "700", marginBottom: 8 },
   titleRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -281,16 +282,16 @@ const styles = StyleSheet.create({
   },
   loadingRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8 },
   row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6 },
-  label: { fontSize: 13, flex: 1, paddingRight: 8 },
-  value: { fontSize: 14, fontWeight: "600" },
-  total: { fontSize: 16, fontWeight: "800" },
+  label: { fontSize: rf(13), flex: 1, paddingRight: 8 },
+  value: { fontSize: rf(14), fontWeight: "600" },
+  total: { fontSize: rf(16), fontWeight: "800" },
   divider: { height: 1 },
-  insufficient: { marginTop: 10, fontSize: 12, fontWeight: "600" },
-  hint: { marginTop: 8, fontSize: 12, fontWeight: "500" },
+  insufficient: { marginTop: 10, fontSize: rf(12), fontWeight: "600" },
+  hint: { marginTop: 8, fontSize: rf(12), fontWeight: "500" },
   errorBlock: { marginTop: 10, gap: 6 },
-  errorText: { color: "#EF4444", fontSize: 12, fontWeight: "600" },
+  errorText: { color: "#EF4444", fontSize: rf(12), fontWeight: "600" },
   retryBtn: { alignSelf: "flex-start", paddingVertical: 4 },
-  retryText: { fontSize: 13, fontWeight: "700" },
+  retryText: { fontSize: rf(13), fontWeight: "700" },
   splitRow: {
     flexDirection: "row",
     alignItems: "center",

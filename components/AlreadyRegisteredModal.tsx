@@ -9,6 +9,7 @@ import {
 import { Feather } from "@expo/vector-icons";
 import type { ActiveRaceInfo } from "@/components/ActiveRaceModal";
 import { formatLocalDate, formatLocalTime } from "@/utils/timezone";
+import { rf } from "@/utils/responsive";
 
 export type RegisteredRaceInfo = ActiveRaceInfo & {
   scheduled_start_at?: string | null;
@@ -191,10 +192,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  iconEmoji: { fontSize: 26 },
+  iconEmoji: { fontSize: rf(26) },
   title: {
     color: "#FFFFFF",
-    fontSize: 18,
+    fontSize: rf(18),
     fontWeight: "700",
     textAlign: "center",
     marginBottom: 10,
@@ -202,7 +203,7 @@ const styles = StyleSheet.create({
   },
   message: {
     color: "#8B9BBE",
-    fontSize: 14,
+    fontSize: rf(14),
     textAlign: "center",
     lineHeight: 22,
     marginBottom: 20,
@@ -232,12 +233,12 @@ const styles = StyleSheet.create({
   },
   detailLabel: {
     color: "#5A6A8A",
-    fontSize: 13,
+    fontSize: rf(13),
     fontWeight: "500",
   },
   detailValue: {
     color: "#FFFFFF",
-    fontSize: 13,
+    fontSize: rf(13),
     fontWeight: "600",
     flexShrink: 1,
     textAlign: "right",
@@ -252,7 +253,7 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: {
     color: "#000000",
-    fontSize: 16,
+    fontSize: rf(16),
     fontWeight: "700",
   },
   btnIcon: {

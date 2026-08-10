@@ -82,7 +82,8 @@ Peers may animate from `displayedLiveSteps`. Qualification / badges / prizes use
 
 ## Device capability
 
-Central resolver: `services/steps/stepTrackingCapability.ts`
+Central resolver: `platform/steps/stepTrackingCapability.ts`
+(Compatibility re-export: `services/steps/stepTrackingCapability.ts`)
 
 - HC ready without external writer → verified + provisional
 - HC available but no records → provisional continues; writer/provider may be required

@@ -20,8 +20,10 @@ import { useColors } from "@/hooks/useColors";
 import { authFetch } from "@/utils/authFetch";
 import { getLocalDateStr } from "@/utils/timezone";
 import { useWalkContext } from "@/context/WalkContext";
+import { useWalkTodaySteps } from "@/services/walkTodayStepsStore";
 import { getTodayKey } from "@/utils/format";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
+import { rf } from "@/utils/responsive";
 
 
 type Range = "week" | "month" | "three_months" | "year";
@@ -146,7 +148,8 @@ export default function StepHistoryScreen() {
 
   // refreshTodayRank is fetchTodayFromBackend — calling it syncs the new goal
   // into WalkContext so the Walk tab updates immediately without requiring a restart.
-  const { refreshTodayRank, todaySteps } = useWalkContext();
+  const { refreshTodayRank } = useWalkContext();
+  const todaySteps = useWalkTodaySteps();
 
   const todayStr = getLocalDateStr();
 
@@ -376,7 +379,7 @@ export default function StepHistoryScreen() {
                 bottom: barH + 4,
                 width: BAR_WIDTH,
                 textAlign: "center",
-                fontSize: 10,
+                fontSize: rf(10),
                 fontWeight: "700",
                 color: isSelected ? "#FFFFFF" : bc,
               }}
@@ -390,14 +393,14 @@ export default function StepHistoryScreen() {
         {/* Day + date labels */}
         <View style={{ height: LABEL_H, alignItems: "center", paddingTop: 5, gap: 2 }}>
           <Text style={{
-            fontSize: 11,
+            fontSize: rf(11),
             fontWeight: isToday || isSelected ? "800" : "500",
             color: isToday ? colors.primary : isSelected ? "#FFFFFF" : "#555870",
           }}>
             {day.dayLabel}
           </Text>
           <Text style={{
-            fontSize: 10,
+            fontSize: rf(10),
             color: isToday
               ? colors.primary + "BB"
               : isSelected
@@ -477,7 +480,7 @@ export default function StepHistoryScreen() {
         {/* ── Network/server error ── */}
         {!loading && !sessionExpired && error && allDays.length === 0 && (
           <View style={S.centered}>
-            <Text style={{ fontSize: 40 }}>⚠️</Text>
+            <Text style={{ fontSize: rf(40) }}>⚠️</Text>
             <Text style={[S.emptyTitle, { color: colors.foreground }]}>
               Unable to load walking history
             </Text>
@@ -500,7 +503,7 @@ export default function StepHistoryScreen() {
         {/* ── Empty state ── */}
         {!loading && !sessionExpired && !error && allDays.length === 0 && (
           <View style={S.centered}>
-            <Text style={{ fontSize: 48 }}>🚶</Text>
+            <Text style={{ fontSize: rf(48) }}>🚶</Text>
             <Text style={[S.emptyTitle, { color: colors.foreground }]}>No walking history yet</Text>
             <Text style={[S.emptySub, { color: colors.mutedForeground }]}>
               Start walking to see your progress here
@@ -531,7 +534,7 @@ export default function StepHistoryScreen() {
                         ]}
                       >
                         <Text style={{
-                          fontSize: 10,
+                          fontSize: rf(10),
                           fontWeight: "700",
                           color: distanceUnit === u ? colors.primary : "#555870",
                         }}>
@@ -571,16 +574,16 @@ export default function StepHistoryScreen() {
                       <Text style={[S.selectedDaySteps, { color: colors.foreground }]}>
                         {selected.steps.toLocaleString()}
                       </Text>
-                      <Text style={{ fontSize: 12, color: colors.mutedForeground }}>steps</Text>
+                      <Text style={{ fontSize: rf(12), color: colors.mutedForeground }}>steps</Text>
                     </View>
                     <View style={{ flexDirection: "row", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
-                      <Text style={{ fontSize: 11, color: colors.accent }}>
+                      <Text style={{ fontSize: rf(11), color: colors.accent }}>
                         {fmtDist(selected.distanceMeters, distanceUnit)}
                       </Text>
-                      <Text style={{ fontSize: 11, color: colors.gold }}>
+                      <Text style={{ fontSize: rf(11), color: colors.gold }}>
                         {selected.caloriesBurned} cal
                       </Text>
-                      <Text style={{ fontSize: 11, color: colors.primary }}>
+                      <Text style={{ fontSize: rf(11), color: colors.primary }}>
                         {selected.activeMinutes}m active
                       </Text>
                     </View>
@@ -608,7 +611,7 @@ export default function StepHistoryScreen() {
                     }]}>
                       {selected.goalCompleted ? "✓ Goal" : `${selectedPercent}%`}
                     </Text>
-                    <Text style={{ fontSize: 9, color: colors.mutedForeground, marginTop: 1, textAlign: "center" }}>
+                    <Text style={{ fontSize: rf(9), color: colors.mutedForeground, marginTop: 1, textAlign: "center" }}>
                       of {fmtGoalLabel(selected.goalSteps)}
                     </Text>
                   </View>
@@ -712,7 +715,7 @@ export default function StepHistoryScreen() {
                 }}>
                   <Text style={[S.sectionTitle, { color: colors.foreground }]}>Lifetime Summary</Text>
                   {lifetime.joinedLabel && (
-                    <Text style={{ fontSize: 10, color: colors.mutedForeground }}>
+                    <Text style={{ fontSize: rf(10), color: colors.mutedForeground }}>
                       {lifetime.joinedLabel}
                     </Text>
                   )}
@@ -778,7 +781,7 @@ export default function StepHistoryScreen() {
                   ]}
                 >
                   <Text style={{
-                    fontSize: 12,
+                    fontSize: rf(12),
                     fontWeight: "700",
                     color: goalInput === String(preset) ? colors.primary : colors.mutedForeground,
                   }}>
@@ -806,7 +809,7 @@ export default function StepHistoryScreen() {
                 }]}
               />
               {!!goalInputError && (
-                <Text style={{ fontSize: 11, color: "#FF4560", marginTop: 4 }}>
+                <Text style={{ fontSize: rf(11), color: "#FF4560", marginTop: 4 }}>
                   {goalInputError}
                 </Text>
               )}
@@ -814,7 +817,7 @@ export default function StepHistoryScreen() {
 
             {/* Distance unit toggle */}
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 20 }}>
-              <Text style={{ fontSize: 12, color: colors.mutedForeground }}>Distance unit:</Text>
+              <Text style={{ fontSize: rf(12), color: colors.mutedForeground }}>Distance unit:</Text>
               {(["km", "mi"] as DistanceUnit[]).map((u) => (
                 <TouchableOpacity
                   key={u}
@@ -828,7 +831,7 @@ export default function StepHistoryScreen() {
                   ]}
                 >
                   <Text style={{
-                    fontSize: 13,
+                    fontSize: rf(13),
                     fontWeight: "700",
                     color: distanceUnit === u ? colors.primary : colors.mutedForeground,
                   }}>
@@ -852,7 +855,7 @@ export default function StepHistoryScreen() {
               >
                 {savingGoal
                   ? <ActivityIndicator size="small" color="#000" />
-                  : <Text style={{ color: "#000", fontWeight: "800", fontSize: 15 }}>Save Goal</Text>
+                  : <Text style={{ color: "#000", fontWeight: "800", fontSize: rf(15) }}>Save Goal</Text>
                 }
               </TouchableOpacity>
             </View>
@@ -893,7 +896,7 @@ function LifetimeTile({
 }) {
   return (
     <View style={[S.lifetimeTile, { backgroundColor: colors.background, borderColor: colors.border }]}>
-      <Text style={{ fontSize: 18, lineHeight: 24 }}>{emoji}</Text>
+      <Text style={{ fontSize: rf(18), lineHeight: 24 }}>{emoji}</Text>
       <Text style={[S.lifetimeTileValue, { color: colors.foreground }]}>{value}</Text>
       <Text style={[S.lifetimeTileLabel, { color: colors.mutedForeground }]}>{label}</Text>
     </View>
@@ -912,12 +915,12 @@ const S = StyleSheet.create({
     paddingBottom: 12,
   },
   backBtn: { width: 38, height: 38, alignItems: "center", justifyContent: "center" },
-  headerTitle: { fontSize: 18, fontWeight: "800", color: "#FFFFFF", letterSpacing: 0.2 },
+  headerTitle: { fontSize: rf(18), fontWeight: "800", color: "#FFFFFF", letterSpacing: 0.2 },
 
   centered: { paddingTop: 80, alignItems: "center", gap: 14 },
-  loadingTxt: { fontSize: 14, marginTop: 6 },
-  emptyTitle: { fontSize: 18, fontWeight: "700", textAlign: "center" },
-  emptySub: { fontSize: 14, textAlign: "center", paddingHorizontal: 32, lineHeight: 20 },
+  loadingTxt: { fontSize: rf(14), marginTop: 6 },
+  emptyTitle: { fontSize: rf(18), fontWeight: "700", textAlign: "center" },
+  emptySub: { fontSize: rf(14), textAlign: "center", paddingHorizontal: 32, lineHeight: 20 },
   retryBtn: {
     marginTop: 4,
     paddingHorizontal: 20,
@@ -942,16 +945,16 @@ const S = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#2A2D3E",
   },
-  inCardFilterTxt: { fontSize: 12, fontWeight: "700" },
+  inCardFilterTxt: { fontSize: rf(12), fontWeight: "700" },
 
   periodSteps: {
-    fontSize: 42,
+    fontSize: rf(42),
     fontWeight: "800",
     letterSpacing: -1.5,
     lineHeight: 46,
     fontVariant: ["tabular-nums"],
   },
-  periodStepsLabel: { fontSize: 14, marginBottom: 6 },
+  periodStepsLabel: { fontSize: rf(14), marginBottom: 6 },
 
   pillRow: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
   pill: {
@@ -963,7 +966,7 @@ const S = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
   },
-  pillTxt: { fontSize: 12, fontWeight: "600" },
+  pillTxt: { fontSize: rf(12), fontWeight: "600" },
   goalBarTrack: { height: 6, borderRadius: 3, overflow: "hidden" },
   goalBarFill: { height: 6, borderRadius: 3 },
 
@@ -973,7 +976,7 @@ const S = StyleSheet.create({
     justifyContent: "space-between",
     paddingBottom: 10,
   },
-  chartTitle: { fontSize: 15, fontWeight: "700" },
+  chartTitle: { fontSize: rf(15), fontWeight: "700" },
 
   unitToggle: {
     flexDirection: "row",
@@ -995,7 +998,7 @@ const S = StyleSheet.create({
     backgroundColor: "#FFD70012",
   },
   goalEditTxt: {
-    fontSize: 12,
+    fontSize: rf(12),
     fontWeight: "800",
     color: "#FFD700",
     letterSpacing: 0.2,
@@ -1008,9 +1011,9 @@ const S = StyleSheet.create({
     marginBottom: 4,
     borderBottomWidth: 1,
   },
-  selectedDayDate: { fontSize: 10, marginBottom: 2 },
+  selectedDayDate: { fontSize: rf(10), marginBottom: 2 },
   selectedDaySteps: {
-    fontSize: 28,
+    fontSize: rf(28),
     fontWeight: "800",
     letterSpacing: -1,
     fontVariant: ["tabular-nums"],
@@ -1024,7 +1027,7 @@ const S = StyleSheet.create({
     alignItems: "center",
     minWidth: 60,
   },
-  pctBadgeTxt: { fontSize: 14, fontWeight: "800" },
+  pctBadgeTxt: { fontSize: rf(14), fontWeight: "800" },
 
   legendRow: {
     flexDirection: "row",
@@ -1034,9 +1037,9 @@ const S = StyleSheet.create({
   },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 5, marginRight: 14 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendLabel: { fontSize: 10, color: "#555870" },
+  legendLabel: { fontSize: rf(10), color: "#555870" },
 
-  sectionTitle: { fontSize: 15, fontWeight: "700" },
+  sectionTitle: { fontSize: rf(15), fontWeight: "700" },
 
   lifetimeGrid: {
     flexDirection: "row",
@@ -1051,8 +1054,8 @@ const S = StyleSheet.create({
     padding: 10,
     gap: 3,
   },
-  lifetimeTileValue: { fontSize: 15, fontWeight: "800", letterSpacing: -0.5 },
-  lifetimeTileLabel: { fontSize: 9, fontWeight: "600", letterSpacing: 0.2 },
+  lifetimeTileValue: { fontSize: rf(15), fontWeight: "800", letterSpacing: -0.5 },
+  lifetimeTileLabel: { fontSize: rf(9), fontWeight: "600", letterSpacing: 0.2 },
 
   // Modal
   modalOverlay: {
@@ -1075,8 +1078,8 @@ const S = StyleSheet.create({
     alignSelf: "center",
     marginBottom: 16,
   },
-  modalTitle: { fontSize: 18, fontWeight: "800", marginBottom: 4 },
-  modalSub: { fontSize: 13, marginBottom: 16 },
+  modalTitle: { fontSize: rf(18), fontWeight: "800", marginBottom: 4 },
+  modalSub: { fontSize: rf(13), marginBottom: 16 },
 
   presetRow: {
     flexDirection: "row",
@@ -1095,7 +1098,7 @@ const S = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    fontSize: 16,
+    fontSize: rf(16),
     fontVariant: ["tabular-nums"],
   },
 

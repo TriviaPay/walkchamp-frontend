@@ -18,6 +18,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { rf } from "@/utils/responsive";
 
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { AppAlert } from "@/components/AppAlert";
@@ -722,7 +723,7 @@ const s = StyleSheet.create({
     marginTop: 6,
   },
   hostBadgeText: {
-    fontSize: 11,
+    fontSize: rf(11),
     fontWeight: "800",
     color: "#000",
   },
@@ -733,12 +734,12 @@ const s = StyleSheet.create({
     marginTop: 6,
   },
   youBadgeText: {
-    fontSize: 11,
+    fontSize: rf(11),
     fontWeight: "800",
     color: "#000",
   },
   username: {
-    fontSize: 18,
+    fontSize: rf(18),
     fontWeight: "800",
     letterSpacing: -0.3,
   },
@@ -748,7 +749,7 @@ const s = StyleSheet.create({
     opacity: 0.4,
   },
   country: {
-    fontSize: 13,
+    fontSize: rf(13),
   },
   titleBadge: {
     alignSelf: "flex-start",
@@ -759,7 +760,7 @@ const s = StyleSheet.create({
     marginTop: 2,
   },
   titleText: {
-    fontSize: 12,
+    fontSize: rf(12),
     fontWeight: "600",
   },
   divider: {
@@ -789,7 +790,7 @@ const s = StyleSheet.create({
     flex: 1,
   },
   actionText: {
-    fontSize: 14,
+    fontSize: rf(14),
     fontWeight: "600",
   },
   removeBtn: {
@@ -803,7 +804,7 @@ const s = StyleSheet.create({
     width: "100%",
   },
   removeText: {
-    fontSize: 14,
+    fontSize: rf(14),
     fontWeight: "600",
   },
 });
@@ -832,15 +833,15 @@ const ss = StyleSheet.create({
     height: 18,
   },
   iconEmoji: {
-    fontSize: 15,
+    fontSize: rf(15),
     lineHeight: 18,
   },
   label: {
-    fontSize: 13,
+    fontSize: rf(13),
     fontWeight: "500",
   },
   value: {
-    fontSize: 13,
+    fontSize: rf(13),
     fontWeight: "700",
   },
   errorWrap: {
@@ -850,7 +851,7 @@ const ss = StyleSheet.create({
     paddingVertical: 8,
   },
   errorText: {
-    fontSize: 13,
+    fontSize: rf(13),
   },
 });
 

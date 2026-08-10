@@ -10,6 +10,10 @@ import {
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
+import { typography } from "@/constants/typography";
+import { spacing } from "@/constants/spacing";
+import { sizes } from "@/constants/sizes";
+import { MODAL_MAX_WIDTH, rs } from "@/utils/responsive";
 
 export type AlertButton = {
   text: string;
@@ -173,19 +177,19 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.55)",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 36,
+    paddingHorizontal: rs(36),
   },
   card: {
     width: "100%",
-    maxWidth: 340,
-    borderRadius: 18,
-    borderWidth: 1,
+    maxWidth: Math.min(340, MODAL_MAX_WIDTH),
+    borderRadius: sizes.radiusXl,
+    borderWidth: sizes.hairline,
     overflow: "hidden",
   },
   closeBtn: {
     position: "absolute",
-    top: 12,
-    right: 12,
+    top: spacing.lg,
+    right: spacing.lg,
     zIndex: 2,
     width: 32,
     height: 32,
@@ -194,40 +198,38 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   body: {
-    paddingHorizontal: 22,
-    paddingTop: 24,
-    paddingBottom: 18,
+    paddingHorizontal: rs(22),
+    paddingTop: spacing.xxxl,
+    paddingBottom: spacing.xlPlus,
     alignItems: "center",
   },
   bodyWithClose: {
-    paddingTop: 28,
-    paddingHorizontal: 36,
+    paddingTop: rs(28),
+    paddingHorizontal: rs(36),
   },
   title: {
-    fontSize: 17,
-    fontWeight: "700",
+    ...typography.dialogTitle,
     textAlign: "center",
     letterSpacing: 0.1,
   },
   message: {
-    fontSize: 14,
+    ...typography.dialogBody,
     textAlign: "center",
-    marginTop: 7,
-    lineHeight: 20,
+    marginTop: rs(7),
   },
   divider: {
-    height: 1,
+    height: sizes.hairline,
   },
   buttons: {
     flexDirection: "row",
-    padding: 12,
-    gap: 8,
+    padding: spacing.lg,
+    gap: spacing.md,
   },
   buttonsStack: {
     flexDirection: "column",
   },
   btn: {
-    paddingVertical: 12,
+    paddingVertical: spacing.lg,
     borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
@@ -239,7 +241,7 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   btnText: {
-    fontSize: 15,
+    ...typography.button,
     fontWeight: "600",
   },
 });

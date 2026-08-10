@@ -1,6 +1,7 @@
 import { Link, Stack, useRouter, usePathname } from "expo-router";
 import { StyleSheet, Text, View } from "react-native";
 import { useEffect } from "react";
+import { rf } from "@/utils/responsive";
 
 import { useColors } from "@/hooks/useColors";
 import ScreenContainer from "@/components/ScreenContainer";
@@ -49,7 +50,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   title: {
-    fontSize: 20,
+    fontSize: rf(20),
     fontWeight: "bold",
   },
   link: {
@@ -57,6 +58,6 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
   },
   linkText: {
-    fontSize: 14,
+    fontSize: rf(14),
   },
 });

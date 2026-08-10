@@ -868,7 +868,7 @@ export default function SignupScreen() {
                   style={[styles.inputContainer, { backgroundColor: colors.card, borderColor: colors.border }]}
                   onPress={() => setShowCountryPicker(true)}
                 >
-                  <Text style={{ fontSize: 20 }}>{selectedCountry.flag}</Text>
+                  <Text style={{ fontSize: rf(20) }}>{selectedCountry.flag}</Text>
                   <Text style={[styles.input, { color: colors.foreground }]}>{selectedCountry.name}</Text>
                   <Feather name="chevron-down" size={18} color={colors.mutedForeground} />
                 </TouchableOpacity>
@@ -1063,7 +1063,7 @@ export default function SignupScreen() {
                 style={[styles.countryRow, { borderBottomColor: colors.border }]}
                 onPress={() => { setSelectedCountry(item); setShowCountryPicker(false); setCountrySearch(""); }}
               >
-                <Text style={{ fontSize: 22 }}>{item.flag}</Text>
+                <Text style={{ fontSize: rf(22) }}>{item.flag}</Text>
                 <Text style={[styles.countryName, { color: colors.foreground }]}>{item.name}</Text>
                 {selectedCountry.code === item.code && <Feather name="check" size={18} color={colors.primary} />}
               </TouchableOpacity>

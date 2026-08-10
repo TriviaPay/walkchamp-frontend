@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { rf } from "@/utils/responsive";
 
 interface AlreadyHostingModalProps {
   visible: boolean;
@@ -120,7 +121,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: "#FFFFFF",
-    fontSize: 18,
+    fontSize: rf(18),
     fontWeight: "700",
     textAlign: "center",
     marginBottom: 10,
@@ -128,7 +129,7 @@ const styles = StyleSheet.create({
   },
   message: {
     color: "#8B9BBE",
-    fontSize: 14,
+    fontSize: rf(14),
     textAlign: "center",
     lineHeight: 22,
     marginBottom: 24,
@@ -146,7 +147,7 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: {
     color: "#000000",
-    fontSize: 16,
+    fontSize: rf(16),
     fontWeight: "700",
   },
   dismissBtn: {
@@ -159,7 +160,7 @@ const styles = StyleSheet.create({
   },
   dismissBtnText: {
     color: "#8B9BBE",
-    fontSize: 16,
+    fontSize: rf(16),
     fontWeight: "600",
   },
   btnIcon: {

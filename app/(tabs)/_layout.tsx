@@ -4,7 +4,7 @@ import { Redirect, Tabs } from "expo-router";
 import { Icon, Label, NativeTabs } from "expo-router/unstable-native-tabs";
 import { SymbolView } from "expo-symbols";
 import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import React from "react";
+import React, { useCallback, useMemo } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 
 import { useColors } from "@/hooks/useColors";
@@ -14,6 +14,10 @@ import { useAppSelector } from "@/store/hooks";
 import { useSound } from "@/context/SoundContext";
 import { useUnread } from "@/context/UnreadContext";
 import * as Haptics from "@/utils/haptics";
+import { typography } from "@/constants/typography";
+import { sizes } from "@/constants/sizes";
+import { rf } from "@/utils/responsive";
+
 function NativeTabLayout() {
   const { totalUnread } = useUnread();
   const chatBadge = totalUnread > 0 ? (totalUnread > 99 ? "99+" : String(totalUnread)) : undefined;
@@ -58,22 +62,22 @@ function ClassicTabLayout() {
     Platform.OS === "android" ? 48 : 0,
   );
 
-  const tabBarStyle = {
-    position: "absolute" as const,
-    backgroundColor: isIOS ? "transparent" : colors.card,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    elevation: 0,
-    height: tabBarBase + tabBarBottomInset,
-    paddingBottom: tabBarBottomInset,
-  };
+  const tabBarStyle = useMemo(
+    () => ({
+      position: "absolute" as const,
+      backgroundColor: isIOS ? "transparent" : colors.card,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      elevation: 0,
+      height: tabBarBase + tabBarBottomInset,
+      paddingBottom: tabBarBottomInset,
+    }),
+    [isIOS, colors.card, colors.border, tabBarBase, tabBarBottomInset],
+  );
 
-  const screenOpts = {
-    tabBarActiveTintColor: colors.primary,
-    tabBarInactiveTintColor: colors.mutedForeground,
-    headerShown: false,
-    tabBarStyle,
-    tabBarBackground: () =>
+  // Stable BlurView element — avoid remounting on every tab press / options rebuild.
+  const tabBarBackgroundEl = useMemo(
+    () =>
       isIOS ? (
         <BlurView
           intensity={80}
@@ -83,10 +87,39 @@ function ClassicTabLayout() {
       ) : isWeb ? (
         <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.card }]} />
       ) : null,
-  };
+    [isIOS, isWeb, isDark, colors.card],
+  );
+
+  const screenOpts = useMemo(
+    () => ({
+      tabBarActiveTintColor: colors.primary,
+      tabBarInactiveTintColor: colors.mutedForeground,
+      headerShown: false,
+      // Freeze inactive tab UI (timers/polls that respect focus). FGS/sensors stay root-owned.
+      freezeOnBlur: true,
+      lazy: true,
+      tabBarStyle,
+      tabBarLabelStyle: {
+        fontSize: typography.tab.fontSize,
+        fontWeight: typography.tab.fontWeight,
+      },
+      tabBarBackground: () => tabBarBackgroundEl,
+    }),
+    [
+      colors.primary,
+      colors.mutedForeground,
+      tabBarStyle,
+      tabBarBackgroundEl,
+    ],
+  );
+
+  const onTabPress = useCallback(() => {
+    // Fire-and-forget — never block navigation on haptic completion.
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+  }, []);
 
   return (
-    <Tabs screenOptions={screenOpts} screenListeners={{ tabPress: () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy); } }}>
+    <Tabs screenOptions={screenOpts} screenListeners={{ tabPress: onTabPress }}>
       {/* Visible tabs: Walk → Live → Ranks → Chat → Wallet */}
       <Tabs.Screen
         name="walk"
@@ -94,9 +127,9 @@ function ClassicTabLayout() {
           title: "Walk",
           tabBarIcon: ({ color }) =>
             isIOS ? (
-              <SymbolView name="figure.walk" tintColor={color} size={22} />
+              <SymbolView name="figure.walk" tintColor={color} size={sizes.iconTabIos} />
             ) : (
-              <MaterialCommunityIcons name="walk" size={24} color={color} />
+              <MaterialCommunityIcons name="walk" size={sizes.iconTabAndroid} color={color} />
             ),
         }}
       />
@@ -106,9 +139,9 @@ function ClassicTabLayout() {
           title: "Live",
           tabBarIcon: ({ color }) => (
             isIOS ? (
-              <SymbolView name="antenna.radiowaves.left.and.right" tintColor={color} size={22} />
+              <SymbolView name="antenna.radiowaves.left.and.right" tintColor={color} size={sizes.iconTabIos} />
             ) : (
-              <MaterialCommunityIcons name="access-point" size={24} color={color} />
+              <MaterialCommunityIcons name="access-point" size={sizes.iconTabAndroid} color={color} />
             )
           ),
         }}
@@ -121,9 +154,9 @@ function ClassicTabLayout() {
           title: "Ranks",
           tabBarIcon: ({ color }) =>
             isIOS ? (
-              <SymbolView name="trophy" tintColor={color} size={22} />
+              <SymbolView name="trophy" tintColor={color} size={sizes.iconTabIos} />
             ) : (
-              <MaterialCommunityIcons name="trophy-outline" size={24} color={color} />
+              <MaterialCommunityIcons name="trophy-outline" size={sizes.iconTabAndroid} color={color} />
             ),
         }}
       />
@@ -132,12 +165,12 @@ function ClassicTabLayout() {
         options={{
           title: "Chat",
           tabBarBadge: totalUnread > 0 ? (totalUnread > 99 ? "99+" : totalUnread) : undefined,
-          tabBarBadgeStyle: { backgroundColor: "#FF3B30", fontSize: 10, minWidth: 16, height: 16, lineHeight: 16, borderRadius: 8 },
+          tabBarBadgeStyle: { backgroundColor: "#FF3B30", fontSize: rf(10), minWidth: 16, height: 16, lineHeight: 16, borderRadius: 8 },
           tabBarIcon: ({ color }) =>
             isIOS ? (
-              <SymbolView name="bubble.left.and.bubble.right" tintColor={color} size={22} />
+              <SymbolView name="bubble.left.and.bubble.right" tintColor={color} size={sizes.iconTabIos} />
             ) : (
-              <Ionicons name="chatbubbles-outline" size={24} color={color} />
+              <Ionicons name="chatbubbles-outline" size={sizes.iconTabAndroid} color={color} />
             ),
         }}
       />
@@ -152,9 +185,9 @@ function ClassicTabLayout() {
           title: "Wallet",
           tabBarIcon: ({ color }) =>
             isIOS ? (
-              <SymbolView name="creditcard" tintColor={color} size={22} />
+              <SymbolView name="creditcard" tintColor={color} size={sizes.iconTabIos} />
             ) : (
-              <MaterialCommunityIcons name="wallet-outline" size={24} color={color} />
+              <MaterialCommunityIcons name="wallet-outline" size={sizes.iconTabAndroid} color={color} />
             ),
         }}
       />

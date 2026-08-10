@@ -12,7 +12,13 @@ import { useAuth } from "@/context/AuthContext";
 import { authFetch } from "@/utils/authFetch";
 import { fetchChatSummary } from "@/services/api/hotReads";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
-import { subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
+import {
+  subscribeToChannel,
+  unsubscribeFromChannel,
+  CHANNELS,
+  EVENTS,
+} from "@/services/realtimeService";
+import { waitForAppStartupReady } from "@/services/appStartup";
 
 interface UnreadContextValue {
   privateUnread: number;
@@ -60,7 +66,17 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
     }
   }, [user?.id]);
 
-  useEffect(() => { void fetchSummary(); }, [fetchSummary]);
+  // Defer unread network/realtime until after cold-start gate (reduces splash hitch).
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    void waitForAppStartupReady().then(() => {
+      if (!cancelled) void fetchSummary();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchSummary, user?.id]);
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
@@ -76,8 +92,9 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!user?.id) return;
-    const channel = subscribeToChannel(CHANNELS.privateUser(user.id));
-    if (!channel) return;
+    let cancelled = false;
+    let channelName: string | null = null;
+    let channel: ReturnType<typeof subscribeToChannel> = null;
 
     const onNewRequest = () => setPendingRequests((n) => n + 1);
     const onAccepted = () => void fetchSummary();
@@ -87,18 +104,28 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
     };
     const onGroupInvite = () => setPendingGroupInvites((n) => n + 1);
 
-    channel.bind(EVENTS.FRIEND_REQUEST_NEW, onNewRequest);
-    channel.bind(EVENTS.FRIEND_REQUEST_ACCEPTED, onAccepted);
-    channel.bind(EVENTS.FRIEND_REQUEST_REJECTED, onRejected);
-    channel.bind(EVENTS.CHAT_NEW_MESSAGE, onPrivateMsg);
-    channel.bind(EVENTS.GROUP_INVITE_NEW, onGroupInvite);
+    void waitForAppStartupReady().then(() => {
+      if (cancelled || !user?.id) return;
+      channelName = CHANNELS.privateUser(user.id);
+      channel = subscribeToChannel(channelName);
+      if (!channel) return;
+      channel.bind(EVENTS.FRIEND_REQUEST_NEW, onNewRequest);
+      channel.bind(EVENTS.FRIEND_REQUEST_ACCEPTED, onAccepted);
+      channel.bind(EVENTS.FRIEND_REQUEST_REJECTED, onRejected);
+      channel.bind(EVENTS.CHAT_NEW_MESSAGE, onPrivateMsg);
+      channel.bind(EVENTS.GROUP_INVITE_NEW, onGroupInvite);
+    });
 
     return () => {
-      channel.unbind(EVENTS.FRIEND_REQUEST_NEW, onNewRequest);
-      channel.unbind(EVENTS.FRIEND_REQUEST_ACCEPTED, onAccepted);
-      channel.unbind(EVENTS.FRIEND_REQUEST_REJECTED, onRejected);
-      channel.unbind(EVENTS.CHAT_NEW_MESSAGE, onPrivateMsg);
-      channel.unbind(EVENTS.GROUP_INVITE_NEW, onGroupInvite);
+      cancelled = true;
+      if (channel) {
+        channel.unbind(EVENTS.FRIEND_REQUEST_NEW, onNewRequest);
+        channel.unbind(EVENTS.FRIEND_REQUEST_ACCEPTED, onAccepted);
+        channel.unbind(EVENTS.FRIEND_REQUEST_REJECTED, onRejected);
+        channel.unbind(EVENTS.CHAT_NEW_MESSAGE, onPrivateMsg);
+        channel.unbind(EVENTS.GROUP_INVITE_NEW, onGroupInvite);
+      }
+      if (channelName) unsubscribeFromChannel(channelName);
     };
   }, [user?.id, fetchSummary]);
 

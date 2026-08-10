@@ -21,8 +21,9 @@ import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { subscribeToChannel } from "@/services/realtimeService";
 import { SkeletonGroupDetailScreen } from "@/components/SkeletonRows";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
-import { useWalkContext } from "@/context/WalkContext";
+import { useWalkTodaySteps } from "@/services/walkTodayStepsStore";
 import { store } from "@/store";
+import { rf } from "@/utils/responsive";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
@@ -306,9 +307,9 @@ function ProgressRing({ pct, size, stroke, g1, g2, label, valueText, subText, pc
       </Svg>
       <View style={{ alignItems: "center" }}>
         {centerTop && <View style={{ marginBottom: 4 }}>{centerTop}</View>}
-        {label && <Text style={{ color: T.secondary, fontSize: 9, fontWeight: "700", letterSpacing: 1.5, marginBottom: 4 }}>{label}</Text>}
+        {label && <Text style={{ color: T.secondary, fontSize: rf(9), fontWeight: "700", letterSpacing: 1.5, marginBottom: 4 }}>{label}</Text>}
         <Text style={{ color: T.white, fontSize: size > 170 ? 24 : 20, fontWeight: "900", letterSpacing: -1 }}>{valueText}</Text>
-        <Text style={{ color: T.muted, fontSize: 10, marginTop: 2 }}>{subText}</Text>
+        <Text style={{ color: T.muted, fontSize: rf(10), marginTop: 2 }}>{subText}</Text>
         <Text style={{ color: progress >= 1 ? T.green : g1, fontSize: size > 170 ? 19 : 15, fontWeight: "800", marginTop: 5 }}>{pctText}</Text>
       </View>
     </View>
@@ -373,7 +374,7 @@ function ModalAvatar({
 function Tag({ label, color }: { label: string; color: string }) {
   return (
     <View style={{ backgroundColor: color + "22", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: color + "40" }}>
-      <Text style={{ color, fontSize: 8, fontWeight: "800", letterSpacing: 0.3 }}>{label}</Text>
+      <Text style={{ color, fontSize: rf(8), fontWeight: "800", letterSpacing: 0.3 }}>{label}</Text>
     </View>
   );
 }
@@ -382,22 +383,22 @@ function Tag({ label, color }: { label: string; color: string }) {
 function RankBadge({ rank }: { rank: number }) {
   if (rank === 1) return (
     <View style={[s.rankBadge, { backgroundColor: "rgba(255,200,61,0.15)", borderColor: "rgba(255,200,61,0.5)" }]}>
-      <Text style={{ fontSize: 16 }}>👑</Text>
+      <Text style={{ fontSize: rf(16) }}>👑</Text>
     </View>
   );
   if (rank === 2) return (
     <View style={[s.rankBadge, { backgroundColor: "rgba(148,163,184,0.15)", borderColor: "rgba(148,163,184,0.4)" }]}>
-      <Text style={{ fontSize: 13, fontWeight: "800", color: "#94A3B8" }}>#2</Text>
+      <Text style={{ fontSize: rf(13), fontWeight: "800", color: "#94A3B8" }}>#2</Text>
     </View>
   );
   if (rank === 3) return (
     <View style={[s.rankBadge, { backgroundColor: "rgba(205,127,50,0.15)", borderColor: "rgba(205,127,50,0.4)" }]}>
-      <Text style={{ fontSize: 13, fontWeight: "800", color: "#CD7F32" }}>#3</Text>
+      <Text style={{ fontSize: rf(13), fontWeight: "800", color: "#CD7F32" }}>#3</Text>
     </View>
   );
   return (
     <View style={[s.rankBadge, { backgroundColor: "rgba(255,255,255,0.05)", borderColor: "rgba(255,255,255,0.08)" }]}>
-      <Text style={{ fontSize: 12, fontWeight: "700", color: T.muted }}>#{rank}</Text>
+      <Text style={{ fontSize: rf(12), fontWeight: "700", color: T.muted }}>#{rank}</Text>
     </View>
   );
 }
@@ -448,7 +449,7 @@ export default function GroupDetailScreen() {
   const { safeBottom } = useSafeLayout();
   const { groupId, section } = useLocalSearchParams<{ groupId: string; section?: string | string[] }>();
   const paramSection = Array.isArray(section) ? section[0] : section;
-  const { todaySteps: liveSteps } = useWalkContext();
+  const liveSteps = useWalkTodaySteps();
 
   const { markContentReady } = useScreenMountPerf(`GroupDetail:${groupId}`);
   const cacheKey = groupDetailCacheKey(groupId);
@@ -639,7 +640,7 @@ export default function GroupDetailScreen() {
           {/* Type badge */}
           <View style={[s.typeBadge, { backgroundColor: theme.badgeBg, borderColor: theme.badgeBorder }]}>
             <Feather name={group.groupType === "friends" ? "users" : group.groupType === "family" ? "heart" : group.groupType === "office" ? "briefcase" : "star"} size={10} color={theme.g1} />
-            <Text style={{ color: theme.g1, fontSize: 10, fontWeight: "800", letterSpacing: 1.2, marginLeft: 5 }}>
+            <Text style={{ color: theme.g1, fontSize: rf(10), fontWeight: "800", letterSpacing: 1.2, marginLeft: 5 }}>
               {group.groupType === "custom" && group.customGroupType ? group.customGroupType.toUpperCase() : group.groupType.toUpperCase()}
             </Text>
           </View>
@@ -665,8 +666,8 @@ export default function GroupDetailScreen() {
                     ].map((st) => (
                       <View key={st.lbl} style={[s.statCard, { borderColor: st.color + "30" }]}>
                         <Feather name={st.icon as never} size={13} color={st.color} />
-                        <Text style={{ color: T.white, fontWeight: "800", fontSize: 15, marginTop: 3 }}>{st.val}</Text>
-                        <Text style={{ color: T.muted, fontSize: 9 }}>{st.lbl}</Text>
+                        <Text style={{ color: T.white, fontWeight: "800", fontSize: rf(15), marginTop: 3 }}>{st.val}</Text>
+                        <Text style={{ color: T.muted, fontSize: rf(9) }}>{st.lbl}</Text>
                       </View>
                     ))}
                   </View>
@@ -683,10 +684,10 @@ export default function GroupDetailScreen() {
                   />
                   <View style={s.overallMetaRow}>
                     <Feather name="users" size={11} color={T.muted} />
-                    <Text style={{ color: T.muted, fontSize: 11, marginLeft: 4 }}>{group.memberCount} members</Text>
+                    <Text style={{ color: T.muted, fontSize: rf(11), marginLeft: 4 }}>{group.memberCount} members</Text>
                     <Text style={{ color: T.muted, marginHorizontal: 6 }}>·</Text>
                     <Feather name="target" size={11} color={T.muted} />
-                    <Text style={{ color: T.muted, fontSize: 11, marginLeft: 4 }}>{fmtN(group.dailyGoalSteps)} daily goal</Text>
+                    <Text style={{ color: T.muted, fontSize: rf(11), marginLeft: 4 }}>{fmtN(group.dailyGoalSteps)} daily goal</Text>
                   </View>
                 </>
               )}
@@ -703,11 +704,11 @@ export default function GroupDetailScreen() {
                 size={52}
               />
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={{ color: T.white, fontWeight: "800", fontSize: 16 }} numberOfLines={1}>{group.groupName}</Text>
+                <Text style={{ color: T.white, fontWeight: "800", fontSize: rf(16) }} numberOfLines={1}>{group.groupName}</Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 }}>
-                  <Text style={{ color: T.secondary, fontSize: 12 }}>{group.memberCount} members</Text>
+                  <Text style={{ color: T.secondary, fontSize: rf(12) }}>{group.memberCount} members</Text>
                   <Text style={{ color: T.muted }}>·</Text>
-                  <Text style={{ color: T.secondary, fontSize: 12 }}>{fmtN(group.dailyGoalSteps)} daily goal</Text>
+                  <Text style={{ color: T.secondary, fontSize: rf(12) }}>{fmtN(group.dailyGoalSteps)} daily goal</Text>
                 </View>
                 <View style={[s.miniGoalBar, { marginTop: 8, backgroundColor: "rgba(255,255,255,0.08)" }]}>
                   <LinearGradient
@@ -716,7 +717,7 @@ export default function GroupDetailScreen() {
                     start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
                   />
                 </View>
-                <Text style={{ color: T.muted, fontSize: 11, marginTop: 4 }}>
+                <Text style={{ color: T.muted, fontSize: rf(11), marginTop: 4 }}>
                   {Math.round(goalPct * 100)}% of daily goal · {fmtInt(adjustedTodayTotal)} steps today
                 </Text>
               </View>
@@ -733,7 +734,7 @@ export default function GroupDetailScreen() {
               >
                 <LinearGradient colors={[theme.g1 + "40", theme.g2 + "25"]} style={s.inviteBtnInner} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
                   <Feather name="user-plus" size={14} color={T.cyan} />
-                  <Text style={{ color: T.cyan, fontWeight: "700", fontSize: 13, marginLeft: 6 }}>Invite Members</Text>
+                  <Text style={{ color: T.cyan, fontWeight: "700", fontSize: rf(13), marginLeft: 6 }}>Invite Members</Text>
                 </LinearGradient>
               </TouchableOpacity>
             )}
@@ -743,7 +744,7 @@ export default function GroupDetailScreen() {
               activeOpacity={0.8}
             >
               <Feather name="log-out" size={14} color={T.red} />
-              <Text style={{ color: T.red, fontWeight: "700", fontSize: 13, marginLeft: 6 }}>Leave Group</Text>
+              <Text style={{ color: T.red, fontWeight: "700", fontSize: rf(13), marginLeft: 6 }}>Leave Group</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -763,12 +764,12 @@ export default function GroupDetailScreen() {
               {active ? (
                 <LinearGradient colors={[theme.g1 + "30", theme.g2 + "20"]} style={s.tabActiveChip} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
                   <Feather name={tab.icon as never} size={12} color={theme.g1} />
-                  <Text style={{ fontSize: 12, fontWeight: "700", color: theme.g1, marginLeft: 4 }}>{tab.label}</Text>
+                  <Text style={{ fontSize: rf(12), fontWeight: "700", color: theme.g1, marginLeft: 4 }}>{tab.label}</Text>
                 </LinearGradient>
               ) : (
                 <View style={s.tabInactiveChip}>
                   <Feather name={tab.icon as never} size={12} color={T.muted} />
-                  <Text style={{ fontSize: 12, fontWeight: "600", color: T.muted, marginLeft: 4 }}>{tab.label}</Text>
+                  <Text style={{ fontSize: rf(12), fontWeight: "600", color: T.muted, marginLeft: 4 }}>{tab.label}</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -837,7 +838,7 @@ export default function GroupDetailScreen() {
               resizeMode="cover"
             />
           </View>
-          <Text style={{ color: "rgba(255,255,255,0.45)", fontSize: 13, marginTop: 20 }}>Tap anywhere to close</Text>
+          <Text style={{ color: "rgba(255,255,255,0.45)", fontSize: rf(13), marginTop: 20 }}>Tap anywhere to close</Text>
         </TouchableOpacity>
       </Modal>
 
@@ -888,20 +889,20 @@ function TodayTab({ todayLB, topWalker, avgStepsPerHr, theme, onMemberPress }: {
         <View style={[s.insightCard, { borderColor: "rgba(255,200,61,0.3)", flex: 1 }]}>
           <LinearGradient colors={["rgba(255,200,61,0.1)", "rgba(139,92,255,0.05)"]} style={StyleSheet.absoluteFill} />
           <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 8 }}>
-            <Text style={{ fontSize: 14 }}>👑</Text>
-            <Text style={{ color: T.secondary, fontSize: 9, fontWeight: "700", letterSpacing: 0.8 }}>TODAY'S TOP WALKER</Text>
+            <Text style={{ fontSize: rf(14) }}>👑</Text>
+            <Text style={{ color: T.secondary, fontSize: rf(9), fontWeight: "700", letterSpacing: 0.8 }}>TODAY'S TOP WALKER</Text>
           </View>
           {topWalker ? (
             <>
-              <Text style={{ color: T.white, fontWeight: "800", fontSize: 14 }} numberOfLines={1}>
+              <Text style={{ color: T.white, fontWeight: "800", fontSize: rf(14) }} numberOfLines={1}>
                 {topWalker.profile?.fullName ?? topWalker.profile?.username ?? "—"}
               </Text>
-              <Text style={{ color: T.gold, fontWeight: "700", fontSize: 12, marginTop: 3 }}>
+              <Text style={{ color: T.gold, fontWeight: "700", fontSize: rf(12), marginTop: 3 }}>
                 {fmtInt(topWalker.steps)} steps
               </Text>
             </>
           ) : (
-            <Text style={{ color: T.muted, fontSize: 12 }}>No steps yet</Text>
+            <Text style={{ color: T.muted, fontSize: rf(12) }}>No steps yet</Text>
           )}
         </View>
 
@@ -910,10 +911,10 @@ function TodayTab({ todayLB, topWalker, avgStepsPerHr, theme, onMemberPress }: {
           <LinearGradient colors={["rgba(0,245,155,0.08)", "rgba(0,216,255,0.05)"]} style={StyleSheet.absoluteFill} />
           <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 8 }}>
             <Feather name="activity" size={11} color={T.green} />
-            <Text style={{ color: T.secondary, fontSize: 9, fontWeight: "700", letterSpacing: 0.8 }}>GROUP PACE</Text>
+            <Text style={{ color: T.secondary, fontSize: rf(9), fontWeight: "700", letterSpacing: 0.8 }}>GROUP PACE</Text>
           </View>
-          <Text style={{ color: T.white, fontWeight: "800", fontSize: 14 }}>{fmtN(avgStepsPerHr)} steps/hr</Text>
-          <Text style={{ color: T.green, fontWeight: "700", fontSize: 11, marginTop: 3 }}>
+          <Text style={{ color: T.white, fontWeight: "800", fontSize: rf(14) }}>{fmtN(avgStepsPerHr)} steps/hr</Text>
+          <Text style={{ color: T.green, fontWeight: "700", fontSize: rf(11), marginTop: 3 }}>
             {avgStepsPerHr > 500 ? "Ahead of goal!" : "Keep going!"}
           </Text>
         </View>
@@ -932,7 +933,7 @@ function TodayTab({ todayLB, topWalker, avgStepsPerHr, theme, onMemberPress }: {
         <>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }}>
             <Feather name="award" size={12} color={T.gold} />
-            <Text style={{ color: T.secondary, fontSize: 11, fontWeight: "700", letterSpacing: 0.8 }}>TODAY'S RANKINGS</Text>
+            <Text style={{ color: T.secondary, fontSize: rf(11), fontWeight: "700", letterSpacing: 0.8 }}>TODAY'S RANKINGS</Text>
           </View>
           {todayLB.map((entry, i) => (
             <TouchableOpacity
@@ -959,18 +960,18 @@ function TodayTab({ todayLB, topWalker, avgStepsPerHr, theme, onMemberPress }: {
               <AvatarCircle userId={entry.userId} url={entry.profile?.avatarUrl} username={entry.profile?.username} color={theme.g1} avatarVersion={entry.profile?.avatarVersion} />
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
-                  <Text style={{ color: T.white, fontWeight: "700", fontSize: 14 }} numberOfLines={1}>
+                  <Text style={{ color: T.white, fontWeight: "700", fontSize: rf(14) }} numberOfLines={1}>
                     {entry.profile?.fullName ?? entry.profile?.username ?? "Unknown"}
                   </Text>
-                  {!!entry.profile?.countryCode && <Text style={{ fontSize: 12 }}>{flag(entry.profile.countryCode)}</Text>}
+                  {!!entry.profile?.countryCode && <Text style={{ fontSize: rf(12) }}>{flag(entry.profile.countryCode)}</Text>}
                   {entry.role === "admin" && <Tag label="ADMIN" color={T.gold} />}
                   {entry.isCurrentUser && <Tag label="YOU" color={theme.g1} />}
                 </View>
-                <Text style={{ color: T.muted, fontSize: 11 }}>@{entry.profile?.username ?? "—"}</Text>
+                <Text style={{ color: T.muted, fontSize: rf(11) }}>@{entry.profile?.username ?? "—"}</Text>
               </View>
               <View style={{ alignItems: "flex-end" }}>
-                <Text style={{ color: entry.steps > 0 ? theme.g1 : T.muted, fontWeight: "800", fontSize: 15 }}>{fmtN(entry.steps)}</Text>
-                <Text style={{ color: T.muted, fontSize: 9 }}>steps today</Text>
+                <Text style={{ color: entry.steps > 0 ? theme.g1 : T.muted, fontWeight: "800", fontSize: rf(15) }}>{fmtN(entry.steps)}</Text>
+                <Text style={{ color: T.muted, fontSize: rf(9) }}>steps today</Text>
               </View>
               <Feather name="chevron-right" size={14} color={T.muted} style={{ marginLeft: 4 }} />
             </TouchableOpacity>
@@ -1004,8 +1005,8 @@ function OverallTab({ overallLB, groupStats, theme, onMemberPress }: {
           <View key={sc.label} style={[s.statMini, { borderColor: sc.color + "25" }]}>
             <LinearGradient colors={[sc.color + "12", "transparent"]} style={StyleSheet.absoluteFill} />
             <Feather name={sc.icon as never} size={16} color={sc.color} />
-            <Text style={{ color: T.white, fontWeight: "800", fontSize: 16, marginTop: 6 }}>{sc.val}</Text>
-            <Text style={{ color: T.muted, fontSize: 9, marginTop: 2 }}>{sc.label}</Text>
+            <Text style={{ color: T.white, fontWeight: "800", fontSize: rf(16), marginTop: 6 }}>{sc.val}</Text>
+            <Text style={{ color: T.muted, fontSize: rf(9), marginTop: 2 }}>{sc.label}</Text>
           </View>
         ))}
       </View>
@@ -1016,15 +1017,15 @@ function OverallTab({ overallLB, groupStats, theme, onMemberPress }: {
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <Feather name="trending-up" size={13} color={momentumPos ? T.green : T.red} />
-            <Text style={{ color: T.secondary, fontSize: 12, fontWeight: "700" }}>Weekly Momentum</Text>
+            <Text style={{ color: T.secondary, fontSize: rf(12), fontWeight: "700" }}>Weekly Momentum</Text>
           </View>
-          <Text style={{ color: momentumPos ? T.green : T.red, fontWeight: "800", fontSize: 16 }}>
+          <Text style={{ color: momentumPos ? T.green : T.red, fontWeight: "800", fontSize: rf(16) }}>
             {momentumPos ? "+" : ""}{groupStats?.weeklyMomentumPct ?? 0}%
           </Text>
         </View>
-        <Text style={{ color: T.muted, fontSize: 11, marginBottom: 10 }}>vs. previous 7 days</Text>
+        <Text style={{ color: T.muted, fontSize: rf(11), marginBottom: 10 }}>vs. previous 7 days</Text>
         <Sparkline data={spark} color={momentumPos ? T.green : T.red} width={SCREEN_W - 64} height={48} />
-        {momentumPos && <Text style={{ color: T.green, fontSize: 11, fontWeight: "700", textAlign: "right", marginTop: 6 }}>Great momentum! 🔥</Text>}
+        {momentumPos && <Text style={{ color: T.green, fontSize: rf(11), fontWeight: "700", textAlign: "right", marginTop: 6 }}>Great momentum! 🔥</Text>}
       </View>
 
       {/* All-time leaderboard */}
@@ -1038,7 +1039,7 @@ function OverallTab({ overallLB, groupStats, theme, onMemberPress }: {
         <>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }}>
             <Feather name="star" size={12} color={T.purple} />
-            <Text style={{ color: T.secondary, fontSize: 11, fontWeight: "700", letterSpacing: 0.8 }}>ALL-TIME RANKINGS</Text>
+            <Text style={{ color: T.secondary, fontSize: rf(11), fontWeight: "700", letterSpacing: 0.8 }}>ALL-TIME RANKINGS</Text>
           </View>
           {overallLB.map((entry, i) => (
             <TouchableOpacity
@@ -1065,18 +1066,18 @@ function OverallTab({ overallLB, groupStats, theme, onMemberPress }: {
               <AvatarCircle userId={entry.userId} url={entry.profile?.avatarUrl} username={entry.profile?.username} color={theme.g1} avatarVersion={entry.profile?.avatarVersion} />
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                  <Text style={{ color: T.white, fontWeight: "700", fontSize: 14 }} numberOfLines={1}>
+                  <Text style={{ color: T.white, fontWeight: "700", fontSize: rf(14) }} numberOfLines={1}>
                     {entry.profile?.fullName ?? entry.profile?.username ?? "Unknown"}
                   </Text>
-                  {!!entry.profile?.countryCode && <Text style={{ fontSize: 12 }}>{flag(entry.profile.countryCode)}</Text>}
+                  {!!entry.profile?.countryCode && <Text style={{ fontSize: rf(12) }}>{flag(entry.profile.countryCode)}</Text>}
                   {entry.role === "admin" && <Tag label="ADMIN" color={T.gold} />}
                   {entry.isCurrentUser && <Tag label="YOU" color={theme.g1} />}
                 </View>
-                <Text style={{ color: T.muted, fontSize: 10 }}>@{entry.profile?.username ?? "—"}</Text>
+                <Text style={{ color: T.muted, fontSize: rf(10) }}>@{entry.profile?.username ?? "—"}</Text>
               </View>
               <View style={{ alignItems: "flex-end" }}>
-                <Text style={{ color: theme.g1, fontWeight: "800", fontSize: 15 }}>{fmtN(entry.steps)}</Text>
-                <Text style={{ color: T.muted, fontSize: 9 }}>total steps</Text>
+                <Text style={{ color: theme.g1, fontWeight: "800", fontSize: rf(15) }}>{fmtN(entry.steps)}</Text>
+                <Text style={{ color: T.muted, fontSize: rf(9) }}>total steps</Text>
               </View>
               <Feather name="chevron-right" size={14} color={T.muted} style={{ marginLeft: 4 }} />
             </TouchableOpacity>
@@ -1135,11 +1136,11 @@ function MembersTab({ members, pendingGroupInvites, isAdmin, groupId, adminUserI
               <Feather name="user-plus" size={20} color={theme.g1} />
             </View>
             <View style={{ flex: 1, marginLeft: 14 }}>
-              <Text style={{ color: T.white, fontWeight: "800", fontSize: 15 }}>Invite friends</Text>
-              <Text style={{ color: T.secondary, fontSize: 12, marginTop: 2 }}>Add friends and crush your goals together!</Text>
+              <Text style={{ color: T.white, fontWeight: "800", fontSize: rf(15) }}>Invite friends</Text>
+              <Text style={{ color: T.secondary, fontSize: rf(12), marginTop: 2 }}>Add friends and crush your goals together!</Text>
             </View>
             <View style={[s.inviteSmallBtn, { backgroundColor: theme.g1 }]}>
-              <Text style={{ color: "#FFF", fontWeight: "800", fontSize: 12 }}>Invite</Text>
+              <Text style={{ color: "#FFF", fontWeight: "800", fontSize: rf(12) }}>Invite</Text>
             </View>
           </LinearGradient>
         </TouchableOpacity>
@@ -1149,7 +1150,7 @@ function MembersTab({ members, pendingGroupInvites, isAdmin, groupId, adminUserI
       <View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 10 }}>
           <Feather name="users" size={11} color={T.cyan} />
-          <Text style={{ color: T.secondary, fontSize: 10, fontWeight: "700", letterSpacing: 1 }}>
+          <Text style={{ color: T.secondary, fontSize: rf(10), fontWeight: "700", letterSpacing: 1 }}>
             MEMBERS ({activeCount})
           </Text>
         </View>
@@ -1177,7 +1178,7 @@ function MembersTab({ members, pendingGroupInvites, isAdmin, groupId, adminUserI
             {m.role === "admin" ? (
               <View style={s.memberRankWrap}>
                 <View style={[s.rankBadge, { backgroundColor: "rgba(255,200,61,0.15)", borderColor: "rgba(255,200,61,0.4)" }]}>
-                  <Text style={{ fontSize: 14 }}>👑</Text>
+                  <Text style={{ fontSize: rf(14) }}>👑</Text>
                 </View>
               </View>
             ) : (
@@ -1186,17 +1187,17 @@ function MembersTab({ members, pendingGroupInvites, isAdmin, groupId, adminUserI
             <AvatarCircle userId={m.userId} url={m.profile?.avatarUrl} username={m.profile?.username} color={theme.g1} size={38} avatarVersion={m.profile?.avatarVersion} />
             <View style={{ flex: 1, marginLeft: 10 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                <Text style={{ color: T.white, fontWeight: "700", fontSize: 14 }} numberOfLines={1}>
+                <Text style={{ color: T.white, fontWeight: "700", fontSize: rf(14) }} numberOfLines={1}>
                   {m.profile?.fullName ?? m.profile?.username ?? "Unknown"}
                 </Text>
-                {!!m.profile?.countryCode && <Text style={{ fontSize: 12 }}>{flag(m.profile.countryCode)}</Text>}
+                {!!m.profile?.countryCode && <Text style={{ fontSize: rf(12) }}>{flag(m.profile.countryCode)}</Text>}
                 {m.role === "admin" && <Tag label="ADMIN" color={T.gold} />}
                 {m.isCurrentUser && <Tag label="YOU" color={theme.g1} />}
               </View>
-              <Text style={{ color: T.muted, fontSize: 11 }}>@{m.profile?.username ?? "—"}</Text>
+              <Text style={{ color: T.muted, fontSize: rf(11) }}>@{m.profile?.username ?? "—"}</Text>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
                 <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: T.green }} />
-                <Text style={{ color: T.green, fontSize: 10 }}>Active</Text>
+                <Text style={{ color: T.green, fontSize: rf(10) }}>Active</Text>
               </View>
             </View>
             {isAdmin && m.userId !== adminUserId ? (
@@ -1217,7 +1218,7 @@ function MembersTab({ members, pendingGroupInvites, isAdmin, groupId, adminUserI
         <View>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 10 }}>
             <Feather name="clock" size={11} color={T.gold} />
-            <Text style={{ color: T.secondary, fontSize: 10, fontWeight: "700", letterSpacing: 1 }}>
+            <Text style={{ color: T.secondary, fontSize: rf(10), fontWeight: "700", letterSpacing: 1 }}>
               PENDING INVITES ({pendingGroupInvites.length})
             </Text>
           </View>
@@ -1236,13 +1237,13 @@ function MembersTab({ members, pendingGroupInvites, isAdmin, groupId, adminUserI
               />
               <View style={{ flex: 1, marginLeft: 10 }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                  <Text style={{ color: T.white, fontWeight: "700", fontSize: 14 }} numberOfLines={1}>
+                  <Text style={{ color: T.white, fontWeight: "700", fontSize: rf(14) }} numberOfLines={1}>
                     {inv.invitedProfile?.fullName ?? inv.invitedProfile?.username ?? "Unknown"}
                   </Text>
-                  {!!inv.invitedProfile?.countryCode && <Text style={{ fontSize: 12 }}>{flag(inv.invitedProfile.countryCode)}</Text>}
+                  {!!inv.invitedProfile?.countryCode && <Text style={{ fontSize: rf(12) }}>{flag(inv.invitedProfile.countryCode)}</Text>}
                   <Tag label="INVITED" color={T.gold} />
                 </View>
-                <Text style={{ color: T.muted, fontSize: 10 }}>Invited {timeAgo(inv.createdAt)}</Text>
+                <Text style={{ color: T.muted, fontSize: rf(10) }}>Invited {timeAgo(inv.createdAt)}</Text>
               </View>
               {isAdmin && (
                 <TouchableOpacity
@@ -1261,7 +1262,7 @@ function MembersTab({ members, pendingGroupInvites, isAdmin, groupId, adminUserI
       {isAdmin && (
         <View style={s.adminNote}>
           <Feather name="shield" size={11} color={T.muted} />
-          <Text style={{ color: T.muted, fontSize: 11, marginLeft: 6 }}>Only admins can remove members</Text>
+          <Text style={{ color: T.muted, fontSize: rf(11), marginLeft: 6 }}>Only admins can remove members</Text>
         </View>
       )}
     </View>
@@ -1290,8 +1291,8 @@ function HistoryTab({ history, goal, theme }: {
         return (
           <View key={day.id} style={[s.historyRow, { backgroundColor: T.card, borderColor: day.goalCompleted ? T.green + "30" : T.border }]}>
             <View style={{ flex: 1 }}>
-              <Text style={{ color: T.white, fontWeight: "700", fontSize: 13 }}>{day.resultDate}</Text>
-              <Text style={{ color: T.secondary, fontSize: 11, marginTop: 2 }}>{fmtInt(day.groupTotalSteps)} group steps</Text>
+              <Text style={{ color: T.white, fontWeight: "700", fontSize: rf(13) }}>{day.resultDate}</Text>
+              <Text style={{ color: T.secondary, fontSize: rf(11), marginTop: 2 }}>{fmtInt(day.groupTotalSteps)} group steps</Text>
               <View style={[s.miniGoalBar, { backgroundColor: "rgba(255,255,255,0.06)", marginTop: 6 }]}>
                 <LinearGradient
                   colors={day.goalCompleted ? [T.green, T.cyan] : [theme.g1, theme.g2]}
@@ -1303,11 +1304,11 @@ function HistoryTab({ history, goal, theme }: {
             {day.goalCompleted ? (
               <View style={[s.histBadge, { backgroundColor: T.green + "15", borderColor: T.green + "40" }]}>
                 <Feather name="check-circle" size={11} color={T.green} />
-                <Text style={{ color: T.green, fontSize: 11, fontWeight: "700", marginLeft: 4 }}>Goal Met</Text>
+                <Text style={{ color: T.green, fontSize: rf(11), fontWeight: "700", marginLeft: 4 }}>Goal Met</Text>
               </View>
             ) : (
               <View style={[s.histBadge, { backgroundColor: "rgba(255,255,255,0.05)", borderColor: T.border }]}>
-                <Text style={{ color: T.secondary, fontSize: 11, fontWeight: "700" }}>{pct}%</Text>
+                <Text style={{ color: T.secondary, fontSize: rf(11), fontWeight: "700" }}>{pct}%</Text>
               </View>
             )}
           </View>
@@ -1344,12 +1345,12 @@ function MemberProfileModal({ member, theme, onClose }: {
             <View style={{ flexDirection: "row", justifyContent: "center", gap: 8, marginTop: 10, marginBottom: 16 }}>
               {member.role === "admin" && (
                 <View style={[s.mpBadge, { backgroundColor: "rgba(255,200,61,0.15)", borderColor: "rgba(255,200,61,0.4)" }]}>
-                  <Text style={{ color: T.gold, fontSize: 11, fontWeight: "700" }}>👑 Admin</Text>
+                  <Text style={{ color: T.gold, fontSize: rf(11), fontWeight: "700" }}>👑 Admin</Text>
                 </View>
               )}
               {member.isCurrentUser && (
                 <View style={[s.mpBadge, { backgroundColor: theme.g1 + "20", borderColor: theme.g1 + "50" }]}>
-                  <Text style={{ color: theme.g1, fontSize: 11, fontWeight: "700" }}>✦ You</Text>
+                  <Text style={{ color: theme.g1, fontSize: rf(11), fontWeight: "700" }}>✦ You</Text>
                 </View>
               )}
             </View>
@@ -1445,7 +1446,7 @@ function InviteMemberModal({ groupId, theme, onClose, onInvited }: {
         </View>
 
         <View style={{ padding: 20 }}>
-          <Text style={{ color: T.secondary, fontSize: 12, fontWeight: "700", marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>Search Username</Text>
+          <Text style={{ color: T.secondary, fontSize: rf(12), fontWeight: "700", marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>Search Username</Text>
 
           {/* Input + spinner row */}
           <View style={{ position: "relative" }}>
@@ -1505,11 +1506,11 @@ function InviteMemberModal({ groupId, theme, onClose, onInvited }: {
                       style={{ marginRight: 10 }}
                     />
                     <View style={{ flex: 1 }}>
-                      <Text style={{ color: T.white, fontWeight: "700", fontSize: 14 }} numberOfLines={1}>
+                      <Text style={{ color: T.white, fontWeight: "700", fontSize: rf(14) }} numberOfLines={1}>
                         {u.fullName ?? u.username}
                         {u.countryFlag ? `  ${u.countryFlag}` : ""}
                       </Text>
-                      <Text style={{ color: T.muted, fontSize: 11 }}>@{u.username}</Text>
+                      <Text style={{ color: T.muted, fontSize: rf(11) }}>@{u.username}</Text>
                     </View>
                     <Feather name="chevron-right" size={14} color={T.muted} />
                   </TouchableOpacity>
@@ -1520,10 +1521,10 @@ function InviteMemberModal({ groupId, theme, onClose, onInvited }: {
 
           {/* No results hint */}
           {!searching && query.trim().length >= 2 && results.length === 0 && !selected && (
-            <Text style={{ color: T.muted, fontSize: 12, marginTop: 8 }}>No users found for "{query}"</Text>
+            <Text style={{ color: T.muted, fontSize: rf(12), marginTop: 8 }}>No users found for "{query}"</Text>
           )}
 
-          <Text style={{ color: T.muted, fontSize: 12, marginTop: 12 }}>
+          <Text style={{ color: T.muted, fontSize: rf(12), marginTop: 12 }}>
             They'll receive a notification and must accept the invite.
           </Text>
 
@@ -1533,7 +1534,7 @@ function InviteMemberModal({ groupId, theme, onClose, onInvited }: {
               style={[s.ctaBtn, { opacity: sending || (!selected && query.trim().length < 2) ? 0.5 : 1 }]}
               start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
             >
-              {sending ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={{ color: "#FFF", fontWeight: "800", fontSize: 16 }}>Send Invite</Text>}
+              {sending ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={{ color: "#FFF", fontWeight: "800", fontSize: rf(16) }}>Send Invite</Text>}
             </LinearGradient>
           </TouchableOpacity>
         </View>
@@ -1643,7 +1644,7 @@ function EditGroupModal({ group, theme, onClose, onUpdated, onDeleted }: {
         <ScrollView contentContainerStyle={{ padding: 20 }}>
 
           {/* ── Group photo ── */}
-          <Text style={{ color: T.secondary, fontSize: 12, fontWeight: "700", marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.5 }}>Group Photo</Text>
+          <Text style={{ color: T.secondary, fontSize: rf(12), fontWeight: "700", marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.5 }}>Group Photo</Text>
           <TouchableOpacity onPress={handlePickImage} disabled={uploading} activeOpacity={0.8} style={{ alignSelf: "center", marginBottom: 24 }}>
             <View style={{
               width: 90, height: 90, borderRadius: 45, overflow: "hidden",
@@ -1675,19 +1676,19 @@ function EditGroupModal({ group, theme, onClose, onUpdated, onDeleted }: {
               }
             </View>
           </TouchableOpacity>
-          <Text style={{ color: T.muted, fontSize: 12, textAlign: "center", marginTop: -18, marginBottom: 20 }}>
+          <Text style={{ color: T.muted, fontSize: rf(12), textAlign: "center", marginTop: -18, marginBottom: 20 }}>
             {uploading ? "Uploading…" : "Tap to change photo"}
           </Text>
 
           {/* ── Group name ── */}
-          <Text style={{ color: T.secondary, fontSize: 12, fontWeight: "700", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Group Name</Text>
+          <Text style={{ color: T.secondary, fontSize: rf(12), fontWeight: "700", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Group Name</Text>
           <TextInput
             value={groupName} onChangeText={setGroupName} maxLength={60}
             style={[s.textInput, { backgroundColor: T.card, borderColor: T.border, color: T.white }]}
           />
 
           {/* ── Daily goal ── */}
-          <Text style={{ color: T.secondary, fontSize: 12, fontWeight: "700", marginBottom: 8, marginTop: 20, textTransform: "uppercase", letterSpacing: 0.5 }}>Daily Group Goal</Text>
+          <Text style={{ color: T.secondary, fontSize: rf(12), fontWeight: "700", marginBottom: 8, marginTop: 20, textTransform: "uppercase", letterSpacing: 0.5 }}>Daily Group Goal</Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             {GOALS.map((g) => (
               <TouchableOpacity
@@ -1696,7 +1697,7 @@ function EditGroupModal({ group, theme, onClose, onUpdated, onDeleted }: {
                 style={[s.goalChip, { borderColor: goal === g ? T.cyan : T.border, backgroundColor: goal === g ? T.cyan + "18" : T.card }]}
                 activeOpacity={0.75}
               >
-                <Text style={{ color: goal === g ? T.cyan : T.secondary, fontWeight: "700", fontSize: 13 }}>{(g / 1000).toFixed(0)}k</Text>
+                <Text style={{ color: goal === g ? T.cyan : T.secondary, fontWeight: "700", fontSize: rf(13) }}>{(g / 1000).toFixed(0)}k</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -1708,13 +1709,13 @@ function EditGroupModal({ group, theme, onClose, onUpdated, onDeleted }: {
               style={[s.ctaBtn, { opacity: saving || uploading ? 0.6 : 1 }]}
               start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
             >
-              {saving ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={{ color: "#FFF", fontWeight: "800", fontSize: 16 }}>Save Changes</Text>}
+              {saving ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={{ color: "#FFF", fontWeight: "800", fontSize: rf(16) }}>Save Changes</Text>}
             </LinearGradient>
           </TouchableOpacity>
 
           {/* ── Delete group ── */}
           <View style={{ height: 1, backgroundColor: T.border, marginVertical: 28 }} />
-          <Text style={{ color: T.muted, fontSize: 12, marginBottom: 12, textAlign: "center" }}>
+          <Text style={{ color: T.muted, fontSize: rf(12), marginBottom: 12, textAlign: "center" }}>
             Deleting the group is permanent and cannot be undone.
           </Text>
           <TouchableOpacity onPress={handleDelete} disabled={deleting} activeOpacity={0.82}>
@@ -1724,7 +1725,7 @@ function EditGroupModal({ group, theme, onClose, onUpdated, onDeleted }: {
                 : (
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                     <Feather name="trash-2" size={17} color={T.red} />
-                    <Text style={{ color: T.red, fontWeight: "800", fontSize: 16 }}>Delete Group</Text>
+                    <Text style={{ color: T.red, fontWeight: "800", fontSize: rf(16) }}>Delete Group</Text>
                   </View>
                 )}
             </View>
@@ -1787,7 +1788,7 @@ function LeaveModal({ groupName, groupId, isAdmin, otherMembers, theme, onClose,
           showsVerticalScrollIndicator={false}
         >
           {/* ── Confirmation text ── */}
-          <Text style={{ color: T.secondary, fontSize: 15, lineHeight: 22 }}>
+          <Text style={{ color: T.secondary, fontSize: rf(15), lineHeight: 22 }}>
             Are you sure you want to leave{" "}
             <Text style={{ color: T.white, fontWeight: "700" }}>{groupName}</Text>?
           </Text>
@@ -1798,7 +1799,7 @@ function LeaveModal({ groupName, groupId, isAdmin, otherMembers, theme, onClose,
               backgroundColor: "rgba(239,68,68,0.10)", borderColor: "rgba(239,68,68,0.35)",
               borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 16,
             }}>
-              <Text style={{ color: "#FF6B6B", fontSize: 13, lineHeight: 20 }}>
+              <Text style={{ color: "#FF6B6B", fontSize: rf(13), lineHeight: 20 }}>
                 👑  You're the admin. Choose a member below to hand over admin rights before you leave.
               </Text>
             </View>
@@ -1810,7 +1811,7 @@ function LeaveModal({ groupName, groupId, isAdmin, otherMembers, theme, onClose,
               backgroundColor: T.gold + "18", borderColor: T.gold + "45",
               borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 16,
             }}>
-              <Text style={{ color: T.gold, fontSize: 13, lineHeight: 20 }}>
+              <Text style={{ color: T.gold, fontSize: rf(13), lineHeight: 20 }}>
                 ⚠️  You are the only member. Leaving will permanently archive this group.
               </Text>
             </View>
@@ -1820,7 +1821,7 @@ function LeaveModal({ groupName, groupId, isAdmin, otherMembers, theme, onClose,
           {needsTransfer && (
             <>
               <Text style={{
-                color: T.secondary, fontSize: 11, fontWeight: "700",
+                color: T.secondary, fontSize: rf(11), fontWeight: "700",
                 textTransform: "uppercase", letterSpacing: 1.1,
                 marginTop: 24, marginBottom: 10,
               }}>
@@ -1852,11 +1853,11 @@ function LeaveModal({ groupName, groupId, isAdmin, otherMembers, theme, onClose,
                       avatarVersion={member.profile?.avatarVersion}
                     />
                     <View style={{ flex: 1 }}>
-                      <Text style={{ color: T.white, fontWeight: "700", fontSize: 14 }}>{uname}</Text>
+                      <Text style={{ color: T.white, fontWeight: "700", fontSize: rf(14) }}>{uname}</Text>
                       {member.profile?.fullName ? (
-                        <Text style={{ color: T.muted, fontSize: 12, marginTop: 1 }}>{member.profile.fullName}</Text>
+                        <Text style={{ color: T.muted, fontSize: rf(12), marginTop: 1 }}>{member.profile.fullName}</Text>
                       ) : null}
-                      <Text style={{ color: T.muted, fontSize: 11, marginTop: 2 }}>
+                      <Text style={{ color: T.muted, fontSize: rf(11), marginTop: 2 }}>
                         {fmtN(member.allTimeSteps)} total steps
                       </Text>
                     </View>
@@ -1888,7 +1889,7 @@ function LeaveModal({ groupName, groupId, isAdmin, otherMembers, theme, onClose,
             }]}>
               {leaving
                 ? <ActivityIndicator color="#FFF" size="small" />
-                : <Text style={{ color: "#FFF", fontWeight: "800", fontSize: 16 }}>
+                : <Text style={{ color: "#FFF", fontWeight: "800", fontSize: rf(16) }}>
                     {needsTransfer ? "Transfer Admin & Leave" : "Leave Group"}
                   </Text>
               }
@@ -1896,7 +1897,7 @@ function LeaveModal({ groupName, groupId, isAdmin, otherMembers, theme, onClose,
           </TouchableOpacity>
 
           <TouchableOpacity onPress={onClose} style={{ marginTop: 14 }} activeOpacity={0.8}>
-            <Text style={{ color: T.secondary, fontWeight: "700", fontSize: 14, textAlign: "center" }}>Cancel</Text>
+            <Text style={{ color: T.secondary, fontWeight: "700", fontSize: rf(14), textAlign: "center" }}>Cancel</Text>
           </TouchableOpacity>
         </ScrollView>
       </View>
@@ -1917,7 +1918,7 @@ const s = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.10)", borderWidth: 1, borderColor: T.border,
     alignItems: "center", justifyContent: "center",
   },
-  topBarTitle: { flexShrink: 1, color: T.white, fontSize: 17, fontWeight: "800", letterSpacing: -0.3 },
+  topBarTitle: { flexShrink: 1, color: T.white, fontSize: rf(17), fontWeight: "800", letterSpacing: -0.3 },
 
   typeBadge: {
     alignSelf: "flex-start", flexDirection: "row", alignItems: "center",
@@ -1978,8 +1979,8 @@ const s = StyleSheet.create({
     borderColor: T.border, backgroundColor: "rgba(0,216,255,0.08)",
     alignItems: "center", justifyContent: "center", marginBottom: 4,
   },
-  emptyTitle: { color: T.secondary, fontSize: 15, fontWeight: "700" },
-  emptyText: { color: T.muted, fontSize: 13, textAlign: "center", lineHeight: 20 },
+  emptyTitle: { color: T.secondary, fontSize: rf(15), fontWeight: "700" },
+  emptyText: { color: T.muted, fontSize: rf(13), textAlign: "center", lineHeight: 20 },
 
   inviteCard: { flexDirection: "row", alignItems: "center", borderRadius: 14, borderWidth: 1.5, borderStyle: "dashed", padding: 16, overflow: "hidden" },
   inviteIconBig: { width: 46, height: 46, borderRadius: 23, alignItems: "center", justifyContent: "center", borderWidth: 1 },
@@ -1995,8 +1996,8 @@ const s = StyleSheet.create({
 
   modalRoot: { flex: 1 },
   modalHeader: { flexDirection: "row", alignItems: "center", padding: 20, borderBottomWidth: StyleSheet.hairlineWidth },
-  modalTitle: { fontSize: 17, fontWeight: "800" },
-  textInput: { borderWidth: 1.5, borderRadius: 12, padding: 14, fontSize: 16, fontWeight: "600" },
+  modalTitle: { fontSize: rf(17), fontWeight: "800" },
+  textInput: { borderWidth: 1.5, borderRadius: 12, padding: 14, fontSize: rf(16), fontWeight: "600" },
   goalChip: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5 },
   ctaBtn: { padding: 17, borderRadius: 14, alignItems: "center" },
 
@@ -2007,16 +2008,16 @@ const s = StyleSheet.create({
   },
   mpHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: T.border, alignSelf: "center", marginBottom: 20 },
   mpAvatar: { width: 72, height: 72, borderRadius: 36, borderWidth: 2.5, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  mpName: { fontSize: 20, fontWeight: "800", color: T.white, textAlign: "center", marginTop: 8 },
-  mpUsername: { fontSize: 13, color: T.muted, textAlign: "center", marginTop: 4 },
+  mpName: { fontSize: rf(20), fontWeight: "800", color: T.white, textAlign: "center", marginTop: 8 },
+  mpUsername: { fontSize: rf(13), color: T.muted, textAlign: "center", marginTop: 4 },
   mpBadge: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 8, borderWidth: 1 },
   mpStatsRow: { flexDirection: "row", alignItems: "center", backgroundColor: "rgba(0,0,0,0.3)", borderRadius: 14, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: T.border },
   mpStatItem: { flex: 1, alignItems: "center" },
-  mpStatVal: { fontSize: 22, fontWeight: "800" },
-  mpStatLabel: { fontSize: 11, color: T.muted, marginTop: 4 },
+  mpStatVal: { fontSize: rf(22), fontWeight: "800" },
+  mpStatLabel: { fontSize: rf(11), color: T.muted, marginTop: 4 },
   mpStatDivider: { width: 1, height: 36, backgroundColor: T.border },
   mpCloseBtn: { backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 12, padding: 14, alignItems: "center", borderWidth: 1, borderColor: T.border },
-  mpCloseBtnText: { color: T.white, fontWeight: "700", fontSize: 15 },
+  mpCloseBtnText: { color: T.white, fontWeight: "700", fontSize: rf(15) },
 
   gaOverlay: {
     flex: 1,
@@ -2038,14 +2039,14 @@ const s = StyleSheet.create({
   },
   gaTitle: {
     color: T.white,
-    fontSize: 17,
+    fontSize: rf(17),
     fontWeight: "800",
     textAlign: "center",
     letterSpacing: -0.2,
   },
   gaMessage: {
     color: T.secondary,
-    fontSize: 14,
+    fontSize: rf(14),
     textAlign: "center",
     lineHeight: 21,
     marginTop: 8,
@@ -2071,15 +2072,15 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: T.border,
   },
-  gaBtnCancelText: { color: T.secondary, fontSize: 15, fontWeight: "700" },
+  gaBtnCancelText: { color: T.secondary, fontSize: rf(15), fontWeight: "700" },
   gaBtnPrimary: {
     backgroundColor: T.green,
   },
-  gaBtnPrimaryText: { color: "#04140F", fontSize: 15, fontWeight: "800" },
+  gaBtnPrimaryText: { color: "#04140F", fontSize: rf(15), fontWeight: "800" },
   gaBtnDestructive: {
     backgroundColor: T.red + "22",
     borderWidth: 1,
     borderColor: T.red + "66",
   },
-  gaBtnDestructiveText: { color: T.red, fontSize: 15, fontWeight: "800" },
+  gaBtnDestructiveText: { color: T.red, fontSize: rf(15), fontWeight: "800" },
 });

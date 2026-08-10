@@ -125,6 +125,31 @@ export const perf = {
     }
   },
 
+  /** Provider / store update tick (1Hz isolation diagnostics). */
+  providerUpdate(name: string, reason?: string): void {
+    const n = bumpRender(`provider:${name}`);
+    if (n === 1 || n % 30 === 0) {
+      log(
+        `[Perf] providerUpdate name=${name} count=${n}${reason ? ` reason=${reason}` : ""}`,
+      );
+    }
+  },
+
+  /** Focus-time network coalescing diagnostics (no URL/PII). */
+  focusFetch(screen: string, key: string, action: "start" | "skip_ttl" | "coalesced"): void {
+    log(`[Perf] focusFetch screen=${screen} key=${key} action=${action}`);
+  },
+
+  channelRefCount(channelHint: string, count: number): void {
+    if (count === 0 || count === 1 || count % 3 === 0) {
+      log(`[Perf] channelRefCount hint=${channelHint} count=${count}`);
+    }
+  },
+
+  presenceSkippedUnchanged(): void {
+    log(`[Perf] presenceOnlineIds skipped unchanged`);
+  },
+
   realtimeEvent(type: string, applied: boolean): void {
     log(`[Perf] RealtimeEvent type=${type} applied=${applied}`);
   },

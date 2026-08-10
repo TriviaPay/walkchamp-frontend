@@ -23,6 +23,7 @@ import {
   RANK_CURRENT_USER_GREEN,
 } from "@/utils/participantRankUi";
 import { UNLIMITED_COPY } from "@/utils/unlimitedLiveUiCopy";
+import { rf } from "@/utils/responsive";
 
 const PANEL_ROW_HEIGHT = 52;
 /** Compact so ~10 Live Board rows fit above progress/chat without scrolling. */
@@ -444,7 +445,7 @@ const LiveBoardRow = memo(function LiveBoardRow({
             {participant.username}
           </Text>
           {!!participant.countryFlag && (
-            <Text style={{ fontSize: 13 }}>{participant.countryFlag}</Text>
+            <Text style={{ fontSize: rf(13) }}>{participant.countryFlag}</Text>
           )}
           {!isForfeited && participant.isHost && (
             <View
@@ -577,7 +578,7 @@ const styles = StyleSheet.create({
   },
   muteAllTxt: {
     color: "#C7CDDA",
-    fontSize: 10,
+    fontSize: rf(10),
     fontWeight: "800",
   },
   lbEmpty: { paddingVertical: 18, alignItems: "center" },
@@ -623,7 +624,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
     backgroundColor: "#0B0D1A",
   },
-  rankCornerTxt: { fontSize: 9, fontWeight: "900" },
+  rankCornerTxt: { fontSize: rf(9), fontWeight: "900" },
   lbBadgeN: { fontWeight: "800" },
   lbInfo: { flex: 1, minWidth: 0 },
   lbName: { fontWeight: "700" },
@@ -656,7 +657,7 @@ const styles = StyleSheet.create({
     minHeight: BOARD_ROW_HEIGHT,
     height: BOARD_ROW_HEIGHT,
   },
-  boardMedal: { fontSize: 15, width: 24, textAlign: "center" },
+  boardMedal: { fontSize: rf(15), width: 24, textAlign: "center" },
   boardAvatar: {
     width: 28,
     height: 28,
@@ -667,7 +668,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   boardAvatarImg: { width: 28, height: 28, borderRadius: 14 },
-  boardAvatarTxt: { fontSize: 12, fontWeight: "800" },
+  boardAvatarTxt: { fontSize: rf(12), fontWeight: "800" },
   boardInfo: { flex: 1, gap: 2, minWidth: 0 },
   nameRow: {
     flexDirection: "row",
@@ -675,18 +676,18 @@ const styles = StyleSheet.create({
     gap: 4,
     flexWrap: "wrap",
   },
-  boardName: { fontSize: 12, fontWeight: "700", flexShrink: 1 },
+  boardName: { fontSize: rf(12), fontWeight: "700", flexShrink: 1 },
   tag: {
     paddingHorizontal: 5,
     paddingVertical: 1,
     borderRadius: 5,
     borderWidth: 1,
   },
-  tagTxt: { fontSize: 9, fontWeight: "800" },
+  tagTxt: { fontSize: rf(9), fontWeight: "800" },
   track: { height: 2, borderRadius: 1, overflow: "hidden" },
   fill: { height: 2, borderRadius: 1 },
   boardRight: { alignItems: "flex-end", gap: 1, flexShrink: 0, minWidth: 64 },
-  boardSteps: { fontSize: 11, fontWeight: "700" },
-  stepDelta: { fontSize: 10, fontWeight: "800", color: "#00E676" },
-  prize: { fontSize: 12, fontWeight: "800" },
+  boardSteps: { fontSize: rf(11), fontWeight: "700" },
+  stepDelta: { fontSize: rf(10), fontWeight: "800", color: "#00E676" },
+  prize: { fontSize: rf(12), fontWeight: "800" },
 });
