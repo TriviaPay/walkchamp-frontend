@@ -53,6 +53,22 @@ export async function runCoalesced<T>(key: string, fn: () => Promise<T>): Promis
 }
 
 /**
+ * Wait for any in-flight coalesce on `key`, then run a fresh request.
+ * Use after payments/refunds so callers do not join a stale pre-settlement fetch.
+ */
+export async function runCoalescedFresh<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = inFlight.get(key) as Promise<unknown> | undefined;
+  if (existing) {
+    try {
+      await existing;
+    } catch {
+      /* ignore prior failure — still run a fresh pull */
+    }
+  }
+  return runCoalesced(key, fn);
+}
+
+/**
  * Coalesce a GET and drop the result if auth generation / user changed mid-flight.
  * Returns undefined when the caller should not apply the response.
  */

@@ -643,7 +643,7 @@ export default function SignupScreen() {
                   resizeMode="contain"
                 />
               </View>
-              <Text style={[styles.authAppName, { color: colors.foreground }]}>Walk Champ</Text>
+              <Text style={[styles.authAppName, { color: colors.foreground }]}>WalkChamp</Text>
               <Text style={[styles.authTagline, { color: colors.mutedForeground }]}>
                 Global Walking Competition
               </Text>
@@ -681,11 +681,11 @@ export default function SignupScreen() {
              "Create Password"}
           </Text>
           <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
-            {step === 0 ? "Walk Champ — join millions of walkers" :
+            {step === 0 ? "WalkChamp — join millions of walkers" :
              step === 1 ? `Enter the 6-digit code sent to ${email}` :
              step === 2 ? "Tell us about yourself" :
              step === 3 ? "Review and accept the terms" :
-             "Stored securely in Descope — Walk Champ never sees it"}
+             "Stored securely in Descope — WalkChamp never sees it"}
           </Text>
 
           {/* ── STEP 0: Email ──────────────────────────────────────── */}
@@ -965,7 +965,7 @@ export default function SignupScreen() {
               <View style={[styles.infoBox, { backgroundColor: "#00E67610", borderColor: "#00E67640" }]}>
                 <Feather name="shield" size={13} color="#00E676" />
                 <Text style={[styles.infoText, { color: "#00E676" }]}>
-                  Your password is stored securely in Descope. Walk Champ never stores your password.
+                  Your password is stored securely in Descope. WalkChamp never stores your password.
                 </Text>
               </View>
 

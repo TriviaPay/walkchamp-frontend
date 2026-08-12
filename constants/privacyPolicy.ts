@@ -16,7 +16,7 @@ export const PRIVACY_POLICY_SECTIONS: PrivacyPolicySection[] = [
     id: "1-introduction",
     number: 1,
     title: "INTRODUCTION",
-    body: `This Privacy Policy explains how MIRA GAMING PRIVATE LIMITED ("Mira Gaming," "Company," "we," "us," or "our") collects, uses, stores, shares, and protects information when you access or use Walk Champ, including the Walk Champ mobile application, websites, services, features, challenges, races, groups, communications, payments, and related services collectively referred to as the "Service."
+    body: `This Privacy Policy explains how MIRA GAMING PRIVATE LIMITED ("Mira Gaming," "Company," "we," "us," or "our") collects, uses, stores, shares, and protects information when you access or use WalkChamp, including the WalkChamp mobile application, websites, services, features, challenges, races, groups, communications, payments, and related services collectively referred to as the "Service."
 
 Company Details:
 
@@ -29,7 +29,7 @@ Telangana, India
 Support and Privacy Contact:
 admin@miragaming.com
 
-Walk Champ is a walking, fitness, social competition, and challenge platform. Depending on your location and eligibility, the Service may include:
+WalkChamp is a walking, fitness, social competition, and challenge platform. Depending on your location and eligibility, the Service may include:
 
 • Daily step tracking
 • Free walking challenges
@@ -45,9 +45,9 @@ Walk Champ is a walking, fitness, social competition, and challenge platform. De
 • Referrals and promotions
 • Wallet, payment, refund, and payout features
 
-By using Walk Champ, you acknowledge that you have read and understood this Privacy Policy.
+By using WalkChamp, you acknowledge that you have read and understood this Privacy Policy.
 
-If you do not agree with this Privacy Policy, do not access or use Walk Champ.`,
+If you do not agree with this Privacy Policy, do not access or use WalkChamp.`,
   },
   {
     id: "2-scope-of-this-privacy-policy",
@@ -55,9 +55,9 @@ If you do not agree with this Privacy Policy, do not access or use Walk Champ.`,
     title: "SCOPE OF THIS PRIVACY POLICY",
     body: `This Privacy Policy applies to information processed through:
 
-• The Walk Champ mobile application
-• Walk Champ websites and web pages
-• Walk Champ user accounts
+• The WalkChamp mobile application
+• WalkChamp websites and web pages
+• WalkChamp user accounts
 • Challenge and race participation
 • Groups, chats, messages, and voice features
 • Wallet, payment, refund, and payout functions
@@ -73,15 +73,15 @@ This Privacy Policy does not govern third-party websites, applications, payment 
     title: "DEFINITIONS",
     body: `For this Privacy Policy:
 
-"Account" means a Walk Champ user account.
+"Account" means a WalkChamp user account.
 
-"Application" or "App" means the Walk Champ mobile application.
+"Application" or "App" means the WalkChamp mobile application.
 
 "Cash Prize Challenge" means an eligible skill-based walking challenge involving a monetary entry contribution or cash reward.
 
 "Challenge" means any Free Challenge, Coins Battle, Cash Prize Challenge, Sponsored Event, public room, private room, scheduled race, group challenge, or other supported competition.
 
-"Coins" means virtual in-app items or balances used in supported Walk Champ features. Coins are not automatically equivalent to cash and may not be withdrawable.
+"Coins" means virtual in-app items or balances used in supported WalkChamp features. Coins are not automatically equivalent to cash and may not be withdrawable.
 
 "Health Data" means fitness and physical-activity information accessed through Apple Health, Health Connect, a supported device, or a supported wearable integration, including step count and related activity records.
 
@@ -89,13 +89,13 @@ This Privacy Policy does not govern third-party websites, applications, payment 
 
 "Processing" means collecting, recording, organizing, using, storing, transmitting, sharing, deleting, or otherwise handling information.
 
-"Service Provider" means a third party that processes information to help us operate Walk Champ.
+"Service Provider" means a third party that processes information to help us operate WalkChamp.
 
 "Sponsored Event" means a Challenge funded, organized, promoted, or supported by Mira Gaming or an approved sponsor or partner.
 
 "Usage Data" means technical and activity information generated when you use the Service.
 
-"User," "you," or "your" means the person accessing or using Walk Champ.`,
+"User," "you," or "your" means the person accessing or using WalkChamp.`,
   },
   {
     id: "4-information-we-collect",
@@ -104,7 +104,7 @@ This Privacy Policy does not govern third-party websites, applications, payment 
     body: `We collect information in the following ways:
 
 • Information you provide directly
-• Information generated through your use of Walk Champ
+• Information generated through your use of WalkChamp
 • Information received from Apple Health or Health Connect with your permission
 • Information received from payment, payout, authentication, communications, and infrastructure providers
 • Information received from other users when they interact with you
@@ -114,7 +114,7 @@ This Privacy Policy does not govern third-party websites, applications, payment 
     id: "5-account-and-profile-information",
     number: 5,
     title: "ACCOUNT AND PROFILE INFORMATION",
-    body: `When you register for or use Walk Champ, we may collect:
+    body: `When you register for or use WalkChamp, we may collect:
 
 • Name
 • Display name
@@ -143,9 +143,9 @@ We may also receive limited account information from supported sign-in providers
     id: "6-health-and-fitness-information",
     number: 6,
     title: "HEALTH AND FITNESS INFORMATION",
-    body: `Walk Champ uses health and fitness data to provide step tracking, challenge participation, race progress, rankings, winner determination, fraud prevention, and related features.
+    body: `WalkChamp uses health and fitness data to provide step tracking, challenge participation, race progress, rankings, winner determination, fraud prevention, and related features.
 
-Depending on your device, Walk Champ may access information from:
+Depending on your device, WalkChamp may access information from:
 
 • Apple Health on iOS
 • Health Connect on Android
@@ -166,7 +166,7 @@ Health and fitness information may include:
 • Goal-completion timestamps
 • Activity summaries displayed in the App
 
-Walk Champ requests only the health permissions that are reasonably necessary for active features.
+WalkChamp requests only the health permissions that are reasonably necessary for active features.
 
 You control health permissions through your device settings.
 
@@ -175,16 +175,16 @@ If you deny or revoke health permission:
 • Some daily-step features may not work
 • You may be unable to join or continue eligible Challenges
 • Race progress may not update
-• Walk Champ may be unable to verify your results
+• WalkChamp may be unable to verify your results
 • Previously processed records may remain where necessary for completed Challenges, disputes, fraud prevention, legal compliance, and financial recordkeeping`,
   },
   {
     id: "7-apple-health-information",
     number: 7,
     title: "APPLE HEALTH INFORMATION",
-    body: `On compatible iOS devices, Walk Champ may read step and related activity information that you authorize through Apple Health.
+    body: `On compatible iOS devices, WalkChamp may read step and related activity information that you authorize through Apple Health.
 
-Walk Champ:
+WalkChamp:
 
 • Requests permission before accessing Apple Health information
 • Accesses only authorized data types
@@ -198,7 +198,7 @@ Walk Champ:
 • Does not use Apple Health information for medical diagnosis or treatment
 • Does not knowingly use individual-level Apple Health information to train third-party artificial intelligence models
 
-Walk Champ may use Apple Health information to:
+WalkChamp may use Apple Health information to:
 
 • Display your step progress
 • Track eligible Challenge activity
@@ -209,15 +209,15 @@ Walk Champ may use Apple Health information to:
 • Resolve disputes
 • Improve fitness and challenge functionality
 
-Walk Champ is not a medical application and does not provide medical advice, diagnosis, or treatment.`,
+WalkChamp is not a medical application and does not provide medical advice, diagnosis, or treatment.`,
   },
   {
     id: "8-health-connect-information",
     number: 8,
     title: "HEALTH CONNECT INFORMATION",
-    body: `On compatible Android devices, Walk Champ may read step and related activity information that you authorize through Health Connect.
+    body: `On compatible Android devices, WalkChamp may read step and related activity information that you authorize through Health Connect.
 
-Walk Champ:
+WalkChamp:
 
 • Requests user authorization
 • Requests only health permissions needed for supported features
@@ -243,13 +243,13 @@ Health Connect information may be used for:
 • Dispute resolution
 • Improving the related user-facing fitness features
 
-You can manage Walk Champ's Health Connect permissions through the Health Connect settings on your device.`,
+You can manage WalkChamp's Health Connect permissions through the Health Connect settings on your device.`,
   },
   {
     id: "9-limitations-of-health-and-fitness-information",
     number: 9,
     title: "LIMITATIONS OF HEALTH AND FITNESS INFORMATION",
-    body: `Walk Champ relies on information provided by Apple Health, Health Connect, devices, sensors, and supported wearable applications.
+    body: `WalkChamp relies on information provided by Apple Health, Health Connect, devices, sensors, and supported wearable applications.
 
 We cannot guarantee that:
 
@@ -317,7 +317,7 @@ Some Challenge information is visible to other users.`,
     id: "11-information-visible-to-other-users",
     number: 11,
     title: "INFORMATION VISIBLE TO OTHER USERS",
-    body: `Walk Champ contains social, competitive, and public-facing features.
+    body: `WalkChamp contains social, competitive, and public-facing features.
 
 Depending on the feature and your settings, other users may see:
 
@@ -396,13 +396,13 @@ Messages may be stored for:
 • Resolving disputes
 • Complying with legal obligations
 
-Do not use Walk Champ to share passwords, full card details, government identification numbers, private health records, or other sensitive information.`,
+Do not use WalkChamp to share passwords, full card details, government identification numbers, private health records, or other sensitive information.`,
   },
   {
     id: "14-voice-and-audio-features",
     number: 14,
     title: "VOICE AND AUDIO FEATURES",
-    body: `Where voice or audio features are available, Walk Champ may request microphone permission.
+    body: `Where voice or audio features are available, WalkChamp may request microphone permission.
 
 We may process:
 
@@ -416,7 +416,7 @@ We may process:
 
 Live audio may be transmitted through a communications service provider.
 
-Unless explicitly disclosed at the time, Walk Champ does not routinely record or permanently store live voice conversations.
+Unless explicitly disclosed at the time, WalkChamp does not routinely record or permanently store live voice conversations.
 
 We may retain limited metadata required for connection, moderation, security, abuse investigation, and technical support.`,
   },
@@ -424,7 +424,7 @@ We may retain limited metadata required for connection, moderation, security, ab
     id: "15-location-and-regional-information",
     number: 15,
     title: "LOCATION AND REGIONAL INFORMATION",
-    body: `Walk Champ may collect or infer location-related information, including:
+    body: `WalkChamp may collect or infer location-related information, including:
 
 • Country
 • State or province
@@ -448,7 +448,7 @@ We may use location and timezone information to:
 • Investigate suspicious activity
 • Provide local availability information
 
-Walk Champ does not require continuous background location unless a clearly disclosed feature specifically needs it and you grant permission.
+WalkChamp does not require continuous background location unless a clearly disclosed feature specifically needs it and you grant permission.
 
 Where feasible, we use the least precise location sufficient for the feature.`,
   },
@@ -500,7 +500,7 @@ We use this information for:
     id: "17-payment-information",
     number: 17,
     title: "PAYMENT INFORMATION",
-    body: `Walk Champ may use Stripe, Razorpay, app stores, and other approved payment providers depending on your country, currency, device, and transaction type.
+    body: `WalkChamp may use Stripe, Razorpay, app stores, and other approved payment providers depending on your country, currency, device, and transaction type.
 
 When you make a payment, the payment provider may collect:
 
@@ -657,7 +657,7 @@ We use referral information to:
 • Prevent self-referrals and abuse
 • Investigate coordinated or duplicate accounts
 
-If Walk Champ accesses contacts in the future, it will request permission and explain the purpose before access.`,
+If WalkChamp accesses contacts in the future, it will request permission and explain the purpose before access.`,
   },
   {
     id: "23-push-notifications",
@@ -686,7 +686,7 @@ Notifications may include:
 • Feature announcements
 • Promotional messages where permitted
 
-You can disable notifications through Walk Champ or your device settings.
+You can disable notifications through WalkChamp or your device settings.
 
 Disabling notifications may prevent you from receiving time-sensitive race alerts.`,
   },
@@ -694,7 +694,7 @@ Disabling notifications may prevent you from receiving time-sensitive race alert
     id: "24-camera-photos-and-media",
     number: 24,
     title: "CAMERA, PHOTOS, AND MEDIA",
-    body: `Walk Champ may request access to the camera or photo library when you choose to:
+    body: `WalkChamp may request access to the camera or photo library when you choose to:
 
 • Upload a profile image
 • Change an avatar
@@ -709,7 +709,7 @@ We access only the media you select or create for the requested feature, subject
     id: "25-information-from-service-providers",
     number: 25,
     title: "INFORMATION FROM SERVICE PROVIDERS",
-    body: `Walk Champ may use service providers for:
+    body: `WalkChamp may use service providers for:
 
 • Authentication
 • Cloud hosting
@@ -728,7 +728,7 @@ We access only the media you select or create for the requested feature, subject
 • Crash reporting
 • Security monitoring
 
-Based on the services enabled in Walk Champ, providers may include services such as:
+Based on the services enabled in WalkChamp, providers may include services such as:
 
 • Stripe
 • Razorpay
@@ -814,11 +814,11 @@ We may process Health Data for fraud prevention, security, result verification, 
     id: "28-advertising-and-marketing",
     number: 28,
     title: "ADVERTISING AND MARKETING",
-    body: `Walk Champ may send service-related messages and, where legally permitted, marketing communications.
+    body: `WalkChamp may send service-related messages and, where legally permitted, marketing communications.
 
 We do not use Apple Health or Health Connect data to target advertising.
 
-If Walk Champ introduces advertising:
+If WalkChamp introduces advertising:
 
 • Health Data will not be used to personalize advertisements
 • Sensitive payment or identity information will not be used for ad targeting
@@ -886,7 +886,7 @@ We may take action including:
     id: "30-automated-processing",
     number: 30,
     title: "AUTOMATED PROCESSING",
-    body: `Walk Champ may use automated systems to:
+    body: `WalkChamp may use automated systems to:
 
 • Calculate rankings
 • Determine progress
@@ -962,7 +962,7 @@ Service Providers are permitted to process information only for contracted or le
     id: "33-sponsored-events-and-partners",
     number: 33,
     title: "SPONSORED EVENTS AND PARTNERS",
-    body: `For a Sponsored Event, Walk Champ may share limited information with the sponsor or organizer where necessary and disclosed.
+    body: `For a Sponsored Event, WalkChamp may share limited information with the sponsor or organizer where necessary and disclosed.
 
 This may include:
 
@@ -1001,7 +1001,7 @@ We review requests for legal validity where reasonably possible.`,
     id: "35-international-data-transfers",
     number: 35,
     title: "INTERNATIONAL DATA TRANSFERS",
-    body: `Walk Champ is operated by MIRA GAMING PRIVATE LIMITED in India and is intended for global use.
+    body: `WalkChamp is operated by MIRA GAMING PRIVATE LIMITED in India and is intended for global use.
 
 Your information may be processed in India, the United States, the European Economic Area, Singapore, or other countries where Mira Gaming or its Service Providers operate.
 
@@ -1031,7 +1031,7 @@ Where required, we use appropriate protections for international transfers, whic
 • In backups
 • In security, fraud, and audit logs
 
-The production version of Walk Champ should maintain an accurate internal list of storage locations, data categories, processors, and retention periods.`,
+The production version of WalkChamp should maintain an accurate internal list of storage locations, data categories, processors, and retention periods.`,
   },
   {
     id: "37-data-retention",
@@ -1136,11 +1136,11 @@ admin@miragaming.com
 
 Suggested subject:
 
-Walk Champ Privacy Request
+WalkChamp Privacy Request
 
 Include:
 
-• Your Walk Champ username
+• Your WalkChamp username
 • Account email
 • Country or region
 • The right you wish to exercise
@@ -1172,7 +1172,7 @@ Some Service features may stop working after permission is withdrawn.`,
     id: "42-account-deletion",
     number: 42,
     title: "ACCOUNT DELETION",
-    body: `You can request deletion using the Delete Account feature in Walk Champ or by contacting:
+    body: `You can request deletion using the Delete Account feature in WalkChamp or by contacting:
 
 admin@miragaming.com
 
@@ -1262,11 +1262,11 @@ These rights may include:
 • Right to limit certain uses of sensitive information
 • Right to non-discrimination
 
-Walk Champ does not sell Health Data.
+WalkChamp does not sell Health Data.
 
-Walk Champ does not use Health Data for cross-context behavioral advertising.
+WalkChamp does not use Health Data for cross-context behavioral advertising.
 
-Walk Champ does not sell Personal Data for money.
+WalkChamp does not sell Personal Data for money.
 
 If our practices change, we will update this Privacy Policy and provide legally required controls before beginning the changed practice.
 
@@ -1284,7 +1284,7 @@ We may verify your identity before completing a request.`,
     id: "46-categories-of-personal-information",
     number: 46,
     title: "CATEGORIES OF PERSONAL INFORMATION",
-    body: `Depending on your use of Walk Champ, categories processed may include:
+    body: `Depending on your use of WalkChamp, categories processed may include:
 
 • Identifiers
 • Contact information
@@ -1336,7 +1336,7 @@ US State Privacy Request`,
     title: "CHILDREN AND AGE RESTRICTIONS",
     body: `Cash Prize Challenges and other paid or payout-enabled features are intended only for users who meet the minimum legal age, which is generally 18 years or older unless a higher age applies.
 
-Walk Champ is not intended to knowingly collect Personal Data from children below the minimum age permitted for the relevant Service without legally valid parental or guardian authorization.
+WalkChamp is not intended to knowingly collect Personal Data from children below the minimum age permitted for the relevant Service without legally valid parental or guardian authorization.
 
 If general non-cash features are made available to minors, Mira Gaming may apply:
 
@@ -1356,7 +1356,7 @@ We will review the report and take appropriate action.`,
     id: "49-responsible-participation",
     number: 49,
     title: "RESPONSIBLE PARTICIPATION",
-    body: `Walk Champ encourages responsible participation.
+    body: `WalkChamp encourages responsible participation.
 
 Users should:
 
@@ -1373,7 +1373,7 @@ We may provide spending, entry, account, or regional restrictions where appropri
     id: "50-third-party-links",
     number: 50,
     title: "THIRD-PARTY LINKS",
-    body: `Walk Champ may contain links to:
+    body: `WalkChamp may contain links to:
 
 • Payment providers
 • App stores
@@ -1449,12 +1449,12 @@ admin@miragaming.com
 
 Suggested subject lines:
 
-• Walk Champ Privacy Request
-• Walk Champ Account Deletion
-• Walk Champ Data Correction
-• Walk Champ Security Report
-• Walk Champ Payment Privacy Question
-• Walk Champ Health Data Request
+• WalkChamp Privacy Request
+• WalkChamp Account Deletion
+• WalkChamp Data Correction
+• WalkChamp Security Report
+• WalkChamp Payment Privacy Question
+• WalkChamp Health Data Request
 
 Please include sufficient information for us to identify your Account and understand your request.`,
   },

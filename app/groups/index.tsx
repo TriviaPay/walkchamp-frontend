@@ -630,7 +630,7 @@ function GroupsScreenContent() {
             <Feather name="arrow-left" size={20} color={T.textPrimary} />
           </TouchableOpacity>
           <View style={{ flex: 1 }}>
-            <Text style={s.headerTitle}>Walk Champ Groups</Text>
+            <Text style={s.headerTitle}>WalkChamp Groups</Text>
             <Text style={s.headerSub}>Build your circle. Hit goals together.</Text>
           </View>
         </View>

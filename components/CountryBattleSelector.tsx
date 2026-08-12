@@ -178,7 +178,7 @@ export default function CountryBattleSelector({ teamA, teamB, onChangeA, onChang
       {/* Popular Matchups */}
       {picking === null && (
         <>
-          <Text style={s.popularLabel}>🔥  Popular Matchups</Text>
+          <Text style={s.popularLabel}>Popular Matchups</Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}

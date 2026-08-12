@@ -148,10 +148,10 @@ class WalkChampRaceForegroundService : Service() {
         nm.createNotificationChannel(
           NotificationChannel(
             CHANNEL_STEPS,
-            "Walk Champ Steps",
+            "WalkChamp Steps",
             NotificationManager.IMPORTANCE_LOW,
           ).apply {
-            description = "Shows your daily step count while Walk Champ tracks steps."
+            description = "Shows your daily step count while WalkChamp tracks steps."
             setSound(null, null)
             enableVibration(false)
             setShowBadge(false)
@@ -278,7 +278,7 @@ class WalkChampRaceForegroundService : Service() {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
       val builder = NotificationCompat.Builder(ctx, CHANNEL_STEPS)
-        .setContentTitle(title.ifBlank { "Walk Champ" })
+        .setContentTitle(title.ifBlank { "WalkChamp" })
         .setContentText(body.lines().firstOrNull() ?: body)
         .setSmallIcon(notificationSmallIcon(ctx))
         .setOngoing(true)
@@ -308,7 +308,7 @@ class WalkChampRaceForegroundService : Service() {
             builder,
             stepsForUi,
             goalForUi,
-            title.ifBlank { "Walk Champ" },
+            title.ifBlank { "WalkChamp" },
           )
         } catch (e: Exception) {
           Log.w(TAG, "Custom walk notification rendering failed — legacy content kept: ${e.message}")
@@ -321,7 +321,7 @@ class WalkChampRaceForegroundService : Service() {
 
       Log.d(
         TAG,
-        "[OngoingNotification] trackingType=daily chronometerEnabled=false title=${title.ifBlank { "Walk Champ" }}",
+        "[OngoingNotification] trackingType=daily chronometerEnabled=false title=${title.ifBlank { "WalkChamp" }}",
       )
 
       return builder.build().also {
@@ -629,7 +629,7 @@ class WalkChampRaceForegroundService : Service() {
 
   private fun buildWalkNotificationFromIntent(intent: Intent): Notification {
     val deepLink = intent.getStringExtra(EXTRA_DEEP_LINK) ?: "walkchamp://walk"
-    val title = intent.getStringExtra(EXTRA_TITLE) ?: "Walk Champ"
+    val title = intent.getStringExtra(EXTRA_TITLE) ?: "WalkChamp"
     val todayStepsExtra = intent.getIntExtra(EXTRA_TODAY_STEPS, -1)
     val bodyFromIntent = intent.getStringExtra(EXTRA_BODY) ?: ""
     val parsedSteps =
@@ -642,7 +642,7 @@ class WalkChampRaceForegroundService : Service() {
 
   private fun completeStartWalkWork(intent: Intent, isStart: Boolean) {
     val deepLink = intent.getStringExtra(EXTRA_DEEP_LINK) ?: "walkchamp://walk"
-    val title = intent.getStringExtra(EXTRA_TITLE) ?: "Walk Champ"
+    val title = intent.getStringExtra(EXTRA_TITLE) ?: "WalkChamp"
     val stepSource = intent.getStringExtra(EXTRA_STEP_SOURCE) ?: "health_connect"
     val todayStepsExtra = intent.getIntExtra(EXTRA_TODAY_STEPS, -1)
     val bodyFromIntent = intent.getStringExtra(EXTRA_BODY) ?: ""
@@ -764,7 +764,7 @@ class WalkChampRaceForegroundService : Service() {
       NOTIFICATION_ID_WALK -> {
         val body = prefs().getString("walk_body", null) ?: formatWalkNotificationBody(0)
         val deepLink = prefs().getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
-        val title = prefs().getString("walk_title", "Walk Champ") ?: "Walk Champ"
+        val title = prefs().getString("walk_title", "WalkChamp") ?: "WalkChamp"
         buildWalkNotification(
           this,
           body,
@@ -1405,8 +1405,15 @@ class WalkChampRaceForegroundService : Service() {
    * Never regress the ongoing walk notification within the same local day.
    * Across local midnight, yesterday's tray body must NOT floor today's count
    * (that kept sticky at e.g. 125 after 12:00 AM).
+   *
+   * @param allowInflationCorrection when true (verified HC/HK JS update), allow
+   *   dropping a poisoned sensor absolute (≥1000 and >incoming+250) so the tray
+   *   can match Walk / backend instead of locking to the inflated FGS total.
    */
-  private fun monotonicWalkSteps(incoming: Int): Int {
+  private fun monotonicWalkSteps(
+    incoming: Int,
+    allowInflationCorrection: Boolean = false,
+  ): Int {
     val today = NativeStepState.localDateString()
     val walkDate = prefs().getString("walk_local_date", null)
     // Force the engine to roll its day before trusting its todaySteps as a floor —
@@ -1420,7 +1427,19 @@ class WalkChampRaceForegroundService : Service() {
       return maxOf(safeIncoming, fromEngine)
     }
     val fromPrefs = parseStepsFromWalkBody(prefs().getString("walk_body", "") ?: "")
-    return maxOf(safeIncoming, fromPrefs, fromEngine)
+    val high = maxOf(fromPrefs, fromEngine)
+    if (
+      allowInflationCorrection &&
+      high >= 1000 &&
+      high > safeIncoming + 250
+    ) {
+      Log.d(
+        TAG,
+        "[WalkChampFGS] inflation correction tray high=$high -> hc=$safeIncoming",
+      )
+      return safeIncoming
+    }
+    return maxOf(safeIncoming, high)
   }
 
   private fun updateWalkNotificationToSteps(
@@ -1442,7 +1461,7 @@ class WalkChampRaceForegroundService : Service() {
       if (forceDayReset) steps.coerceAtLeast(0) else monotonicWalkSteps(steps)
     val body = formatWalkNotificationBody(safeSteps, provisional)
     val deepLink = prefs().getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
-    val title = prefs().getString("walk_title", "Walk Champ") ?: "Walk Champ"
+    val title = prefs().getString("walk_title", "WalkChamp") ?: "WalkChamp"
     val source = stepSource ?: prefs().getString("walk_step_source", "health_connect") ?: "health_connect"
     val goal = prefs().getInt("walk_daily_goal", 10_000).coerceAtLeast(1)
     val display = WalkNotificationDisplayState(
@@ -1679,7 +1698,7 @@ class WalkChampRaceForegroundService : Service() {
     val steps = maxOf(stepsFromPrefs, stepsFromBody, stepsFromNative, 0)
     val goal = p.getInt("walk_daily_goal", 10_000).coerceAtLeast(1)
     val deepLink = p.getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
-    val title = p.getString("walk_title", "Walk Champ") ?: "Walk Champ"
+    val title = p.getString("walk_title", "WalkChamp") ?: "WalkChamp"
     val body = storedBody ?: formatWalkNotificationBody(steps)
 
     // Prefer a freshly built companion tray so RemoteViews match current theme/assets
@@ -1900,7 +1919,7 @@ class WalkChampRaceForegroundService : Service() {
     val body = formatWalkNotificationBody(steps)
     val goal = prefs().getInt("walk_daily_goal", 10_000).coerceAtLeast(1)
     val pct = NotificationVisuals.clampPercent(steps, goal)
-    val notification = buildCurrentWalkNotification(body, "walkchamp://walk", "Walk Champ", steps, goal)
+    val notification = buildCurrentWalkNotification(body, "walkchamp://walk", "WalkChamp", steps, goal)
     lastWalkNotification = notification
     lastWalkDisplayState = WalkNotificationDisplayState(
       steps = steps,
@@ -1923,7 +1942,7 @@ class WalkChampRaceForegroundService : Service() {
       prefs().getString("walk_step_source", null)
         ?: sensorEngine?.currentState()?.stepSource
         ?: "health_connect"
-    persistWalkState(body, "walkchamp://walk", "Walk Champ", steps, null, walkSource)
+    persistWalkState(body, "walkchamp://walk", "WalkChamp", steps, null, walkSource)
     // Raise native sensor floor so later provisional ticks cannot pin the tray at ~2.
     try {
       ensureSensorEngine().ensureDailyFloor(steps, walkSource)
@@ -1970,7 +1989,7 @@ class WalkChampRaceForegroundService : Service() {
     checkMidnightRollover()
     val body = p.getString("walk_body", null) ?: return false
     val deepLink = p.getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
-    val title = p.getString("walk_title", "Walk Champ") ?: "Walk Champ"
+    val title = p.getString("walk_title", "WalkChamp") ?: "WalkChamp"
     // Default to verified Health Connect — never flip restore to provisional sensor
     // source or native walk backend sync will skip while the app is closed.
     val stepSource = p.getString("walk_step_source", "health_connect") ?: "health_connect"
@@ -2087,7 +2106,7 @@ class WalkChampRaceForegroundService : Service() {
         val placeholder = buildCurrentWalkNotification(
           formatWalkNotificationBody(0),
           "walkchamp://walk",
-          "Walk Champ",
+          "WalkChamp",
         )
         startHealthForegroundService(NOTIFICATION_ID_WALK, placeholder)
         try {
@@ -2104,7 +2123,7 @@ class WalkChampRaceForegroundService : Service() {
           val notification = buildCurrentWalkNotification(
             body,
             prefs().getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk",
-            prefs().getString("walk_title", "Walk Champ") ?: "Walk Champ",
+            prefs().getString("walk_title", "WalkChamp") ?: "WalkChamp",
           )
           lastWalkNotification = notification
           walkRunning = true
@@ -2371,9 +2390,30 @@ class WalkChampRaceForegroundService : Service() {
         val bodyFromIntent = intent.getStringExtra(EXTRA_BODY) ?: ""
         val parsedSteps =
           if (todayStepsExtra >= 0) todayStepsExtra else parseStepsFromWalkBody(bodyFromIntent)
-        val safeSteps = monotonicWalkSteps(parsedSteps)
+        val stepSource =
+          intent.getStringExtra(EXTRA_STEP_SOURCE) ?: "health_connect"
+        val allowInflationCorrection =
+          RaceNotificationState.isVerifiedStepSource(stepSource)
+        val safeSteps =
+          monotonicWalkSteps(parsedSteps, allowInflationCorrection = allowInflationCorrection)
+        // When HC corrects an inflated tray, clear poisoned walk_body so later
+        // monotonic floors cannot revive the bad absolute.
+        if (allowInflationCorrection && safeSteps == parsedSteps.coerceAtLeast(0)) {
+          val prevBody = parseStepsFromWalkBody(prefs().getString("walk_body", "") ?: "")
+          val eng =
+            sensorEngine?.currentState()?.takeIf {
+              it.localDate == NativeStepState.localDateString()
+            }?.todaySteps ?: 0
+          if (maxOf(prevBody, eng) > safeSteps + 250) {
+            prefs().edit()
+              .putString("walk_local_date", NativeStepState.localDateString())
+              .putString("walk_body", formatWalkNotificationBody(safeSteps))
+              .commit()
+            lastWalkDisplayState = null
+          }
+        }
         val deepLink = intent.getStringExtra(EXTRA_DEEP_LINK) ?: "walkchamp://walk"
-        val title = intent.getStringExtra(EXTRA_TITLE) ?: "Walk Champ"
+        val title = intent.getStringExtra(EXTRA_TITLE) ?: "WalkChamp"
         val body = formatWalkNotificationBody(safeSteps)
         val dailyGoalExtra = intent.getIntExtra(EXTRA_DAILY_GOAL, -1)
         if (dailyGoalExtra > 0) {
@@ -2413,8 +2453,6 @@ class WalkChampRaceForegroundService : Service() {
         lastWalkDisplayState = display
         walkRunning = true
         // Persist keep-alive BEFORE promote — kill during start must still restore.
-        val stepSource =
-          intent.getStringExtra(EXTRA_STEP_SOURCE) ?: "health_connect"
         persistWalkState(
           body,
           deepLink,

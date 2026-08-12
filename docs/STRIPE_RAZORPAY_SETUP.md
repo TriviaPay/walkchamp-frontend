@@ -203,7 +203,7 @@ Host at `https://walkchamp.app/.well-known/apple-app-site-association` (no file 
     "apps": [],
     "details": [
       {
-        "appID": "TEAMID.com.globalwalkerleague.app",
+        "appID": "TEAMID.com.walkchamp.app",
         "paths": [
           "/payment-complete",
           "/payment-complete/*"
@@ -226,7 +226,7 @@ Also host the same structure on API host if using API done-page links:
     "apps": [],
     "details": [
       {
-        "appID": "TEAMID.com.globalwalkerleague.app",
+        "appID": "TEAMID.com.walkchamp.app",
         "paths": [
           "/api/wallet/deposit/done",
           "/api/wallet/deposit/done/*"
@@ -247,7 +247,7 @@ Host at `https://walkchamp.app/.well-known/assetlinks.json`:
     "relation": ["delegate_permission/common.handle_all_urls"],
     "target": {
       "namespace": "android_app",
-      "package_name": "com.globalwalkerleague.app",
+      "package_name": "com.walkchamp.app",
       "sha256_cert_fingerprints": [
         "YOUR_RELEASE_SHA256_FINGERPRINT"
       ]

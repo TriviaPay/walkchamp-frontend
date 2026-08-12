@@ -28,7 +28,7 @@ export default function FAQScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[s.list, { paddingBottom: safeBottom + 40 }]}
       >
-        <FaqAccordionList intro="Frequently asked questions about Walk Champ." />
+        <FaqAccordionList intro="Frequently asked questions about WalkChamp." />
       </ScrollView>
     </View>
   );

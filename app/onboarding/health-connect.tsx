@@ -66,12 +66,12 @@ export default function HealthConnectOnboardingScreen() {
           <OnboardingFeatureCard
             icon="refresh-cw"
             title="Automatic Sync"
-            body="Your supported steps update Walk Champ."
+            body="Your supported steps update WalkChamp."
           />
           <OnboardingFeatureCard
             icon="lock"
             title="Read-Only Access"
-            body="Walk Champ reads only approved activity data."
+            body="WalkChamp reads only approved activity data."
           />
         </View>
       </OnboardingLayout>

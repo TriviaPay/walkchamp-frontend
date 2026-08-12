@@ -96,7 +96,7 @@ function renderTextWithEmails(
             style={{ color: linkColor, textDecorationLine: "underline" }}
             onPress={() =>
               void Linking.openURL(
-                `mailto:${TERMS_SUPPORT_EMAIL}?subject=${encodeURIComponent("Walk Champ Terms and Conditions Question")}`,
+                `mailto:${TERMS_SUPPORT_EMAIL}?subject=${encodeURIComponent("WalkChamp Terms and Conditions Question")}`,
               )
             }
           >
@@ -203,10 +203,10 @@ export function TermsAndConditionsDocument({ contentBottomPad = 40 }: Props) {
   }, []);
 
   const openSupportEmail = useCallback(() => {
-    const subject = encodeURIComponent("Walk Champ Terms and Conditions Question");
+    const subject = encodeURIComponent("WalkChamp Terms and Conditions Question");
     const body = encodeURIComponent(
       [
-        "Hello Walk Champ Support,",
+        "Hello WalkChamp Support,",
         "",
         "Username:",
         "Account email:",
@@ -324,7 +324,7 @@ export function TermsAndConditionsDocument({ contentBottomPad = 40 }: Props) {
             {TERMS_DOCUMENT.intro}
           </Text>
           <Text selectable style={[styles.heroAppleNote, { color: colors.mutedForeground }]}>
-            Apple Inc. and Google LLC do not sponsor, endorse, administer, operate, or provide prizes for Walk Champ or any Challenge.
+            Apple Inc. and Google LLC do not sponsor, endorse, administer, operate, or provide prizes for WalkChamp or any Challenge.
           </Text>
           <Text style={[styles.heroHint, { color: colors.mutedForeground }]}>
             Tap a section to expand. Use Contents or Search to jump quickly.
@@ -351,7 +351,7 @@ export function TermsAndConditionsDocument({ contentBottomPad = 40 }: Props) {
         <View style={[styles.supportCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Text style={[styles.supportTitle, { color: colors.foreground }]}>Questions about these Terms?</Text>
           <Text style={[styles.supportBody, { color: colors.mutedForeground }]}>
-            Contact the Walk Champ support team if you need help understanding these Terms or resolving a challenge, payment, reward, refund, or Account issue.
+            Contact the WalkChamp support team if you need help understanding these Terms or resolving a challenge, payment, reward, refund, or Account issue.
           </Text>
           <TouchableOpacity
             style={styles.contactBtn}

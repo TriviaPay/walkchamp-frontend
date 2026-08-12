@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   AppState,
+  Image,
   Platform,
   Pressable,
   ScrollView,
@@ -95,6 +96,7 @@ import {
 } from "@/utils/createChallengeSchedule";
 import { CREATE_CHALLENGE_TOTAL_STEPS, ROOM_CARD_RADIUS, adaptCreateChallengeAccentForTheme, getCreateChallengeChrome, selectCreateChallengeAccentTheme, type CreateChallengeAccentTheme, type CreateChallengeChrome } from "@/constants/createChallengeTheme";
 import { useTheme } from "@/context/ThemeContext";
+import { streakIconSource } from "@/utils/brandImages";
 
 type ThemeLike = { code: string; owned?: boolean };
 type Colors = ReturnType<typeof import("@/hooks/useColors").useColors>;
@@ -186,7 +188,7 @@ function StepProgress({
 }
 
 const CHALLENGE_TYPE_PILLS = {
-  unlimited: ["Unlimited Players", "Streak Goal", "Equal Prize Split"] as const,
+  unlimited: ["No Player Limit", "Streak Goal", "Equal Prize Split"] as const,
   fixed: ["2–10 Players", "Up to 3 Winners"] as const,
 };
 
@@ -881,15 +883,14 @@ export function CreateChallengeFlow({
                                 !unlimitedSelected && { opacity: 0.72 },
                               ]}
                             >
-                              <Text
-                                style={{
-                                  fontSize: rf(16),
-                                  fontWeight: "800",
-                                  color: unlimitedSelected ? "#FFF" : chrome.unselectedTitle,
-                                }}
-                              >
-                                ∞
-                              </Text>
+                              <Image
+                                source={streakIconSource({
+                                  completed: unlimitedSelected,
+                                  isDark,
+                                })}
+                                style={{ width: 22, height: 22 }}
+                                resizeMode="contain"
+                              />
                             </LinearGradient>
                             <View style={{ flex: 1, minWidth: 0 }}>
                               <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>

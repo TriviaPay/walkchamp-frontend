@@ -13,6 +13,7 @@ import {
   formatTrendingStartLabel,
   type TrendingChallenge,
 } from "@/utils/trendingChallenges";
+import { displayChallengeTitle } from "@/features/unlimited/mappers/unlimitedLiveUiCopy";
 import { rf, rs } from "@/utils/responsive";
 
 type Props = {
@@ -91,7 +92,7 @@ function TrendingChallengeCardInner({
       </View>
 
       <Text style={styles.title} numberOfLines={1}>
-        {challenge.title}
+        {displayChallengeTitle(challenge.title)}
       </Text>
 
       <View style={styles.artBox}>

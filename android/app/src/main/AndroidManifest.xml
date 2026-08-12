@@ -66,7 +66,7 @@
     <meta-data android:name="com.google.android.gms.ads.flag.OPTIMIZE_INITIALIZATION" android:value="true" tools:replace="android:value"/>
     <meta-data android:name="com.onesignal.messaging.default_notification_icon" android:resource="@drawable/ic_stat_onesignal_default"/>
     <meta-data android:name="com.onesignal.NotificationAccentColor.DEFAULT" android:value="FF00B4FF"/>
-    <meta-data android:name="com.onesignal.NotificationServiceExtension" android:value="com.globalwalkerleague.app.WalkChampNotificationServiceExtension"/>
+    <meta-data android:name="com.onesignal.NotificationServiceExtension" android:value="com.walkchamp.app.WalkChampNotificationServiceExtension"/>
     <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
@@ -74,6 +74,12 @@
     <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTask" android:windowSoftInputMode="adjustPan" android:theme="@style/Theme.App.SplashScreen" android:exported="true" android:screenOrientation="portrait">
       <!-- LAUNCHER lives on progress activity-aliases only (dynamic home-screen icon). -->
       <!-- Deep links only on MainActivity — do not duplicate VIEW on aliases. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="walkchamp"/>
+      </intent-filter>
       <intent-filter>
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>

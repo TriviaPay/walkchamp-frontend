@@ -1,5 +1,5 @@
 /**
- * AppText — optional semantic Text wrapper for Walk Champ.
+ * AppText — optional semantic Text wrapper for WalkChamp.
  *
  * Prefer this for shared UI (alerts, badges, section labels) when a typography
  * variant clearly matches. Do NOT mass-replace every RN Text — nested Text,

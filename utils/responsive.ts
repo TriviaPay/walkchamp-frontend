@@ -1,5 +1,5 @@
 /**
- * Responsive design utilities for Walk Champ.
+ * Responsive design utilities for WalkChamp.
  *
  * Values are computed once at module load from Dimensions, which is stable for
  * portrait-only apps and avoids per-render recalculation.

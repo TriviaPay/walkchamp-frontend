@@ -207,9 +207,9 @@ function getPackageName(): string {
     const C = require("expo-constants") as {
       default?: { expoConfig?: { android?: { package?: string } } };
     };
-    return C?.default?.expoConfig?.android?.package ?? "com.globalwalkerleague.app";
+    return C?.default?.expoConfig?.android?.package ?? "com.walkchamp.app";
   } catch {
-    return "com.globalwalkerleague.app";
+    return "com.walkchamp.app";
   }
 }
 
@@ -799,7 +799,7 @@ export const androidHCService = {
           ? steps > 0
             ? `Receiving steps (${steps.toLocaleString()} today)`
             : "Health Connect readable"
-          : "Allow Walk Champ Read Steps",
+          : "Allow WalkChamp Read Steps",
         recordCount: steps > 0 ? 1 : 0,
         dataOrigins: [],
         hasHistoricalStepRecords: steps > 0,

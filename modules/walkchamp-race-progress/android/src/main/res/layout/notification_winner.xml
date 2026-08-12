@@ -31,7 +31,7 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
-            android:text="Walk Champ"
+            android:text="WalkChamp"
             android:textColor="?android:attr/textColorPrimary"
             android:textSize="12sp"
             android:textStyle="bold" />

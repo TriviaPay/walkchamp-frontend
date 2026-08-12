@@ -180,11 +180,14 @@ const CenteredSnapPicker = React.memo(function CenteredSnapPicker({
         horizontal
         showsHorizontalScrollIndicator={false}
         snapToInterval={SNAP_ITEM_W}
-        decelerationRate="fast"
+        snapToAlignment="center"
+        disableIntervalMomentum
+        decelerationRate="normal"
         bounces={false}
         overScrollMode="never"
         contentContainerStyle={{ paddingHorizontal: sidePad, alignItems: "center" }}
         onMomentumScrollEnd={(e) => handleScrollEnd(e.nativeEvent.contentOffset.x)}
+        onScrollEndDrag={(e) => handleScrollEnd(e.nativeEvent.contentOffset.x)}
         style={{ flex: 1 }}
       >
         {options.map((opt, i) => {

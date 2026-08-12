@@ -15,7 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -906,7 +906,7 @@ function UpcomingRoomCard({ room, currentUserId, onRegister, onCancel, onCancelR
           ) : isUnlimited ? (
             <>
               <Feather name="dollar-sign" size={11} color={CASH_BLUE} />
-              <Text style={[ucard.headerTitle, { color: CASH_BLUE }]}>UNLIMITED CHALLENGE</Text>
+              <Text style={[ucard.headerTitle, { color: CASH_BLUE }]}>STREAK CHALLENGE</Text>
             </>
           ) : isCash ? (
             <>
@@ -1279,11 +1279,27 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
             (isCash || isCoins) && cc.typeBadgeHighlight,
           ]}>
             {isSponsored ? <Text style={{ fontSize: rf(9) }}>🏆</Text>
+              : isUnlimited ? <Text style={{ fontSize: rf(10), color: accent, fontWeight: "900" }}>∞</Text>
               : isCash ? <Feather name="dollar-sign" size={9} color={accent} />
               : isCoins ? <CoinIcon size={11} />
               : <Ionicons name="walk-outline" size={10} color={accent} />}
-            <Text style={[cc.typeBadgeText, { color: accent }]}>
-              {isSponsored ? "CHAMP" : isUnlimited ? "UNLIMITED" : isCash ? "CASH" : isCoins ? "COINS" : "FREE"}
+            <Text
+              style={[
+                cc.typeBadgeText,
+                { color: accent },
+                isUnlimited && { letterSpacing: 0.2, fontSize: rf(8) },
+              ]}
+              numberOfLines={1}
+            >
+              {isSponsored
+                ? "CHAMP"
+                : isUnlimited
+                  ? "Streak Challenge"
+                  : isCash
+                    ? "CASH"
+                    : isCoins
+                      ? "COINS"
+                      : "FREE"}
             </Text>
           </View>
           {isCash && (
@@ -1780,9 +1796,11 @@ export default function AvailableRoomsScreen() {
 }
 
 function AvailableRoomsScreenContent() {
-  const { safeBottom } = useSafeLayout();
+  const { safeBottom, safeTop } = useSafeLayout();
   const { setActiveRace, joinRace } = useRace();
   const { user } = useAuth();
+  const params = useLocalSearchParams<{ confirmRoomId?: string | string[] }>();
+  const confirmRoomHandledRef = useRef<string | null>(null);
 
   const [rooms, setRooms] = useState<Room[]>([]);
   const [activeRoomCount, setActiveRoomCount] = useState(0);
@@ -2162,7 +2180,11 @@ function AvailableRoomsScreenContent() {
       scheduledStartAt: room.scheduled_start_at,
       status: room.status,
     });
-    const copy = usdCashLeaveConfirmCopy({ hasStartedPreview, isHost });
+    const copy = usdCashLeaveConfirmCopy({
+      hasStartedPreview,
+      isHost,
+      noRefund: isUnlimited,
+    });
 
     const runLeave = async () => {
       setRegisteringRoomId(room.room_id);
@@ -2179,7 +2201,7 @@ function AvailableRoomsScreenContent() {
             AppAlert.alert("Could not leave", body.error ?? "Please try again.");
             return;
           }
-          void refreshWallet({ silent: true });
+          void refreshWallet({ force: true, silent: true });
           AppAlert.alert("Left Challenge", formatCashLeaveSuccessMessage(body));
         } else {
           const useLeave = room.status === "open" || room.status === "full";
@@ -2498,7 +2520,7 @@ function AvailableRoomsScreenContent() {
           requires_code: !!room.requires_code,
           reward_pool: room.reward_pool ?? room.entry_fee,
           selected_track_theme_id: resolveRoomTrackCode(room),
-          theme_name: room.theme_name || "Unlimited",
+          theme_name: room.theme_name || "Streak Challenge",
         });
       }
       router.push({
@@ -2660,6 +2682,33 @@ function AvailableRoomsScreenContent() {
       }),
     });
   }, [user]);
+
+  // Trending card → Available Rooms with confirmRoomId opens the paid confirmation sheet
+  // (or waiting room if already registered) instead of jumping straight into matchmaking.
+  useEffect(() => {
+    const raw = params.confirmRoomId;
+    const id = Array.isArray(raw) ? raw[0] : raw;
+    if (!id || upcomingLoading) return;
+    if (confirmRoomHandledRef.current === id) return;
+    const room = upcomingRooms.find((r) => r.room_id === id);
+    if (!room) return;
+    confirmRoomHandledRef.current = id;
+    if (
+      room.current_user_registered ||
+      (!!user?.id && user.id === room.host_user_id)
+    ) {
+      handleGoWaitingRoom(room);
+      return;
+    }
+    void continueRegisterAfterChecks(room);
+  }, [
+    params.confirmRoomId,
+    upcomingRooms,
+    upcomingLoading,
+    user?.id,
+    continueRegisterAfterChecks,
+    handleGoWaitingRoom,
+  ]);
 
   const handleWithdrawRegisteredRace = async () => {
     const ar = registeredRaceModal;
@@ -2959,7 +3008,7 @@ function AvailableRoomsScreenContent() {
             presentationStyle="pageSheet"
             transparent={false}
           >
-            <View style={s.consentWrap}>
+            <View style={[s.consentWrap, { paddingTop: safeTop }]}>
               <View style={s.consentHeader}>
                 <Text style={s.consentTitle}>Confirm Challenge Entry</Text>
                 <TouchableOpacity onPress={dismissConsent} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -2990,8 +3039,8 @@ function AvailableRoomsScreenContent() {
                 {[
                   "I am 18 years of age or older and legally eligible to participate in paid challenges in my jurisdiction.",
                   "I understand that the challenge cannot be cancelled after creation.",
-                  "I understand that leaving before the challenge starts may qualify for an entry-fee refund according to the refund policy. Leaving at or after the challenge start time provides no refund and removes me from prize eligibility.",
-                  "I understand that if I leave, the challenge will continue for other participants. I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
+                  "No refund once you join. Even if a participant leaves the match before it starts, there is no refund.",
+                  "I understand that if I leave, the challenge will continue for other participants. I have read and agree to the WalkChamp Challenge Rules & Terms of Service.",
                 ].map((text, i) => (
                   <TouchableOpacity
                     key={i}
@@ -3061,7 +3110,7 @@ function AvailableRoomsScreenContent() {
                 </TouchableOpacity>
 
                 <Text style={s.finePrint}>
-                  Walk Champ is a skill-based activity platform. Paid challenges are not gambling — your performance determines your result. Must be 18+ and eligible in your region to join paid challenges.
+                  WalkChamp is a skill-based activity platform. Paid challenges are not gambling — your performance determines your result. Must be 18+ and eligible in your region to join paid challenges.
                 </Text>
               </ScrollView>
             </View>

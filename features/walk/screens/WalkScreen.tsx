@@ -106,10 +106,14 @@ import { TrendingChallengesPreview } from "@/components/trending/TrendingChallen
 import { fetchAvailableChallengeCount } from "@/services/trendingChallengesApi";
 import { fetchAvailableUnlimitedChallenges, fetchMyOpenUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
 import { mergeUpcomingRoomsById } from "@/utils/unlimitedChallengeRooms";
-import { saveHostedUnlimitedChallenge } from "@/utils/hostedUnlimitedCache";
+import {
+  loadLeftUnlimitedChallengeIds,
+  saveHostedUnlimitedChallenge,
+} from "@/utils/hostedUnlimitedCache";
 import {
   CHALLENGE_LEFT_EVENT,
   CHALLENGE_STATUSES_REFRESH_EVENT,
+  isRecentlyLeftRaceId,
 } from "@/utils/challengeLocalEvents";
 import { PremiumStepSlider } from "@/components/PremiumStepSlider";
 import {
@@ -123,6 +127,10 @@ import {
 } from "@/utils/createChallengeFlow";
 import { trackEvent } from "@/services/analytics";
 import { resolveDisplayTodaySteps } from "@/utils/liveRaceDisplay";
+import {
+  isInflatedProvisionalVsVerified,
+  resolveWalkNotificationSteps,
+} from "@/platform/steps/walkDisplaySteps";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import { useRace, useRaceUiProgress } from "@/context/RaceContext";
@@ -191,7 +199,12 @@ import CoinsBattleModal from "@/components/CoinsBattleModal";
 import { screenCache } from "@/utils/screenCache";
 import { warmLiveRaceDetailNavigation, prefetchLiveRaceDetailRoster } from "@/utils/warmLiveRaceDetail";
 import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
-import { apiFetchAllowed, markApiFetched, runCoalescedAuthed } from "@/utils/apiRequestCoordinator";
+import {
+  apiFetchAllowed,
+  markApiFetched,
+  resetApiFetchGate,
+  runCoalescedAuthed,
+} from "@/utils/apiRequestCoordinator";
 import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import { useWalkScreenBootstrap } from "@/hooks/useWalkScreenBootstrap";
 import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows";
@@ -504,11 +517,14 @@ const TargetStepsCenteredPicker = React.memo(function TargetStepsCenteredPicker(
         showsHorizontalScrollIndicator={false}
         scrollEnabled={!disabled}
         snapToInterval={SNAP_ITEM_W}
-        decelerationRate="fast"
+        snapToAlignment="center"
+        disableIntervalMomentum
+        decelerationRate="normal"
         bounces={false}
         overScrollMode="never"
         contentContainerStyle={{ paddingHorizontal: sidePad, alignItems: "center" }}
         onMomentumScrollEnd={(e) => handleScrollEnd(e.nativeEvent.contentOffset.x)}
+        onScrollEndDrag={(e) => handleScrollEnd(e.nativeEvent.contentOffset.x)}
         style={{ flex: 1 }}
       >
         {STEP_OPTIONS.map((opt, i) => {
@@ -838,9 +854,9 @@ function HelpSubpage({ colors, onBack }: { colors: ReturnType<typeof useColors>;
       .catch(() => AppAlert.alert("Email Support", `Please email us at:\n${EMAIL}`));
   };
   const contacts = [
-    { icon: "mail" as const,           label: "Email Support",  sub: EMAIL,                       onPress: () => openEmail("Walk Champ Support") },
-    { icon: "alert-circle" as const,   label: "Report a Bug",   sub: "Describe what went wrong",  onPress: () => openEmail("Walk Champ Bug Report") },
-    { icon: "message-square" as const, label: "Give Feedback",  sub: "Help us improve the app",   onPress: () => openEmail("Walk Champ Feedback") },
+    { icon: "mail" as const,           label: "Email Support",  sub: EMAIL,                       onPress: () => openEmail("WalkChamp Support") },
+    { icon: "alert-circle" as const,   label: "Report a Bug",   sub: "Describe what went wrong",  onPress: () => openEmail("WalkChamp Bug Report") },
+    { icon: "message-square" as const, label: "Give Feedback",  sub: "Help us improve the app",   onPress: () => openEmail("WalkChamp Feedback") },
   ];
   const tips = [
     { q: "Steps not tracking?",      a: "Grant Step permissions. Go to Profile → Wearable Setup." },
@@ -897,7 +913,7 @@ function FAQSubpage({ colors, onBack }: { colors: ReturnType<typeof useColors>; 
         <View style={{ width: 22 }} />
       </View>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[spStyles.body, { paddingBottom: safeBottom + 40 }]}>
-        <FaqAccordionList intro="Frequently asked questions about Walk Champ." />
+        <FaqAccordionList intro="Frequently asked questions about WalkChamp." />
       </ScrollView>
     </View>
   );
@@ -1205,7 +1221,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
     if (!perm.granted) {
       AppAlert.alert(
         "Camera Permission Required",
-        "Walk Champ needs camera access to take a photo. Please allow it when prompted or enable it in Settings.",
+        "WalkChamp needs camera access to take a photo. Please allow it when prompted or enable it in Settings.",
         [
           { text: "Not Now", style: "cancel" },
           { text: "Open Settings", onPress: () => Linking.openSettings() },
@@ -1233,7 +1249,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
     if (!perm.granted && (perm.status as string) !== "limited") {
       AppAlert.alert(
         "Photo Library Permission Required",
-        "Walk Champ needs access to your photo library. Please allow it when prompted or enable it in Settings.",
+        "WalkChamp needs access to your photo library. Please allow it when prompted or enable it in Settings.",
         [
           { text: "Not Now", style: "cancel" },
           { text: "Open Settings", onPress: () => Linking.openSettings() },
@@ -1881,6 +1897,8 @@ function WalkScreenContent() {
   const { user, logout, loading: authLoading, sessionToken } = useAuth();
   /** Set before navigating to Waiting Room while a Walk pageSheet is still covering. */
   const pendingDismissRaceCoverModalsRef = useRef(false);
+  /** After Waiting Room return — bypass rooms TTL so My Race / Free Challenge gate stay in sync. */
+  const pendingForceRoomsRefreshRef = useRef(false);
   const navToMatchmaking = useCallback(
     (opts: Omit<Parameters<typeof buildMatchmakingParams>[0], "user">) => {
       // Returning from Waiting Room should not flash Walk cover sheets.
@@ -1911,17 +1929,29 @@ function WalkScreenContent() {
       ? Math.max(0, Math.floor(s.raceProgress.todaySteps))
       : 0,
   );
+  const verifiedTodaySteps = useSelector((s: RootState) =>
+    s.raceProgress.userId === user?.id
+      ? Math.max(0, Math.floor(s.raceProgress.verifiedTodaySteps ?? 0))
+      : 0,
+  );
+  const provisionalSensorTodaySteps = useSelector((s: RootState) =>
+    s.raceProgress.userId === user?.id
+      ? s.raceProgress.provisionalSensorTodaySteps
+      : null,
+  );
   const { guardRewardAction, verificationLevel } = useStepSourceGuard({
     onSetupRequired: () => requestHomeStepSetup(),
   });
-  const liveTodaySteps = resolveDisplayTodaySteps(
-    contextTodaySteps,
-    canonicalTodaySteps,
-    {
-      preferVerifiedContext:
-        stepsSourceReady && verificationLevel === "verified",
-    },
-  );
+  // Prefer the same resolution as the ongoing notification so Walk cannot show a
+  // poisoned sensor absolute while Profile / backend already show HC/HK.
+  const liveTodaySteps =
+    stepsSourceReady && verificationLevel === "verified"
+      ? resolveWalkNotificationSteps({
+          verifiedTodaySteps: Math.max(verifiedTodaySteps, contextTodaySteps),
+          provisionalSensorTodaySteps,
+          todaySteps: Math.max(canonicalTodaySteps, contextTodaySteps),
+        })
+      : resolveDisplayTodaySteps(contextTodaySteps, canonicalTodaySteps);
   const [purchaseConfirmModal, setPurchaseConfirmModal] = useState<{ code: string; name: string; price: number } | null>(null);
   const [showCoinsInfo, setShowCoinsInfo] = useState(false);
   const [showCoinStore, setShowCoinStore] = useState(false);
@@ -2211,7 +2241,19 @@ function WalkScreenContent() {
         if (!walkCacheReadyRef.current) {
           const cached = await screenCache.get<Record<string, ChallengeStatus>>(cacheKey);
           if (cached) {
-            setChallengeStatuses(cached);
+            const leftUnlimitedIds = await loadLeftUnlimitedChallengeIds();
+            const filtered: Record<string, ChallengeStatus> = {};
+            for (const [key, status] of Object.entries(cached)) {
+              const raceId = status?.raceId;
+              if (
+                raceId &&
+                (isRecentlyLeftRaceId(raceId) || leftUnlimitedIds.has(raceId))
+              ) {
+                continue;
+              }
+              filtered[key] = status;
+            }
+            setChallengeStatuses(filtered);
             markWalkCacheReady();
           }
         }
@@ -2229,8 +2271,17 @@ function WalkScreenContent() {
         const res = await authFetch(`/api/challenges/available`);
         if (!res.ok) return;
         const data = await res.json();
+        const leftUnlimitedIds = await loadLeftUnlimitedChallengeIds();
         const map: Record<string, ChallengeStatus> = {};
         for (const c of (data.challenges ?? [])) {
+          const raceId = typeof c?.raceId === "string" ? c.raceId : "";
+          // Forfeit / leave must win over a stale "still joined" response.
+          if (
+            raceId &&
+            (isRecentlyLeftRaceId(raceId) || leftUnlimitedIds.has(raceId))
+          ) {
+            continue;
+          }
           map[c.entryType] = c;
         }
         setChallengeStatuses(map);
@@ -2291,6 +2342,8 @@ function WalkScreenContent() {
       setSetupModal(null);
       setConfirmEntryAnimated(false);
       setConfirmEntry(null);
+      // Force My Race membership refresh after Waiting Room (bypass 20s TTL).
+      pendingForceRoomsRefreshRef.current = true;
     }, []),
   );
 
@@ -2308,7 +2361,13 @@ function WalkScreenContent() {
     suppressLegacyStepBumps(8_000);
     await refreshTodayRank();
     if (usingRealTracking) {
-      const shouldApplyDisplay = !(Number.isFinite(liveTodaySteps) && liveTodaySteps > 0);
+      // Always re-apply when the Walk UI is holding an inflated sensor absolute vs HC.
+      const inflatedVsVerified =
+        verificationLevel === "verified" &&
+        isInflatedProvisionalVsVerified(verifiedTodaySteps, liveTodaySteps);
+      const shouldApplyDisplay =
+        inflatedVsVerified ||
+        !(Number.isFinite(liveTodaySteps) && liveTodaySteps > 0);
       await refreshTodaySteps({
         rehydrateBackend: true,
         mergeNative: false,
@@ -2317,7 +2376,15 @@ function WalkScreenContent() {
     } else {
       await refetchDbWalk();
     }
-  }, [liveTodaySteps, refetchDbWalk, refreshTodayRank, refreshTodaySteps, usingRealTracking]);
+  }, [
+    liveTodaySteps,
+    refetchDbWalk,
+    refreshTodayRank,
+    refreshTodaySteps,
+    usingRealTracking,
+    verificationLevel,
+    verifiedTodaySteps,
+  ]);
 
   const refreshSecondaryOnFocus = useCallback(() => {
     if (showCoinStoreRef.current) return;
@@ -2474,7 +2541,7 @@ function WalkScreenContent() {
     setRegisteredUpcomingStatus((prev) => (prev === "ready" ? prev : "loading"));
     try {
       const [
-        { loadLeftUnlimitedChallengeIds, clearUnlimitedChallengeLeft },
+        { loadLeftUnlimitedChallengeIds },
         res,
         unlimitedWaiting,
         unlimitedMine,
@@ -2531,10 +2598,8 @@ function WalkScreenContent() {
         };
       });
       const unlimitedAsWalk: WalkUpcomingRoom[] = unlimited.map((u) => {
-        const serverReg = !!u.current_user_registered;
-        if (serverReg && leftIds.has(u.room_id)) {
-          void clearUnlimitedChallengeLeft(u.room_id);
-        }
+        const left = leftIds.has(u.room_id) || isRecentlyLeftRaceId(u.room_id);
+        const serverReg = !!u.current_user_registered && !left;
         return {
           room_id: u.room_id,
           challenge_type: u.challenge_type,
@@ -2546,7 +2611,8 @@ function WalkScreenContent() {
           challenge_end_at: u.challenge_end_at ?? null,
           target_steps: u.target_steps,
           host_user_id: u.host_user_id,
-          current_user_registered: serverReg || (!leftIds.has(u.room_id) && !!u.current_user_registered),
+          // Never resurrect a locally forfeited/left Unlimited challenge from a stale list.
+          current_user_registered: serverReg,
           status: u.status,
           challenge_timezone: u.challenge_timezone ?? null,
           challenge_duration_days: u.challenge_duration_days,
@@ -2558,7 +2624,7 @@ function WalkScreenContent() {
         classicAsWalk,
       );
       const nextRaceRooms = merged.filter((r) => {
-        // Only drop leftIds when server did not confirm membership.
+        if (leftIds.has(r.room_id) || isRecentlyLeftRaceId(r.room_id)) return false;
         const isUnlimited = isUnlimitedGoalChallenge({
           challengeType: r.challenge_type,
           maxPlayers: r.max_players,
@@ -2567,7 +2633,6 @@ function WalkScreenContent() {
           ? !!r.current_user_registered
           : r.current_user_registered || (!!uid && r.host_user_id === uid);
         if (!isMine) return false;
-        if (leftIds.has(r.room_id) && !r.current_user_registered) return false;
         if (!r.scheduled_start_at) return false;
         const status = (r.status ?? "").toLowerCase();
         if (
@@ -2620,7 +2685,14 @@ function WalkScreenContent() {
   useFocusEffect(useCallback(() => {
     if (!raceReady) return;
     const uid = user?.id ?? "anon";
-    if (apiFetchAllowed(`walk_rooms_focus:${uid}`, 20_000)) {
+    const forceRooms = pendingForceRoomsRefreshRef.current;
+    if (forceRooms) {
+      pendingForceRoomsRefreshRef.current = false;
+      resetApiFetchGate(`walk_rooms_focus:${uid}`);
+      markApiFetched(`walk_rooms_focus:${uid}`);
+      void fetchRegisteredUpcomingRooms();
+      void loadChallengeStatuses({ force: true });
+    } else if (apiFetchAllowed(`walk_rooms_focus:${uid}`, 20_000)) {
       markApiFetched(`walk_rooms_focus:${uid}`);
       void fetchRegisteredUpcomingRooms();
     }
@@ -2633,6 +2705,7 @@ function WalkScreenContent() {
     raceReady,
     user?.id,
     fetchRegisteredUpcomingRooms,
+    loadChallengeStatuses,
     syncGroupCountFromCache,
     refreshAvailableChallengeCount,
   ]));
@@ -3025,21 +3098,23 @@ function WalkScreenContent() {
             }
             next[key] = status;
           }
+          if (changed && user?.id) {
+            void screenCache.set(walkChallengeCacheKey(user.id), next);
+          }
           return changed ? next : prev;
         });
-        // Reconcile with server ASAP so "match completed" / join chips aren't stale.
-        void loadChallengeStatuses();
+        // Do not force-refetch here — leave may still be in flight; forfeit refreshes after POST.
       },
     );
     return () => sub.remove();
-  }, [loadChallengeStatuses]);
+  }, [user?.id]);
 
   // Live detail / other screens request an immediate chip refetch (start, forfeit, complete).
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener(
       CHALLENGE_STATUSES_REFRESH_EVENT,
       () => {
-        void loadChallengeStatuses();
+        void loadChallengeStatuses({ force: true });
       },
     );
     return () => sub.remove();
@@ -3332,6 +3407,7 @@ function WalkScreenContent() {
     for (const [entryKey, cs] of Object.entries(challengeStatuses)) {
       if (!cs || cs.isFinished || !cs.raceId) continue;
       if (coveredRaceIds.has(cs.raceId)) continue;
+      if (isRecentlyLeftRaceId(cs.raceId)) continue;
       const s = cs.status;
       const isWaiting = s === "user_hosting_waiting" || s === "user_joined_waiting";
       const isActive = s === "user_hosting_active" || s === "user_joined_active";
@@ -3499,6 +3575,7 @@ function WalkScreenContent() {
     // Available Rooms — registered upcoming + Unlimited still racing after start.
     for (const room of registeredUpcomingRooms) {
       if (!room.scheduled_start_at || coveredRaceIds.has(room.room_id)) continue;
+      if (isRecentlyLeftRaceId(room.room_id)) continue;
       const startMs = new Date(room.scheduled_start_at).getTime();
       if (!Number.isFinite(startMs)) continue;
       const status = (room.status ?? "").toLowerCase();
@@ -4160,6 +4237,10 @@ function WalkScreenContent() {
     if (!ar) return;
     const isUnlimited =
       ar.challenge_type === "unlimited_goal" || ar.room_type === "unlimited_goal";
+    const isHost = ar.current_user_role === "host";
+    // Keep RaceContext + My Race seed aligned (same as openChallengeWaitingRoom).
+    setActiveRace(ar.room_id, isHost);
+    joinRace(ar.entry_fee ?? 0, isUnlimited ? 0 : (ar.max_players ?? 10), isHost);
     if (ar.room_status === "in_progress") {
       router.push({
         pathname: "/race/live-detail",
@@ -4173,7 +4254,7 @@ function WalkScreenContent() {
     } else {
       navToMatchmaking({
         raceId: ar.room_id,
-        isHost: ar.current_user_role === "host",
+        isHost,
         ...(isUnlimited
           ? {
               initialEntryType: "unlimited_goal",
@@ -4491,7 +4572,7 @@ function WalkScreenContent() {
             coin_entry_amount: 0,
             title:
               unlimitedChallenge?.title ??
-              `Streak · ${dailySteps.toLocaleString()} steps/day`,
+              `Streak challenge · ${dailySteps.toLocaleString()} steps/day`,
             target_steps: dailySteps,
             max_players: 0,
             registered_count: unlimitedChallenge?.participantCount ?? 1,
@@ -4499,7 +4580,7 @@ function WalkScreenContent() {
             challenge_duration_days: unlimitedChallenge?.durationDays ?? meta.durationDays,
             challenge_end_at: meta.endAt?.toISOString() ?? null,
             selected_track_theme_id: draft.trackLayout || "bg",
-            theme_name: "Unlimited",
+            theme_name: "Streak Challenge",
             is_private: !!isPrivateRoom,
             requires_code: !!isPrivateRoom,
             host_user_id: user?.id ?? "",
@@ -4645,7 +4726,7 @@ function WalkScreenContent() {
         {/* Header */}
         <View style={styles.pageHeader}>
           <View style={styles.pageTitleRow}>
-            <Text style={[styles.pageTitle, { color: colors.foreground }]}>Walk Champ</Text>
+            <Text style={[styles.pageTitle, { color: colors.foreground }]}>WalkChamp</Text>
           </View>
           <View style={styles.headerRight}>
             {/* Coin pill — tappable to open Coins Info */}
@@ -4733,8 +4814,8 @@ function WalkScreenContent() {
                           : Platform.OS === "android" && stepPermissionStatus === "unavailable"
                             ? "Tap Connect to set up step tracking"
                             : stepPermissionStatus === "denied"
-                              ? "Tap Connect to request Steps permission again in Walk Champ"
-                              : "Tap Connect to allow Walk Champ to read your steps from Health Connect"}
+                              ? "Tap Connect to request Steps permission again in WalkChamp"
+                              : "Tap Connect to allow WalkChamp to read your steps from Health Connect"}
                     </Text>
                   </>
                 )}
@@ -5994,8 +6075,8 @@ function WalkScreenContent() {
 
             {[
               "I understand that the challenge cannot be cancelled after creation.",
-              "I understand that leaving before the challenge starts may qualify for an entry-fee refund according to the refund policy. Leaving at or after the challenge start time provides no refund and removes me from prize eligibility.",
-              "I understand that if I leave, the challenge will continue for other participants. I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
+              "No refund once you join. Even if a participant leaves the match before it starts, there is no refund.",
+              "I understand that if I leave, the challenge will continue for other participants. I have read and agree to the WalkChamp Challenge Rules & Terms of Service.",
             ].map((text, i) => (
               <TouchableOpacity
                 key={i}
@@ -6058,7 +6139,7 @@ function WalkScreenContent() {
             </TouchableOpacity>
 
             <Text style={[styles.finePrint, { color: colors.mutedForeground }]}>
-              Walk Champ is a skill-based race platform. Results are determined by your activity performance — not by chance.
+              WalkChamp is a skill-based race platform. Results are determined by your activity performance — not by chance.
             </Text>
           </ScrollView>
         </SafeAreaView>
@@ -6222,8 +6303,8 @@ function WalkScreenContent() {
           : srr.entryType === "coins_battle" ? `${srr.coinEntryAmount.toLocaleString()} coins`
           : `$${(srr.entryAmountCents / 100).toFixed(0)}`;
         const shareMsg = srr.isPrivate
-          ? `Join my Walk Champ private challenge!\n\nRoom Code: ${srr.inviteCode}\nStarts: ${startLabel}\nTarget: ${srr.targetSteps.toLocaleString()} steps\nEntry: ${entryLabel}\n\nOpen Walk Champ and use Join with Code.`
-          : `Join my Walk Champ challenge!\n\nStarts: ${startLabel}\nTarget: ${srr.targetSteps.toLocaleString()} steps\nEntry: ${entryLabel}\n\nOpen Walk Champ and find it in Upcoming Rooms.`;
+          ? `Join my WalkChamp private challenge!\n\nRoom Code: ${srr.inviteCode}\nStarts: ${startLabel}\nTarget: ${srr.targetSteps.toLocaleString()} steps\nEntry: ${entryLabel}\n\nOpen WalkChamp and use Join with Code.`
+          : `Join my WalkChamp challenge!\n\nStarts: ${startLabel}\nTarget: ${srr.targetSteps.toLocaleString()} steps\nEntry: ${entryLabel}\n\nOpen WalkChamp and find it in Upcoming Rooms.`;
 
         return (
           <Modal

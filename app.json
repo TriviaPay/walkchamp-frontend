@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "Walk Champ",
+    "name": "WalkChamp",
     "slug": "walkchamp",
     "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icons/ios/WalkChampProgress100.png",
-    "scheme": ["globalwalkerleague", "walkchamp"],
+    "scheme": ["walkchamp", "globalwalkerleague"],
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
@@ -15,7 +15,7 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.globalwalkerleague.app",
+      "bundleIdentifier": "com.walkchamp.app",
       "entitlements": {
         "com.apple.developer.applesignin": [
           "Default"
@@ -26,12 +26,14 @@
         "NSMotionUsageDescription": "We count your steps only to rank you in walking challenges and leaderboards.",
         "NSHealthShareUsageDescription": "We count your steps only to rank you in walking challenges and leaderboards.",
         "NSLocationWhenInUseUsageDescription": "Location is used for GPS-verified walking mode and city leaderboards.",
-        "NSCameraUsageDescription": "Walk Champ needs camera access to take a profile photo.",
-        "NSPhotoLibraryUsageDescription": "Walk Champ needs access to your photos to upload a profile picture.",
-        "NSPhotoLibraryAddUsageDescription": "Walk Champ saves photos to your library.",
+        "NSCameraUsageDescription": "WalkChamp needs camera access to take a profile photo.",
+        "NSPhotoLibraryUsageDescription": "WalkChamp needs access to your photos to upload a profile picture.",
+        "NSPhotoLibraryAddUsageDescription": "WalkChamp saves photos to your library.",
         "NSMicrophoneUsageDescription": "Microphone permission is required to use Mic Pass voice chat during live races.",
-        "NSAppleIDUsageDescription": "Walk Champ uses Apple Sign-In to create and access your account securely."
-      }
+        "NSAppleIDUsageDescription": "WalkChamp uses Apple Sign-In to create and access your account securely.",
+        "CFBundleDisplayName": "WalkChamp"
+      },
+      "buildNumber": "7"
     },
     "android": {
       "softwareKeyboardLayoutMode": "pan",
@@ -50,7 +52,7 @@
         "android.permission.FOREGROUND_SERVICE_HEALTH",
         "android.permission.WAKE_LOCK"
       ],
-      "package": "com.globalwalkerleague.app",
+      "package": "com.walkchamp.app",
       "versionCode": 7,
       "navigationBar": {
         "backgroundColor": "#0A0B14",
@@ -87,7 +89,7 @@
             "minSdkVersion": 26,
             "compileSdkVersion": 35,
             "targetSdkVersion": 35,
-            "extraProguardRules": "-keep class com.globalwalkerleague.walkchampraceprogress.** { *; }\n-keep class com.globalwalkerleague.app.WalkChampNotificationServiceExtension { *; }\n-keep class expo.modules.** { *; }\n-keep class expo.modules.ExpoModulesPackageList { *; }\n-keep class com.facebook.react.** { *; }\n-keep @expo.modules.core.interfaces.DoNotStrip class *"
+            "extraProguardRules": "-keep class com.globalwalkerleague.walkchampraceprogress.** { *; }\n-keep class com.walkchamp.app.WalkChampNotificationServiceExtension { *; }\n-keep class expo.modules.** { *; }\n-keep class expo.modules.ExpoModulesPackageList { *; }\n-keep class com.facebook.react.** { *; }\n-keep @expo.modules.core.interfaces.DoNotStrip class *"
           }
         }
       ],
@@ -114,14 +116,14 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Walk Champ needs access to your photos to upload a profile picture.",
-          "cameraPermission": "Walk Champ needs camera access to take a profile photo."
+          "photosPermission": "WalkChamp needs access to your photos to upload a profile picture.",
+          "cameraPermission": "WalkChamp needs camera access to take a profile photo."
         }
       ],
       [
         "expo-sensors",
         {
-          "motionPermission": "Walk Champ needs your physical activity permission to count steps and compete in challenges."
+          "motionPermission": "WalkChamp needs your physical activity permission to count steps and compete in challenges."
         }
       ],
       "@livekit/react-native-expo-plugin",

@@ -1,5 +1,5 @@
 /**
- * Walk Champ Terms and Conditions — structured content.
+ * WalkChamp Terms and Conditions — structured content.
  *
  * DRAFT – LEGAL REVIEW REQUIRED BEFORE PUBLICATION
  * This notice is for internal engineering/legal use only.
@@ -34,9 +34,9 @@ export const TERMS_PUBLIC_URL = "https://walkchamp.app/terms";
 export const TERMS_DOCUMENT: TermsDocument = {
   version: "1.0",
   effectiveDate: "2026-07-21",
-  title: "Walk Champ Terms and Conditions",
+  title: "WalkChamp Terms and Conditions",
   lastUpdatedLabel: "July 21, 2026",
-  intro: "Please read these Terms and Conditions carefully before accessing or using Walk Champ. These Terms explain your legal rights and responsibilities, challenge participation rules, financial risks, payment and payout conditions, health-data requirements, prohibited conduct, refund rules, account restrictions, and dispute procedures.",
+  intro: "Please read these Terms and Conditions carefully before accessing or using WalkChamp. These Terms explain your legal rights and responsibilities, challenge participation rules, financial risks, payment and payout conditions, health-data requirements, prohibited conduct, refund rules, account restrictions, and dispute procedures.",
   supportEmail: TERMS_SUPPORT_EMAIL,
   publicUrl: TERMS_PUBLIC_URL,
   sections: [
@@ -51,13 +51,13 @@ Words with initial capital letters have the meanings provided below. These defin
 
 1.2 Definitions
 
-Account means the user account created to access Walk Champ.
+Account means the user account created to access WalkChamp.
 
 Active Race means a Challenge that has started and has not yet ended, been cancelled, forfeited, or finally settled.
 
-Application, App, or Walk Champ means the Walk Champ mobile application and related services provided by MIRA GAMING PRIVATE LIMITED.
+Application, App, or WalkChamp means the WalkChamp mobile application and related services provided by MIRA GAMING PRIVATE LIMITED.
 
-Application Store means the Apple App Store, Google Play Store, or another authorized platform from which Walk Champ is downloaded.
+Application Store means the Apple App Store, Google Play Store, or another authorized platform from which WalkChamp is downloaded.
 
 Cash Balance means verified money recorded in the Wallet and specifically designated as eligible for withdrawal, subject to identity verification, fraud review, geographic availability, minimum withdrawal limits, provider requirements, and applicable law.
 
@@ -67,9 +67,9 @@ Cash Entry Contribution means the amount contributed by a participant to the Pri
 
 Challenge means a Free Challenge, Coins Battle, Cash Prize Challenge, Sponsored Event, public challenge, private challenge, scheduled race, group challenge, or another supported walking or fitness competition.
 
-Challenge Rules means the specific conditions displayed in Walk Champ for an individual Challenge, including challenge type, start time, end time, step target, participant capacity, entry requirements, Fees, Prize Pool, reward, winner structure, refund rules, withdrawal rules, and eligibility restrictions.
+Challenge Rules means the specific conditions displayed in WalkChamp for an individual Challenge, including challenge type, start time, end time, step target, participant capacity, entry requirements, Fees, Prize Pool, reward, winner structure, refund rules, withdrawal rules, and eligibility restrictions.
 
-Coins means virtual, app-only units that may be earned, purchased where permitted, awarded, or used inside Walk Champ. Coins are not money, legal tender, deposits, securities, or cryptocurrency. Coins have no guaranteed cash value and are not withdrawable unless Walk Champ expressly states otherwise in a legally permitted offer.
+Coins means virtual, app-only units that may be earned, purchased where permitted, awarded, or used inside WalkChamp. Coins are not money, legal tender, deposits, securities, or cryptocurrency. Coins have no guaranteed cash value and are not withdrawable unless WalkChamp expressly states otherwise in a legally permitted offer.
 
 Company, Mira Gaming, we, us, and our mean MIRA GAMING PRIVATE LIMITED.
 
@@ -77,7 +77,7 @@ Entry Amount means the Cash Entry Contribution or other challenge entry requirem
 
 Fees means any separately disclosed processing fee, platform fee, service fee, convenience fee, tax, payment-provider charge, or other fee payable in addition to the Cash Entry Contribution.
 
-Health Data Provider means Apple Health, Apple HealthKit, Google Health Connect, an approved device sensor, or another supported source used by Walk Champ to obtain or validate health and fitness activity.
+Health Data Provider means Apple Health, Apple HealthKit, Google Health Connect, an approved device sensor, or another supported source used by WalkChamp to obtain or validate health and fitness activity.
 
 IANA Timezone means a standardized timezone identifier used to display and synchronize Challenge dates and times.
 
@@ -85,9 +85,9 @@ Live Board means the complete or expanded participant ranking for a live Challen
 
 Official Timestamp means a backend-recorded timestamp used to determine registration, start time, end time, goal completion, ranking, and settlement.
 
-Participant means a User whose Challenge registration has been confirmed by the Walk Champ backend.
+Participant means a User whose Challenge registration has been confirmed by the WalkChamp backend.
 
-Platform Fee means a separately disclosed service charge payable to Walk Champ where applicable.
+Platform Fee means a separately disclosed service charge payable to WalkChamp where applicable.
 
 Prize Pool means the total amount designated for distribution to eligible winners of a Cash Prize Challenge or Sponsored Event.
 
@@ -97,7 +97,7 @@ Promotional Credit means a bonus, referral reward, coupon, credit, or promotiona
 
 Race Track means the visual race representation that may display only a limited number or selected subset of participants.
 
-Service means the Walk Champ application, backend services, websites, APIs, Wallet, Challenges, social features, communications, and related services operated by Mira Gaming.
+Service means the WalkChamp application, backend services, websites, APIs, Wallet, Challenges, social features, communications, and related services operated by Mira Gaming.
 
 Spectator means a User who watches a Challenge without being registered as a Participant.
 
@@ -105,21 +105,21 @@ Sponsored Event means a Challenge funded, organized, supported, or promoted by M
 
 Upcoming Challenge means a successfully registered Challenge with an Official Timestamp in the future.
 
-Verified Steps means steps accepted by Walk Champ after applying Challenge timestamps, provider information, duplicate prevention, source validation, anti-cheat checks, synchronization rules, and other verification methods.
+Verified Steps means steps accepted by WalkChamp after applying Challenge timestamps, provider information, duplicate prevention, source validation, anti-cheat checks, synchronization rules, and other verification methods.
 
 Wallet means the in-app record of Cash Balance, Coins, Promotional Credit, Entry Amounts, refunds, rewards, payouts, and transaction history.
 
-You, your, or User means the individual accessing or using Walk Champ.`,
+You, your, or User means the individual accessing or using WalkChamp.`,
     },
     {
       id: "acceptance",
       number: 2,
       title: "Acceptance of These Terms",
       keywords: ["accept","agree","privacy policy","challenge rules"],
-      body: `By creating an Account, downloading, registering for, accessing, or using Walk Champ, you agree to:
+      body: `By creating an Account, downloading, registering for, accessing, or using WalkChamp, you agree to:
 
 • These Terms and Conditions
-• The Walk Champ Privacy Policy
+• The WalkChamp Privacy Policy
 • Challenge Rules displayed before registration
 • Refund conditions
 • Fair Play and Anti-Cheat rules
@@ -213,7 +213,7 @@ You must not:
 • Create duplicate Accounts
 • Use another User's Account
 
-Walk Champ may limit simultaneous sessions.
+WalkChamp may limit simultaneous sessions.
 
 Logging in on a new device may terminate or invalidate a previous session.
 
@@ -271,7 +271,7 @@ Marketing communications are optional and may be disabled where settings or unsu
 
 Disabling notifications may cause you to miss reminders, but it does not change the official start or end time of a Challenge.
 
-Walk Champ may request permission to access:
+WalkChamp may request permission to access:
 
 • Apple Health
 • Health Connect
@@ -287,9 +287,9 @@ Some permissions are optional. However, permissions required to verify steps or 
     {
       id: "nature-of-walk-champ",
       number: 6,
-      title: "Nature of Walk Champ",
+      title: "Nature of WalkChamp",
       keywords: ["skill","financial risk","gambling","verified steps"],
-      body: `Walk Champ is a walking, fitness, social, and skill-based competition platform.
+      body: `WalkChamp is a walking, fitness, social, and skill-based competition platform.
 
 Challenge outcomes are intended to depend on:
 
@@ -446,7 +446,7 @@ They may begin automatically at the scheduled time unless cancelled or otherwise
       number: 8,
       title: "Registration and Participation Limits",
       keywords: ["registration","spectator","sponsored event","one active"],
-      body: `Registration is complete only when the Walk Champ backend confirms:
+      body: `Registration is complete only when the WalkChamp backend confirms:
 
 • Eligibility
 • Participant capacity
@@ -484,9 +484,9 @@ To register for another Sponsored Event, the User must either:
 • Leave the current Sponsored Event before it starts where withdrawal is permitted; or
 • Wait until the current Sponsored Event has completed
 
-Limits on simultaneous Free, Coins, and Cash Challenges are determined by the rules displayed in Walk Champ.
+Limits on simultaneous Free, Coins, and Cash Challenges are determined by the rules displayed in WalkChamp.
 
-Walk Champ may permit an ongoing Challenge and a future scheduled Challenge to coexist where supported.`,
+WalkChamp may permit an ongoing Challenge and a future scheduled Challenge to coexist where supported.`,
     },
     {
       id: "schedules-waiting-rooms-timezones",
@@ -546,7 +546,7 @@ Backend timestamps and accepted provider timestamps control the Challenge.`,
       number: 10,
       title: "Cash Challenge Pricing, Fees, and Prize Pools",
       keywords: ["processing fee","platform fee","prize pool","entry contribution","total payable"],
-      body: `Before a User confirms entry into a Cash Prize Challenge, Walk Champ must display:
+      body: `Before a User confirms entry into a Cash Prize Challenge, WalkChamp must display:
 
 • Cash Entry Contribution
 • Processing Fee
@@ -593,7 +593,7 @@ Separately disclosed Processing Fees, Platform Fees, taxes, and provider charges
       number: 11,
       title: "Winner Determination and Prize Distribution",
       keywords: ["winner","prize","tie-break","distribution","50%","60%"],
-      body: `Winner eligibility is determined by the Walk Champ backend using:
+      body: `Winner eligibility is determined by the WalkChamp backend using:
 
 • Verified Steps
 • Challenge target
@@ -616,7 +616,7 @@ Winner count and percentage distribution may change based on the final eligible 
 
 The exact winner structure must be displayed before registration and locked when the Challenge begins.
 
-For specifically configured small Challenges, Walk Champ may use:
+For specifically configured small Challenges, WalkChamp may use:
 
 • 2 Participants: 1 winner receiving 100%
 • 3 Participants: 2 winners receiving 60% and 40%
@@ -701,7 +701,7 @@ Coins cannot normally be:
 
 • Withdrawn
 • Sold
-• Transferred outside Walk Champ
+• Transferred outside WalkChamp
 • Exchanged for cash
 • Redeemed for gift cards
 
@@ -725,7 +725,7 @@ Purchased Coins or digital items may be subject to Apple or Google in-app purcha
       number: 14,
       title: "Referral Program",
       keywords: ["referral","invite friends","self-referral"],
-      body: `Walk Champ may offer referral programs.
+      body: `WalkChamp may offer referral programs.
 
 The terms displayed in the Invite Friends screen control.
 
@@ -760,14 +760,14 @@ Referral rewards may be cancelled or reversed for:
 • False identity information
 • Promotion manipulation
 
-The reward amount and qualifying conditions displayed in Walk Champ control.`,
+The reward amount and qualifying conditions displayed in WalkChamp control.`,
     },
     {
       id: "wallet-cash-withdrawals",
       number: 15,
       title: "Wallet, Cash Balance, and Withdrawals",
       keywords: ["wallet","withdrawal","stripe","razorpay","kyc","cash balance"],
-      body: `The Walk Champ Wallet is an internal ledger.
+      body: `The WalkChamp Wallet is an internal ledger.
 
 It is not:
 
@@ -808,7 +808,7 @@ Withdrawals may require:
 • Fraud review
 • Payment-method verification
 
-Walk Champ may use providers such as:
+WalkChamp may use providers such as:
 
 • Stripe
 • Razorpay
@@ -860,7 +860,7 @@ Before a Challenge starts:
 • Platform Fees may be non-refundable
 • Taxes or provider charges may be non-refundable
 
-unless Walk Champ or applicable law states otherwise.
+unless WalkChamp or applicable law states otherwise.
 
 After a Challenge starts:
 
@@ -884,7 +884,7 @@ Wallet transaction history should display refund status, amount, date, and time 
       number: 17,
       title: "Step Tracking and Health Data",
       keywords: ["apple health","health connect","verified steps","manual steps"],
-      body: `Walk Champ may obtain activity data through:
+      body: `WalkChamp may obtain activity data through:
 
 • Apple Health on iOS
 • Apple HealthKit
@@ -919,17 +919,17 @@ Users should:
 • Keep devices charged
 • Keep required permissions enabled
 • Maintain internet access
-• Open Walk Champ periodically
+• Open WalkChamp periodically
 • Confirm synchronization
 • Check Challenge progress before the deadline
 
-Switching devices, revoking permissions, uninstalling Walk Champ, disabling background processes, changing accounts, or relying on delayed wearable sync may reduce or interrupt accepted steps.
+Switching devices, revoking permissions, uninstalling WalkChamp, disabling background processes, changing accounts, or relying on delayed wearable sync may reduce or interrupt accepted steps.
 
 For Challenge results, the backend record of Verified Steps controls, subject to the dispute process.
 
 Mira Gaming does not guarantee that every device, sensor, wearable, or health platform is perfectly accurate.
 
-Health information is governed by the Walk Champ Privacy Policy.
+Health information is governed by the WalkChamp Privacy Policy.
 
 Health information is not used for targeted advertising.`,
     },
@@ -1037,7 +1037,7 @@ Include:
 
 Mira Gaming will review available records in good faith.
 
-Walk Champ cannot credit steps that never reached the authorized health platform.
+WalkChamp cannot credit steps that never reached the authorized health platform.
 
 Mandatory consumer rights remain unaffected.`,
     },
@@ -1063,7 +1063,7 @@ Mandatory consumer rights remain unaffected.`,
 
 You retain ownership of content you submit.
 
-You grant Mira Gaming a non-exclusive, worldwide, royalty-free license to host, store, reproduce, display, format, transmit, moderate, and use that content as necessary to operate and secure Walk Champ.
+You grant Mira Gaming a non-exclusive, worldwide, royalty-free license to host, store, reproduce, display, format, transmit, moderate, and use that content as necessary to operate and secure WalkChamp.
 
 You must not submit content that is:
 
@@ -1090,7 +1090,7 @@ Mira Gaming is not required to pre-screen every communication.`,
     {
       id: "code-of-conduct",
       number: 21,
-      title: "Walk Champ Code of Conduct",
+      title: "WalkChamp Code of Conduct",
       keywords: ["conduct","harassment","community"],
       body: `Users must:
 
@@ -1111,7 +1111,7 @@ Mira Gaming is not required to pre-screen every communication.`,
 • Avoid false reports
 • Avoid voice and chat abuse
 • Avoid ranking manipulation
-• Use Walk Champ safely while walking
+• Use WalkChamp safely while walking
 
 Serious concerns may be reported to:
 
@@ -1122,7 +1122,7 @@ admin@miragaming.com`,
       number: 22,
       title: "Sponsored Content and Third-Party Offers",
       keywords: ["sponsor","advertisement","third-party"],
-      body: `Walk Champ may display:
+      body: `WalkChamp may display:
 
 • Sponsorships
 • Advertisements
@@ -1145,14 +1145,14 @@ Unless expressly stated, Mira Gaming does not guarantee third-party:
 
 Third-party terms may apply.
 
-Apple and Google do not sponsor or provide Walk Champ Challenge rewards.`,
+Apple and Google do not sponsor or provide WalkChamp Challenge rewards.`,
     },
     {
       id: "third-party-services",
       number: 23,
       title: "Third-Party Services",
       keywords: ["stripe","razorpay","descope","pusher","onesignal","livekit"],
-      body: `Walk Champ may rely on third parties for:
+      body: `WalkChamp may rely on third parties for:
 
 • Authentication
 • Cloud hosting
@@ -1194,7 +1194,7 @@ Mira Gaming is not responsible for third-party outages, payment decisions, accou
       number: 24,
       title: "Privacy and Sensitive Data",
       keywords: ["privacy","health data","sensitive"],
-      body: `Use of Walk Champ is also governed by the Walk Champ Privacy Policy.
+      body: `Use of WalkChamp is also governed by the WalkChamp Privacy Policy.
 
 Sensitive information may include:
 
@@ -1218,9 +1218,9 @@ The Privacy Policy is available directly above Terms and Conditions in the Profi
       number: 25,
       title: "Health and Medical Disclaimer",
       keywords: ["medical","health","injury","disclaimer"],
-      body: `Walk Champ is a fitness and entertainment service.
+      body: `WalkChamp is a fitness and entertainment service.
 
-Walk Champ is not:
+WalkChamp is not:
 
 • A healthcare provider
 • A medical service
@@ -1255,7 +1255,7 @@ You voluntarily accept ordinary risks associated with walking and exercise, incl
 • Overexertion
 • Injury
 
-Do not use Walk Champ in a way that distracts you while:
+Do not use WalkChamp in a way that distracts you while:
 
 • Driving
 • Cycling
@@ -1284,7 +1284,7 @@ Mira Gaming may:
 • Report transactions
 • Maintain financial records
 
-Walk Champ does not provide tax advice.
+WalkChamp does not provide tax advice.
 
 Consult a qualified tax professional.`,
     },
@@ -1349,7 +1349,7 @@ Some records may be retained after deletion as described in the Privacy Policy.`
       number: 29,
       title: "Service Availability and Changes",
       keywords: ["as available","outage","cancel challenge"],
-      body: `Walk Champ is provided on an "as available" basis.
+      body: `WalkChamp is provided on an "as available" basis.
 
 The Service may be interrupted, delayed, restricted, changed, or discontinued due to:
 
@@ -1384,7 +1384,7 @@ Any remedy remains subject to applicable law.`,
       keywords: ["copyright","trademark","license","reverse engineer"],
       body: `The following are owned by or licensed to Mira Gaming:
 
-• Walk Champ name
+• WalkChamp name
 • Logos
 • Application code
 • Designs
@@ -1399,7 +1399,7 @@ Any remedy remains subject to applicable law.`,
 • Backend systems
 • Other intellectual property
 
-You receive a limited, personal, revocable, non-exclusive, non-transferable license to use Walk Champ for its intended purpose.
+You receive a limited, personal, revocable, non-exclusive, non-transferable license to use WalkChamp for its intended purpose.
 
 You must not:
 
@@ -1413,7 +1413,7 @@ You must not:
 • Create derivative works
 • Commercially exploit
 
-Walk Champ except where permitted by law or written authorization.`,
+WalkChamp except where permitted by law or written authorization.`,
     },
     {
       id: "apple-app-store-terms",
@@ -1424,7 +1424,7 @@ Walk Champ except where permitted by law or written authorization.`,
 
 Apple is not responsible for:
 
-• Walk Champ
+• WalkChamp
 • Maintenance
 • Support
 • Challenges
@@ -1435,7 +1435,7 @@ Apple is not responsible for:
 • Content
 • Claims
 
-Mira Gaming is responsible for addressing claims concerning Walk Champ.
+Mira Gaming is responsible for addressing claims concerning WalkChamp.
 
 Apple and its subsidiaries may be third-party beneficiaries of these Terms where applicable.
 
@@ -1454,7 +1454,7 @@ Cash-entry functionality must receive all required legal and App Review approval
       keywords: ["google play","android","billing"],
       body: `Google is not a party to these Terms.
 
-Google does not sponsor, administer, endorse, or provide prizes for Walk Champ Challenges.
+Google does not sponsor, administer, endorse, or provide prizes for WalkChamp Challenges.
 
 Users must comply with Google Play terms and policies.
 
@@ -1477,14 +1477,14 @@ Availability depends on:
 • Payment-provider approval
 • Legal review
 
-Walk Champ must not claim that skill-based cash-entry competitions are automatically permitted on Google Play.`,
+WalkChamp must not claim that skill-based cash-entry competitions are automatically permitted on Google Play.`,
     },
     {
       id: "disclaimer-of-warranties",
       number: 33,
       title: "Disclaimer of Warranties",
       keywords: ["as is","warranty","disclaimer"],
-      body: `To the maximum extent permitted by law, Walk Champ is provided:
+      body: `To the maximum extent permitted by law, WalkChamp is provided:
 
 "AS IS"
 
@@ -1533,7 +1533,7 @@ Mandatory legal rights remain unaffected.`,
 
 Where liability cannot be excluded, Mira Gaming's total aggregate liability will be limited to the greater of:
 
-A. The amount paid directly to Mira Gaming through Walk Champ during the 12 months before the event giving rise to the claim; or
+A. The amount paid directly to Mira Gaming through WalkChamp during the 12 months before the event giving rise to the claim; or
 
 B. USD 100 or the local-currency equivalent
 
@@ -1608,7 +1608,7 @@ These Terms do not create an employment, partnership, agency, joint venture, or 
 
 Entire Agreement:
 
-These Terms, the Privacy Policy, Challenge Rules, promotion rules, and Sponsored Event rules form the entire agreement regarding Walk Champ.
+These Terms, the Privacy Policy, Challenge Rules, promotion rules, and Sponsored Event rules form the entire agreement regarding WalkChamp.
 
 Electronic Acceptance:
 

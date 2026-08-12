@@ -1,5 +1,5 @@
 /**
- * Walk Champ typography tokens.
+ * WalkChamp typography tokens.
  *
  * These encode the EXISTING de-facto type scale found across the app.
  * Multiple sizes for the same "role" are intentional (screens differ) —
@@ -30,7 +30,7 @@ function fs(size: number, min?: number, max?: number): number {
 }
 
 /**
- * Semantic typography variants matching current Walk Champ usage.
+ * Semantic typography variants matching current WalkChamp usage.
  * Values are design-baseline sizes (390×844); rf/responsiveFont keep them
  * stable on phones and mildly adjust at extremes.
  */

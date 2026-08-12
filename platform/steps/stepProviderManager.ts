@@ -550,7 +550,7 @@ export const stepProviderManager = {
         status: "unavailable",
         providerId: null,
         message:
-          "Step tracking requires the installed Walk Champ app. It does not work in Expo Go.",
+          "Step tracking requires the installed WalkChamp app. It does not work in Expo Go.",
       };
     }
 
@@ -592,7 +592,7 @@ export const stepProviderManager = {
                 ...hcResult,
                 message:
                   hcResult.message ??
-                  "Walk Champ needs Health Connect step access for verified daily tracking.",
+                  "WalkChamp needs Health Connect step access for verified daily tracking.",
               };
             }
             devLog("HC not granted — trying legacy fallback (non-hybrid)");

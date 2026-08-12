@@ -12,7 +12,7 @@ export const UNLIMITED_COPY = {
   prizePoolNotEligible: "Prize pool not eligible",
   lostAfterMiss: "Challenge lost after missing a required day.",
   modalWarning: "Miss any required day and you are out of the challenge.",
-  modalInfoPrefix: "Only top 10 players appear on the race track; full rankings are available in ",
+  modalInfoPrefix: "Full rankings are available in ",
   modalInfoHighlight: "Live Board",
   modalCta: "Let's go!",
   modalTitle: "Challenge Progress",
@@ -27,10 +27,17 @@ export const UNLIMITED_COPY = {
   todayGoal: "Today Goal",
 } as const;
 
-/** Live / waiting titles: `Streak · 10,000 steps/day`. */
+/** Live / waiting titles: `Streak challenge · 10,000 steps/day`. */
 export function streakChallengeTitle(dailyGoalSteps: number): string {
   const n = Math.max(0, Math.floor(dailyGoalSteps));
-  return `Streak · ${n > 0 ? n.toLocaleString() : "—"} steps/day`;
+  return `Streak challenge · ${n > 0 ? n.toLocaleString() : "—"} steps/day`;
+}
+
+/** Remap legacy "Unlimited" product name on live/list cards without changing other titles. */
+export function displayChallengeTitle(title: string | null | undefined): string {
+  const t = (title ?? "").trim();
+  if (!t) return t;
+  return t.replace(/^Unlimited\b/i, "Streak challenge");
 }
 
 export function missedDayFooterCopy(missedDayIndex: number | null | undefined): string {

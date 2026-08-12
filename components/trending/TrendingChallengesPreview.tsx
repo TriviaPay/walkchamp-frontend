@@ -196,23 +196,31 @@ function TrendingChallengesPreviewInner({ onCountChange }: Props) {
       router.push("/rooms/available");
       return;
     }
+    const isHost = !!user?.id && !!c.hostUserId && user.id === c.hostUserId;
+    // Already hosting → waiting room. New joiners → Available Rooms confirmation first.
+    if (isHost) {
+      router.push({
+        pathname: "/race/matchmaking",
+        params: buildMatchmakingParams({
+          raceId: c.id,
+          isHost: true,
+          user,
+          initialScheduledStartAt: c.startsAtUtc,
+          initialEntryType:
+            c.challengeFormat === "unlimited_goal"
+              ? "unlimited_goal"
+              : c.challengeFormat === "fixed_cash"
+                ? "paid_usd"
+                : undefined,
+          initialMaxPlayers: c.challengeFormat === "unlimited_goal" ? null : undefined,
+          initialCurrentPlayers: Math.max(0, c.participantCount),
+        }),
+      });
+      return;
+    }
     router.push({
-      pathname: "/race/matchmaking",
-      params: buildMatchmakingParams({
-        raceId: c.id,
-        isHost: !!user?.id && !!c.hostUserId && user.id === c.hostUserId,
-        user,
-        initialScheduledStartAt: c.startsAtUtc,
-        initialEntryType:
-          c.challengeFormat === "unlimited_goal"
-            ? "unlimited_goal"
-            : c.challengeFormat === "fixed_cash"
-              ? "paid_usd"
-              : undefined,
-        initialMaxPlayers: c.challengeFormat === "unlimited_goal" ? null : undefined,
-        // Do not inflate with Math.max(1, …) — that kept stale "Joined" after leave.
-        initialCurrentPlayers: Math.max(0, c.participantCount),
-      }),
+      pathname: "/rooms/available",
+      params: { confirmRoomId: c.id },
     });
   };
 

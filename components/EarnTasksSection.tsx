@@ -17,6 +17,7 @@ import { useColors } from "@/hooks/useColors";
 import { SkeletonEarnTaskCard } from "@/components/SkeletonRows";
 import { rf } from "@/utils/responsive";
 
+import { CHALLENGE_IMG } from "@/utils/brandImages";
 const blueShoe = require("../assets/images/footstep.png") as number;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -77,9 +78,11 @@ function TaskRow({ task, accent, isLast }: { task: EarnTask; accent: string; isL
       isLast && row.wrapLast,
       isClaimed && row.wrapClaimed,
     ]}>
-      {/* Icon — blue shoe PNG for walk tasks, emoji for everything else */}
+      {/* Icon — blue shoe PNG for walk tasks, challenge PNG for fire, emoji otherwise */}
       {SHOE_TASKS.has(task.task_id) ? (
         <Image source={blueShoe} style={row.shoeImg} resizeMode="contain" />
+      ) : task.icon === "🔥" ? (
+        <Image source={CHALLENGE_IMG} style={row.shoeImg} resizeMode="contain" />
       ) : (
         <Text style={row.icon}>{task.icon}</Text>
       )}

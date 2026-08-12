@@ -1,7 +1,7 @@
 /**
  * app/join/[code].tsx — Deep-link join handler
  *
- * Opened when the user taps a Walk Champ invite link:
+ * Opened when the user taps a WalkChamp invite link:
  *   globalwalkerleague://join/CODE
  *
  * Validates auth, resolves room details, shows cash-challenge consent if needed,
@@ -41,8 +41,8 @@ const ERROR_MESSAGES: Record<string, string> = {
 
 const CONSENT_LINES = [
   "I understand that the challenge cannot be cancelled after creation.",
-  "I understand that leaving before the challenge starts may qualify for an entry-fee refund according to the refund policy. Leaving at or after start provides no refund and removes me from prize eligibility.",
-  "I understand that if I leave, the challenge will continue for other participants. I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
+  "No refund once you join. Even if a participant leaves the match before it starts, there is no refund.",
+  "I understand that if I leave, the challenge will continue for other participants. I have read and agree to the WalkChamp Challenge Rules & Terms of Service.",
 ];
 
 interface RoomPreview {
@@ -153,7 +153,7 @@ export default function JoinByCode() {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.trophy}>🏆</Text>
-        <Text style={[styles.title, { color: colors.foreground }]}>Walk Champ Invite</Text>
+        <Text style={[styles.title, { color: colors.foreground }]}>WalkChamp Invite</Text>
         <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
           You've been invited to join a private walking challenge!
         </Text>
@@ -252,7 +252,7 @@ export default function JoinByCode() {
 
         {isCash && (
           <Text style={[styles.legalNote, { color: colors.mutedForeground }]}>
-            Walk Champ is a skill-based race platform. Results are determined by your activity performance — not by chance.
+            WalkChamp is a skill-based race platform. Results are determined by your activity performance — not by chance.
           </Text>
         )}
 

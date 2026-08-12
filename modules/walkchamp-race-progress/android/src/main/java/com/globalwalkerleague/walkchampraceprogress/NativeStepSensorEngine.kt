@@ -288,7 +288,15 @@ class NativeStepSensorEngine(
     val total = sensorTotal ?: lastSensorTotal.takeIf { it >= 0f }
     val source = stepSource ?: state.stepSource
     val verified = !isDeviceSensorSource(source)
-    val known = maxOf(knownTodaySteps.coerceAtLeast(0), state.todaySteps)
+    val incoming = knownTodaySteps.coerceAtLeast(0)
+    // Verified HC/HK may correct a poisoned sensor absolute (e.g. 3122 vs HC 800).
+    // Modest live lead over a lagging HC read is kept so the tray still moves.
+    val known =
+      if (verified && state.todaySteps >= 1000 && state.todaySteps > incoming + 250) {
+        incoming
+      } else {
+        maxOf(incoming, state.todaySteps)
+      }
     if (verified) {
       state = state.copy(
         todaySteps = known,
@@ -336,15 +344,22 @@ class NativeStepSensorEngine(
     // Same reasoning as seedDailyBaselineFromKnownSteps — must not trust
     // state.todaySteps as today's floor until we've confirmed it's actually today.
     ensureCurrentDay()
-    val floor = maxOf(knownTodaySteps.coerceAtLeast(0), state.todaySteps)
+    val incoming = knownTodaySteps.coerceAtLeast(0)
     val source = stepSource ?: state.stepSource
+    val verified = !isDeviceSensorSource(source)
+    // HC/HK correcting an inflated sensor absolute — full re-seed, not raise-only.
+    if (verified && state.todaySteps >= 1000 && state.todaySteps > incoming + 250) {
+      seedDailyBaselineFromKnownSteps(incoming, stepSource = source)
+      return
+    }
+    val floor = maxOf(incoming, state.todaySteps)
     if (state.dailyBaseline == null || lastSensorTotal < 0f) {
       seedDailyBaselineFromKnownSteps(floor, stepSource = source)
       return
     }
     if (floor > state.todaySteps) {
       seedDailyBaselineFromKnownSteps(floor, stepSource = source)
-    } else if (!isDeviceSensorSource(source) && state.stepSource != source) {
+    } else if (verified && state.stepSource != source) {
       state = state.copy(stepSource = source, updatedAt = System.currentTimeMillis())
       NativeStepState.save(context, state)
     }
@@ -446,11 +461,18 @@ class NativeStepSensorEngine(
   }
 
   fun mergeJsWalkUpdate(todaySteps: Int, stepSource: String) {
-    // Health Connect / HealthKit from JS is authoritative for daily totals when higher.
-    // Never re-anchor downward — that freezes closed-app sensor continuation.
+    // Health Connect / HealthKit from JS is authoritative for daily totals.
+    // Allow downward correction only for yesterday-style / bad-baseline inflation;
+    // modest provisional lead over lagging HC must keep closed-app sensor continuation.
     ensureCurrentDay()
     if (!isDeviceSensorSource(stepSource)) {
-      val known = maxOf(todaySteps.coerceAtLeast(0), state.todaySteps)
+      val incoming = todaySteps.coerceAtLeast(0)
+      val known =
+        if (state.todaySteps >= 1000 && state.todaySteps > incoming + 250) {
+          incoming
+        } else {
+          maxOf(incoming, state.todaySteps)
+        }
       val total = lastSensorTotal.takeIf { it >= 0f }
       seedDailyBaselineFromKnownSteps(known, total, stepSource)
       return

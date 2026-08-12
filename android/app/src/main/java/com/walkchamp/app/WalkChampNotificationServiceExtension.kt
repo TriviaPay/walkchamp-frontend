@@ -1,4 +1,4 @@
-package com.globalwalkerleague.app
+package com.walkchamp.app
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -16,7 +16,7 @@ import org.json.JSONObject
 /**
  * OneSignal Android presentation only:
  * - Small icon: monochrome walker (status bar)
- * - Large icon: Walk Champ brand only when the system does not already show
+ * - Large icon: WalkChamp brand only when the system does not already show
  *   the default app icon in the notification header (pre-N / unsupported)
  * - Big picture: notification-type illustration (notification_friend, …)
  */

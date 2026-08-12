@@ -662,7 +662,7 @@ export default function GroupDetailScreen() {
                     {[
                       { icon: "users", val: `${group.memberCount}`, lbl: "Members", color: T.cyan },
                       { icon: "target", val: fmtN(group.dailyGoalSteps), lbl: "Daily Goal", color: T.purple },
-                      { icon: "zap", val: `${groupStats?.bestStreak ?? 0}`, lbl: "Day Streak 🔥", color: T.gold },
+                      { icon: "zap", val: `${groupStats?.bestStreak ?? 0}`, lbl: "Day Streak", color: T.gold },
                     ].map((st) => (
                       <View key={st.lbl} style={[s.statCard, { borderColor: st.color + "30" }]}>
                         <Feather name={st.icon as never} size={13} color={st.color} />
@@ -1025,7 +1025,7 @@ function OverallTab({ overallLB, groupStats, theme, onMemberPress }: {
         </View>
         <Text style={{ color: T.muted, fontSize: rf(11), marginBottom: 10 }}>vs. previous 7 days</Text>
         <Sparkline data={spark} color={momentumPos ? T.green : T.red} width={SCREEN_W - 64} height={48} />
-        {momentumPos && <Text style={{ color: T.green, fontSize: rf(11), fontWeight: "700", textAlign: "right", marginTop: 6 }}>Great momentum! 🔥</Text>}
+        {momentumPos && <Text style={{ color: T.green, fontSize: rf(11), fontWeight: "700", textAlign: "right", marginTop: 6 }}>Great momentum!</Text>}
       </View>
 
       {/* All-time leaderboard */}
@@ -1385,6 +1385,7 @@ function InviteMemberModal({ groupId, theme, onClose, onInvited }: {
   groupId: string; theme: { g1: string; g2: string; glow: string };
   onClose: () => void; onInvited: () => void;
 }) {
+  const { safeTop } = useSafeLayout();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchUser[]>([]);
   const [searching, setSearching] = useState(false);
@@ -1436,7 +1437,7 @@ function InviteMemberModal({ groupId, theme, onClose, onInvited }: {
 
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={[s.modalRoot, { backgroundColor: T.bg }]}>
+      <View style={[s.modalRoot, { backgroundColor: T.bg, paddingTop: safeTop }]}>
         <View style={[s.modalHeader, { borderBottomColor: T.border }]}>
           <Feather name="user-plus" size={20} color={T.cyan} />
           <Text style={[s.modalTitle, { color: T.white, marginLeft: 10 }]}>Invite Member</Text>
@@ -1548,6 +1549,7 @@ function EditGroupModal({ group, theme, onClose, onUpdated, onDeleted }: {
   group: Group; theme: { g1: string; g2: string; glow: string };
   onClose: () => void; onUpdated: () => void; onDeleted: () => void;
 }) {
+  const { safeTop } = useSafeLayout();
   const [groupName, setGroupName] = useState(group.groupName);
   const [goal, setGoal] = useState(group.dailyGoalSteps);
   const [saving, setSaving] = useState(false);
@@ -1633,7 +1635,7 @@ function EditGroupModal({ group, theme, onClose, onUpdated, onDeleted }: {
 
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={[s.modalRoot, { backgroundColor: T.bg }]}>
+      <View style={[s.modalRoot, { backgroundColor: T.bg, paddingTop: safeTop }]}>
         <View style={[s.modalHeader, { borderBottomColor: T.border }]}>
           <Feather name="settings" size={20} color={T.cyan} />
           <Text style={[s.modalTitle, { color: T.white, marginLeft: 10 }]}>Edit Group</Text>
@@ -1744,6 +1746,7 @@ function LeaveModal({ groupName, groupId, isAdmin, otherMembers, theme, onClose,
   theme: { g1: string; g2: string };
   onClose: () => void; onLeft: () => void;
 }) {
+  const { safeTop } = useSafeLayout();
   const [leaving, setLeaving] = useState(false);
   const [selectedNewAdmin, setSelectedNewAdmin] = useState<string | null>(null);
 
@@ -1772,7 +1775,7 @@ function LeaveModal({ groupName, groupId, isAdmin, otherMembers, theme, onClose,
 
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={[s.modalRoot, { backgroundColor: T.bg }]}>
+      <View style={[s.modalRoot, { backgroundColor: T.bg, paddingTop: safeTop }]}>
         {/* ── Header ── */}
         <View style={[s.modalHeader, { borderBottomColor: T.border }]}>
           <Feather name="log-out" size={20} color={T.red} />

@@ -86,7 +86,7 @@ export async function runFirstLaunchPermissionFlow(options: {
         return;
       }
       // User already completed the onboarding HC step (connect / maybe later / denied).
-      // Never open a second WearableSetupModal on home after Enter Walk Champ.
+      // Never open a second WearableSetupModal on home after Enter WalkChamp.
       if (onboarding === "completed") {
         const healthChoice = await getHealthOnboardingChoice();
         if (healthChoice != null) {

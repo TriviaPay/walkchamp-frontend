@@ -70,13 +70,13 @@ const Hero: React.FC = () => {
 
             <div className="hero-status-ticker" aria-label="Studio updates">
               <div className="ticker-track">
-                <span>Walk Champ — Now Available</span>
+                <span>WalkChamp — Now Available</span>
                 <span>Trivia Coin — In Development</span>
                 <span>Vibe Link — In Development</span>
                 <span>Mira Gaming Private Limited</span>
               </div>
               <div className="ticker-track" aria-hidden="true">
-                <span>Walk Champ — Now Available</span>
+                <span>WalkChamp — Now Available</span>
                 <span>Trivia Coin — In Development</span>
                 <span>Vibe Link — In Development</span>
                 <span>Mira Gaming Private Limited</span>

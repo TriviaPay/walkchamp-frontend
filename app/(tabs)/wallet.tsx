@@ -1,7 +1,11 @@
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import {
+  apiFetchAllowed,
+  markApiFetched,
+  resetApiFetchGate,
+} from "@/utils/apiRequestCoordinator";
 import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import {
   ActivityIndicator,
@@ -378,7 +382,8 @@ function WalletScreenContent() {
     if (ui === "success") {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setPaymentResult("success");
-      void refreshWallet().catch(() => {});
+      resetApiFetchGate("wallet_tab_focus");
+      void refreshWallet({ force: true, silent: true }).catch(() => {});
       return;
     }
     if (ui === "cancelled") {
@@ -387,11 +392,13 @@ function WalletScreenContent() {
     }
     if (ui === "verification_failed") {
       setPaymentResult("verification_failed");
-      void refreshWallet().catch(() => {});
+      resetApiFetchGate("wallet_tab_focus");
+      void refreshWallet({ force: true, silent: true }).catch(() => {});
       return;
     }
     setPaymentResult("failed");
-    void refreshWallet().catch(() => {});
+    resetApiFetchGate("wallet_tab_focus");
+    void refreshWallet({ force: true, silent: true }).catch(() => {});
   }, [refreshWallet, router]);
 
   // Show result saved by Universal Link / payment return handler.
@@ -893,7 +900,7 @@ function WalletScreenContent() {
           <Text style={[styles.disclaimerText, { color: colors.mutedForeground }]}>
             All rewards are subject to verification of genuine walking activity. Suspicious or
             fraudulent activity may result in reward cancellation, account suspension, or withdrawal
-            rejection. Walk Champ is a skill-based activity platform — results depend on your actual
+            rejection. WalkChamp is a skill-based activity platform — results depend on your actual
             step performance. Submission of a withdrawal request does not guarantee payout.
           </Text>
         </View>
@@ -928,7 +935,7 @@ function WalletScreenContent() {
 
       {/* ── Deposit Modal ──────────────────────────────────────────────────── */}
       <Modal visible={showDeposit} animationType="slide" presentationStyle="pageSheet">
-        <View style={[styles.modal, { backgroundColor: colors.background }]}>
+        <View style={[styles.modal, { backgroundColor: colors.background, paddingTop: safeTop }]}>
           <View style={styles.modalHeader}>
             <Text style={[styles.modalTitle, { color: colors.foreground }]}>Add Money</Text>
             <TouchableOpacity onPress={closeDeposit} disabled={isDepositBusy}>
@@ -1177,7 +1184,7 @@ function WalletScreenContent() {
 
       {/* ── Withdraw Modal ─────────────────────────────────────────────────── */}
       <Modal visible={showWithdraw} animationType="slide" presentationStyle="pageSheet">
-        <View style={[styles.modal, { backgroundColor: colors.background }]}>
+        <View style={[styles.modal, { backgroundColor: colors.background, paddingTop: safeTop }]}>
           <View style={styles.modalHeader}>
             <Text style={[styles.modalTitle, { color: colors.foreground }]}>
               Request Withdrawal
@@ -1453,8 +1460,8 @@ const styles = StyleSheet.create({
   txAmount: { fontSize: rf(15), fontWeight: "700" },
   emptyTx: { padding: rs(32), alignItems: "center", gap: 8 },
   emptyText: { fontSize: rf(15) },
-  // Modal shared
-  modal: { flex: 1, paddingTop: 20 },
+  // Modal shared — top inset applied inline via safeTop (status bar / notch).
+  modal: { flex: 1 },
   modalHeader: {
     flexDirection: "row",
     justifyContent: "space-between",

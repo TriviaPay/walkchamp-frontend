@@ -28,13 +28,13 @@ import {
 } from "../services/dummyUnlimitedRace/dummyUnlimitedRaceData";
 
 // ── Ghost / filter ────────────────────────────────────────────────────────────
-assert.equal(isGhostOrSystemHost({ username: "Walk Champ Admin" }), true);
+assert.equal(isGhostOrSystemHost({ username: "WalkChamp Admin" }), true);
 assert.equal(isGhostOrSystemHost({ username: "normal_user" }), false);
 assert.equal(isGhostOrSystemHost({ isGhostHost: true, username: "x" }), true);
 
 const filtered = filterRaceParticipantsForDisplay([
   { id: "1", userId: "a", username: "alice", status: "active" },
-  { id: "2", userId: "b", username: "Walk Champ Admin", status: "active" },
+  { id: "2", userId: "b", username: "WalkChamp Admin", status: "active" },
   { id: "3", userId: "c", username: "bob", status: "left" },
   { id: "4", userId: "d", username: "cara", status: "disqualified" },
   { id: "5", userId: "e", username: "dan", status: "active" },
@@ -43,7 +43,7 @@ assert.equal(filtered.length, 2);
 
 const unlimitedFiltered = filterUnlimitedParticipantsForDisplay([
   { id: "1", userId: "a", username: "alice", status: "active" },
-  { id: "2", userId: "b", username: "Walk Champ Admin", status: "active" },
+  { id: "2", userId: "b", username: "WalkChamp Admin", status: "active" },
   { id: "3", userId: "c", username: "bob", status: "left" },
   { id: "4", userId: "d", username: "cara", status: "disqualified" },
   { id: "5", userId: "e", username: "dan", status: "active" },

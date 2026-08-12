@@ -498,7 +498,7 @@ class WalkChampRaceProgressModule : Module() {
     val ctx = appContext.reactContext ?: return
     val body = payload["body"] as? String ?: formatWalkBody(payload)
     val deepLink = payload["deepLink"] as? String ?: "walkchamp://walk"
-    val title = payload["title"] as? String ?: "Walk Champ"
+    val title = payload["title"] as? String ?: "WalkChamp"
     WalkChampRaceForegroundService.ensureChannels(ctx)
     val intent = Intent(ctx, WalkChampRaceForegroundService::class.java).apply {
       this.action = action

@@ -15,6 +15,7 @@ import {
   shouldReleaseActiveChallengeLock,
   usdCashLeaveConfirmCopy,
   usdCashLeaveEndpoint,
+  USD_CASH_LEAVE_ACTION_LABEL,
   USD_CASH_LEAVE_POST_START_CONFIRM,
   USD_CASH_LEAVE_PRE_START_CONFIRM,
   USD_CASH_NO_CANCEL_MESSAGE,
@@ -70,6 +71,14 @@ assert.equal(
 
   const postHost = usdCashLeaveConfirmCopy({ hasStartedPreview: true, isHost: true });
   assert.match(postHost.message, /continue for other participants/i);
+
+  const streak = usdCashLeaveConfirmCopy({
+    hasStartedPreview: false,
+    isHost: false,
+    noRefund: true,
+  });
+  assert.equal(streak.confirmLabel, USD_CASH_LEAVE_ACTION_LABEL);
+  assert.match(streak.message, /no refund/i);
 }
 
 assert.equal(

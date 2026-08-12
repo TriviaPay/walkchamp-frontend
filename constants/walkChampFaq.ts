@@ -8,15 +8,15 @@ export type FaqSection = {
   items: FaqItem[];
 };
 
-/** Canonical Walk Champ FAQ — used by Profile FAQ screen and My Profile FAQ subpage. */
+/** Canonical WalkChamp FAQ — used by Profile FAQ screen and My Profile FAQ subpage. */
 export const WALK_CHAMP_FAQ: FaqSection[] = [
   {
     title: "Getting Started",
     items: [
       {
-        q: "What is Walk Champ?",
+        q: "What is WalkChamp?",
         a: [
-          "Walk Champ is a competitive walking and fitness app where users track verified steps, join challenges, race against other participants, climb leaderboards, earn coins and achievements, and compete for eligible rewards.",
+          "WalkChamp is a competitive walking and fitness app where users track verified steps, join challenges, race against other participants, climb leaderboards, earn coins and achievements, and compete for eligible rewards.",
           "",
           "Depending on availability in your region, you can participate in:",
           "• Free Challenges",
@@ -31,12 +31,12 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         ].join("\n"),
       },
       {
-        q: "What do I need to use Walk Champ?",
+        q: "What do I need to use WalkChamp?",
         a: [
           "You need:",
           "• A supported Android phone or iPhone",
           "• Apple Health on iOS or Health Connect on Android",
-          "• Permission for Walk Champ to read step information",
+          "• Permission for WalkChamp to read step information",
           "• An internet connection for registration, live updates, chat, notifications, and payments",
           "• A supported account and region for paid Cash Prize Challenges",
           "",
@@ -44,29 +44,29 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         ].join("\n"),
       },
       {
-        q: "Does Walk Champ count steps by itself?",
+        q: "Does WalkChamp count steps by itself?",
         a: [
-          "Walk Champ does not rely only on an internal pedometer.",
+          "WalkChamp does not rely only on an internal pedometer.",
           "",
-          "On iPhone, Walk Champ reads your permitted step records from Apple Health.",
+          "On iPhone, WalkChamp reads your permitted step records from Apple Health.",
           "",
-          "On Android, Walk Champ reads your permitted step records from Health Connect.",
+          "On Android, WalkChamp reads your permitted step records from Health Connect.",
           "",
           "This provides a consistent source for verifying step activity across supported phones and wearables.",
         ].join("\n"),
       },
       {
-        q: "Is Walk Champ a gambling app?",
+        q: "Is WalkChamp a gambling app?",
         a: [
-          "Walk Champ challenges are designed as skill-based walking competitions. Results are determined by verified physical activity, step progress, completion time, and challenge rules—not by random outcomes.",
+          "WalkChamp challenges are designed as skill-based walking competitions. Results are determined by verified physical activity, step progress, completion time, and challenge rules—not by random outcomes.",
           "",
-          "Cash Prize Challenges may not be available in every country or US state. Access depends on your age, account status, current location, applicable laws, and Walk Champ’s regional configuration.",
+          "Cash Prize Challenges may not be available in every country or US state. Access depends on your age, account status, current location, applicable laws, and WalkChamp’s regional configuration.",
           "",
           "Users should participate responsibly and enter only amounts they are comfortable spending.",
         ].join("\n"),
       },
       {
-        q: "Who can use Walk Champ?",
+        q: "Who can use WalkChamp?",
         a: [
           "Supported users can access general fitness, Free Challenge, Coins, Groups, leaderboard, and social features.",
           "",
@@ -78,7 +78,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
           "• An eligible payment and payout method",
           "• Acceptance of the applicable challenge terms",
           "",
-          "Walk Champ may disable paid features where they are not permitted or supported.",
+          "WalkChamp may disable paid features where they are not permitted or supported.",
         ].join("\n"),
       },
     ],
@@ -87,9 +87,9 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
     title: "Step Tracking",
     items: [
       {
-        q: "How does Walk Champ track my steps?",
+        q: "How does WalkChamp track my steps?",
         a: [
-          "Walk Champ reads step records from:",
+          "WalkChamp reads step records from:",
           "• Apple Health on iOS",
           "• Health Connect on Android",
           "",
@@ -99,17 +99,17 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
       {
         q: "How do I connect Apple Health?",
         a: [
-          "Open your Walk Champ profile and select Set Up Step Tracking.",
+          "Open your WalkChamp profile and select Set Up Step Tracking.",
           "",
-          "Allow Walk Champ to read your step information. If permission was previously denied, review the Health permissions in your iPhone settings or Apple Health, then return to Walk Champ and try again.",
+          "Allow WalkChamp to read your step information. If permission was previously denied, review the Health permissions in your iPhone settings or Apple Health, then return to WalkChamp and try again.",
         ].join("\n"),
       },
       {
         q: "How do I connect Health Connect?",
         a: [
-          "Open your Walk Champ profile and select Set Up Step Tracking.",
+          "Open your WalkChamp profile and select Set Up Step Tracking.",
           "",
-          "Install or open Health Connect when prompted, grant the required step permissions, and return to Walk Champ. Tap Try Again if the connection does not refresh automatically.",
+          "Install or open Health Connect when prompted, grant the required step permissions, and return to WalkChamp. Tap Try Again if the connection does not refresh automatically.",
           "",
           "Your phone or wearable’s companion app must also write step records into Health Connect.",
         ].join("\n"),
@@ -121,7 +121,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
           "• Keep your phone with you while walking, or use a supported wearable.",
           "• Confirm the wearable is syncing to Apple Health or Health Connect.",
           "• Keep health permissions enabled.",
-          "• Open Walk Champ periodically during long challenges.",
+          "• Open WalkChamp periodically during long challenges.",
           "• Check your race progress before the challenge ends.",
           "• Keep your phone and wearable charged.",
         ].join("\n"),
@@ -131,15 +131,15 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "A wearable may work when its companion app successfully writes step records into Apple Health or Health Connect.",
           "",
-          "Walk Champ does not necessarily read information directly from the wearable’s own app. Sync quality and timing depend on the wearable, its companion app, and the connected health platform.",
+          "WalkChamp does not necessarily read information directly from the wearable’s own app. Sync quality and timing depend on the wearable, its companion app, and the connected health platform.",
         ].join("\n"),
       },
       {
-        q: "Why is my wearable’s count different from Walk Champ?",
+        q: "Why is my wearable’s count different from WalkChamp?",
         a: [
           "Your wearable app may display its own raw step count, while Apple Health or Health Connect may merge, prioritize, delay, filter, or remove duplicate records from multiple sources.",
           "",
-          "Walk Champ uses the supported health platform as its source. Compare Walk Champ with Apple Health or Health Connect rather than only comparing it with the wearable’s own app.",
+          "WalkChamp uses the supported health platform as its source. Compare WalkChamp with Apple Health or Health Connect rather than only comparing it with the wearable’s own app.",
         ].join("\n"),
       },
       {
@@ -147,7 +147,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "Not necessarily, provided a supported wearable is recording your steps and syncing them correctly.",
           "",
-          "If neither your phone nor a wearable records the activity, Walk Champ cannot count those steps.",
+          "If neither your phone nor a wearable records the activity, WalkChamp cannot count those steps.",
         ].join("\n"),
       },
       {
@@ -160,13 +160,13 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
           "• Confirming synchronization",
           "• Checking progress before the race ends",
           "",
-          "Walk Champ cannot always recover activity that was never recorded by Apple Health or Health Connect.",
+          "WalkChamp cannot always recover activity that was never recorded by Apple Health or Health Connect.",
         ].join("\n"),
       },
       {
         q: "Do manually entered steps count?",
         a: [
-          "No. Manually entered, altered, or suspicious step records are not eligible for Walk Champ races.",
+          "No. Manually entered, altered, or suspicious step records are not eligible for WalkChamp races.",
           "",
           "Attempting to inflate activity can lead to:",
           "• Step removal",
@@ -190,20 +190,20 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         q: "Why are my steps missing or delayed?",
         a: [
           "First check:",
-          "1. Walk Champ has health permission.",
+          "1. WalkChamp has health permission.",
           "2. Your steps appear in Apple Health or Health Connect.",
           "3. Your wearable’s companion app has synchronized.",
           "4. Battery-saving settings are not blocking background activity.",
           "5. Your phone has internet access.",
           "6. Your timezone is correct.",
           "",
-          "Then reopen Walk Champ and refresh the screen.",
+          "Then reopen WalkChamp and refresh the screen.",
           "",
           "If the issue continues, contact admin@miragaming.com with screenshots, device details, race ID, and the approximate time of the issue.",
         ].join("\n"),
       },
       {
-        q: "What should I do if I reached the goal but Walk Champ shows fewer steps?",
+        q: "What should I do if I reached the goal but WalkChamp shows fewer steps?",
         a: [
           "Compare your health-platform records with the exact race start and end time.",
           "",
@@ -214,19 +214,19 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
           "• Apple Health or Health Connect records",
           "• Whether the activity synchronized before the race ended",
           "",
-          "Contact admin@miragaming.com before results are finalized when possible. Walk Champ can review technical discrepancies but cannot create steps that never reached the health platform.",
+          "Contact admin@miragaming.com before results are finalized when possible. WalkChamp can review technical discrepancies but cannot create steps that never reached the health platform.",
         ].join("\n"),
       },
       {
         q: "What happens when I travel to another timezone?",
         a: [
-          "Walk Champ stores scheduled times consistently and displays them using the applicable local timezone.",
+          "WalkChamp stores scheduled times consistently and displays them using the applicable local timezone.",
           "",
           "When traveling:",
           "• Verify the displayed race start and end times.",
           "• Keep timezone synchronization enabled.",
           "• Confirm your device time is set automatically.",
-          "• Refresh Walk Champ after arriving in the new timezone.",
+          "• Refresh WalkChamp after arriving in the new timezone.",
           "",
           "Paid challenge availability may also depend on your current location.",
         ].join("\n"),
@@ -239,7 +239,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
       {
         q: "What types of challenges are available?",
         a: [
-          "Walk Champ supports several challenge types.",
+          "WalkChamp supports several challenge types.",
           "",
           "Free Challenges have no cash or coin entry fee.",
           "",
@@ -247,7 +247,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
           "",
           "Cash Prize Challenges require an eligible cash entry and award cash prizes according to the displayed payout structure.",
           "",
-          "Sponsored Events are organized or funded by Walk Champ or a sponsor and may offer coins, cash, badges, recognition, or other configured rewards.",
+          "Sponsored Events are organized or funded by WalkChamp or a sponsor and may offer coins, cash, badges, recognition, or other configured rewards.",
           "",
           "Challenges can also be public, private, immediate, or scheduled for a future date.",
         ].join("\n"),
@@ -272,13 +272,13 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "Yes. A Free Challenge may offer coins, badges, achievements, titles, or ranking recognition when configured.",
           "",
-          "The card should display the actual reward. Walk Champ does not use negative descriptions such as “No cash prize.”",
+          "The card should display the actual reward. WalkChamp does not use negative descriptions such as “No cash prize.”",
         ].join("\n"),
       },
       {
         q: "How do Coins Battles work?",
         a: [
-          "A Coins Battle requires the displayed number of Walk Champ coins to enter.",
+          "A Coins Battle requires the displayed number of WalkChamp coins to enter.",
           "",
           "The card shows:",
           "• Coin entry amount",
@@ -291,9 +291,9 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         ].join("\n"),
       },
       {
-        q: "Are Walk Champ coins real money?",
+        q: "Are WalkChamp coins real money?",
         a: [
-          "No. Walk Champ coins are virtual in-app items used in supported app features.",
+          "No. WalkChamp coins are virtual in-app items used in supported app features.",
           "",
           "Coins are not automatically equal to cash and generally cannot be withdrawn directly as money.",
           "",
@@ -303,7 +303,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
       {
         q: "Can I withdraw coins?",
         a: [
-          "Walk Champ coins cannot be directly withdrawn as cash unless a future feature explicitly states otherwise.",
+          "WalkChamp coins cannot be directly withdrawn as cash unless a future feature explicitly states otherwise.",
           "",
           "Coins can be used for supported features such as Coins Battles and other eligible in-app activities.",
         ].join("\n"),
@@ -343,7 +343,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
       {
         q: "Are processing and platform fees deducted from the prize pool?",
         a: [
-          "Under Walk Champ’s current model, the displayed entry contribution goes toward the prize pool.",
+          "Under WalkChamp’s current model, the displayed entry contribution goes toward the prize pool.",
           "",
           "Processing and platform fees are charged separately when applicable.",
           "",
@@ -383,7 +383,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
           "",
           "For example, a large race may reward several top finishers, while a small race may reward only one, two, or three positions.",
           "",
-          "Walk Champ applies the displayed percentages to the final prize pool and handles cent-level rounding automatically.",
+          "WalkChamp applies the displayed percentages to the final prize pool and handles cent-level rounding automatically.",
         ].join("\n"),
       },
       {
@@ -418,7 +418,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
       {
         q: "What is a Sponsored Event?",
         a: [
-          "A Sponsored Event is a special challenge organized or funded by Walk Champ or an approved partner.",
+          "A Sponsored Event is a special challenge organized or funded by WalkChamp or an approved partner.",
           "",
           "Sponsored rewards may include:",
           "• Cash",
@@ -479,7 +479,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
           "• Race-track theme",
           "• Invite list or room code",
           "",
-          "All challenge values must meet Walk Champ’s validation rules.",
+          "All challenge values must meet WalkChamp’s validation rules.",
         ].join("\n"),
       },
       {
@@ -531,7 +531,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "A live race generally should not be cancelled directly by the host.",
           "",
-          "Walk Champ support or administrative intervention may be required for serious technical, safety, or compliance issues.",
+          "WalkChamp support or administrative intervention may be required for serious technical, safety, or compliance issues.",
         ].join("\n"),
       },
     ],
@@ -621,9 +621,9 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "No.",
           "",
-          "You can leave the Waiting Room and continue using Walk Champ. The race starts automatically at the scheduled time.",
+          "You can leave the Waiting Room and continue using WalkChamp. The race starts automatically at the scheduled time.",
           "",
-          "Enable push notifications so Walk Champ can alert you when the race begins.",
+          "Enable push notifications so WalkChamp can alert you when the race begins.",
         ].join("\n"),
       },
       {
@@ -756,7 +756,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "Users may send supported messages, cheers, and reactions during a race.",
           "",
-          "Live chat must follow Walk Champ’s community guidelines. Harassment, spam, offensive material, and misuse can be reported and may lead to restrictions.",
+          "Live chat must follow WalkChamp’s community guidelines. Harassment, spam, offensive material, and misuse can be reported and may lead to restrictions.",
         ].join("\n"),
       },
       {
@@ -800,7 +800,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "For goal-based races, the user who reaches the required goal first using valid verified records may be ranked first.",
           "",
-          "Walk Champ records the most precise eligible completion timestamp available.",
+          "WalkChamp records the most precise eligible completion timestamp available.",
           "",
           "Final results may be reviewed before rewards are released.",
         ].join("\n"),
@@ -808,7 +808,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
       {
         q: "What happens if two users finish at the same time?",
         a: [
-          "Walk Champ compares precise verified completion timestamps.",
+          "WalkChamp compares precise verified completion timestamps.",
           "",
           "If the timestamps are exactly identical, the challenge’s configured tie-break rule is applied.",
         ].join("\n"),
@@ -818,7 +818,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "The outcome follows the rules displayed before registration.",
           "",
-          "Depending on the challenge, Walk Champ may:",
+          "Depending on the challenge, WalkChamp may:",
           "• Use final step ranking",
           "• Apply a no-winner policy",
           "• Refund eligible entries",
@@ -831,7 +831,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "Not always.",
           "",
-          "Results may remain provisional while Walk Champ verifies:",
+          "Results may remain provisional while WalkChamp verifies:",
           "• Eligible steps",
           "• Completion timestamps",
           "• Withdrawals",
@@ -849,7 +849,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
     title: "Groups and Social Features",
     items: [
       {
-        q: "What are Walk Champ Groups?",
+        q: "What are WalkChamp Groups?",
         a: [
           "Groups let users compete and stay connected with:",
           "• Friends",
@@ -950,7 +950,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "Tap the displayed invite code or copy icon.",
           "",
-          "Walk Champ copies the code to your clipboard and shows a confirmation message.",
+          "WalkChamp copies the code to your clipboard and shows a confirmation message.",
         ].join("\n"),
       },
       {
@@ -1007,7 +1007,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         q: "Why did I not receive a race-start notification?",
         a: [
           "Check that:",
-          "• Push Notifications are enabled in Walk Champ",
+          "• Push Notifications are enabled in WalkChamp",
           "• System notifications are enabled",
           "• Battery optimization is not blocking background activity",
           "• Your device has internet access",
@@ -1016,14 +1016,14 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
       },
       {
         q: "What does the vibration setting control?",
-        a: "The vibration setting controls supported haptic feedback within Walk Champ, such as button interactions, race events, alerts, and other in-app actions.",
+        a: "The vibration setting controls supported haptic feedback within WalkChamp, such as button interactions, race events, alerts, and other in-app actions.",
       },
       {
         q: "Can I use dark mode?",
         a: [
           "Yes. Dark mode can be enabled from My Profile when supported.",
           "",
-          "Walk Champ’s primary design is optimized for a premium dark experience.",
+          "WalkChamp’s primary design is optimized for a premium dark experience.",
         ].join("\n"),
       },
     ],
@@ -1032,13 +1032,13 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
     title: "Coins, Cash Wallet, and Payments",
     items: [
       {
-        q: "What is the Walk Champ Wallet?",
+        q: "What is the WalkChamp Wallet?",
         a: [
           "The Wallet manages supported balances and transaction information, which may include:",
           "• Cash winnings",
           "• Refunds",
           "• Promotional credits",
-          "• Walk Champ coins",
+          "• WalkChamp coins",
           "• Purchases",
           "• Withdrawals",
           "• Pending transactions",
@@ -1051,7 +1051,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "Eligible wallet cash or credits may be applied to another challenge when this option is supported at checkout.",
           "",
-          "Walk Champ coins can be used only for supported coin-based features.",
+          "WalkChamp coins can be used only for supported coin-based features.",
         ].join("\n"),
       },
       {
@@ -1086,7 +1086,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
       {
         q: "Are there withdrawal fees?",
         a: [
-          "Any Walk Champ fee should be shown before confirmation.",
+          "Any WalkChamp fee should be shown before confirmation.",
           "",
           "Banks, payment processors, currency-conversion providers, or payout services may charge their own fees depending on the country, currency, and method.",
         ].join("\n"),
@@ -1096,7 +1096,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "Challenge winnings may be taxable depending on your location.",
           "",
-          "Walk Champ does not provide tax advice. Users are responsible for maintaining records and consulting a qualified tax professional when necessary.",
+          "WalkChamp does not provide tax advice. Users are responsible for maintaining records and consulting a qualified tax professional when necessary.",
         ].join("\n"),
       },
       {
@@ -1104,7 +1104,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         a: [
           "Withdraw any eligible cash balance before deleting your account.",
           "",
-          "Pending financial transactions may delay account deletion. Walk Champ may retain certain payment, security, fraud-prevention, or compliance records as required by law.",
+          "Pending financial transactions may delay account deletion. WalkChamp may retain certain payment, security, fraud-prevention, or compliance records as required by law.",
           "",
           "Contact admin@miragaming.com for balance-related assistance.",
         ].join("\n"),
@@ -1131,7 +1131,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         ].join("\n"),
       },
       {
-        q: "What happens if Walk Champ cancels a challenge?",
+        q: "What happens if WalkChamp cancels a challenge?",
         a: [
           "Applicable entry amounts, coins, or credits are returned according to the original challenge and payment rules.",
           "",
@@ -1156,7 +1156,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         q: "What should I do if I was charged incorrectly?",
         a: [
           "Contact admin@miragaming.com and provide:",
-          "• Walk Champ username",
+          "• WalkChamp username",
           "• Account email",
           "• Transaction date",
           "• Amount",
@@ -1173,9 +1173,9 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
     title: "Fair Play and Community",
     items: [
       {
-        q: "How does Walk Champ prevent cheating?",
+        q: "How does WalkChamp prevent cheating?",
         a: [
-          "Walk Champ may use:",
+          "WalkChamp may use:",
           "• Verified health-platform data",
           "• Manual-entry exclusion",
           "• Device and source checks",
@@ -1207,7 +1207,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
       {
         q: "What happens if a user cheats?",
         a: [
-          "Depending on severity, Walk Champ may:",
+          "Depending on severity, WalkChamp may:",
           "• Remove invalid steps",
           "• Disqualify the user",
           "• Remove the user from a race",
@@ -1219,9 +1219,9 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         ].join("\n"),
       },
       {
-        q: "What are the Walk Champ community guidelines?",
+        q: "What are the WalkChamp community guidelines?",
         a: [
-          "Walk Champ users should:",
+          "WalkChamp users should:",
           "• Treat others respectfully",
           "• Avoid harassment, threats, discrimination, and body-shaming",
           "• Keep chats free from spam",
@@ -1255,7 +1255,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
     title: "Availability, Location, and Legal",
     items: [
       {
-        q: "Where is Walk Champ available?",
+        q: "Where is WalkChamp available?",
         a: [
           "General features may be available in supported countries.",
           "",
@@ -1275,7 +1275,7 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         ].join("\n"),
       },
       {
-        q: "Can I use Walk Champ while traveling?",
+        q: "Can I use WalkChamp while traveling?",
         a: [
           "General app access may continue while traveling.",
           "",
@@ -1287,16 +1287,16 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         ].join("\n"),
       },
       {
-        q: "Why does Walk Champ request location permission?",
+        q: "Why does WalkChamp request location permission?",
         a: [
-          "Walk Champ may use location to:",
+          "WalkChamp may use location to:",
           "• Determine your timezone",
           "• Display scheduled times correctly",
           "• Verify regional eligibility",
           "• Apply country or state restrictions",
           "• Support fraud prevention and compliance",
           "",
-          "Location use is governed by Walk Champ’s Privacy Policy.",
+          "Location use is governed by WalkChamp’s Privacy Policy.",
         ].join("\n"),
       },
     ],
@@ -1333,9 +1333,9 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
         ].join("\n"),
       },
       {
-        q: "How does Walk Champ protect my privacy?",
+        q: "How does WalkChamp protect my privacy?",
         a: [
-          "Walk Champ uses data to operate the app, verify steps, administer races, process payments, deliver notifications, prevent fraud, and provide support.",
+          "WalkChamp uses data to operate the app, verify steps, administer races, process payments, deliver notifications, prevent fraud, and provide support.",
           "",
           "Public profiles show only approved public information. Health, payment, authentication, and private group details should not be publicly exposed.",
           "",
@@ -1355,10 +1355,10 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
           "• Changing tabs and returning",
           "• Reopening the screen",
           "• Checking your internet connection",
-          "• Restarting Walk Champ",
+          "• Restarting WalkChamp",
           "• Updating the app",
           "",
-          "Walk Champ should refresh room counts, Next Race cards, registrations, and live states after successful actions.",
+          "WalkChamp should refresh room counts, Next Race cards, registrations, and live states after successful actions.",
         ].join("\n"),
       },
       {
@@ -1423,16 +1423,16 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
     title: "Support",
     items: [
       {
-        q: "How do I contact Walk Champ support?",
+        q: "How do I contact WalkChamp support?",
         a: [
           "Email: admin@miragaming.com",
           "",
           "Include:",
-          "• Walk Champ username",
+          "• WalkChamp username",
           "• Account email",
           "• Device model",
           "• Android or iOS version",
-          "• Walk Champ app version",
+          "• WalkChamp app version",
           "• Description of the issue",
           "• Race or room ID",
           "• Approximate date and time",
@@ -1444,9 +1444,9 @@ export const WALK_CHAMP_FAQ: FaqSection[] = [
       {
         q: "Still need help?",
         a: [
-          "Contact the Walk Champ support team at admin@miragaming.com.",
+          "Contact the WalkChamp support team at admin@miragaming.com.",
           "",
-          "Suggested subject: Walk Champ Support Request",
+          "Suggested subject: WalkChamp Support Request",
           "",
           "Include your username, device information, and a clear description of the issue so the support team can assist you faster.",
         ].join("\n"),

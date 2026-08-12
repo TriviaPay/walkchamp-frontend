@@ -73,6 +73,8 @@ export default function WearableSetupModal({
   const [hcAvailability, setHcAvailability] = useState<HCAvailability | null>(null);
   const [installLoading, setInstallLoading] = useState(false);
   const [limitedLoading, setLimitedLoading] = useState(false);
+  /** Shown when user taps Next on Enable Step Tracking without granting yet. */
+  const [enableTrackingHint, setEnableTrackingHint] = useState(false);
   /** True after Enable Step Tracking succeeded this open — survives stale HC "unknown" cache. */
   const stepsGrantedThisSessionRef = useRef(false);
   const useOnboardingAccent = accent === "onboarding";
@@ -199,6 +201,7 @@ export default function WearableSetupModal({
       setSaving(false);
       setPermLoading(false);
       setInstallLoading(false);
+      setEnableTrackingHint(false);
       stepsGrantedThisSessionRef.current = false;
       if (isIOS) {
         void checkPerm();
@@ -253,6 +256,7 @@ export default function WearableSetupModal({
       if (granted) {
         stepsGrantedThisSessionRef.current = true;
         setPermStatus("granted");
+        setEnableTrackingHint(false);
         setAndroidPhase("setup");
         // Advance past Allow Steps so Next/Done do not bounce back to step 1.
         setStep(Math.max(2, TOTAL_ANDROID - 2));
@@ -306,6 +310,7 @@ export default function WearableSetupModal({
         );
         if (granted) {
           stepsGrantedThisSessionRef.current = true;
+          setEnableTrackingHint(false);
           setStep(Math.max(2, TOTAL_IOS - 2));
         }
       } else {
@@ -428,20 +433,17 @@ export default function WearableSetupModal({
     // cannot mark setup complete while Profile still shows "Tap to connect".
     const allowStepsIndex = 1;
     if (step === allowStepsIndex) {
-      let live = await resolveLivePermStatus();
+      const live = await resolveLivePermStatus();
       setPermStatus(live);
-      if (live !== "granted") {
-        // Don't silently no-op (feels like Next is broken / looping).
-        // Kick Enable once; if still not granted, stay here with clear CTA.
-        if (!permLoading) {
-          await requestPerm();
-          live = await resolveLivePermStatus();
-          setPermStatus(live);
-        }
-        if (live !== "granted") return;
+      const granted =
+        live === "granted" || stepsGrantedThisSessionRef.current;
+      if (!granted) {
+        setEnableTrackingHint(true);
+        return;
       }
+      setEnableTrackingHint(false);
     }
-    setStep(s => Math.min(s + 1, (isIOS ? TOTAL_IOS : TOTAL_ANDROID) - 1));
+    setStep((s) => Math.min(s + 1, (isIOS ? TOTAL_IOS : TOTAL_ANDROID) - 1));
   };
   const goBack = () => setStep(s => Math.max(s - 1, 0));
   const isLast = step === (isIOS ? TOTAL_IOS : TOTAL_ANDROID) - 1;
@@ -453,6 +455,7 @@ export default function WearableSetupModal({
       if (!ok) return false;
       stepsGrantedThisSessionRef.current = true;
       setPermStatus("granted");
+      setEnableTrackingHint(false);
       setAndroidPhase("setup");
       setStep(TOTAL_ANDROID - 1);
       return true;
@@ -535,8 +538,8 @@ export default function WearableSetupModal({
         <Text style={[ws.title, { color: colors.foreground }]}>Health Connect Required</Text>
         <Text style={[ws.desc, { color: colors.mutedForeground }]}>
           {isUpdate
-            ? "Walk Champ requires an updated version of Health Connect to read your verified steps."
-            : "Walk Champ uses Health Connect to read your verified steps for challenges, races, and leaderboards."}
+            ? "WalkChamp requires an updated version of Health Connect to read your verified steps."
+            : "WalkChamp uses Health Connect to read your verified steps for challenges, races, and leaderboards."}
         </Text>
         <PrimaryAction
           onPress={() => {
@@ -611,7 +614,7 @@ export default function WearableSetupModal({
       {!isIOS && (
         <View style={[ws.infoCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Text style={[ws.infoText, { color: colors.mutedForeground }]}>
-            After allowing, Walk Champ appears under Health Connect → App permissions.
+            After allowing, WalkChamp appears under Health Connect → App permissions.
           </Text>
         </View>
       )}
@@ -686,7 +689,7 @@ export default function WearableSetupModal({
         </View>
         <Text style={[ws.title, { color: colors.foreground }]}>Connect to Health Connect</Text>
         <Text style={[ws.desc, { color: colors.mutedForeground }]}>
-          Walk Champ reads verified steps from Health Connect for races and leaderboards.
+          WalkChamp reads verified steps from Health Connect for races and leaderboards.
         </Text>
       </View>
     ),
@@ -774,6 +777,11 @@ export default function WearableSetupModal({
 
         {showFooter && (
           <View style={[ws.footer, { paddingBottom: safeBottom + 16, borderTopColor: colors.border }]}>
+            {enableTrackingHint && step === 1 && !isAndroidPreCheck ? (
+              <Text style={[ws.enableHint, { color: "#F87171" }]}>
+                Enable tracking and then go for next
+              </Text>
+            ) : null}
             <TouchableOpacity
               style={[
                 ws.nextBtn,
@@ -846,6 +854,12 @@ const ws = StyleSheet.create({
   infoCard: { borderRadius: rs(14), borderWidth: 1, padding: rs(16), gap: 6 },
   infoText: { fontSize: rf(14), lineHeight: rf(22) },
   footer: { paddingHorizontal: rs(24), paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  enableHint: {
+    fontSize: rf(12),
+    fontWeight: "600",
+    textAlign: "center",
+    marginBottom: 8,
+  },
   nextBtn: { borderRadius: 16, alignItems: "center", overflow: "hidden", minHeight: 54 },
   nextBtnGrad: {
     minHeight: 54,

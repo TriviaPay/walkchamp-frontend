@@ -35,7 +35,7 @@ export default function CompletionOnboardingScreen() {
       showBack
       footer={
         <>
-          <OnboardingPrimaryButton label="Enter Walk Champ" onPress={() => void enterApp()} />
+          <OnboardingPrimaryButton label="Enter WalkChamp" onPress={() => void enterApp()} />
           <OnboardingSecondaryButton
             label="Review Terms and Privacy"
             onPress={() => router.push("/legal")}
@@ -44,7 +44,7 @@ export default function CompletionOnboardingScreen() {
       }
     >
       <OnboardingMascot source={ONBOARDING_ASSETS.completion} />
-      <Text style={styles.title}>You’re Ready to Walk Champ</Text>
+      <Text style={styles.title}>You’re Ready to WalkChamp</Text>
       <Text style={styles.subtitle}>Join your first challenge and start walking.</Text>
       <View style={styles.cards}>
         {[

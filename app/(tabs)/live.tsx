@@ -31,6 +31,8 @@ import {
 } from "@/utils/raceDateGrouping";
 import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
 import { ChallengeEndsPillLabel } from "@/components/ChallengeEndsPillLabel";
+import { displayChallengeTitle } from "@/features/unlimited/mappers/unlimitedLiveUiCopy";
+import { STREAK_ON_IMG } from "@/utils/brandImages";
 import { AppAlert } from "@/components/AppAlert";
 import { Image } from "expo-image";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
@@ -749,235 +751,6 @@ async function fetchMyActiveRace(): Promise<MyActiveRace | null> {
   return primary;
 }
 
-interface ScheduledEvt {
-  id: string;
-  title: string;
-  status: string;
-  scheduledStartAt: string | null;
-  prizePoolCents: number;
-  targetSteps: number;
-  registeredCount: number;
-  maxSlots: number;
-  isRegistered?: boolean;
-  isActive?: boolean;
-}
-
-// ── Palette cycling for sponsored event cards ──────────────────────────────────
-const SPONSORED_PALETTES = [
-  { grad: ["#0e0025", "#1d004e", "#0a0818"] as [string, string, string], border: "#7C3AFF55", bar: "#7C3AFF", glow: "#7C3AFF", btnGrad: ["#5B21B6", "#7C3AFF", "#C47BFF"] as [string, string, string] },
-  { grad: ["#001a1a", "#003344", "#050f1a"] as [string, string, string], border: "#00B4FF45", bar: "#00B4FF", glow: "#00B4FF", btnGrad: ["#007ACC", "#00B4FF", "#00E5C8"] as [string, string, string] },
-  { grad: ["#1a0800", "#2e1200", "#0f0a00"] as [string, string, string], border: "#FF8C0045", bar: "#FF8C00", glow: "#FF8C00", btnGrad: ["#CC4400", "#FF6600", "#FFB000"] as [string, string, string] },
-];
-const COIN_IMG_SRC = require("../../assets/images/game-coin.png");
-const BLUE_SHOE_SRC = require("../../assets/images/footstep.png");
-
-// ── Sponsored event card (premium) ────────────────────────────────────────────
-function SponsoredEventRow({ evt, index }: { evt: ScheduledEvt; index: number }) {
-  const isLive      = evt.status === "in_progress";
-  const isCompleted = evt.status === "completed";
-  const isUpcoming  = evt.status === "scheduled";
-  const isFeatured  = index === 0;
-
-  const palette = SPONSORED_PALETTES[index % SPONSORED_PALETTES.length];
-  const statusLabel = isLive ? "LIVE NOW" : isCompleted ? "COMPLETED" : "UPCOMING";
-  const statusColor = isLive ? NEON_GREEN : isCompleted ? "#F59E0B" : palette.glow;
-
-  const isMorning = evt.title.toLowerCase().includes("morning");
-
-  const dateStr = evt.scheduledStartAt
-    ? new Date(evt.scheduledStartAt).toLocaleString([], {
-        weekday: "short", month: "short", day: "numeric",
-        hour: "numeric", minute: "2-digit",
-      })
-    : "Date TBD";
-
-  const prizeAmount  = (evt.prizePoolCents / 100).toFixed(0);
-  const hasPrize     = evt.prizePoolCents > 0;
-  const slotsLeft    = Math.max(0, evt.maxSlots - evt.registeredCount);
-  const isFull       = slotsLeft === 0;
-  const fillPct      = evt.maxSlots > 0
-    ? Math.min(100, Math.round((evt.registeredCount / evt.maxSlots) * 100))
-    : 0;
-
-  return (
-    <LinearGradient
-      colors={palette.grad}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={{
-        marginBottom: 16,
-        borderRadius: 22, borderWidth: 1.5,
-        borderColor: palette.border, overflow: "hidden",
-      }}
-    >
-      {/* FEATURED diagonal banner */}
-      {isFeatured && (
-        <View style={{
-          position: "absolute", top: 14, left: -22, zIndex: 10,
-          backgroundColor: palette.glow, paddingHorizontal: 28, paddingVertical: 4,
-          transform: [{ rotate: "-38deg" }],
-        }}>
-          <Text style={{ color: "#FFF", fontSize: rf(9), fontWeight: "800", letterSpacing: 1 }}>FEATURED</Text>
-        </View>
-      )}
-
-      <View style={{ padding: 18 }}>
-        {/* Header row: left circle icon + title + status */}
-        <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 14, marginBottom: 16 }}>
-          {/* Circle icon */}
-          <View style={{
-            width: 60, height: 60, borderRadius: 30,
-            borderWidth: 2, borderColor: palette.glow + "AA",
-            backgroundColor: palette.glow + "20",
-            alignItems: "center", justifyContent: "center",
-            flexShrink: 0,
-          }}>
-            {isMorning
-              ? <Image source={BLUE_SHOE_SRC} style={{ width: 34, height: 34 }} contentFit="contain" />
-              : <Feather name="moon" size={26} color={palette.glow} />}
-          </View>
-
-          {/* Title + date */}
-          <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
-              <Text style={{ color: "#FFF", fontSize: rf(16), fontWeight: "900", letterSpacing: -0.3, flex: 1, marginRight: 8 }}
-                numberOfLines={2}>
-                {evt.title}
-              </Text>
-              {/* Status pill */}
-              <View style={{
-                paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8,
-                backgroundColor: statusColor + "25", borderWidth: 1,
-                borderColor: statusColor + "70", flexDirection: "row",
-                alignItems: "center", gap: 4, flexShrink: 0,
-              }}>
-                {isLive && <View style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: NEON_GREEN }} />}
-                <Text style={{ color: statusColor, fontSize: rf(9.5), fontWeight: "800", letterSpacing: 0.5 }}>
-                  {statusLabel}
-                </Text>
-              </View>
-            </View>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: 5 }}>
-              <Feather name="calendar" size={11} color={MUTED} />
-              <Text style={{ color: MUTED, fontSize: rf(12) }}>{dateStr}</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Stats tiles row */}
-        <View style={{ flexDirection: "row", gap: 8, marginBottom: 14 }}>
-          {hasPrize && (
-            <View style={{
-              flex: 1, backgroundColor: "#F59E0B18", borderRadius: 14,
-              paddingVertical: 10, paddingHorizontal: 6,
-              borderWidth: 1, borderColor: "#F59E0B35", alignItems: "center",
-            }}>
-              <Text style={{ fontSize: rf(18) }}>🎁</Text>
-              <Text style={{ color: "#F59E0B", fontSize: rf(15), fontWeight: "900", marginTop: 2 }}>
-                $5 each
-              </Text>
-              <Text style={{ color: MUTED, fontSize: rf(9.5), marginTop: 2, fontWeight: "600", letterSpacing: 0.3 }}>2 WINNERS</Text>
-            </View>
-          )}
-          <View style={{
-            flex: 1, backgroundColor: palette.glow + "14", borderRadius: 14,
-            paddingVertical: 10, paddingHorizontal: 6,
-            borderWidth: 1, borderColor: palette.glow + "30", alignItems: "center",
-          }}>
-            <Image source={BLUE_SHOE_SRC} style={{ width: 26, height: 26 }} contentFit="contain" />
-            <Text style={{ color: "#FFF", fontSize: rf(15), fontWeight: "900", marginTop: 4 }}>
-              {evt.targetSteps >= 1000 ? `${(evt.targetSteps / 1000).toFixed(0)}K` : `${evt.targetSteps}`}
-            </Text>
-            <Text style={{ color: MUTED, fontSize: rf(9.5), marginTop: 2, fontWeight: "600", letterSpacing: 0.3 }}>STEPS GOAL</Text>
-          </View>
-          <View style={{
-            flex: 1,
-            backgroundColor: isFull ? "#EF444414" : "#FFFFFF0A",
-            borderRadius: 14, paddingVertical: 10, paddingHorizontal: 6,
-            borderWidth: 1, borderColor: isFull ? "#EF444430" : "#FFFFFF18", alignItems: "center",
-          }}>
-            <Feather name="users" size={24} color={isFull ? "#EF4444" : palette.glow} />
-            <Text style={{ color: isFull ? "#EF4444" : "#FFF", fontSize: rf(15), fontWeight: "900", marginTop: 4 }}>
-              {evt.registeredCount}/{evt.maxSlots}
-            </Text>
-            <Text style={{ color: MUTED, fontSize: rf(9.5), marginTop: 2, fontWeight: "600", letterSpacing: 0.3 }}>
-              {isFull ? "FULL" : "REGISTERED"}
-            </Text>
-          </View>
-        </View>
-
-        {/* Progress bar + % */}
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 14 }}>
-          <Feather name="users" size={12} color={MUTED} />
-          <Text style={{ color: MUTED, fontSize: rf(11) }}>
-            {isFull ? "Event is full" : `${slotsLeft} slot${slotsLeft !== 1 ? "s" : ""} remaining`}
-          </Text>
-          <View style={{ flex: 1, height: 5, backgroundColor: "#FFFFFF10", borderRadius: 3, overflow: "hidden" }}>
-            <View style={{
-              height: 5, width: `${fillPct}%`,
-              backgroundColor: isFull ? "#EF4444" : palette.bar, borderRadius: 3,
-            }} />
-          </View>
-          <Text style={{ color: MUTED, fontSize: rf(11), minWidth: 30, textAlign: "right" }}>{fillPct}%</Text>
-        </View>
-
-        {/* Action buttons */}
-        <View style={{ flexDirection: "row", gap: 10 }}>
-          <TouchableOpacity
-            style={{
-              flex: 1, paddingVertical: 11, borderRadius: 12,
-              backgroundColor: "#FFFFFF0F", borderWidth: 1, borderColor: "#FFFFFF20",
-              alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6,
-            }}
-            onPress={() => router.push("/sponsored-events")}
-            activeOpacity={0.75}
-          >
-            <Text style={{ color: "#FFF", fontSize: rf(13), fontWeight: "700" }}>View Details</Text>
-            <Feather name="chevron-right" size={14} color="#FFF" />
-          </TouchableOpacity>
-          {isLive && (evt.isActive || !evt.isRegistered) ? (
-            <LinearGradient
-              colors={evt.isActive ? (["#7C3AFF", "#C47BFF"] as [string, string]) : (["#00C853", "#007A33"] as [string, string])}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={{ flex: 1.3, borderRadius: 12 }}
-            >
-              <TouchableOpacity
-                style={{ paddingVertical: 11, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 }}
-                onPress={() => router.push({ pathname: "/race/live-detail", params: { id: evt.id } })}
-                activeOpacity={0.8}
-              >
-                <Feather name={evt.isActive ? "zap" : "radio"} size={14} color="#FFF" />
-                <Text style={{ color: "#FFF", fontSize: rf(13), fontWeight: "800" }}>
-                  {evt.isActive ? "Continue Race" : "Watch Live"}
-                </Text>
-              </TouchableOpacity>
-            </LinearGradient>
-          ) : (
-            <LinearGradient
-              colors={palette.btnGrad}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={{ flex: 1.3, borderRadius: 12 }}
-            >
-              <TouchableOpacity
-                style={{ paddingVertical: 11, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 }}
-                onPress={() => router.push("/sponsored-events")}
-                activeOpacity={0.8}
-              >
-                <Text style={{ color: "#FFF", fontSize: rf(13), fontWeight: "800" }}>
-                  {isCompleted ? "View Results" : "Register Now"}
-                </Text>
-                <Feather name="chevron-right" size={14} color="#FFF" />
-              </TouchableOpacity>
-            </LinearGradient>
-          )}
-        </View>
-      </View>
-    </LinearGradient>
-  );
-}
-
 // ── Components ────────────────────────────────────────────────────────────────
 
 function LiveDot() {
@@ -1250,8 +1023,8 @@ function RaceCardBase({
       ? "⚔️ Coins"
       : isUnlimited
         ? race.entryType && /^\$\d/.test(race.entryType)
-          ? `∞ ${race.entryType}`
-          : "∞ Streak"
+          ? race.entryType
+          : "Streak"
         : isCash
           ? cashBadgeLabel
           : race.entryType;
@@ -1366,9 +1139,22 @@ function RaceCardBase({
                 </View>
               )}
               <View style={[st.entryBadge, { borderColor: ec + "90", backgroundColor: ec + "28" }]}>
-                <Text style={[st.entryBadgeText, { color: ec }]}>
-                  {entryBadgeLabel}
-                </Text>
+                {isUnlimited ? (
+                  <View style={st.entryBadgeRow}>
+                    <Image
+                      source={STREAK_ON_IMG}
+                      style={st.entryBadgeIcon}
+                      contentFit="contain"
+                    />
+                    <Text style={[st.entryBadgeText, { color: ec }]}>
+                      {entryBadgeLabel}
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={[st.entryBadgeText, { color: ec }]}>
+                    {entryBadgeLabel}
+                  </Text>
+                )}
               </View>
             </View>
             <View style={st.spectBadge}>
@@ -1380,7 +1166,7 @@ function RaceCardBase({
           {/* Title row — reward sits beside the heading for every challenge type */}
           <View style={st.cardTitleRow}>
             <View style={st.cardTitleWrap}>
-              <Text style={[st.cardTitle, { color: colors.foreground }]} numberOfLines={1}>{race.title}</Text>
+              <Text style={[st.cardTitle, { color: colors.foreground }]} numberOfLines={1}>{displayChallengeTitle(race.title)}</Text>
             </View>
             {headingReward ? (
               <View style={st.winnerBlock}>
@@ -1876,10 +1662,6 @@ export default function LiveTab() {
   const [myRace, setMyRace] = useState<MyActiveRace | null>(null);
   const [myActiveRaceIds, setMyActiveRaceIds] = useState<Set<string>>(() => new Set());
   const [realtimeRaceIds, setRealtimeRaceIds] = useState<string[]>([]);
-  const [scheduledEvents,  setScheduledEvents]  = useState<ScheduledEvt[]>([]);
-  const [scheduledLoading, setScheduledLoading] = useState(false);
-  // True after the first successful fetch — subsequent filter switches skip the skeleton.
-  const scheduledLoadedRef = useRef(false);
   const liveChallengesRef = useRef<LiveRace[]>([]);
   useEffect(() => { liveChallengesRef.current = liveChallenges; }, [liveChallenges]);
   /** Bumps on every load() so late responses cannot overwrite a newer filter/fetch. */
@@ -2280,25 +2062,6 @@ export default function LiveTab() {
     setRefreshing(false);
   }, [load]);
 
-  const fetchScheduledEvents = useCallback(async () => {
-    // Show skeleton only on the very first load — subsequent filter switches
-    // silently refresh the already-visible list with no flicker.
-    if (!scheduledLoadedRef.current) setScheduledLoading(true);
-    try {
-      const res = await authFetch(`/api/sponsored-events`);
-      if (res.ok) {
-        const d = await res.json() as { events?: ScheduledEvt[] };
-        setScheduledEvents(d.events ?? []);
-        scheduledLoadedRef.current = true;
-      }
-    } catch {} finally {
-      setScheduledLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (activeFilter === "Sponsored Events") void fetchScheduledEvents();
-  }, [activeFilter, fetchScheduledEvents]);
 
   useEffect(() => {
     // Skeleton only when this filter has neither mem cache nor already-visible cards.
@@ -2581,12 +2344,10 @@ export default function LiveTab() {
         (() => {
           const sponsoredLive = racesVisibleOnTab(liveChallenges, "Sponsored Events");
           const sponsoredFinished = racesVisibleOnTab(finishedChallenges, "Sponsored Events");
-          const upcomingSponsored = scheduledEvents.filter((e) => e.status !== "cancelled");
-          const empty =
-            sponsoredLive.length === 0 &&
-            sponsoredFinished.length === 0 &&
-            upcomingSponsored.length === 0;
-          if (scheduledLoading && empty) {
+          // Upcoming scheduled sponsored events are intentionally hidden on Live —
+          // only in-progress and finished sponsored races appear here.
+          const empty = sponsoredLive.length === 0 && sponsoredFinished.length === 0;
+          if (loading && empty) {
             return (
               <View style={{ paddingTop: 8 }}>
                 <SkeletonList count={5} variant="race" />
@@ -2629,18 +2390,6 @@ export default function LiveTab() {
                         onAvatarPress={handleAvatarPress}
                       />
                     </View>
-                  ))}
-                </>
-              )}
-              {upcomingSponsored.length > 0 && (
-                <>
-                  <SectionHeader
-                    label="Upcoming"
-                    sub="Scheduled sponsored events"
-                    isFinished={false}
-                  />
-                  {upcomingSponsored.map((evt, index) => (
-                    <SponsoredEventRow key={evt.id} evt={evt} index={index} />
                   ))}
                 </>
               )}
@@ -2815,6 +2564,8 @@ const st = StyleSheet.create({
   finishedBadge:    { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(0,0,0,0.65)", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, borderWidth: 1.5, borderColor: NEON_GREEN },
   finishedBadgeText:{ fontSize: rf(11), fontWeight: "900", color: NEON_GREEN, letterSpacing: 0.6 },
   entryBadge:       { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1 },
+  entryBadgeRow:    { flexDirection: "row", alignItems: "center", gap: 4 },
+  entryBadgeIcon:   { width: 12, height: 12 },
   entryBadgeText:   { fontSize: rf(11), fontWeight: "800" },
   spectBadge:       { flexDirection: "row", alignItems: "center", gap: 3 },
   spectText:        { fontSize: rf(11), color: MUTED },

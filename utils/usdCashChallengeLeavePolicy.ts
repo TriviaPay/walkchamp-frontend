@@ -35,11 +35,13 @@ export const USD_CASH_LEAVE_POST_START_HOST =
 export const USD_CASH_ACK_NO_CANCEL =
   "I understand that the challenge cannot be cancelled after creation.";
 
-export const USD_CASH_ACK_PRE_START_REFUND =
-  "I understand that leaving before the challenge starts may qualify for an entry-fee refund according to the refund policy.";
+export const USD_CASH_ACK_NO_REFUND_ONCE_JOIN =
+  "No refund once you join. Even if a participant leaves the match before it starts, there is no refund.";
 
-export const USD_CASH_ACK_POST_START_NO_REFUND =
-  "I understand that leaving at or after the challenge start time provides no refund and removes me from prize eligibility.";
+/** @deprecated Use USD_CASH_ACK_NO_REFUND_ONCE_JOIN */
+export const USD_CASH_ACK_PRE_START_REFUND = USD_CASH_ACK_NO_REFUND_ONCE_JOIN;
+
+export const USD_CASH_ACK_POST_START_NO_REFUND = USD_CASH_ACK_NO_REFUND_ONCE_JOIN;
 
 export const USD_CASH_ACK_HOST_CONTINUES =
   "I understand that if I leave, the challenge will continue for other participants.";
@@ -135,14 +137,18 @@ export function previewChallengeHasStarted(params: {
 export function usdCashLeaveConfirmCopy(params: {
   hasStartedPreview: boolean;
   isHost: boolean;
+  /** Streak / Unlimited: leave is never refundable (pre- or post-start). */
+  noRefund?: boolean;
 }): { title: string; message: string; confirmLabel: string; stayLabel: string } {
   const title = USD_CASH_LEAVE_TITLE;
   const stayLabel = USD_CASH_LEAVE_STAY_LABEL;
-  if (params.hasStartedPreview) {
+  if (params.noRefund || params.hasStartedPreview) {
     return {
       title,
       stayLabel,
-      confirmLabel: USD_CASH_LEAVE_POST_START_CONFIRM,
+      confirmLabel: params.noRefund
+        ? USD_CASH_LEAVE_ACTION_LABEL
+        : USD_CASH_LEAVE_POST_START_CONFIRM,
       message: params.isHost
         ? USD_CASH_LEAVE_POST_START_HOST
         : USD_CASH_LEAVE_POST_START_PARTICIPANT,

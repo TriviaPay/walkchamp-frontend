@@ -17,7 +17,7 @@ struct WalkChampRaceLiveActivityWidget: Widget {
               .scaledToFit()
               .frame(width: 28, height: 28)
               .accessibilityHidden(true)
-            Text("Walk Champ")
+            Text("WalkChamp")
               .font(.headline)
               .foregroundStyle(.white)
           }

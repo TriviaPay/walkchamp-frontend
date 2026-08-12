@@ -660,6 +660,26 @@ export async function setupNotificationClickHandler(
         `notification visualType=${visualMeta.visualType} androidDrawable=${visualMeta.androidDrawable}`,
       );
     }
+    if (
+      type === "session_invalidated" ||
+      type === "session_replaced" ||
+      String(data.reason ?? "").toLowerCase().includes("login_on_new")
+    ) {
+      pushLog("notification click — session replaced");
+      void import("@/services/sessionInvalidation")
+        .then(({ handleSessionInvalidation }) =>
+          handleSessionInvalidation({
+            reason: String(data.reason ?? "login_on_new_device"),
+            sessionId: typeof data.sessionId === "string" ? data.sessionId : undefined,
+            message:
+              typeof data.message === "string"
+                ? data.message
+                : "Your account was signed in on another device. Please sign in again.",
+          }),
+        )
+        .catch(() => {});
+      return;
+    }
     if (type === "race_starting_soon") {
       // Sanitize: never JSON.stringify full push payloads (may include PII).
       notificationLog(
@@ -708,6 +728,30 @@ export async function setupForegroundHandler(): Promise<() => void> {
     ) as Record<string, unknown>;
     const type = String(data.type ?? "unknown");
     pushLog(`foreground received type=${type}`);
+
+    // Single-session kick: never show a system banner on the new device.
+    // The superseded device gets the in-app SessionReplacedModal via handleSessionInvalidation.
+    if (
+      type === "session_invalidated" ||
+      type === "session_replaced" ||
+      String(data.reason ?? "").toLowerCase().includes("login_on_new")
+    ) {
+      fgEvent.preventDefault();
+      void import("@/services/sessionInvalidation")
+        .then(({ handleSessionInvalidation }) =>
+          handleSessionInvalidation({
+            reason: String(data.reason ?? "login_on_new_device"),
+            sessionId: typeof data.sessionId === "string" ? data.sessionId : undefined,
+            message:
+              typeof data.message === "string"
+                ? data.message
+                : "Your account was signed in on another device. Please sign in again.",
+          }),
+        )
+        .catch(() => {});
+      return;
+    }
+
     if (type === "race_starting_soon") {
       const eventType = String(data.eventType ?? data.event_type ?? "unknown");
       notificationLog(`received type=race_starting_soon`);

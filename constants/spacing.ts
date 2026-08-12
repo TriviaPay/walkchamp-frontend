@@ -1,5 +1,5 @@
 /**
- * Global spacing tokens for Walk Champ.
+ * Global spacing tokens for WalkChamp.
  *
  * Values match the existing UI rhythm (common 4 / 8 / 12 / 16 / 20 / 24 patterns).
  * Use rs() so spacing tracks short-edge width with the same caps as the rest of the app.

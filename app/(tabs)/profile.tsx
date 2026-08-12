@@ -303,7 +303,7 @@ function WearableStatusCard({
           {isConnected
             ? `${sourceName} is connected. Tap to manage access or reopen setup.`
             : isDenied
-            ? "Tap to restore Health Connect / Apple Health, or open Android Settings → Apps → Walk Champ → Permissions."
+            ? "Tap to restore Health Connect / Apple Health, or open Android Settings → Apps → WalkChamp → Permissions."
             : `Tap to connect ${sourceName}`}
         </Text>
       </View>
@@ -843,7 +843,7 @@ function ProfileScreenContent() {
   const handleDeleteAccount = useCallback(() => {
     AppAlert.alert(
       "Delete Account",
-      "This will permanently delete your Walk Champ account and all associated data. This action cannot be undone.",
+      "This will permanently delete your WalkChamp account and all associated data. This action cannot be undone.",
       [
         { text: "Cancel", style: "cancel" },
         {

@@ -52,31 +52,40 @@ export async function registerActiveSession(options: {
   const device = await getDeviceSessionMetadata();
   const existing = await getActiveSessionMeta().catch(() => null);
 
-  // Prefer known backend session for same-device resume; else provisional client id.
-  const provisionalId =
+  // Account switch: never reuse the previous user's session id as X-Session-Id.
+  const sameUser = !!existing?.userId && existing.userId === userId;
+  if (existing && !sameUser) {
+    await clearActiveSessionMeta().catch(() => {});
+  }
+
+  // Prefer known backend session for same-user resume only.
+  const resumeSessionId =
     sessionIdFromLogin?.trim() ||
-    (existing?.userId === userId ? existing.sessionId : null) ||
-    createUuid();
+    (sameUser ? existing?.sessionId ?? null : null);
 
   try {
     const sessionHeaders = await buildSessionRequestHeaders().catch(() => ({}));
+    // Strip any stale X-Session-Id that buildSessionRequestHeaders may have
+    // still read before clear (race) or from another user.
+    const {
+      ["X-Session-Id"]: _dropStaleSession,
+      ...safeSessionHeaders
+    } = sessionHeaders as Record<string, string>;
+    void _dropStaleSession;
+
     const res = await fetch(`${getApiBase()}/api/auth/session/register`, {
       method: "POST",
       signal: timeoutSignal(API_TIMEOUT_MS),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${accessToken}`,
-        ...sessionHeaders,
+        ...safeSessionHeaders,
         // Ensure device id is always present for same-device resume.
         "X-Device-Id": device.deviceId,
         "X-Platform": device.platform,
         "X-App-Version": device.appVersion,
         ...(device.buildNumber ? { "X-Build-Number": device.buildNumber } : {}),
-        ...(provisionalId && existing?.sessionId === provisionalId
-          ? { "X-Session-Id": provisionalId }
-          : existing?.sessionId
-            ? { "X-Session-Id": existing.sessionId }
-            : {}),
+        ...(resumeSessionId ? { "X-Session-Id": resumeSessionId } : {}),
       },
       body: JSON.stringify({
         deviceId: device.deviceId,
@@ -87,22 +96,17 @@ export async function registerActiveSession(options: {
         osName: device.osName,
         osVersion: device.osVersion,
         androidApiLevel: device.androidApiLevel,
-        clientSessionId: provisionalId,
-        ...(existing?.sessionId ? { sessionId: existing.sessionId } : {}),
+        ...(resumeSessionId ? { sessionId: resumeSessionId } : {}),
       }),
     });
 
     if (res.status === 404 || res.status === 501) {
-      const meta: ActiveSessionMeta = {
-        sessionId: provisionalId,
-        userId,
-        createdAt: new Date().toISOString(),
-      };
-      await saveActiveSessionMeta(meta);
+      // No register endpoint — omit fake session id so authFetch never sends it.
+      await clearActiveSessionMeta().catch(() => {});
       if (__DEV__) {
-        console.log("[AuthSession] register endpoint missing — provisional session stored");
+        console.log("[AuthSession] register endpoint missing — meta cleared");
       }
-      return meta;
+      return null;
     }
 
     const body = (await res.json().catch(() => ({}))) as RegisterResponse;
@@ -110,21 +114,17 @@ export async function registerActiveSession(options: {
     if (!res.ok) {
       // Do NOT call handleSessionInvalidation on the registering device —
       // that caused first-login self-logout + "other device" modal.
+      // Do NOT store a client UUID as X-Session-Id (causes SESSION_INVALID self-kick).
       if (__DEV__) {
         console.log(
-          `[AuthSession] register HTTP ${res.status} code=${body.code ?? body.error ?? "n/a"} — soft-fail provisional`,
+          `[AuthSession] register HTTP ${res.status} code=${body.code ?? body.error ?? "n/a"} — soft-fail no provisional id`,
         );
       }
-      const meta: ActiveSessionMeta = {
-        sessionId: provisionalId,
-        userId,
-        createdAt: new Date().toISOString(),
-      };
-      await saveActiveSessionMeta(meta);
-      return meta;
+      await clearActiveSessionMeta().catch(() => {});
+      return null;
     }
 
-    const sessionId = (body.sessionId ?? provisionalId).toString();
+    const sessionId = (body.sessionId ?? resumeSessionId ?? createUuid()).toString();
     const gen = body.sessionGeneration ?? body.generation;
     const createdAt =
       body.createdAt != null
@@ -147,13 +147,8 @@ export async function registerActiveSession(options: {
     return meta;
   } catch (e) {
     if (__DEV__) console.log("[AuthSession] register failed (network)", e);
-    const meta: ActiveSessionMeta = {
-      sessionId: provisionalId,
-      userId,
-      createdAt: new Date().toISOString(),
-    };
-    await saveActiveSessionMeta(meta);
-    return meta;
+    await clearActiveSessionMeta().catch(() => {});
+    return null;
   }
 }
 
@@ -245,10 +240,14 @@ export async function validateActiveSession(accessToken: string): Promise<Sessio
 }
 
 /** Best-effort logout of the current backend session row. */
-export async function revokeCurrentSession(accessToken?: string | null): Promise<void> {
+export async function revokeCurrentSession(
+  accessToken?: string | null,
+  sessionIdOverride?: string | null,
+): Promise<void> {
   try {
     const meta = await getActiveSessionMeta();
-    if (!meta?.sessionId) {
+    const sessionId = sessionIdOverride?.trim() || meta?.sessionId;
+    if (!sessionId) {
       await clearActiveSessionMeta();
       return;
     }
@@ -265,9 +264,9 @@ export async function revokeCurrentSession(accessToken?: string | null): Promise
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
         ...sessionHeaders,
-        "X-Session-Id": meta.sessionId,
+        "X-Session-Id": sessionId,
       },
-      body: JSON.stringify({ sessionId: meta.sessionId }),
+      body: JSON.stringify({ sessionId }),
     }).catch(() => {});
   } finally {
     await clearActiveSessionMeta().catch(() => {});

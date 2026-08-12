@@ -198,7 +198,7 @@ async function resolveAndroidCapability(
         verificationStatus: "unsupported",
         userMessage: provisionalTrackingAvailable
           ? "This device does not currently support the verified health integration required for prize-based challenges."
-          : "This device cannot provide the step data required for Walk Champ challenges.",
+          : "This device cannot provide the step data required for WalkChamp challenges.",
       };
     }
 

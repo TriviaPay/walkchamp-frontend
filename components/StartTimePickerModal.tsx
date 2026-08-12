@@ -252,7 +252,8 @@ function WheelColumn({
         showsVerticalScrollIndicator={false}
         snapToInterval={itemH}
         snapToAlignment="start"
-        decelerationRate="fast"
+        disableIntervalMomentum
+        decelerationRate="normal"
         nestedScrollEnabled
         scrollEventThrottle={16}
         bounces={false}

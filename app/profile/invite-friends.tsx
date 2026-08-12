@@ -39,7 +39,7 @@ const HOW_IT_WORKS = [
   {
     icon: "user-plus" as const,
     title: "Friend Joins",
-    body: "They create a Walk Champ account using your invite.",
+    body: "They create a WalkChamp account using your invite.",
   },
   {
     icon: "flag" as const,
@@ -222,7 +222,7 @@ export default function InviteFriendsScreen() {
     try {
       const message = buildReferralShareMessage(details);
       await Share.share({
-        title: "Join Walk Champ",
+        title: "Join WalkChamp",
         message,
         url: details.inviteUrl,
       });
@@ -313,7 +313,7 @@ export default function InviteFriendsScreen() {
               </View>
               <Text style={[st.heroTitle, { color: colors.foreground }]}>
                 Invite friends to{" "}
-                <Text style={{ color: ACCENT }}>Walk Champ</Text>
+                <Text style={{ color: ACCENT }}>WalkChamp</Text>
               </Text>
               <Text style={[st.heroBody, { color: colors.mutedForeground }]}>
                 Share your invite and earn rewards when your friends join and complete the required challenge.

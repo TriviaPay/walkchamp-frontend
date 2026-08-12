@@ -116,9 +116,9 @@ export async function hasActivityRecognitionPermission(): Promise<boolean> {
 }
 
 export function getActivityRecognitionDeniedMessage(): string {
-  return "Physical activity access is needed so your walking progress can keep updating in the background. Enable it in Android Settings → Apps → Walk Champ → Permissions, or reopen step tracking setup from Profile.";
+  return "Physical activity access is needed so your walking progress can keep updating in the background. Enable it in Android Settings → Apps → WalkChamp → Permissions, or reopen step tracking setup from Profile.";
 }
 
 export function getActivityRecognitionSettingsHint(): string {
-  return "Android Settings → Apps → Walk Champ → Permissions → Physical activity";
+  return "Android Settings → Apps → WalkChamp → Permissions → Physical activity";
 }

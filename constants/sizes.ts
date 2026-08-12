@@ -1,5 +1,5 @@
 /**
- * Recurring dimension tokens used across Walk Champ.
+ * Recurring dimension tokens used across WalkChamp.
  * Sized with rs() where the existing UI already scales; otherwise fixed by design.
  */
 

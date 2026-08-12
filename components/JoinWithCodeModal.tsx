@@ -357,7 +357,7 @@ export default function JoinWithCodeModal({
             </TouchableOpacity>
 
             <Text style={[styles.legalNote, { color: colors.mutedForeground }]}>
-              Walk Champ is a skill-based race platform. Results are determined by your activity performance — not by chance.
+              WalkChamp is a skill-based race platform. Results are determined by your activity performance — not by chance.
             </Text>
           </View>
         )}
@@ -368,8 +368,8 @@ export default function JoinWithCodeModal({
 
 const CONSENT_LINES = [
   "I understand that the challenge cannot be cancelled after creation.",
-  "I understand that leaving before the challenge starts may qualify for an entry-fee refund according to the refund policy. Leaving at or after start provides no refund and removes me from prize eligibility.",
-  "I understand that if I leave, the challenge will continue for other participants. I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
+  "No refund once you join. Even if a participant leaves the match before it starts, there is no refund.",
+  "I understand that if I leave, the challenge will continue for other participants. I have read and agree to the WalkChamp Challenge Rules & Terms of Service.",
 ];
 
 function SummaryRow({

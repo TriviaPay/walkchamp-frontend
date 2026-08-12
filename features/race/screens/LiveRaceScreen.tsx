@@ -124,6 +124,7 @@ import {
 import { authFetch } from "@/utils/authFetch";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import {
+  clearRecentlyLeftRaceId,
   emitChallengeLeft,
   emitChallengeStatusesRefresh,
 } from "@/utils/challengeLocalEvents";
@@ -2977,8 +2978,9 @@ function LiveRaceDetailScreenContent() {
           totalParticipants: race?.currentPlayers ?? participants.length,
         });
       } else {
-        // Before the viewer's own day starts, keep the ordinary daily walk tray.
-        void switchDailyStepsNotification(0, race?.targetSteps);
+        // Before the viewer's own day starts, keep the ordinary daily walk tray
+        // with the profile goal — do not leak challenge targetSteps into walk_daily_goal.
+        void switchDailyStepsNotification(0);
       }
       const dayKey = liveDay?.challengeDayKey ?? "";
       const dayTz =
@@ -3049,7 +3051,8 @@ function LiveRaceDetailScreenContent() {
             totalParticipants: race?.currentPlayers ?? participants.length,
           });
         } else {
-          void switchDailyStepsNotification(notifSteps, race?.targetSteps);
+          // Day not started yet — keep profile daily goal on the walk tray.
+          void switchDailyStepsNotification(notifSteps);
         }
         const tickDay = resolveUnlimitedLiveDayContext({
           participantChallengeDayKey: currentParticipant?.challengeDayKey,
@@ -3670,7 +3673,8 @@ function LiveRaceDetailScreenContent() {
             totalParticipants: liveRaceData.currentPlayers ?? parts.length,
           });
         } else {
-          void switchDailyStepsNotification(0, liveRaceData.targetSteps);
+          // Ordinary daily walk tray — profile goal only (not challenge target).
+          void switchDailyStepsNotification(0);
         }
       } else {
         void suppressSpectatorLiveRaceNotifications(raceId);
@@ -4081,7 +4085,8 @@ function LiveRaceDetailScreenContent() {
           totalParticipants: race?.currentPlayers ?? participantsOnFocusRef.current.length,
         });
       } else {
-        void switchDailyStepsNotification(0, race?.targetSteps);
+        // Ordinary daily walk tray — profile goal only (not challenge target).
+        void switchDailyStepsNotification(0);
       }
       void fetchDetailsOnFocusRef.current(true);
       stepEngineLog(
@@ -5676,20 +5681,47 @@ function LiveRaceDetailScreenContent() {
                 if (raceId) {
                   void suppressLiveRaceNotification(raceId, "user_forfeit");
                   stopRaceStepTracking("user_forfeit");
+                  // Marks recently-left + Unlimited left cache before Walk idle refresh.
                   emitChallengeLeft(raceId);
                 }
                 cancelRace();
                 setActiveRace(null, false);
-                emitChallengeStatusesRefresh("user_forfeit");
                 leaveLiveDetail();
 
                 const leavePath = isUnlimitedHeader
                   ? `/api/unlimited-challenges/${raceId}/leave`
                   : `/api/races/${raceId}/leave`;
+                // Refresh My Race chips only after leave settles — early refetch resurrects the card.
                 void authFetch(leavePath, {
                   method: "POST",
                   body: JSON.stringify({ reason: "user_quit" }),
-                }).catch(() => { /* best-effort */ });
+                })
+                  .then(async (res) => {
+                    if (!res.ok && raceId) {
+                      clearRecentlyLeftRaceId(raceId);
+                      if (isUnlimitedHeader) {
+                        void import("@/utils/hostedUnlimitedCache")
+                          .then(({ clearUnlimitedChallengeLeft }) =>
+                            clearUnlimitedChallengeLeft(raceId),
+                          )
+                          .catch(() => {});
+                      }
+                    }
+                    emitChallengeStatusesRefresh("user_forfeit");
+                  })
+                  .catch(() => {
+                    if (raceId) {
+                      clearRecentlyLeftRaceId(raceId);
+                      if (isUnlimitedHeader) {
+                        void import("@/utils/hostedUnlimitedCache")
+                          .then(({ clearUnlimitedChallengeLeft }) =>
+                            clearUnlimitedChallengeLeft(raceId),
+                          )
+                          .catch(() => {});
+                      }
+                    }
+                    emitChallengeStatusesRefresh("user_forfeit");
+                  });
               }},
             ]) }>
             <LinearGradient colors={["#FF3333", "#BB0000"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.leaveBtn}>

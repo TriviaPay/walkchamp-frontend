@@ -85,6 +85,8 @@ function PremiumStepSliderInner<T>({
 }: PremiumStepSliderProps<T>) {
   const count = Math.max(values.length, 1);
   const maxIdx = Math.max(1, count - 1);
+  const trackRef = useRef<View>(null);
+  const trackPageXRef = useRef(0);
   const [trackWidth, setTrackWidth] = useState(0);
   const selectedIndex = indexOfDiscreteValue(values, selectedValue);
 
@@ -118,10 +120,16 @@ function PremiumStepSliderInner<T>({
     }
   }, []);
 
-  const ratioFromX = useCallback(
-    (x: number) => {
+  const measureTrack = useCallback(() => {
+    trackRef.current?.measureInWindow((x) => {
+      if (Number.isFinite(x)) trackPageXRef.current = x;
+    });
+  }, []);
+
+  const ratioFromPageX = useCallback(
+    (pageX: number) => {
       if (trackWidth <= 0) return 0;
-      return Math.max(0, Math.min(1, x / trackWidth));
+      return Math.max(0, Math.min(1, (pageX - trackPageXRef.current) / trackWidth));
     },
     [trackWidth],
   );
@@ -132,37 +140,38 @@ function PremiumStepSliderInner<T>({
         onStartShouldSetPanResponder: () => !disabled,
         onStartShouldSetPanResponderCapture: () => !disabled,
         onMoveShouldSetPanResponder: (_, g) =>
-          !disabled && Math.abs(g.dx) > Math.abs(g.dy) && Math.abs(g.dx) > 2,
+          !disabled && Math.abs(g.dx) > Math.abs(g.dy) && Math.abs(g.dx) > 1,
         onMoveShouldSetPanResponderCapture: (_, g) =>
-          !disabled && Math.abs(g.dx) > Math.abs(g.dy) && Math.abs(g.dx) > 2,
+          !disabled && Math.abs(g.dx) > Math.abs(g.dy) && Math.abs(g.dx) > 1,
         onPanResponderTerminationRequest: () => false,
         onShouldBlockNativeResponder: () => true,
         onPanResponderGrant: (evt) => {
           draggingRef.current = true;
-          const ratio = ratioFromX(evt.nativeEvent.locationX);
+          measureTrack();
+          const ratio = ratioFromPageX(evt.nativeEvent.pageX);
           setDragRatio(ratio);
           applyIndex(Math.round(ratio * maxIdx), true);
         },
         onPanResponderMove: (evt) => {
-          const ratio = ratioFromX(evt.nativeEvent.locationX);
+          const ratio = ratioFromPageX(evt.nativeEvent.pageX);
           setDragRatio(ratio);
           const nextIdx = Math.round(ratio * maxIdx);
           if (nextIdx !== idxRef.current) applyIndex(nextIdx, true);
         },
         onPanResponderRelease: (evt) => {
-          const ratio = ratioFromX(evt.nativeEvent.locationX);
+          const ratio = ratioFromPageX(evt.nativeEvent.pageX);
           draggingRef.current = false;
           setDragRatio(null);
           applyIndex(Math.round(ratio * maxIdx), true);
         },
         onPanResponderTerminate: (evt) => {
-          const ratio = ratioFromX(evt.nativeEvent.locationX);
+          const ratio = ratioFromPageX(evt.nativeEvent.pageX);
           draggingRef.current = false;
           setDragRatio(null);
           applyIndex(Math.round(ratio * maxIdx), false);
         },
       }),
-    [disabled, ratioFromX, maxIdx, applyIndex],
+    [disabled, ratioFromPageX, maxIdx, applyIndex, measureTrack],
   );
 
   const displayIdx =
@@ -224,10 +233,12 @@ function PremiumStepSliderInner<T>({
       </View>
 
       <View
+        ref={trackRef}
         style={styles.hitArea}
         onLayout={(e: LayoutChangeEvent) => {
           const w = e.nativeEvent.layout.width;
           if (w > 0 && Math.abs(w - trackWidth) > 0.5) setTrackWidth(w);
+          measureTrack();
         }}
         {...panResponder.panHandlers}
       >

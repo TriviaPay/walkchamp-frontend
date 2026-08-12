@@ -98,7 +98,7 @@ function renderTextWithEmails(
             style={{ color: linkColor, textDecorationLine: "underline" }}
             onPress={() =>
               void Linking.openURL(
-                `mailto:${PRIVACY_POLICY_SUPPORT_EMAIL}?subject=${encodeURIComponent("Walk Champ Privacy Request")}`,
+                `mailto:${PRIVACY_POLICY_SUPPORT_EMAIL}?subject=${encodeURIComponent("WalkChamp Privacy Request")}`,
               )
             }
           >
@@ -206,7 +206,7 @@ export function PrivacyPolicyDocument({ contentBottomPad = 40 }: Props) {
 
   const openPrivacyEmail = useCallback(() => {
     void Linking.openURL(
-      `mailto:${PRIVACY_POLICY_SUPPORT_EMAIL}?subject=${encodeURIComponent("Walk Champ Privacy Request")}`,
+      `mailto:${PRIVACY_POLICY_SUPPORT_EMAIL}?subject=${encodeURIComponent("WalkChamp Privacy Request")}`,
     );
   }, []);
 

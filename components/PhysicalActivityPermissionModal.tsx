@@ -108,16 +108,16 @@ export function PhysicalActivityPermissionHost() {
 
           <Text style={[styles.message, { color: colors.mutedForeground }]}>
             {needsSettings
-              ? "Physical activity access was turned off. Enable it so your steps and race progress keep updating while you walk — even when Walk Champ is in the background."
-              : "Walk Champ needs Physical activity access so your steps and race progress keep updating while you walk — even when the app is in the background or your phone is locked."}
+              ? "Physical activity access was turned off. Enable it so your steps and race progress keep updating while you walk — even when WalkChamp is in the background."
+              : "WalkChamp needs Physical activity access so your steps and race progress keep updating while you walk — even when the app is in the background or your phone is locked."}
           </Text>
 
           <View style={[styles.tipCard, { backgroundColor: colors.muted, borderColor: colors.border }]}>
             <Feather name="info" size={14} color={colors.accent} />
             <Text style={[styles.tipText, { color: colors.mutedForeground }]}>
               {needsSettings
-                ? "Path: Android Settings → Apps → Walk Champ → Permissions → Physical activity. Or reopen step tracking setup from Profile."
-                : "This is for walking progress — not promotional alerts. You can change it later in Android Settings → Apps → Walk Champ → Permissions."}
+                ? "Path: Android Settings → Apps → WalkChamp → Permissions → Physical activity. Or reopen step tracking setup from Profile."
+                : "This is for walking progress — not promotional alerts. You can change it later in Android Settings → Apps → WalkChamp → Permissions."}
             </Text>
           </View>
 

@@ -26,6 +26,7 @@ import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { authFetch } from "@/utils/authFetch";
+import { STREAK_ON_IMG } from "@/utils/brandImages";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const blueShoeImg = require("@/assets/images/footstep.png") as number;
@@ -199,7 +200,7 @@ function StatsSection({
       value: formatWinning(stats.totalWinning),
     },
     {
-      icon:  { kind: "emoji", char: "🔥" },
+      icon:  { kind: "png", src: STREAK_ON_IMG },
       label: "Streak",
       value: stats.currentStreakDays === 0
         ? "—"

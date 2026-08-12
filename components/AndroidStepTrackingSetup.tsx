@@ -219,8 +219,8 @@ export default function AndroidStepTrackingSetup({
         {hcGuide}
         <StateCard icon="activity" iconColor="#4285F4" iconBg="#4285F418"
           title="Health Connect Recommended"
-          desc="Tap Enable Step Tracking below. A permission sheet should appear inside Walk Champ — not in the Health Connect app."
-          footnote="Allow Steps read access when prompted. Walk Champ reads steps from Health Connect for races and leaderboards."
+          desc="Tap Enable Step Tracking below. A permission sheet should appear inside WalkChamp — not in the Health Connect app."
+          footnote="Allow Steps read access when prompted. WalkChamp reads steps from Health Connect for races and leaderboards."
           colors={colors}
           primaryLabel="Enable Step Tracking"
           primaryIcon="shield"
@@ -240,8 +240,8 @@ export default function AndroidStepTrackingSetup({
         {hcGuide}
         <StateCard icon="shield-off" iconColor="#F59E0B" iconBg="#F59E0B18"
           title="Permission Needed"
-          desc="Tap Enable Step Tracking below. A permission sheet should appear inside Walk Champ — stay in this app until you see it."
-          footnote="Walk Champ appears in Health Connect only after you tap Enable here. If denied, it will show under Not allowed access."
+          desc="Tap Enable Step Tracking below. A permission sheet should appear inside WalkChamp — stay in this app until you see it."
+          footnote="WalkChamp appears in Health Connect only after you tap Enable here. If denied, it will show under Not allowed access."
           colors={colors}
           primaryLabel="Enable Step Tracking"
           primaryIcon="shield"
@@ -262,8 +262,8 @@ export default function AndroidStepTrackingSetup({
         <StateCard
           icon="download" iconColor="#4285F4" iconBg="#4285F418"
           title="Install or Update Health Connect"
-          desc="Your device supports Health Connect, but it must be installed or updated from Google Play before Walk Champ can request Steps permission."
-          footnote="After install/update, return to Walk Champ, tap Try Again, then tap Enable Step Tracking."
+          desc="Your device supports Health Connect, but it must be installed or updated from Google Play before WalkChamp can request Steps permission."
+          footnote="After install/update, return to WalkChamp, tap Try Again, then tap Enable Step Tracking."
           colors={colors}
           primaryLabel="Install / Update Health Connect"
           primaryIcon="download"
@@ -322,7 +322,7 @@ export default function AndroidStepTrackingSetup({
     <>
       <StateCard icon="alert-circle" iconColor={colors.destructive} iconBg={colors.destructive + "18"}
         title="Step Tracking Not Supported"
-        desc="Verified Health Connect tracking is not available on this device. You can still use races, groups, shop, and all other Walk Champ features."
+        desc="Verified Health Connect tracking is not available on this device. You can still use races, groups, shop, and all other WalkChamp features."
         footnote="Try limited sensor tracking or a fitness app bridge below if available."
         colors={colors}
         secondaryLabel="Try Again"
@@ -345,7 +345,7 @@ function HcSetupGuide({
   const steps = [
     { label: "Fitness app", sub: "Samsung Health / Google Fit records steps" },
     { label: "Health Connect", sub: "Central hub on your phone" },
-    { label: "Walk Champ", sub: "Reads Steps from Health Connect" },
+    { label: "WalkChamp", sub: "Reads Steps from Health Connect" },
   ];
   return (
     <View style={[s.guideWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -368,7 +368,7 @@ function HcSetupGuide({
       </View>
       {showManualSteps ? (
         <Text style={[s.guideFoot, { color: "#F59E0B" }]}>
-          If Health Connect opened but you see no options: tap App permissions → Walk Champ → enable Steps.
+          If Health Connect opened but you see no options: tap App permissions → WalkChamp → enable Steps.
         </Text>
       ) : null}
     </View>
@@ -502,7 +502,7 @@ function OptionalAppsState({
 
       <View style={[s.infoCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <Text style={[s.infoText, { color: colors.mutedForeground }]}>
-          Connect through Health Connect or supported account sync. Walk Champ does not read steps directly from third-party apps unless explicitly integrated.
+          Connect through Health Connect or supported account sync. WalkChamp does not read steps directly from third-party apps unless explicitly integrated.
         </Text>
       </View>
     </View>

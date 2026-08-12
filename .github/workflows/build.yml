@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   checks:
-    name: Typecheck, Lint, Build
+    name: Typecheck, Lint, Test
     runs-on: ubuntu-latest
 
     steps:
@@ -34,17 +34,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Lint
-        run: npm run lint -- --max-warnings=0
-
-      - name: Build
-        run: npm run build
-
-      - name: Validate Vercel config
-        run: node -e "JSON.parse(require('fs').readFileSync('vercel.json', 'utf8')); console.log('vercel.json is valid')"
+      - name: Validate frontend
+        run: npm run validate:frontend
 
       - name: Validate env template
         run: test -f .env.example

@@ -1,4 +1,4 @@
-package com.globalwalkerleague.app
+package com.walkchamp.app
 
 import android.app.Application
 import android.content.res.Configuration

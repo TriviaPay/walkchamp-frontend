@@ -1,56 +1,22 @@
 /**
- * Smooth tick-up display for a single monotonic step counter (Walk screen daily total).
- * confirmedSteps is authoritative; displaySteps catches up incrementally for live UI.
+ * Walk screen daily total display.
+ * Shows confirmed steps on the same render (no tick animation / useEffect lag)
+ * so the hero stays in sync with sensor + ongoing notification.
  */
 
-import { useEffect, useRef, useState } from "react";
-
-const TICK_MS = 50;
-const INSTANT_CATCH_UP_MAX = 20;
+import { useRef } from "react";
 
 export function useIncrementalStepDisplay(confirmedSteps: number): number {
-  const safeConfirmed = Math.max(0, Math.floor(confirmedSteps));
-  const confirmedRef = useRef(safeConfirmed);
-  const displayRef = useRef(safeConfirmed);
-  const [display, setDisplay] = useState(safeConfirmed);
+  const safe = Math.max(0, Math.floor(confirmedSteps));
+  const peakRef = useRef(safe);
 
-  useEffect(() => {
-    const next = Math.max(0, Math.floor(confirmedSteps));
-    if (next < confirmedRef.current) return;
-    const prevConfirmed = confirmedRef.current;
-    confirmedRef.current = next;
+  // Allow reset on midnight / account switch / large HC correction; otherwise
+  // keep a monotonic peak so brief provider dips don't flash the counter down.
+  if (safe === 0 || safe + 500 < peakRef.current) {
+    peakRef.current = safe;
+  } else if (safe > peakRef.current) {
+    peakRef.current = safe;
+  }
 
-    const gap = next - displayRef.current;
-    // Tab open / refresh / re-login catch-up — show immediately.
-    // Only animate tiny live +1 ticks so Walk doesn't lag the notification.
-    if (gap > 1 || (prevConfirmed === 0 && next > 0)) {
-      displayRef.current = next;
-      setDisplay(next);
-      return;
-    }
-
-    if (
-      next > 0 &&
-      displayRef.current === 0 &&
-      next <= INSTANT_CATCH_UP_MAX
-    ) {
-      displayRef.current = next;
-      setDisplay(next);
-    }
-  }, [confirmedSteps]);
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      const target = confirmedRef.current;
-      if (displayRef.current >= target) return;
-      const gap = target - displayRef.current;
-      const increment = Math.max(1, Math.ceil(gap / 4));
-      const next = Math.min(target, displayRef.current + increment);
-      displayRef.current = next;
-      setDisplay(next);
-    }, TICK_MS);
-    return () => clearInterval(id);
-  }, []);
-
-  return display;
+  return peakRef.current;
 }

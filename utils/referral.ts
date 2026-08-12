@@ -120,7 +120,7 @@ export function buildReferralShareMessage(
         : "";
 
   return [
-    "Join me on Walk Champ!",
+    "Join me on WalkChamp!",
     "Walk together. Compete together. Earn rewards.",
     "",
     `My invite code: ${details.code}`,

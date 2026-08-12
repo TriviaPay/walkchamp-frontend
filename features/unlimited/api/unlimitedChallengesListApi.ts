@@ -10,7 +10,6 @@ import {
   loadLeftUnlimitedChallengeIds,
   saveHostedUnlimitedChallenge,
   purgeHostedUnlimitedChallenge,
-  clearUnlimitedChallengeLeft,
 } from "@/utils/hostedUnlimitedCache";
 import {
   extractUnlimitedChallengeRows,
@@ -26,6 +25,7 @@ import {
   type UnlimitedLiveRaceFields,
 } from "@/utils/unlimitedLiveRace";
 import type { AvailableRoomLike } from "@/utils/trendingChallenges";
+import { displayChallengeTitle } from "@/features/unlimited/mappers/unlimitedLiveUiCopy";
 
 /**
  * Browse/waiting list — dedicated Unlimited APIs only.
@@ -385,26 +385,23 @@ export async function fetchAvailableUnlimitedChallenges(opts?: {
 
   // Membership = explicit API registered OR reconciled hosted seed.
   // Never treat hostUserId alone as registered (Leave keeps creator id on the row).
-  // If the server still says registered, clear stale local "left" marks from ghost cleanup.
+  // Local leave/forfeit marks win over a stale "still registered" list response.
   const merged = mergeUpcomingRoomsById(hostedActive, fromApi).map((room) => {
-    const seed = hostedActive.find((h) => h.room_id === room.room_id);
-    const serverRegistered =
-      room.current_user_registered === true || !!seed?.current_user_registered;
-    if (serverRegistered) {
-      if (leftIds.has(room.room_id)) {
-        void clearUnlimitedChallengeLeft(room.room_id);
-      }
-      return {
-        ...room,
-        current_user_registered: true,
-        eligible_to_register: false,
-      };
-    }
     if (leftIds.has(room.room_id)) {
       return {
         ...room,
         current_user_registered: false,
         eligible_to_register: !room.is_private,
+      };
+    }
+    const seed = hostedActive.find((h) => h.room_id === room.room_id);
+    const serverRegistered =
+      room.current_user_registered === true || !!seed?.current_user_registered;
+    if (serverRegistered) {
+      return {
+        ...room,
+        current_user_registered: true,
+        eligible_to_register: false,
       };
     }
     return {
@@ -484,21 +481,17 @@ export async function fetchMyOpenUnlimitedChallenges(opts?: {
     return true;
   });
 
-  return open.map((room) => {
-    const serverReg = room.current_user_registered === true;
-    const isHost =
-      !!opts?.viewerUserId &&
-      !!room.host_user_id &&
-      room.host_user_id === opts.viewerUserId;
-    if (serverReg || isHost) {
-      if (leftIds.has(room.room_id)) void clearUnlimitedChallengeLeft(room.room_id);
-      return { ...room, current_user_registered: true, eligible_to_register: false };
-    }
-    if (leftIds.has(room.room_id)) {
-      return { ...room, current_user_registered: false };
-    }
-    return room;
-  });
+  return open
+    // Local forfeit/leave must win over stale my-active / hosted-seed merges.
+    .filter((room) => !leftIds.has(room.room_id))
+    .map((room) => {
+      const serverReg = room.current_user_registered === true;
+      if (serverReg) {
+        return { ...room, current_user_registered: true, eligible_to_register: false };
+      }
+      // Host id alone is not membership after leave — only server/hosted registration is.
+      return room;
+    });
 }
 
 /**
@@ -629,27 +622,22 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
   );
 
   const merged = mergeUpcomingRoomsById(fromApi, confirmedLiveFromDetail).map((room) => {
-    const serverSaysMember = [room, ...fromApi.filter((r) => r.room_id === room.room_id)].some(
-      (r) => r?.current_user_registered === true,
-    );
-    const isHost =
-      !!opts?.viewerUserId &&
-      !!room.host_user_id &&
-      room.host_user_id === opts.viewerUserId;
-
-    if (serverSaysMember || isHost) {
-      if (leftIds.has(room.room_id)) void clearUnlimitedChallengeLeft(room.room_id);
-      return {
-        ...room,
-        current_user_registered: true,
-        eligible_to_register: false,
-      };
-    }
     if (leftIds.has(room.room_id)) {
       return {
         ...room,
         current_user_registered: false,
         eligible_to_register: !room.is_private,
+      };
+    }
+    const serverSaysMember = [room, ...fromApi.filter((r) => r.room_id === room.room_id)].some(
+      (r) => r?.current_user_registered === true,
+    );
+
+    if (serverSaysMember) {
+      return {
+        ...room,
+        current_user_registered: true,
+        eligible_to_register: false,
       };
     }
     return {
@@ -673,7 +661,7 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
       // Last-resort card so active Unlimited never vanishes from Live.
       live.push({
         id: room.room_id,
-        title: room.title || "Unlimited Challenge",
+        title: displayChallengeTitle(room.title) || "Streak Challenge",
         type: "paid",
         entryType:
           room.entry_fee > 0

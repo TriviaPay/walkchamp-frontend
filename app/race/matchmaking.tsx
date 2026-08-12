@@ -1402,6 +1402,7 @@ function MatchmakingScreenContent() {
   const cashLeaveCopy = usdCashLeaveConfirmCopy({
     hasStartedPreview: cashLeaveHasStartedPreview,
     isHost: isHostMode,
+    noRefund: isUnlimitedGoalRoom,
   });
 
   const clearWaitingRoomLocalState = useCallback(() => {
@@ -2327,7 +2328,7 @@ function MatchmakingScreenContent() {
                 challenge_duration_days: dataRace.challengeDurationDays ?? 0,
                 challenge_end_at: dataRace.challengeEndAt ?? dataRace.challenge_end_at ?? null,
                 selected_track_theme_id: "bg",
-                theme_name: "Unlimited",
+                theme_name: "Streak Challenge",
                 is_private: !!dataRace.isPrivate,
                 requires_code: !!dataRace.isPrivate,
                 host_user_id:
@@ -4127,13 +4128,32 @@ function MatchmakingScreenContent() {
               </Text>
             </View>
             <View style={{ height: 1, backgroundColor: colors.border }} />
-            <View style={{ flexDirection: "row", padding: 12, gap: 8 }}>
+            <View style={{ flexDirection: "row", padding: 12, gap: 8, alignItems: "stretch" }}>
               <TouchableOpacity
-                style={{ flex: 1, paddingVertical: 12, borderRadius: 11, borderWidth: 1, borderColor: colors.border, alignItems: "center" }}
+                style={{
+                  flex: 1,
+                  minHeight: 48,
+                  paddingVertical: 12,
+                  paddingHorizontal: 8,
+                  borderRadius: 11,
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
                 onPress={() => setConfirmModal(null)}
                 disabled={leaving}
               >
-                <Text style={{ color: colors.mutedForeground, fontWeight: "600" }}>
+                <Text
+                  style={{
+                    color: colors.mutedForeground,
+                    fontWeight: "600",
+                    textAlign: "center",
+                    fontSize: rf(13),
+                    lineHeight: rf(16),
+                  }}
+                  numberOfLines={2}
+                >
                   {confirmModal === "host_cancel"
                     ? "Keep Waiting"
                     : confirmModal === "leave_pre_start" || confirmModal === "leave_post_start"
@@ -4142,11 +4162,33 @@ function MatchmakingScreenContent() {
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={{ flex: 1, paddingVertical: 12, borderRadius: 11, backgroundColor: colors.destructive, alignItems: "center", opacity: leaving ? 0.6 : 1 }}
+                style={{
+                  flex: 1,
+                  minHeight: 48,
+                  paddingVertical: 12,
+                  paddingHorizontal: 8,
+                  borderRadius: 11,
+                  backgroundColor: colors.destructive,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: leaving ? 0.6 : 1,
+                }}
                 disabled={leaving}
                 onPress={confirmModal === "host_cancel" ? executeHostCancel : executeLeave}
               >
-                <Text style={{ color: "#fff", fontWeight: "700" }}>
+                <Text
+                  style={{
+                    color: "#fff",
+                    fontWeight: "700",
+                    textAlign: "center",
+                    fontSize: rf(13),
+                    lineHeight: rf(16),
+                    flexShrink: 1,
+                  }}
+                  numberOfLines={2}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.85}
+                >
                   {confirmModal === "host_cancel"
                     ? "Cancel Room"
                     : confirmModal === "leave_pre_start" || confirmModal === "leave_post_start"
@@ -4516,24 +4558,29 @@ const styles = StyleSheet.create({
   },
   hostBadgeSlot: {
     position: "absolute",
-    top: -6,
-    left: 1,
-    minHeight: 14,
+    top: -7,
+    left: 0,
+    minHeight: 16,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 2,
-    paddingHorizontal: 4,
-    borderRadius: 7,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "#FDE68A",
     backgroundColor: "#D4A514",
+    overflow: "visible",
   },
   hostBadgeSlotText: {
     color: "#1A1200",
-    fontSize: rf(7),
+    fontSize: rf(8),
+    lineHeight: rf(10),
     fontWeight: "900",
-    letterSpacing: 0.35,
+    letterSpacing: 0.2,
+    includeFontPadding: false,
+    textAlignVertical: "center",
   },
   participantErrorRow: {
     flexDirection: "row",

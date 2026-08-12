@@ -35,7 +35,7 @@ import { clearStepSessionForLogout, bindStepSessionToUser } from "@/services/ste
 import { raceStepSyncService } from "@/services/RaceStepSyncService";
 import { setCrashReportingUser } from "@/services/monitoring/sentry";
 import { registerActiveSession, validateActiveSession } from "@/services/authSessionService";
-import { clearActiveSessionMeta } from "@/services/authSessionMetadata";
+import { clearActiveSessionMeta, getActiveSessionMeta } from "@/services/authSessionMetadata";
 import {
   handleSessionInvalidation,
   onSessionInvalidation,
@@ -122,6 +122,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         "@/services/sessionInvalidation"
       );
       beginSessionLoginGrace(15_000);
+      // Drop previous account's session id before any authenticated API call
+      // so we never send a foreign X-Session-Id as the new user.
+      await clearActiveSessionMeta().catch(() => {});
       await saveSession(sessionJwt, refreshJwt);
       // Persist profile so restoreSession can use it as an offline fallback on
       // next cold start (prevents logout when the API is unreachable at launch).
@@ -143,7 +146,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         accessToken: sessionJwt,
         userId: profile.id,
       }).catch(() => {
-        /* soft-fail — provisional meta stored inside register */
+        /* soft-fail — register clears meta instead of storing a fake id */
       });
       // Brief gate so router.replace() can queue before index evaluates auth.
       authTimerRef.current = setTimeout(() => setIsAuthenticating(false), 100);
@@ -257,13 +260,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       /* ignore */
     }
     void clearPendingMatchPermissionAction().catch(() => {});
-    // Best-effort backend revoke (use captured token — memory session already wiped).
+    // Capture then clear local session meta immediately so a fast re-login cannot
+    // attach this device's old X-Session-Id to the next account.
+    const priorMeta = await getActiveSessionMeta().catch(() => null);
+    await clearActiveSessionMeta().catch(() => {});
+    // Best-effort backend revoke (use captured token + session id).
     void (async () => {
       try {
         const { revokeCurrentSession } = await import("@/services/authSessionService");
-        await revokeCurrentSession(priorSession.session);
+        await revokeCurrentSession(priorSession.session, priorMeta?.sessionId);
       } catch {
-        await clearActiveSessionMeta().catch(() => {});
+        /* meta already cleared above */
       }
     })();
     activeChallengeSync.clear();

@@ -24,6 +24,7 @@ import {
   isValidPlayerCount,
 } from "@/utils/players";
 import { isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
+import { streakChallengeTitle } from "@/features/unlimited/mappers/unlimitedLiveUiCopy";
 import {
   resolveEffectiveChallengeStart,
   resolvePayloadScheduledStart,
@@ -429,12 +430,12 @@ export function buildHostPayload(
 
   if (isUnlimited) {
     if (!isUnlimitedGoalFrontendEnabled()) {
-      return { ok: false, error: "Unlimited Challenge is disabled in this build." };
+      return { ok: false, error: "Streak Challenge is disabled in this build." };
     }
     if (!isScheduled) {
       return {
         ok: false,
-        error: "Unlimited Challenge needs a start time.",
+        error: "Streak Challenge needs a start time.",
       };
     }
     const entryFeeCents = draft.unlimited.entryDollars * 100;
@@ -454,12 +455,12 @@ export function buildHostPayload(
       return { ok: false, error: "Choose 7, 10, 30, 60, or 90 days." };
     }
     if (!draft.unlimitedRulesAccepted) {
-      return { ok: false, error: "Please accept the Unlimited Challenge rules to continue." };
+      return { ok: false, error: "Please accept the Streak Challenge rules to continue." };
     }
 
     const durationDays = draft.unlimited.durationDays;
     const platformFeeCents = UNLIMITED_GOAL_PLATFORM_FEE_CENTS;
-    const title = `Unlimited · ${draft.unlimited.dailyGoalSteps.toLocaleString()} steps/day`;
+    const title = streakChallengeTitle(draft.unlimited.dailyGoalSteps);
     const body: Record<string, unknown> = {
       visibility: draft.visibility === "private" ? "private" : "public",
       entryFeeCents,
@@ -873,9 +874,9 @@ export function inlineRulePreview(draft: CreateChallengeDraft): {
   const format = resolveChallengeFormat(draft);
   if (format === "unlimited_goal") {
     return {
-      title: "Unlimited Cash Challenge",
+      title: "Streak Challenge",
       lines: [
-        "Unlimited participants",
+        "No player limit",
         `$${draft.unlimited.entryDollars} entry`,
         `${draft.unlimited.dailyGoalSteps.toLocaleString()} steps every day`,
         `${draft.unlimited.durationDays} days`,

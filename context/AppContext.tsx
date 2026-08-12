@@ -14,7 +14,12 @@ import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
 import { getDeviceTimezone, getLocalDateStr, getLocalWeekStart, getLocalMonthStart } from "@/utils/timezone";
 import { dynamicIconService } from "@/services/dynamicIconService";
 import { waitForAppStartupReady } from "@/services/appStartup";
-import { runCoalesced, apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
+import {
+  runCoalesced,
+  runCoalescedFresh,
+  apiFetchAllowed,
+  markApiFetched,
+} from "@/utils/apiRequestCoordinator";
 import { screenCache } from "@/utils/screenCache";
 import { perf } from "@/utils/perfLogger";
 import { useAuth } from "@/context/AuthContext";
@@ -40,7 +45,7 @@ interface AppContextType {
   transactions: WalletTransaction[];
   requestWithdrawal: (amount: number, method: string, payoutDetails?: Record<string, string>) => Promise<void>;
   addReward: (amount: number, description: string) => void;
-  refreshWallet: (opts?: { silent?: boolean }) => Promise<void>;
+  refreshWallet: (opts?: { silent?: boolean; force?: boolean }) => Promise<void>;
   refreshLeaderboard: (
     period?: string,
     scope?: string,
@@ -132,12 +137,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [walletLoading, setWalletLoading] = useState(false);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
 
-  const refreshWallet = useCallback(async (opts?: { silent?: boolean }) => {
+  const refreshWallet = useCallback(async (opts?: { silent?: boolean; force?: boolean }) => {
     const uid = user?.id;
     const silent = opts?.silent === true || hasWalletCacheRef.current;
     if (!silent) setWalletLoading(true);
+    const coalesce = opts?.force ? runCoalescedFresh : runCoalesced;
     try {
-      await runCoalesced("wallet_refresh", async () => {
+      await coalesce("wallet_refresh", async () => {
         const data = await apiFetch<{ wallet: WalletData }>("/api/wallet");
         if (data?.wallet) {
           setWalletBalance(data.wallet.availableBalance);

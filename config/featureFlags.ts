@@ -154,7 +154,7 @@ export const ENABLE_LEGACY_CASH_RACE_CARDS =
   process.env.EXPO_PUBLIC_ENABLE_LEGACY_CASH_RACE_CARDS === "true";
 
 /**
- * Premium post-auth onboarding (Welcome → … → Enter Walk Champ).
+ * Premium post-auth onboarding (Welcome → … → Enter WalkChamp).
  *
  * One-command disable (skip premium onboarding; auth goes straight to tabs):
  *   npm run onboarding:disable

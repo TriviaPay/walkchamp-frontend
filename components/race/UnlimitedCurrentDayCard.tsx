@@ -4,7 +4,7 @@
  * Entire tile opens Challenge Progress (not only the info icon).
  */
 import React, { memo } from "react";
-import { Text, TouchableOpacity, View, StyleSheet } from "react-native";
+import { Image, Text, TouchableOpacity, View, StyleSheet } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import type { UnlimitedViewerSchedule } from "@/utils/unlimitedViewerSchedule";
 import type { PrizePoolEligibilityStatus } from "@/utils/unlimitedResults";
@@ -16,6 +16,7 @@ import {
 } from "@/utils/unlimitedLiveUiCopy";
 import type { UnlimitedDayRow } from "@/utils/unlimitedDayProgress";
 import { rf } from "@/utils/responsive";
+import { CHALLENGE_IMG } from "@/utils/brandImages";
 
 type Props = {
   schedule: UnlimitedViewerSchedule;
@@ -28,8 +29,10 @@ type Props = {
   onPressViewResults?: () => void;
 };
 
-/** Compact calendar tile from the mock (green header + star). */
-function CalendarGoalIcon() {
+/** Compact calendar tile — green header + current day number (1–99). */
+function CalendarGoalIcon({ dayNumber }: { dayNumber: number }) {
+  const day = Math.max(1, Math.min(99, Math.floor(dayNumber || 1)));
+  const twoDigit = day >= 10;
   return (
     <View style={cal.tile}>
       <View style={cal.header}>
@@ -37,7 +40,14 @@ function CalendarGoalIcon() {
         <View style={cal.ring} />
       </View>
       <View style={cal.body}>
-        <Text style={cal.star}>★</Text>
+        <Text
+          style={[cal.dayNum, twoDigit && cal.dayNumTwoDigit]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.7}
+        >
+          {day}
+        </Text>
       </View>
     </View>
   );
@@ -72,12 +82,19 @@ const cal = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#0E0A18",
+    paddingHorizontal: 2,
   },
-  star: {
+  dayNum: {
     fontSize: rf(18),
     color: "#A78BFA",
     fontWeight: "900",
     marginTop: -1,
+    textAlign: "center",
+    includeFontPadding: false,
+  },
+  dayNumTwoDigit: {
+    fontSize: rf(15),
+    letterSpacing: -0.5,
   },
 });
 
@@ -114,7 +131,7 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
   const body = (
     <>
       <View style={styles.row}>
-        <CalendarGoalIcon />
+        <CalendarGoalIcon dayNumber={schedule.currentDayIndex} />
 
         <View style={styles.mid}>
           {/* Day N of Y is intentionally omitted here — shown in Challenge Progress only. */}
@@ -145,7 +162,11 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
           ) : null}
           {!finished ? (
             <View style={styles.flameRow}>
-              <Text style={styles.flameEmoji}>🔥</Text>
+              <Image
+                source={CHALLENGE_IMG}
+                style={{ width: 14, height: 14 }}
+                resizeMode="contain"
+              />
               <Text style={styles.daysLeft}>
                 {daysLeft} {daysLeft === 1 ? "day" : "days"} left
               </Text>
@@ -264,9 +285,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 3,
-  },
-  flameEmoji: {
-    fontSize: rf(13),
   },
   daysLeft: {
     fontSize: rf(12),

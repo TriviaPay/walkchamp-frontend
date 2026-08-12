@@ -1,5 +1,5 @@
 /**
- * adMobService.ts — Centralized AdMob service for Walk Champ.
+ * adMobService.ts — Centralized AdMob service for WalkChamp.
  *
  * Provides:
  *  • initializeAds()          — call once on app startup

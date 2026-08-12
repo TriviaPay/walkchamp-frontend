@@ -93,8 +93,10 @@ export async function handleSessionInvalidation(
     return false;
   }
 
-  // First sign-in / re-register race: never kick the device that just logged in.
-  if (isSessionLoginGraceActive() && isReplacedReason(payload.reason)) {
+  // First sign-in / account-switch race: never kick the device that just logged in.
+  // Stale X-Session-Id from the previous account often returns SESSION_INVALID —
+  // that must not sign out the current device.
+  if (isSessionLoginGraceActive()) {
     if (__DEV__) {
       console.log(
         `[AuthSession] invalidation ignored — login grace reason=${payload.reason}`,
@@ -121,14 +123,19 @@ export async function handleSessionInvalidation(
     return false;
   }
 
-  // Ambiguous replaced kick without sessionId — require an explicit session id.
-  if (isReplacedReason(payload.reason) && !payload.sessionId) {
-    if (__DEV__) {
-      console.log(
-        "[AuthSession] invalidation ignored — replaced reason without sessionId",
-      );
+  // Ambiguous SESSION_INVALID without sessionId must not force-logout (stale/foreign header).
+  // SESSION_REPLACED / login_on_new_device from the API means the session we presented was
+  // superseded — treat missing sessionId as targeting the local session.
+  if (!payload.sessionId) {
+    if (!isReplacedReason(payload.reason)) {
+      if (__DEV__) {
+        console.log(
+          `[AuthSession] invalidation ignored — ${payload.reason} without sessionId`,
+        );
+      }
+      return false;
     }
-    return false;
+    payload = { ...payload, sessionId: local.sessionId };
   }
 
   inFlight = true;

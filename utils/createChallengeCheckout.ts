@@ -30,13 +30,13 @@ export const CHECKOUT_CARD_PAD_V = 14;
 
 export const CHECKOUT_ACK_UNLIMITED_L1 =
   "I understand that the challenge cannot be cancelled after creation.";
-export const CHECKOUT_ACK_UNLIMITED_L2 =
-  "I understand that leaving before the challenge starts may qualify for an entry-fee refund according to the refund policy. Leaving at or after start provides no refund. If I leave, the challenge will continue for other participants.";
+export const CHECKOUT_ACK_NO_REFUND_ONCE_JOIN =
+  "No refund once you join. Even if a participant leaves the match before it starts, there is no refund.";
+export const CHECKOUT_ACK_UNLIMITED_L2 = CHECKOUT_ACK_NO_REFUND_ONCE_JOIN;
 
 export const CHECKOUT_ACK_FIXED_USD_L1 =
   "I understand that the challenge cannot be cancelled after creation.";
-export const CHECKOUT_ACK_FIXED_USD_L2 =
-  "I understand that leaving before the challenge starts may qualify for an entry-fee refund according to the refund policy. Leaving at or after start provides no refund. If I leave, the challenge will continue for other participants.";
+export const CHECKOUT_ACK_FIXED_USD_L2 = CHECKOUT_ACK_NO_REFUND_ONCE_JOIN;
 
 export const CHECKOUT_ACK_FREE_COINS_L1 =
   "I understand the challenge rules.";
@@ -97,7 +97,7 @@ export type CompactChallengeSummary = {
   roomIcon: "globe" | "lock";
   /** e.g. "$10 entry" */
   entryLine: string;
-  /** e.g. "Unlimited players" */
+  /** e.g. "No player limit" */
   capacityLine: string;
   /** e.g. "10,000 steps/day" */
   goalLine: string;
@@ -155,7 +155,7 @@ export function buildCheckoutSecondaryDetailRows(params: {
     },
     {
       label: "Challenge Type",
-      value: isUnlimited ? "Unlimited" : "Fixed",
+      value: isUnlimited ? "Streak Challenge" : "Fixed",
     },
     { label: "Timezone", value: params.timezone },
     { label: "Selected Track", value: params.trackLabel },
@@ -191,7 +191,7 @@ export function buildCompactChallengeSummary(params: {
 
   if (isUnlimited) {
     entryLine = `$${draft.unlimited.entryDollars} entry`;
-    capacityLine = "Unlimited players";
+    capacityLine = "No player limit";
     goalLine = `${draft.unlimited.dailyGoalSteps.toLocaleString()} steps/day`;
     durationLine = formatDurationDaysLabel(draft.unlimited.durationDays);
   } else if (draft.entryType === "free") {

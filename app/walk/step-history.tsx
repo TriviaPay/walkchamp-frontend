@@ -24,6 +24,12 @@ import { useWalkTodaySteps } from "@/services/walkTodayStepsStore";
 import { getTodayKey } from "@/utils/format";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf } from "@/utils/responsive";
+import { Image } from "expo-image";
+import { useTheme } from "@/context/ThemeContext";
+import {
+  FOOTSTEP_IMG,
+  streakIconSource,
+} from "@/utils/brandImages";
 
 
 type Range = "week" | "month" | "three_months" | "year";
@@ -148,7 +154,8 @@ export default function StepHistoryScreen() {
 
   // refreshTodayRank is fetchTodayFromBackend — calling it syncs the new goal
   // into WalkContext so the Walk tab updates immediately without requiring a restart.
-  const { refreshTodayRank } = useWalkContext();
+  const { refreshTodayRank, currentStreak } = useWalkContext();
+  const { isDark } = useTheme();
   const todaySteps = useWalkTodaySteps();
 
   const todayStr = getLocalDateStr();
@@ -722,7 +729,12 @@ export default function StepHistoryScreen() {
                 </View>
 
                 <View style={S.lifetimeGrid}>
-                  <LifetimeTile emoji="🚶" label="All-Time Steps" value={fmtK(lifetime.totalSteps)} colors={colors} />
+                  <LifetimeTile
+                    iconSource={FOOTSTEP_IMG}
+                    label="All-Time Steps"
+                    value={fmtK(lifetime.totalSteps)}
+                    colors={colors}
+                  />
                   <LifetimeTile
                     emoji="📍"
                     label="Distance"
@@ -731,7 +743,15 @@ export default function StepHistoryScreen() {
                   />
                   <LifetimeTile emoji="⚡" label="Calories" value={fmtK(lifetime.caloriesBurned)} colors={colors} />
                   <LifetimeTile emoji="⏱" label="Active Mins" value={fmtK(lifetime.activeMinutes)} colors={colors} />
-                  <LifetimeTile emoji="🔥" label="Active Days" value={String(lifetime.activeDays)} colors={colors} />
+                  <LifetimeTile
+                    iconSource={streakIconSource({
+                      completed: currentStreak > 0,
+                      isDark,
+                    })}
+                    label="Active Days"
+                    value={String(lifetime.activeDays)}
+                    colors={colors}
+                  />
                   <LifetimeTile emoji="🏆" label="Best Day" value={fmtK(lifetime.bestDaySteps)} colors={colors} />
                 </View>
               </View>
@@ -887,16 +907,25 @@ function LegendDot({ color, label }: { color: string; label: string }) {
 }
 
 function LifetimeTile({
-  emoji, label, value, colors,
+  emoji,
+  iconSource,
+  label,
+  value,
+  colors,
 }: {
-  emoji: string;
+  emoji?: string;
+  iconSource?: number;
   label: string;
   value: string;
   colors: ReturnType<typeof useColors>;
 }) {
   return (
     <View style={[S.lifetimeTile, { backgroundColor: colors.background, borderColor: colors.border }]}>
-      <Text style={{ fontSize: rf(18), lineHeight: 24 }}>{emoji}</Text>
+      {iconSource != null ? (
+        <Image source={iconSource} style={{ width: 22, height: 22 }} contentFit="contain" />
+      ) : (
+        <Text style={{ fontSize: rf(18), lineHeight: 24 }}>{emoji}</Text>
+      )}
       <Text style={[S.lifetimeTileValue, { color: colors.foreground }]}>{value}</Text>
       <Text style={[S.lifetimeTileLabel, { color: colors.mutedForeground }]}>{label}</Text>
     </View>

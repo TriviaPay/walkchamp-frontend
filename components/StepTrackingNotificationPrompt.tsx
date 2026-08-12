@@ -79,7 +79,7 @@ export function StepTrackingNotificationPrompt() {
           </View>
           <Text style={[s.title, { color: colors.foreground }]}>Enable Notifications</Text>
           <Text style={[s.body, { color: colors.mutedForeground }]}>
-            Walk Champ needs notifications to show ongoing step tracking while you walk.
+            WalkChamp needs notifications to show ongoing step tracking while you walk.
           </Text>
           {stillDisabled ? (
             <Text style={[s.warning, { color: "#ef4444" }]}>

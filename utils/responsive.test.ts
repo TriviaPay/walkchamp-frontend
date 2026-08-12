@@ -1,5 +1,5 @@
 /**
- * Unit tests for Walk Champ responsive math + token shape.
+ * Unit tests for WalkChamp responsive math + token shape.
  * Pure Node (no react-native import) so CI does not hang on Dimensions.
  * Run: npx tsx utils/responsive.test.ts
  */

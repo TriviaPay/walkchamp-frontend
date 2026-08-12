@@ -5,6 +5,10 @@
 import { UNLIMITED_GOAL_CHALLENGE_TYPE } from "@/utils/unlimitedGoal";
 import type { UnlimitedUpcomingRoom } from "@/utils/unlimitedChallengeRooms";
 import { mapUnlimitedDetailToWaitingRoom } from "@/utils/unlimitedWaitingRoom";
+import {
+  displayChallengeTitle,
+  streakChallengeTitle,
+} from "@/features/unlimited/mappers/unlimitedLiveUiCopy";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -211,7 +215,7 @@ export function mapUnlimitedUpcomingToLiveRaceFields(
 
   return {
     id: room.room_id,
-    title: room.title,
+    title: displayChallengeTitle(room.title) || streakChallengeTitle(room.target_steps),
     type: "paid",
     entryType: unlimitedEntryTypeLabel(room.entry_fee),
     playerCount: Math.max(1, room.registered_count ?? 1),
@@ -652,9 +656,10 @@ export function mapUnlimitedDetailToLiveDetail(
     apiPrize > 0 ? apiPrize : entryCents > 0 ? entryCents * participantCount : 0;
   const prizeDollars = prizeCents / 100;
 
-  const title =
+  const title = displayChallengeTitle(
     asString(pick(challenge, "title", "name")) ??
-    `Streak · ${waiting.race.targetSteps.toLocaleString()} steps/day`;
+      streakChallengeTitle(waiting.race.targetSteps),
+  );
 
   const hostUserId =
     asString(pick(challenge, "hostUserId", "host_user_id")) ?? "";

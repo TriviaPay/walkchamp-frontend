@@ -1,6 +1,6 @@
 /**
  * Android step-writing apps that feed Health Connect.
- * Walk Champ only reads HC — these apps must write Steps into it.
+ * WalkChamp only reads HC — these apps must write Steps into it.
  */
 
 import { Linking, Platform } from "react-native";
@@ -35,7 +35,7 @@ const SAMSUNG_HEALTH: AndroidStepWriterApp = {
   playStoreWeb:
     "https://play.google.com/store/apps/details?id=com.sec.android.app.shealth",
   syncHint:
-    "Samsung Health can show steps in its own app while Health Connect stays empty. In Samsung Health: Settings → Health Connect (or Connected services) → turn on sync and allow Write Steps. Then Walk Champ can read them.",
+    "Samsung Health can show steps in its own app while Health Connect stays empty. In Samsung Health: Settings → Health Connect (or Connected services) → turn on sync and allow Write Steps. Then WalkChamp can read them.",
 };
 
 const GOOGLE_FIT: AndroidStepWriterApp = {
@@ -48,7 +48,7 @@ const GOOGLE_FIT: AndroidStepWriterApp = {
   playStoreWeb:
     "https://play.google.com/store/apps/details?id=com.google.android.apps.fitness",
   syncHint:
-    "In Google Fit: Profile → Settings → Health Connect → allow Write Steps. Walk Champ only sees what Fit writes into Health Connect.",
+    "In Google Fit: Profile → Settings → Health Connect → allow Write Steps. WalkChamp only sees what Fit writes into Health Connect.",
 };
 
 type PackageProbeNative = {

@@ -1,5 +1,5 @@
 /**
- * Walk Champ accessibility / system font-scaling policy.
+ * WalkChamp accessibility / system font-scaling policy.
  *
  * Allow OS font scaling (allowFontScaling defaults to true) so users with
  * mild accessibility preferences still get larger text, but hard-cap growth

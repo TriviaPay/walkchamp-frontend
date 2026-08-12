@@ -32,7 +32,7 @@ export function androidOneSignalVisualPayload(input: {
   visualType?: string | null;
 }): {
   visualType: NotificationVisualType;
-  /** Walk Champ brand drawable (large icon). */
+  /** WalkChamp brand drawable (large icon). */
   large_icon: string;
   /** Type-specific illustration drawable (big picture). */
   big_picture_drawable: string;

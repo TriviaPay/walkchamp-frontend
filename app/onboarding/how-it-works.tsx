@@ -25,7 +25,7 @@ export default function HowItWorksScreen() {
       }
     >
       <OnboardingMascot source={ONBOARDING_ASSETS.howItWorks} />
-      <Text style={styles.title}>How Walk Champ Works</Text>
+      <Text style={styles.title}>How WalkChamp Works</Text>
       <Text style={styles.subtitle}>Choose a challenge, walk, and climb the leaderboard.</Text>
       <View style={styles.cards}>
         <OnboardingFeatureCard

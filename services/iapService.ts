@@ -1,5 +1,5 @@
 /**
- * iapService.ts — react-native-iap v12 wrapper for Walk Champ Global.
+ * iapService.ts — react-native-iap v12 wrapper for WalkChamp Global.
  *
  * Responsibilities:
  *  - initialize / cleanup IAP connection
@@ -139,7 +139,7 @@ async function verifyWithBackend(purchase: ProductPurchase): Promise<IAPVerifyRe
   }
   if (Platform.OS === "android") {
     if (purchase.purchaseToken) payload.purchase_token = purchase.purchaseToken;
-    payload.package_name = "com.globalwalkerleague.app";
+    payload.package_name = "com.walkchamp.app";
   }
 
   const res = await fetch(`${getApiBase()}/api/purchases/verify`, {
@@ -463,7 +463,7 @@ export async function retryPendingPurchases(callbacks: {
       };
       if (p.purchaseToken) payload.purchase_token = p.purchaseToken;
       if (p.transactionReceipt) payload.receipt = p.transactionReceipt;
-      if (p.platform === "android") payload.package_name = "com.globalwalkerleague.app";
+      if (p.platform === "android") payload.package_name = "com.walkchamp.app";
 
       const res = await fetch(`${getApiBase()}/api/purchases/verify`, {
         method: "POST",

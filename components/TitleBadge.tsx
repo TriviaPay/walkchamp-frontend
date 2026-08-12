@@ -1,13 +1,15 @@
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Image, StyleSheet, Text, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { CHALLENGE_IMG, STREAK_ON_IMG } from "@/utils/brandImages";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type MCIcon = React.ComponentProps<typeof MaterialCommunityIcons>["name"];
 
 interface IconDef  { kind: "icon"; icon: MCIcon; color: string }
 interface TextDef  { kind: "text"; label: string; color: string }
-type BadgeDef = IconDef | TextDef;
+interface ImageDef { kind: "image"; source: number; color: string }
+type BadgeDef = IconDef | TextDef | ImageDef;
 
 // ── Difficulty fallback icons (used when code is unknown) ─────────────────────
 const DIFFICULTY_DEFAULTS: Record<string, BadgeDef> = {
@@ -26,7 +28,7 @@ const BADGE_MAP: Record<string, BadgeDef> = {
   daily_starter:          { kind: "icon", icon: "weather-sunset-up",       color: "#69F0AE" },
   goal_chaser:            { kind: "icon", icon: "target",                  color: "#00BCD4" },
   halfway_hero:           { kind: "icon", icon: "lightning-bolt",          color: "#4FC3F7" },
-  almost_there:           { kind: "icon", icon: "fire",                    color: "#FF7043" },
+  almost_there:           { kind: "image", source: CHALLENGE_IMG,         color: "#FF7043" },
   goal_finisher:          { kind: "icon", icon: "check-decagram",          color: "#00E676" },
   one_k_walker:           { kind: "text", label: "1K",                    color: "#00BCD4" },
   five_k_walker:          { kind: "text", label: "5K",                    color: "#00E676" },
@@ -46,7 +48,7 @@ const BADGE_MAP: Record<string, BadgeDef> = {
   weekly_warrior:         { kind: "icon", icon: "calendar-star",           color: "#FFD700" },
   ten_k_club:             { kind: "text", label: "10K",                   color: "#FFD700" },
   consistent_walker:      { kind: "icon", icon: "calendar-check",          color: "#FFCA28" },
-  streak_builder:         { kind: "icon", icon: "fire-circle",             color: "#FF8F00" },
+  streak_builder:         { kind: "image", source: STREAK_ON_IMG,          color: "#FF8F00" },
   race_contender:         { kind: "icon", icon: "gauge",                   color: "#FFAB40" },
   race_winner:            { kind: "icon", icon: "flag-variant",            color: "#FFD700" },
   fast_finisher:          { kind: "icon", icon: "timer",                   color: "#FFE082" },
@@ -134,6 +136,12 @@ export function TitleBadge({ code, difficulty = "easy", size = 48, locked = fals
     ]}>
       {def.kind === "icon" ? (
         <MaterialCommunityIcons name={def.icon} size={iconSz} color={bColor} />
+      ) : def.kind === "image" ? (
+        <Image
+          source={def.source}
+          style={{ width: iconSz, height: iconSz, opacity: locked ? 0.45 : 1 }}
+          resizeMode="contain"
+        />
       ) : (
         <Text style={[st.labelText, { color: bColor, fontSize: iconSz * 0.52 }]}>
           {def.label}

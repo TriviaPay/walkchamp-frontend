@@ -55,8 +55,7 @@
         "EXPO_PUBLIC_ONESIGNAL_APP_ID": "d2a5b069-1715-4942-b76f-a2b1c9c2f2f1",
         "EXPO_PUBLIC_ENABLE_CASH_CHALLENGES": "false",
         "EXPO_PUBLIC_PAYMENTS_LIVE_MODE": "false",
-        "EXPO_PUBLIC_ADS_ENABLED": "true",
-        "EXPO_PUBLIC_SENTRY_DSN": ""
+        "EXPO_PUBLIC_ADS_ENABLED": "true"
       }
     },
     "production-apk": {

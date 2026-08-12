@@ -1,4 +1,4 @@
-package com.globalwalkerleague.app
+package com.walkchamp.app
 import expo.modules.splashscreen.SplashScreenManager
 
 import android.os.Build

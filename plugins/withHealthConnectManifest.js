@@ -20,7 +20,7 @@ function getQueriesBlock(manifest) {
 }
 
 /**
- * Health Connect manifest entries so Walk Champ appears in
+ * Health Connect manifest entries so WalkChamp appears in
  * Health Connect > App permissions (activity-alias + package visibility).
  */
 function withHealthConnectManifest(config) {

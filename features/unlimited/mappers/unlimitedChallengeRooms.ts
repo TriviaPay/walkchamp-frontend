@@ -6,6 +6,10 @@
 
 import { UNLIMITED_GOAL_CHALLENGE_TYPE } from "@/utils/unlimitedGoal";
 import type { AvailableRoomLike } from "@/utils/trendingChallenges";
+import {
+  displayChallengeTitle,
+  streakChallengeTitle,
+} from "@/features/unlimited/mappers/unlimitedLiveUiCopy";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -392,9 +396,10 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
     ) ??
     (!isPrivate && !member);
 
-  const title =
+  const title = displayChallengeTitle(
     asString(pickRaw(obj, "title", "name")) ??
-    `Streak · ${dailyGoal > 0 ? dailyGoal.toLocaleString() : "—"} steps/day`;
+      streakChallengeTitle(dailyGoal),
+  );
 
   const status =
     asString(pickRaw(obj, "status", "room_status", "roomStatus")) ?? "scheduled";
@@ -416,7 +421,7 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
     ),
     challenge_end_at: endAt,
     selected_track_theme_id: asString(pickRaw(obj, "selected_track_theme_id", "trackLayout")) ?? "bg",
-    theme_name: asString(pickRaw(obj, "theme_name", "themeName")) ?? "Unlimited",
+    theme_name: asString(pickRaw(obj, "theme_name", "themeName")) ?? "Streak Challenge",
     is_private: !!isPrivate,
     requires_code:
       asBool(pickRaw(obj, "requires_code", "requiresCode")) ?? !!isPrivate,

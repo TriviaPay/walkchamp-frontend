@@ -184,7 +184,7 @@ export function PushPermissionPrompt() {
           </View>
           <Text style={[s.title, { color: colors.foreground }]}>Enable notifications</Text>
           <Text style={[s.body, { color: colors.mutedForeground }]}>
-            Allow notifications so Walk Champ can show live step progress while you walk, plus race invites, rewards, and friend updates. You can change this anytime in Profile.
+            Allow notifications so WalkChamp can show live step progress while you walk, plus race invites, rewards, and friend updates. You can change this anytime in Profile.
           </Text>
           <TouchableOpacity
             style={[s.primaryBtn, { opacity: requesting ? 0.7 : 1 }]}

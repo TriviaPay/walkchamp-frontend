@@ -14,17 +14,19 @@ import androidx.core.app.NotificationCompat
  * Health Connect / sensors or recalculates steps.
  *
  * Android N+ (`DecoratedCustomViewStyle`) draws a system header with the default
- * app icon + "Walk Champ". On those devices we hide our in-layout brand mark so
+ * app icon + "WalkChamp". On those devices we hide our in-layout brand mark so
  * the icon is not duplicated. Older / unsupported surfaces keep the brand icon
  * beside the status line (same as before).
  *
  * Text colors follow the **device** night mode (white on dark, black on light).
- * Progress bar fill is always Walk Champ green.
+ * Progress bar fill is always WalkChamp green.
  */
 object WalkChampNotificationViews {
   private const val TAG = "WalkChampNotifUI"
-  /** Progress fill + percent accent — same green in light and dark. */
+  /** Progress fill — same green in light and dark. */
   private val PROGRESS_GREEN = Color.parseColor("#22C55E")
+  /** Percent / accent text on light notification chrome (readable dark green). */
+  private val PROGRESS_GREEN_LIGHT_TEXT = Color.parseColor("#15803D")
 
   /**
    * True when the system notification chrome already shows the app / launcher
@@ -40,7 +42,7 @@ object WalkChampNotificationViews {
     builder: NotificationCompat.Builder,
     steps: Int,
     goal: Int,
-    brandTitle: String = "Walk Champ",
+    brandTitle: String = "WalkChamp",
   ): Boolean {
     val safeSteps = steps.coerceAtLeast(0)
     val safeGoal = if (goal > 0) goal else 10_000
@@ -87,7 +89,7 @@ object WalkChampNotificationViews {
     ctx: Context,
     builder: NotificationCompat.Builder,
     state: RaceNotificationState,
-    brandTitle: String = "Walk Champ",
+    brandTitle: String = "WalkChamp",
   ): Boolean {
     // Always notification_live.png for every ongoing race type (sponsored / free / cash / etc.).
     val typeIcon = R.drawable.notification_live
@@ -284,9 +286,9 @@ object WalkChampNotificationViews {
   }
 
   /**
-   * Left: Walk Champ brand only when the system will not show the default app
+   * Left: WalkChamp brand only when the system will not show the default app
    * icon. Right: type illustration (always). Brand title stays hidden — the
-   * DecoratedCustomViewStyle header already shows "Walk Champ".
+   * DecoratedCustomViewStyle header already shows "WalkChamp".
    */
   private fun bindBrandIconOnly(views: RemoteViews, typeIcon: Int) {
     if (deviceShowsDefaultNotificationAppIcon()) {
@@ -328,7 +330,7 @@ object WalkChampNotificationViews {
       .setCustomHeadsUpContentView(content)
   }
 
-  /** Device dark mode → white text; light mode → black text. Percent/reward use green. */
+  /** Device dark mode → white text; light mode → black text. Percent uses readable green. */
   private fun applyTextTheme(
     ctx: Context,
     views: RemoteViews,
@@ -340,9 +342,11 @@ object WalkChampNotificationViews {
     val primary = if (night) Color.WHITE else Color.BLACK
     val secondary =
       if (night) Color.argb(0xB3, 0xFF, 0xFF, 0xFF) else Color.argb(0x99, 0x00, 0x00, 0x00)
+    // Dark mode keeps bright green; light mode uses darker green for contrast on gray cards.
+    val accent = if (night) PROGRESS_GREEN else PROGRESS_GREEN_LIGHT_TEXT
     for (id in primaryIds) views.setTextColor(id, primary)
     for (id in secondaryIds) views.setTextColor(id, secondary)
-    for (id in accentIds) views.setTextColor(id, PROGRESS_GREEN)
+    for (id in accentIds) views.setTextColor(id, accent)
   }
 
   private fun isDeviceNightMode(ctx: Context): Boolean {

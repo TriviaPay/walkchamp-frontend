@@ -204,9 +204,14 @@ export async function authFetch(
     const sessionErr = await parseSessionErrorFromResponse(res);
     if (sessionErr) {
       logger.debug("Auth", `session error code=${sessionErr.reason} path=${path}`);
-      // Do not refresh or retry a replaced/revoked session.
-      await handleSessionInvalidation(sessionErr);
-      authEvents.emitSessionInvalidated(sessionErr);
+      const { isSessionLoginGraceActive } = await import(
+        "@/services/sessionInvalidation"
+      );
+      // Account-switch / register race: never self-kick the device that just logged in.
+      if (!isSessionLoginGraceActive()) {
+        await handleSessionInvalidation(sessionErr);
+        authEvents.emitSessionInvalidated(sessionErr);
+      }
       return res;
     }
   }

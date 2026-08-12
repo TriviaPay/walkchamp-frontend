@@ -28,9 +28,9 @@ export default function HelpSupportScreen() {
   };
 
   const contacts = [
-    { icon: "mail" as const,           label: "Email Support",  sub: SUPPORT_EMAIL,               onPress: () => openEmail("Walk Champ Support") },
-    { icon: "alert-circle" as const,   label: "Report a Bug",   sub: "Describe what went wrong",  onPress: () => openEmail("Walk Champ Bug Report") },
-    { icon: "message-square" as const, label: "Give Feedback",  sub: "Help us improve the app",   onPress: () => openEmail("Walk Champ Feedback") },
+    { icon: "mail" as const,           label: "Email Support",  sub: SUPPORT_EMAIL,               onPress: () => openEmail("WalkChamp Support") },
+    { icon: "alert-circle" as const,   label: "Report a Bug",   sub: "Describe what went wrong",  onPress: () => openEmail("WalkChamp Bug Report") },
+    { icon: "message-square" as const, label: "Give Feedback",  sub: "Help us improve the app",   onPress: () => openEmail("WalkChamp Feedback") },
   ];
 
   return (

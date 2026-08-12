@@ -477,6 +477,7 @@ function UserProfileModal({ user, visible, onClose, colors }: {
   visible: boolean;
   onClose: () => void;
   colors: ReturnType<typeof useColors>; }) {
+  const { safeTop } = useSafeLayout();
   const [friendState, setFriendState] = useState<"none" | "sending" | "sent" | "friends">("none");
   const [blocking, setBlocking] = useState(false);
 
@@ -503,7 +504,7 @@ function UserProfileModal({ user, visible, onClose, colors }: {
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" transparent={false}>
-      <View style={[pStyles.profileModal, { backgroundColor: colors.background }]}>
+      <View style={[pStyles.profileModal, { backgroundColor: colors.background, paddingTop: safeTop }]}>
         <View style={[pStyles.profileHeader, { borderBottomColor: colors.border }]}>
           <Text style={[pStyles.profileTitle, { color: colors.foreground }]}>Profile</Text>
           <TouchableOpacity onPress={onClose}><Feather name="x" size={22} color={colors.foreground} /></TouchableOpacity>
@@ -2430,7 +2431,7 @@ const cStyles = StyleSheet.create({
 
 const pStyles = StyleSheet.create({
   profileModal: { flex: 1 },
-  profileHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: rs(20), paddingTop: 20, paddingBottom: rs(16), borderBottomWidth: 1 },
+  profileHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: rs(20), paddingTop: rs(12), paddingBottom: rs(16), borderBottomWidth: 1 },
   profileTitle: { fontSize: rf(20), fontWeight: "700" },
   profileBody: { paddingHorizontal: rs(24), paddingTop: rs(24), gap: 16, paddingBottom: 40 },
   profileCenter: { alignItems: "center", gap: 8 },

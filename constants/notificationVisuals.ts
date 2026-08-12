@@ -1,5 +1,5 @@
 /**
- * Centralized notification visual categories for Walk Champ.
+ * Centralized notification visual categories for WalkChamp.
  * Used by JS services; Android/iOS mirror the same names via string keys.
  */
 

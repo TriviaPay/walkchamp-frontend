@@ -24,6 +24,7 @@ import {
 
 } from "@/constants/trendingChallengeThemes";
 import { resolveRacePlayerCount } from "@/utils/waitingRoomTiming";
+import { displayChallengeTitle } from "@/features/unlimited/mappers/unlimitedLiveUiCopy";
 
 export const TRENDING_MAX_CARDS = 20;
 
@@ -400,13 +401,13 @@ export function mapRoomToTrendingChallenge(
 
         : format === "unlimited_goal"
 
-          ? "Unlimited"
+          ? "Streak Challenge"
 
           : "Fixed Cash";
 
   return {
     id: room.room_id,
-    title: room.title?.trim() || "Public Challenge",
+    title: displayChallengeTitle(room.title?.trim()) || "Streak Challenge",
     challengeFormat: format,
     prizePoolDisplay: formatTrendingPrizePool(room),
     // Prefer registered_count for scheduled/upcoming (current_players stays 0 until start).

@@ -868,7 +868,7 @@ export default function UpcomingRoomsByDateScreen() {
 
       {/* Cash consent modal */}
       <Modal visible={!!consentRoom} animationType="slide" presentationStyle="pageSheet" transparent={false}>
-        <View style={s.consentWrap}>
+        <View style={[s.consentWrap, { paddingTop: safeTop }]}>
           <View style={s.consentHeader}>
             <Text style={s.consentTitle}>Confirm Challenge Entry</Text>
             <TouchableOpacity onPress={() => setConsentRoom(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -888,7 +888,7 @@ export default function UpcomingRoomsByDateScreen() {
               "I am 18 years of age or older and legally eligible to participate in paid challenges in my jurisdiction.",
               "I understand this is a skill-based walking challenge. My result depends entirely on my step performance — outcomes are not based on chance.",
               "I understand that entry fees are charged when the race begins at its scheduled time. If I cancel my registration before the race starts, no fee is charged.",
-              "I have read and agree to the Walk Champ Challenge Rules & Terms of Service.",
+              "I have read and agree to the WalkChamp Challenge Rules & Terms of Service.",
             ].map((text, i) => (
               <TouchableOpacity key={i} style={[s.checkRow, checks[i] && s.checkRowActive]}
                 onPress={() => { const n = [...checks]; n[i] = !n[i]; setChecks(n); }} activeOpacity={0.8}>
@@ -912,7 +912,7 @@ export default function UpcomingRoomsByDateScreen() {
             <TouchableOpacity style={s.cancelConsentBtn} onPress={() => setConsentRoom(null)}>
               <Text style={s.cancelConsentBtnText}>Cancel</Text>
             </TouchableOpacity>
-            <Text style={s.finePrint}>Walk Champ is a skill-based activity platform. Paid challenges are not gambling — your performance determines your result. Must be 18+ and eligible in your region to join paid challenges.</Text>
+            <Text style={s.finePrint}>WalkChamp is a skill-based activity platform. Paid challenges are not gambling — your performance determines your result. Must be 18+ and eligible in your region to join paid challenges.</Text>
           </ScrollView>
         </View>
       </Modal>

@@ -1251,18 +1251,31 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     async (steps: number) => {
       const displaySteps = Math.max(0, Math.floor(steps));
       const today = getTodayKey();
+      const previous = todayStepsRef.current;
       setTodaySteps(displaySteps);
       todayStepsRef.current = displaySteps;
       savedDailyStepsRef.current = displaySteps;
       await persistDailySteps(displaySteps);
-      if (displaySteps === 0 && stepProviderManager.usesVerifiedStepSource()) {
-        store.dispatch(walkActions.setTodaySteps(0));
+      const correctingInflation =
+        stepProviderManager.usesVerifiedStepSource() &&
+        (displaySteps === 0 ||
+          isInflatedProvisionalVsVerified(displaySteps, previous));
+      if (correctingInflation) {
+        store.dispatch(walkActions.setTodaySteps(displaySteps));
         store.dispatch(
           raceProgressActions.resetDailyStepsForNewDay({
-            todaySteps: 0,
+            todaySteps: displaySteps,
             updatedAt: new Date().toISOString(),
           }),
         );
+        if (displaySteps > 0) {
+          updateStepProgressFromRealSource({
+            todaySteps: displaySteps,
+            stepSource: "health_connect",
+            dailyLane: "verified",
+            updatedAt: new Date().toISOString(),
+          });
+        }
         try {
           await pushWalkNotificationFromCanonicalStore(true, user?.id);
         } catch {
@@ -1400,13 +1413,22 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           hydratedDisplay > todayStepsRef.current ||
           (verifiedActive &&
             hydratedDisplay === 0 &&
-            todayStepsRef.current > 250))
+            todayStepsRef.current > 250) ||
+          (verifiedActive &&
+            isInflatedProvisionalVsVerified(
+              hydratedDisplay,
+              todayStepsRef.current,
+            )))
       ) {
         if (
           (isFreshLocalDay() || verifiedActive) &&
-          hydratedDisplay === 0
+          (hydratedDisplay === 0 ||
+            isInflatedProvisionalVsVerified(
+              hydratedDisplay,
+              todayStepsRef.current,
+            ))
         ) {
-          await forceSetTodayStepDisplay(0);
+          await forceSetTodayStepDisplay(hydratedDisplay);
         } else if (hydratedDisplay > todayStepsRef.current) {
           await forceSetTodayStepDisplay(hydratedDisplay);
         }
@@ -2535,7 +2557,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           "Permission Required",
           Platform.OS === "ios"
             ? "Allow Steps access in Apple Health to track your walks."
-            : "Allow Steps access in Walk Champ or Health Connect to track your walks.",
+            : "Allow Steps access in WalkChamp or Health Connect to track your walks.",
         );
       } else if (status === "unavailable") {
         Alert.alert(

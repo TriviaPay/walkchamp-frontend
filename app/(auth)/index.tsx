@@ -264,7 +264,7 @@ export default function LoginScreen() {
         >
           <View style={styles.header}>
             <Image source={APP_LOGO} style={styles.logoImage} resizeMode="contain" />
-            <Text style={[styles.appName, { color: colors.foreground }]}>Walk Champ</Text>
+            <Text style={[styles.appName, { color: colors.foreground }]}>WalkChamp</Text>
             <Text style={[styles.tagline, { color: colors.mutedForeground }]}>Global Walking Competition</Text>
           </View>
 

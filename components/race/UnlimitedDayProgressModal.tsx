@@ -166,34 +166,21 @@ function DayStrip({
   schedule,
   todaySteps,
   cellWidth,
-  fitAll,
 }: {
   rows: UnlimitedDayRow[];
   schedule: UnlimitedViewerSchedule | null;
   todaySteps: number;
   cellWidth: number;
-  fitAll: boolean;
 }) {
-  if (fitAll) {
-    return (
-      <View style={styles.dayRowFit}>
-        {rows.map((item) => (
-          <DayCell
-            key={`d-${item.dayNumber}`}
-            row={item}
-            todaySteps={todaySteps}
-            isCurrent={!!schedule && item.dayNumber === schedule.currentDayIndex}
-            cellWidth={cellWidth}
-          />
-        ))}
-      </View>
-    );
-  }
   return (
     <ScrollView
       horizontal
       nestedScrollEnabled
       showsHorizontalScrollIndicator={false}
+      decelerationRate="normal"
+      disableIntervalMomentum
+      snapToInterval={cellWidth + 6}
+      snapToAlignment="start"
       contentContainerStyle={styles.dayRowScroll}
     >
       {rows.map((item) => (
@@ -231,13 +218,8 @@ export function UnlimitedDayProgressModal({
   const goal = schedule?.dailyGoalSteps ?? rows[0]?.dailyGoalSteps ?? 0;
   const pct = goal > 0 ? Math.min(1, todaySteps / goal) : 0;
 
-  // ≤7 days fit on one row; 10/30/60/90 slide horizontally on the same line.
-  const contentInner = sheetWidth - 32; // sheet horizontal padding
-  const gap = 6;
-  const fitAll = rows.length > 0 && rows.length <= 7;
-  const cellWidth = fitAll
-    ? Math.max(44, Math.floor((contentInner - gap * (rows.length - 1)) / rows.length))
-    : 56;
+  // Always horizontal-scroll so Day 1…N slots slide (7d and longer).
+  const cellWidth = 56;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -296,7 +278,6 @@ export function UnlimitedDayProgressModal({
                 schedule={schedule}
                 todaySteps={todaySteps}
                 cellWidth={cellWidth}
-                fitAll={fitAll}
               />
             </View>
 
@@ -407,13 +388,13 @@ const styles = StyleSheet.create({
   remainRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   remainText: { fontSize: rf(12), color: "#8B9AC0", fontWeight: "600" },
   section: { gap: 6 },
-  dayRowFit: {
+  dayRowScroll: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    alignItems: "stretch",
     gap: 6,
     paddingVertical: 2,
+    paddingRight: 8,
   },
-  dayRowScroll: { gap: 6, paddingVertical: 2 },
   dayCell: {
     minHeight: 96,
     borderRadius: 14,

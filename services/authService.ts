@@ -886,7 +886,7 @@ export async function fetchMe(
   // Superseded session: only kick when the inactive session is OUR registered one.
   // Mid-login with a stale X-Session-Id must not force logout / "other device" modal.
   if (data.session && data.session.active === false) {
-    const { getActiveSessionMeta, clearActiveSessionMeta } = await import(
+    const { getActiveSessionMeta } = await import(
       "@/services/authSessionMetadata"
     );
     const {
@@ -908,8 +908,9 @@ export async function fetchMe(
       throw new ApiError(data.session.code ?? "SESSION_REPLACED", 401);
     }
 
-    // Stale session header from a previous install/login — drop and continue.
-    await clearActiveSessionMeta().catch(() => {});
+    // Do not clearActiveSessionMeta here. During login/account-switch grace a
+    // stale header can report inactive; wiping meta would drop a fresh register
+    // and/or cause the current device to self-kick on the next call.
   }
 
   if (data.profile_completed === false && !data.profile) return null;

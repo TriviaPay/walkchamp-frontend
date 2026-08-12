@@ -113,7 +113,7 @@ end`;
 }
 
 function withEasWalkChampWidgetExtension(config) {
-  const bundleId = config.ios?.bundleIdentifier ?? "com.globalwalkerleague.app";
+  const bundleId = config.ios?.bundleIdentifier ?? "com.walkchamp.app";
   const existing =
     config.extra?.eas?.build?.experimental?.ios?.appExtensions ?? [];
   if (existing.some((entry) => entry.targetName === WIDGET_TARGET_NAME)) {
@@ -205,7 +205,7 @@ function withWalkChampWidgetXcodeProject(config) {
     const xcodeProject = cfg.modResults;
     if (xcodeProject.pbxTargetByName(WIDGET_TARGET_NAME)) return cfg;
 
-    const bundleId = `${cfg.ios?.bundleIdentifier ?? "com.globalwalkerleague.app"}.${WIDGET_TARGET_NAME}`;
+    const bundleId = `${cfg.ios?.bundleIdentifier ?? "com.walkchamp.app"}.${WIDGET_TARGET_NAME}`;
     const widgetFiles = [
       WIDGET_BUNDLE_FILE,
       WIDGET_WALK_FILE,
@@ -376,7 +376,7 @@ function withOneSignalNseNotificationAssets(config) {
 }
 
 /**
- * Registers Walk Champ foreground service (Android) and Live Activities (iOS)
+ * Registers WalkChamp foreground service (Android) and Live Activities (iOS)
  * for persistent walk-step and live-race progress notifications.
  */
 function withWalkChampRaceProgress(config) {
@@ -450,7 +450,7 @@ function withWalkChampRaceProgress(config) {
       });
       ensureMeta("com.onesignal.NotificationServiceExtension", {
         "android:value":
-          "com.globalwalkerleague.app.WalkChampNotificationServiceExtension",
+          "com.walkchamp.app.WalkChampNotificationServiceExtension",
       });
     }
 

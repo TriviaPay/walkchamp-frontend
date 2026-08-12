@@ -26,6 +26,8 @@ export default function DiscreteSliderPicker({
   badge?: { title: string; subtitle: string } | null;
 }) {
   const colors = useColors();
+  const trackRef = useRef<View>(null);
+  const trackPageXRef = useRef(0);
   const [trackW, setTrackW] = useState(0);
   const idxRef = useRef(Math.max(0, options.indexOf(value)));
   const [idx, setIdx] = useState(idxRef.current);
@@ -62,23 +64,36 @@ export default function DiscreteSliderPicker({
     }
   }, [options]);
 
-  const ratioFromX = useCallback((x: number) => {
+  const measureTrack = useCallback(() => {
+    trackRef.current?.measureInWindow((x) => {
+      if (Number.isFinite(x)) trackPageXRef.current = x;
+    });
+  }, []);
+
+  const ratioFromPageX = useCallback((pageX: number) => {
     if (trackW <= 0) return 0;
-    const clampedX = Math.max(0, Math.min(x, trackW));
-    return clampedX / trackW;
+    const localX = pageX - trackPageXRef.current;
+    return Math.max(0, Math.min(1, localX / trackW));
   }, [trackW]);
 
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
+    onStartShouldSetPanResponderCapture: () => true,
     onMoveShouldSetPanResponder: (_, gestureState) =>
       Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+    onMoveShouldSetPanResponderCapture: (_, gestureState) =>
+      Math.abs(gestureState.dx) > Math.abs(gestureState.dy) && Math.abs(gestureState.dx) > 1,
     onPanResponderTerminationRequest: () => false,
+    onShouldBlockNativeResponder: () => true,
     onPanResponderGrant: (evt) => {
       draggingRef.current = true;
-      setDragRatio(ratioFromX(evt.nativeEvent.locationX));
+      measureTrack();
+      const ratio = ratioFromPageX(evt.nativeEvent.pageX);
+      setDragRatio(ratio);
+      applyIndex(Math.round(ratio * maxIdx), true);
     },
     onPanResponderMove: (evt) => {
-      const ratio = ratioFromX(evt.nativeEvent.locationX);
+      const ratio = ratioFromPageX(evt.nativeEvent.pageX);
       setDragRatio(ratio);
       const nextIdx = Math.round(ratio * maxIdx);
       if (nextIdx !== idxRef.current) {
@@ -86,23 +101,24 @@ export default function DiscreteSliderPicker({
       }
     },
     onPanResponderRelease: (evt) => {
-      const ratio = ratioFromX(evt.nativeEvent.locationX);
+      const ratio = ratioFromPageX(evt.nativeEvent.pageX);
       const nextIdx = Math.round(ratio * maxIdx);
       draggingRef.current = false;
       setDragRatio(null);
       applyIndex(nextIdx, true);
     },
     onPanResponderTerminate: (evt) => {
-      const ratio = ratioFromX(evt.nativeEvent.locationX);
+      const ratio = ratioFromPageX(evt.nativeEvent.pageX);
       const nextIdx = Math.round(ratio * maxIdx);
       draggingRef.current = false;
       setDragRatio(null);
       applyIndex(nextIdx, false);
     },
-  }), [applyIndex, maxIdx, ratioFromX]);
+  }), [applyIndex, maxIdx, measureTrack, ratioFromPageX]);
 
   const onTrackLayout = (e: LayoutChangeEvent) => {
     setTrackW(e.nativeEvent.layout.width);
+    measureTrack();
   };
 
   return (
@@ -132,6 +148,7 @@ export default function DiscreteSliderPicker({
       ) : null}
 
       <View
+        ref={trackRef}
         onLayout={onTrackLayout}
         style={{ height: rs(44), justifyContent: "center" }}
         {...panResponder.panHandlers}
@@ -162,10 +179,11 @@ export default function DiscreteSliderPicker({
           borderWidth: 2,
           borderColor: "#FFFFFF",
           shadowColor: accent,
-          shadowOpacity: 0.45,
+          shadowOpacity: dragRatio != null ? 0.55 : 0.45,
           shadowRadius: 6,
           shadowOffset: { width: 0, height: 2 },
           elevation: 4,
+          transform: [{ scale: dragRatio != null ? 1.08 : 1 }],
         }} />
       </View>
 

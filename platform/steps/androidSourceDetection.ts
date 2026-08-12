@@ -46,7 +46,7 @@ export interface DetectedOptionalSource {
   /** True = Linking probe succeeded (app likely installed). */
   likelyInstalled: boolean;
   /**
-   * Whether Walk Champ has a real integration for this source right now.
+   * Whether WalkChamp has a real integration for this source right now.
    * false = show honest "not connected" message; do NOT pretend it works.
    */
   integrated: boolean;
@@ -72,7 +72,7 @@ export interface AndroidStepSourceDetectionResult {
 /**
  * App packages whose deep-link schemes we probe.
  * These are best-effort only; see module doc for caveats.
- * Walk Champ has NO direct integration with any of these — we only use
+ * WalkChamp has NO direct integration with any of these — we only use
  * Health Connect as the bridge. We advertise this honestly in the UI.
  */
 const OPTIONAL_APPS: {
@@ -86,14 +86,14 @@ const OPTIONAL_APPS: {
     label: "Samsung Health",
     scheme: "shealth://",
     statusMessage:
-      "Samsung Health can sync steps to Health Connect. Enable the sync in Samsung Health → Settings → Connected Services → Health Connect, then connect Health Connect to Walk Champ.",
+      "Samsung Health can sync steps to Health Connect. Enable the sync in Samsung Health → Settings → Connected Services → Health Connect, then connect Health Connect to WalkChamp.",
   },
   {
     id: "android_google_fit",
     label: "Google Fit",
     scheme: "com.google.android.apps.fitness://",
     statusMessage:
-      "Google Fit can sync steps to Health Connect. Open Google Fit → Settings → Manage your data in Health Connect, then connect Health Connect to Walk Champ.",
+      "Google Fit can sync steps to Health Connect. Open Google Fit → Settings → Manage your data in Health Connect, then connect Health Connect to WalkChamp.",
   },
   {
     id: "fitbit_cloud",
@@ -114,7 +114,7 @@ const OPTIONAL_APPS: {
     label: "Health Sync",
     scheme: "healthsync://",
     statusMessage:
-      "Health Sync can bridge wearable data into Health Connect. Once synced, connect Health Connect to Walk Champ.",
+      "Health Sync can bridge wearable data into Health Connect. Once synced, connect Health Connect to WalkChamp.",
   },
 ];
 
