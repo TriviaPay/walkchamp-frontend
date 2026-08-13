@@ -24,12 +24,7 @@ export interface ChallengeStatus {
   startedAt?: string | null;
   /** Challenge / race end when the available API includes it. */
   challengeEndAt?: string | null;
-  /**
-   * Entry fee of the room this card points at, in cents. Cash (paid_usd) rooms carry a
-   * per-room amount rather than a fixed tier, so the card prices itself from this.
-   * Null/absent when no room exists yet (host_available).
-   */
-  entryAmountCents?: number | null;
+  entryAmountCents?: number;
   coinEntryAmount?: number;
   prizePoolCents?: number;
   canHost: boolean;
