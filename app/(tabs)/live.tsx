@@ -13,6 +13,7 @@ import {
   ActivityIndicator,
   Animated,
   AppState,
+  DeviceEventEmitter,
   Dimensions,
   FlatList,
   InteractionManager,
@@ -55,6 +56,14 @@ import { PublicProfileModal } from "@/components/PublicProfileModal";
 import type { PublicProfileInitialData } from "@/components/PublicProfileModal";
 import { TrackThemeImageBackground, prefetchTrackThemes, prefetchTrackTheme } from "@/components/TrackThemeImage";
 import type { TrackThemeImageSet } from "@/utils/trackThemeMedia";
+import {
+  CHALLENGE_LEFT_EVENT,
+  isRecentlyLeftRaceId,
+} from "@/utils/challengeLocalEvents";
+import { isUserParticipatingInRace } from "@/utils/liveRaceParticipation";
+import { appendInrHint } from "@/utils/currencyDisplay";
+
+export { isUserParticipatingInRace } from "@/utils/liveRaceParticipation";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const NEON_PURPLE  = "#7C3AED";
@@ -403,6 +412,10 @@ function mapRaceRow(r: Record<string, unknown>): LiveRace {
       (r.currentUserParticipantStatus as string | null | undefined) ??
       (r.current_user_participant_status as string | null | undefined) ??
       (r.participantStatus as string | null | undefined) ??
+      // Unlimited/streak challenge rows carry the viewer's own qualification status
+      // under `participationStatus` (overlayMembership on the backend) — without this
+      // the app can't tell "disqualified from this streak" from "never joined".
+      (r.participationStatus as string | null | undefined) ??
       null,
     currentUserParticipating:
       (r.currentUserParticipating as boolean | undefined) ??
@@ -635,6 +648,7 @@ function mergeMyActiveIntoLiveList(
     if (!isLiveMine) continue;
 
     const existing = byId.get(mine.id);
+    if (isRecentlyLeftRaceId(mine.id)) continue;
     if (existing) {
       byId.set(mine.id, {
         ...existing,
@@ -659,71 +673,40 @@ function buildMyRacesLiveList(
   opts: { userId?: string | null; username?: string | null; myActiveRaceIds: Set<string> },
 ): LiveRace[] {
   // 1) Start from public/unlimited live rows the user is in
-  const participatingFromLive = live.filter(
-    (r) =>
-      opts.myActiveRaceIds.has(r.id) ||
-      r.currentUserParticipating === true ||
-      (!!opts.userId && r.hostUserId === opts.userId) ||
-      isUserParticipatingInRace(r, opts),
+  const participatingFromLive = live.filter((r) =>
+    isUserParticipatingInRace(r, liveParticipationOpts(r, opts)),
   );
   // 2) Force-include /api/races/my-active (source of truth for membership)
-  const merged = mergeMyActiveIntoLiveList(participatingFromLive, myActive);
+  const merged = mergeMyActiveIntoLiveList(
+    participatingFromLive,
+    myActive.filter((r) => r?.id && !isRecentlyLeftRaceId(r.id)),
+  );
   // 3) Keep only membership rows (my-active merge already stamped participating)
-  return merged.filter(
-    (r) =>
-      opts.myActiveRaceIds.has(r.id) ||
-      r.currentUserParticipating === true ||
-      isUserParticipatingInRace(r, opts),
+  return merged.filter((r) =>
+    isUserParticipatingInRace(r, liveParticipationOpts(r, opts)),
   );
 }
 
-const NON_PARTICIPATING_STATUSES = new Set([
-  "withdrawn",
-  "withdrew",
-  "left",
-  "removed",
-  "disqualified",
-  "forfeited",
-  "cancelled",
-  "canceled",
-]);
-
-/** True only when the signed-in user is the host or an eligible participant. */
-export function isUserParticipatingInRace(
-  race: LiveRace,
+/** True only when the signed-in user is still racing (not forfeited / left). */
+function liveParticipationOpts(
+  race: Pick<LiveRace, "id">,
   opts: { userId?: string | null; username?: string | null; myActiveRaceIds?: Set<string> | null },
-): boolean {
-  const uid = opts.userId;
-  const uname = opts.username?.trim().toLowerCase();
-  if (!uid && !uname) return false;
-
-  const player = race.players.find((p) =>
-    (uid && p.userId === uid) ||
-    (uname && p.username?.trim().toLowerCase() === uname),
-  );
-  const status = (
-    race.currentUserParticipantStatus ??
-    player?.participantStatus ??
-    player?.registrationStatus ??
-    player?.status ??
-    (player?.isForfeited ? "forfeited" : "")
-  ).trim().toLowerCase();
-  if (NON_PARTICIPATING_STATUSES.has(status)) return false;
-
-  const role = race.currentUserRole?.trim().toLowerCase();
-  if (role === "spectator" || role === "watcher" || role === "viewer") return false;
-  if (role === "host" || role === "participant" || role === "racer" || role === "racing") return true;
-  if (uid && race.hostUserId === uid) return true;
-  if (race.currentUserParticipating === true) return true;
-  if (opts.myActiveRaceIds?.has(race.id)) return true;
-  return !!player;
+) {
+  return {
+    userId: opts.userId,
+    username: opts.username,
+    myActiveRaceIds: opts.myActiveRaceIds,
+    recentlyLeft: isRecentlyLeftRaceId(race.id),
+  };
 }
 
 function filterMyRaces(
   races: LiveRace[],
   opts: { userId?: string | null; username?: string | null; myActiveRaceIds?: Set<string> | null },
 ): LiveRace[] {
-  return races.filter((race) => isUserParticipatingInRace(race, opts));
+  return races.filter((race) =>
+    isUserParticipatingInRace(race, liveParticipationOpts(race, opts)),
+  );
 }
 
 async function fetchMyActiveRaces(): Promise<{ primary: MyActiveRace | null; all: MyActiveRace[] }> {
@@ -801,7 +784,7 @@ function ChallengeEndsPill({ label }: { label: string }) {
 function RaceCardBase({
   race,
   colors,
-  isMyRace,
+  isMyRace: _isMyRace,
   isHost,
   myUsername,
   myUserId,
@@ -821,13 +804,14 @@ function RaceCardBase({
 }) {
   const { isDark } = useTheme();
   const isFinished = race.status === "completed";
-  const participating =
-    !!isMyRace ||
-    isUserParticipatingInRace(race, {
+  const participating = isUserParticipatingInRace(
+    race,
+    liveParticipationOpts(race, {
       userId: myUserId,
       username: myUsername,
       myActiveRaceIds,
-    });
+    }),
+  );
 
   // ── Per-card reaction counts (optimistic local state) ─────────────────────
   const [localReactions, setLocalReactions] = useState<Record<string, number>>(
@@ -1009,11 +993,14 @@ function RaceCardBase({
   const isCash = !isUnlimited && isCashChallengeRace(race);
   const cashBadgeLabel =
     typeof race.entryAmountCents === "number" && race.entryAmountCents > 0
-      ? `$${
-          race.entryAmountCents % 100 === 0
-            ? (race.entryAmountCents / 100).toFixed(0)
-            : (race.entryAmountCents / 100).toFixed(2)
-        }`
+      ? appendInrHint(
+          race.entryAmountCents / 100,
+          `$${
+            race.entryAmountCents % 100 === 0
+              ? (race.entryAmountCents / 100).toFixed(0)
+              : (race.entryAmountCents / 100).toFixed(2)
+          }`,
+        )
       : race.entryType && /^\$\d/.test(race.entryType)
         ? race.entryType
         : "Cash";
@@ -1023,7 +1010,7 @@ function RaceCardBase({
       ? "⚔️ Coins"
       : isUnlimited
         ? race.entryType && /^\$\d/.test(race.entryType)
-          ? race.entryType
+          ? `Entry fee ${race.entryType}`
           : "Streak"
         : isCash
           ? cashBadgeLabel
@@ -1048,10 +1035,10 @@ function RaceCardBase({
 
   // For sponsored events use the actual prize pool; coins battles use coin pool; paid races use 70% winners pool
   const prizePoolDisplay = isSponsored && race.prizePoolCents > 0
-    ? `$${(race.prizePoolCents / 100).toFixed(0)} pool`
+    ? `${appendInrHint(race.prizePoolCents / 100, `$${(race.prizePoolCents / 100).toFixed(0)}`)} pool`
     : isCoinsBattle && race.coinEntryAmount > 0
     ? `${(race.coinEntryAmount * race.playerCount).toLocaleString()} coins`
-    : race.prizePool > 0 ? `$${race.prizePool.toFixed(2)}` : null;
+    : race.prizePool > 0 ? appendInrHint(race.prizePool, `$${race.prizePool.toFixed(2)}`) : null;
   const elapsedLabel = "Elapsed";
   const finishedStartEnd = isFinished
     ? formatFinishedStartEnd(
@@ -1314,6 +1301,12 @@ function RaceCardBase({
                         <Text style={[st.tagText, { color: "#FFB700" }]}>Host</Text>
                       </View>
                     )}
+                    {isUnlimited &&
+                      (p.status ?? p.participantStatus ?? "").trim().toLowerCase() === "disqualified" && (
+                        <View style={[st.tag, { backgroundColor: "#EF444422", borderColor: "#EF444460" }]}>
+                          <Text style={[st.tagText, { color: "#EF4444" }]}>DQ</Text>
+                        </View>
+                      )}
                   </View>
                   <View style={[st.progressTrack, { backgroundColor: colors.border }]}>
                     <LinearGradient
@@ -1867,12 +1860,12 @@ export default function LiveTab() {
         myRaceResult = mine;
       }
 
-      const idSet = new Set(myRaceResult.all.map((r) => r.id));
+      const idSet = new Set(
+        myRaceResult.all.map((r) => r.id).filter((id) => !isRecentlyLeftRaceId(id)),
+      );
       for (const race of [...live, ...finished]) {
-        if (
-          race.currentUserParticipating ||
-          (!!user?.id && race.hostUserId === user.id)
-        ) {
+        if (isRecentlyLeftRaceId(race.id)) continue;
+        if (race.currentUserParticipating === true) {
           idSet.add(race.id);
         }
       }
@@ -1880,7 +1873,9 @@ export default function LiveTab() {
         const { loadHostedUnlimitedChallenges } = await import("@/utils/hostedUnlimitedCache");
         const hosted = await loadHostedUnlimitedChallenges({ includeStarted: true });
         for (const seed of hosted) {
-          if (seed.current_user_registered && seed.room_id) idSet.add(seed.room_id);
+          if (!seed.current_user_registered || !seed.room_id) continue;
+          if (isRecentlyLeftRaceId(seed.room_id)) continue;
+          idSet.add(seed.room_id);
         }
       } catch { /* optional */ }
       const participation = {
@@ -1897,6 +1892,7 @@ export default function LiveTab() {
           const hostedLive: LiveRace[] = [];
           for (const seed of hosted) {
             if (!seed.current_user_registered) continue;
+            if (seed.room_id && isRecentlyLeftRaceId(seed.room_id)) continue;
             const mapped = mapUnlimitedUpcomingToLiveRaceFields({
               ...seed,
               status: "active",
@@ -1957,15 +1953,20 @@ export default function LiveTab() {
         (cached?.live?.length ?? 0) > 0 ||
         (cached?.finished?.length ?? 0) > 0;
 
-      // Never blank a tab that already correctly showed cards (refresh flicker).
-      if (freshIsEmpty && hadVisible) {
+      // Never blank All/Free/etc that already showed cards (refresh flicker).
+      // My Races must apply an empty result after forfeit / leave.
+      if (freshIsEmpty && hadVisible && activeFilter !== "My Races") {
         setLoading(false);
-        setMyRace(myRaceResult.primary);
+        setMyRace(
+          myRaceResult.primary && !isRecentlyLeftRaceId(myRaceResult.primary.id)
+            ? myRaceResult.primary
+            : null,
+        );
         setMyActiveRaceIds(idSet);
         return;
       }
 
-      if (ok || !freshIsEmpty) {
+      if (ok || !freshIsEmpty || activeFilter === "My Races") {
         setRealtimeRaceIds(
           (activeFilter === "My Races" ? visibleLive : live).map((race) => race.id),
         );
@@ -1979,7 +1980,11 @@ export default function LiveTab() {
             : finished.length >= FINISHED_PAGE_SIZE,
         );
       }
-      setMyRace(myRaceResult.primary);
+      setMyRace(
+        myRaceResult.primary && !isRecentlyLeftRaceId(myRaceResult.primary.id)
+          ? myRaceResult.primary
+          : null,
+      );
       setMyActiveRaceIds(idSet);
       try {
         const { activeChallengeSync } = await import("@/services/activeChallengeSync");
@@ -2018,6 +2023,41 @@ export default function LiveTab() {
     setLoadingMore(false);
   }, [activeFilter, finishedOffset, finishedChallenges, loadingMore, hasMoreFinished, myActiveRaceIds, user?.id, user?.username]);
   useEffect(() => { loadRef.current = load; }, [load]);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(
+      CHALLENGE_LEFT_EVENT,
+      (payload?: { raceId?: string }) => {
+        const raceId = String(payload?.raceId ?? "").trim();
+        if (!raceId) return;
+        setMyActiveRaceIds((prev) => {
+          if (!prev.has(raceId)) return prev;
+          const next = new Set(prev);
+          next.delete(raceId);
+          return next;
+        });
+        setMyRace((prev) => (prev?.id === raceId ? null : prev));
+        setLiveChallenges((prev) => {
+          const next = prev.map((r) =>
+            r.id === raceId
+              ? {
+                  ...r,
+                  currentUserParticipating: false,
+                  currentUserParticipantStatus: "forfeited",
+                  currentUserRole: "spectator",
+                }
+              : r,
+          );
+          return activeFilter === "My Races"
+            ? next.filter((r) => r.id !== raceId)
+            : next;
+        });
+        // Do not refetch immediately — leave POST may still be in flight and
+        // my-active would resurrect streak / View My Race.
+      },
+    );
+    return () => sub.remove();
+  }, [activeFilter]);
 
   // Joining, withdrawing, or forfeiting often happens on another tab/screen.
   // Refresh immediately when the user returns — paint cache first so cards

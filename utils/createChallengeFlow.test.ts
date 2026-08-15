@@ -107,7 +107,9 @@ assert.deepEqual(
       assert.equal(typeof built.body.dailyGoalSteps, "number");
       assert.equal(typeof built.body.durationDays, "number");
       assert.ok(typeof built.body.startAtIso === "string");
+      assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(String(built.body.startLocalDate)));
       assert.equal(built.body.challengeTimezone, "America/Chicago");
+      assert.equal(built.body.hostTimezone, "America/Chicago");
       assert.ok(typeof built.body.title === "string");
       assert.equal(built.body.challengeType, undefined);
       assert.equal(built.body.entryType, undefined);

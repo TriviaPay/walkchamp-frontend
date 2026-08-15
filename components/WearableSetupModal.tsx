@@ -258,8 +258,7 @@ export default function WearableSetupModal({
         setPermStatus("granted");
         setEnableTrackingHint(false);
         setAndroidPhase("setup");
-        // Advance past Allow Steps so Next/Done do not bounce back to step 1.
-        setStep(Math.max(2, TOTAL_ANDROID - 2));
+        // Stay on Enable Step Tracking — user taps Next (do not auto-advance).
       } else {
         setPermStatus(
           live === "denied" || result.status === "denied" ? "denied" : live,
@@ -311,7 +310,7 @@ export default function WearableSetupModal({
         if (granted) {
           stepsGrantedThisSessionRef.current = true;
           setEnableTrackingHint(false);
-          setStep(Math.max(2, TOTAL_IOS - 2));
+          // Stay on Enable Step Tracking — user taps Next (do not auto-advance).
         }
       } else {
         await grantAndroidSteps();
@@ -734,7 +733,18 @@ export default function WearableSetupModal({
     ? (androidPhase === "install" ? "Not Now" : "Close")
     : isLast ? "Done" : "Next";
 
-  const footerAction = isAndroidPreCheck ? onClose : isLast ? handleDone : goNext;
+  const trackingGranted =
+    permStatus === "granted" || stepsGrantedThisSessionRef.current;
+  const nextBlocked =
+    !isAndroidPreCheck && step === 1 && !trackingGranted && !isLast;
+
+  const footerAction = isAndroidPreCheck
+    ? onClose
+    : isLast
+      ? handleDone
+      : nextBlocked
+        ? () => setEnableTrackingHint(true)
+        : goNext;
   const showFooter = androidPhase !== "checking";
   const showBackBtn = !isAndroidPreCheck && step > 0;
   const activeDot = useOnboardingAccent ? ONBOARDING_COLORS.lime : "#00E676";
@@ -785,14 +795,20 @@ export default function WearableSetupModal({
             <TouchableOpacity
               style={[
                 ws.nextBtn,
-                !useOnboardingAccent && { backgroundColor: "#00E676", paddingVertical: 16 },
+                !useOnboardingAccent && {
+                  backgroundColor: nextBlocked ? "#2A3144" : "#00E676",
+                  paddingVertical: 16,
+                },
+                useOnboardingAccent && nextBlocked && {
+                  backgroundColor: "#2A3144",
+                },
                 { opacity: saving ? 0.6 : 1 },
               ]}
               onPress={footerAction}
               disabled={saving}
               activeOpacity={0.88}
             >
-              {useOnboardingAccent ? (
+              {useOnboardingAccent && !nextBlocked ? (
                 <LinearGradient
                   colors={[...ONBOARDING_BTN]}
                   start={{ x: 0, y: 0 }}
@@ -804,8 +820,17 @@ export default function WearableSetupModal({
                     : <Text style={[ws.nextBtnText, { color: "#FFF" }]}>{footerLabel}</Text>}
                 </LinearGradient>
               ) : saving
-                ? <ActivityIndicator color="#000" />
-                : <Text style={ws.nextBtnText}>{footerLabel}</Text>}
+                ? <ActivityIndicator color={nextBlocked ? "#94A3B8" : "#000"} />
+                : (
+                  <Text style={[
+                    ws.nextBtnText,
+                    nextBlocked && { color: "#94A3B8" },
+                    useOnboardingAccent && nextBlocked && { paddingVertical: 16 },
+                  ]}
+                  >
+                    {footerLabel}
+                  </Text>
+                )}
             </TouchableOpacity>
           </View>
         )}

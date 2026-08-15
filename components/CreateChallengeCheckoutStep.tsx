@@ -20,6 +20,8 @@ import type { CreateChallengeAccentTheme } from "@/constants/createChallengeThem
 import { useTheme } from "@/context/ThemeContext";
 import type { CreateChallengeDraft } from "@/utils/createChallengeFlow";
 import type { ChallengeReviewSchedule } from "@/utils/createChallengeSchedule";
+import type { TrackThemeMediaFields } from "@/utils/trackThemeMedia";
+import { TrackThemeImage } from "@/components/TrackThemeImage";
 import {
   CHECKOUT_CARD_GAP,
   CHECKOUT_CARD_PAD_H,
@@ -37,6 +39,7 @@ import { UNLIMITED_GOAL_PLATFORM_FEE_CENTS } from "@/utils/unlimitedGoal";
 import type { StepBlockReason } from "@/utils/createChallengeFlow";
 import { rf, rs } from "@/utils/responsive";
 import * as Haptics from "@/utils/haptics";
+import { UsdAmountWithInr } from "@/components/InrHint";
 
 /** Dark-theme gold kept; light uses deeper amber for contrast on pale surfaces. */
 const CHECKOUT_GOLD_LIGHT = "#A16207";
@@ -53,7 +56,7 @@ type Colors = {
 type TrackLayout = {
   id: string;
   label: string;
-  source: number;
+  media: TrackThemeMediaFields;
 };
 
 type Props = {
@@ -124,14 +127,22 @@ function CreateChallengeCheckoutStepInner({
     const entryFeeCents = unlimitedQuote?.entryFeeCents ?? draft.unlimited.entryDollars * 100;
     const platformFeeCents =
       unlimitedQuote?.platformFeeCents ?? UNLIMITED_GOAL_PLATFORM_FEE_CENTS;
+    const taxFeeCents = 0;
     const totalChargeCents =
-      unlimitedQuote?.totalChargeCents ?? entryFeeCents + platformFeeCents;
-    return buildUnlimitedPaymentRows({
-      entryFeeCents,
-      platformFeeCents,
-      totalChargeCents,
-      formatUsd,
-    });
+      unlimitedQuote?.totalChargeCents ?? entryFeeCents + platformFeeCents + taxFeeCents;
+    return {
+      rows: buildUnlimitedPaymentRows({
+        entryFeeCents,
+        platformFeeCents,
+        totalChargeCents,
+        taxFeeCents,
+        formatUsd,
+      }),
+      entryDollars: entryFeeCents / 100,
+      taxDollars: taxFeeCents / 100,
+      platformDollars: platformFeeCents / 100,
+      totalDollars: totalChargeCents / 100,
+    };
   }, [draft.unlimited.entryDollars, isUnlimited, unlimitedQuote]);
 
   const accepted = isRulesAccepted(draft);
@@ -178,7 +189,7 @@ function CreateChallengeCheckoutStepInner({
                   active && styles.trackCardActive,
                 ]}
               >
-                <Image source={layout.source} style={styles.trackImage} resizeMode="cover" />
+                <TrackThemeImage media={layout.media} variant="thumb" style={styles.trackImage} />
                 <LinearGradient
                   colors={["transparent", "rgba(0,0,0,0.82)"]}
                   style={StyleSheet.absoluteFillObject}
@@ -264,31 +275,49 @@ function CreateChallengeCheckoutStepInner({
       {isUnlimited && payment ? (
         <View
           style={[styles.card, styles.paymentCard, { borderColor: colors.border, backgroundColor: colors.card }]}
-          accessibilityLabel={`Payment Summary. Entry Fee ${payment.entryValue}. Tax ${payment.taxValue}. Platform Service Fee ${payment.platformFeeValue}. Total Payable ${payment.totalValue}.`}
+          accessibilityLabel={`Payment Summary. Entry Fee ${payment.rows.entryValue}. Tax ${payment.rows.taxValue}. Platform Service Fee ${payment.rows.platformFeeValue}. Total Payable ${payment.rows.totalValue}.`}
         >
           <Text style={[styles.cardTitle, { color: colors.foreground }]}>Payment Summary</Text>
           <View style={styles.payRow}>
-            <Text style={[styles.payLabel, { color: colors.mutedForeground }]}>{payment.entryLabel}</Text>
-            <Text style={[styles.payValue, { color: colors.foreground }]}>{payment.entryValue}</Text>
+            <Text style={[styles.payLabel, { color: colors.mutedForeground }]}>{payment.rows.entryLabel}</Text>
+            <UsdAmountWithInr
+              usd={payment.entryDollars}
+              label={payment.rows.entryValue}
+              style={styles.payValue}
+              color={colors.foreground}
+            />
           </View>
           <View style={styles.payRow}>
-            <Text style={[styles.payLabel, { color: colors.mutedForeground }]}>{payment.taxLabel}</Text>
-            <Text style={[styles.payValue, { color: colors.foreground }]}>{payment.taxValue}</Text>
+            <Text style={[styles.payLabel, { color: colors.mutedForeground }]}>{payment.rows.taxLabel}</Text>
+            <UsdAmountWithInr
+              usd={payment.taxDollars}
+              label={payment.rows.taxValue}
+              style={styles.payValue}
+              color={colors.foreground}
+            />
           </View>
           <View style={styles.payRow}>
-            <Text style={[styles.payLabel, { color: colors.mutedForeground }]}>{payment.platformFeeLabel}</Text>
-            <Text style={[styles.payValue, { color: colors.foreground }]}>
-              {payment.platformFeeValue}
-            </Text>
+            <Text style={[styles.payLabel, { color: colors.mutedForeground }]}>{payment.rows.platformFeeLabel}</Text>
+            <UsdAmountWithInr
+              usd={payment.platformDollars}
+              label={payment.rows.platformFeeValue}
+              style={styles.payValue}
+              color={colors.foreground}
+            />
           </View>
           <View style={[styles.payDivider, { backgroundColor: colors.border }]} />
           <View style={styles.payRow}>
             <Text style={[styles.payLabel, styles.payTotalLabel, { color: colors.foreground }]}>
-              {payment.totalLabel}
+              {payment.rows.totalLabel}
             </Text>
-            <Text style={[styles.payTotal, { color: accent }]}>{payment.totalValue}</Text>
+            <UsdAmountWithInr
+              usd={payment.totalDollars}
+              label={payment.rows.totalValue}
+              style={styles.payTotal}
+              color={accent}
+            />
           </View>
-          <Text style={[styles.prizeNote, { color: accentLink }]}>{payment.prizePoolNote}</Text>
+          <Text style={[styles.prizeNote, { color: accentLink }]}>{payment.rows.prizePoolNote}</Text>
         </View>
       ) : null}
 

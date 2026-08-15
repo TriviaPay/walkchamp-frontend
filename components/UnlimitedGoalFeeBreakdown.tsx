@@ -8,6 +8,7 @@ import type { UnlimitedGoalPaymentQuote } from "@/services/unlimitedGoalApi";
 import { formatUsdFromCents } from "@/utils/unlimitedGoal";
 import { CHECKOUT_GOLD, CHECKOUT_PRIZE_POOL_NOTE } from "@/utils/createChallengeCheckout";
 import { rf } from "@/utils/responsive";
+import { InrHint } from "@/components/InrHint";
 
 type Props = {
   quote: UnlimitedGoalPaymentQuote | null;
@@ -32,20 +33,23 @@ export function UnlimitedGoalFeeBreakdown({
   if (!quote) return null;
 
   const rows = [
-    { label: "Entry Fee", value: formatUsdFromCents(quote.entryFeeCents), accent: false },
+    { label: "Entry Fee", value: formatUsdFromCents(quote.entryFeeCents), usd: quote.entryFeeCents / 100, accent: false },
     {
       label: "Tax / Payment Processing Fee",
       value: formatUsdFromCents(0),
+      usd: 0,
       accent: false,
     },
     {
       label: "Platform Service Fee",
       value: formatUsdFromCents(quote.platformFeeCents),
+      usd: quote.platformFeeCents / 100,
       accent: false,
     },
     {
       label: "Total Payable",
       value: formatUsdFromCents(quote.totalChargeCents),
+      usd: quote.totalChargeCents / 100,
       accent: true,
     },
   ];
@@ -85,6 +89,11 @@ export function UnlimitedGoalFeeBreakdown({
               ]}
             >
               {row.value}
+              <InrHint
+                usd={row.usd}
+                style={[styles.value, compact && styles.valueCompact, row.accent && styles.total]}
+                color={row.accent ? colors.primary : colors.foreground}
+              />
             </Text>
           </View>
         </View>

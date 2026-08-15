@@ -4,7 +4,49 @@
 
 import { UNLIMITED_GOAL_CHALLENGE_TYPE } from "@/utils/unlimitedGoal";
 import type { UnlimitedUpcomingRoom } from "@/utils/unlimitedChallengeRooms";
-import { mapUnlimitedDetailToWaitingRoom } from "@/utils/unlimitedWaitingRoom";
+
+export type UnlimitedLiveCardPlayer = {
+  id: string;
+  userId: string;
+  username: string;
+  countryFlag: string;
+  avatarColor: string;
+  avatarUrl: string | null;
+  currentSteps: number;
+  targetSteps: number;
+  rank: number;
+  isHost: boolean;
+  status?: string | null;
+  participantStatus?: string | null;
+};
+
+export function mapUnlimitedRoomPlayersToLiveCard(
+  room: UnlimitedUpcomingRoom,
+): UnlimitedLiveCardPlayer[] {
+  const goal = room.target_steps || 0;
+  const seen = new Set<string>();
+  const out: UnlimitedLiveCardPlayer[] = [];
+  for (const p of room.players ?? []) {
+    if (!p.userId || seen.has(p.userId)) continue;
+    seen.add(p.userId);
+    out.push({
+      id: p.id || p.userId,
+      userId: p.userId,
+      username: p.username,
+      countryFlag: p.countryFlag ?? "",
+      avatarColor: p.avatarColor ?? "#00E676",
+      avatarUrl: p.avatarUrl,
+      currentSteps: p.currentSteps,
+      targetSteps: goal,
+      rank: p.rank,
+      isHost: p.isHost,
+      status: p.status,
+      participantStatus: p.qualificationStatus ?? p.status,
+    });
+  }
+  return out.slice(0, 3);
+}
+import { mapUnlimitedDetailToWaitingRoom, collectRosterFromEnvelope, pickChallengeRecord } from "@/utils/unlimitedWaitingRoom";
 import {
   displayChallengeTitle,
   streakChallengeTitle,
@@ -29,11 +71,30 @@ function asString(value: unknown): string | null {
   return null;
 }
 
+/** Role labels like "Host" are not profile names — same as classic Live Race. */
+function isRolePlaceholderName(name: string | null | undefined): boolean {
+  const n = (name ?? "").trim();
+  return !n || /^host(\s+host)?$/i.test(n);
+}
+
+function firstProfileUsername(...vals: unknown[]): string {
+  for (const v of vals) {
+    const s = asString(v);
+    if (s && !isRolePlaceholderName(s)) return s;
+  }
+  return "Runner";
+}
+
 function asNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) {
     return Number(value);
   }
+  return null;
+}
+
+function asBool(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
   return null;
 }
 
@@ -159,7 +220,7 @@ export type UnlimitedLiveRaceFields = {
   startedAt: string | null;
   completedAt: string | null;
   createdAt: string;
-  players: [];
+  players: UnlimitedLiveCardPlayer[];
   trackLayout: string;
   reactionCounts: Record<string, never>;
   elapsedSeconds: number;
@@ -167,6 +228,8 @@ export type UnlimitedLiveRaceFields = {
   challengeDurationDays: number;
   hostUserId: string | null;
   currentUserParticipating: boolean;
+  /** Viewer's own qualification status (e.g. "disqualified", "left") — null if never joined. */
+  currentUserParticipantStatus: string | null;
   challengeType: typeof UNLIMITED_GOAL_CHALLENGE_TYPE;
   capacityMode: "unlimited";
 };
@@ -213,12 +276,14 @@ export function mapUnlimitedUpcomingToLiveRaceFields(
         )
       : 0;
 
+  const cardPlayers = mapUnlimitedRoomPlayersToLiveCard(room);
+
   return {
     id: room.room_id,
     title: displayChallengeTitle(room.title) || streakChallengeTitle(room.target_steps),
     type: "paid",
     entryType: unlimitedEntryTypeLabel(room.entry_fee),
-    playerCount: Math.max(1, room.registered_count ?? 1),
+    playerCount: Math.max(room.registered_count ?? 0, cardPlayers.length),
     maxPlayers: 0,
     targetSteps: room.target_steps,
     status,
@@ -230,7 +295,7 @@ export function mapUnlimitedUpcomingToLiveRaceFields(
     startedAt,
     completedAt,
     createdAt: room.scheduled_start_at ?? new Date(nowMs).toISOString(),
-    players: [],
+    players: cardPlayers,
     trackLayout: room.selected_track_theme_id || "bg",
     reactionCounts: {},
     elapsedSeconds: elapsed,
@@ -238,6 +303,7 @@ export function mapUnlimitedUpcomingToLiveRaceFields(
     challengeDurationDays: room.challenge_duration_days ?? 0,
     hostUserId: room.host_user_id || null,
     currentUserParticipating: !!room.current_user_registered,
+    currentUserParticipantStatus: room.participation_status ?? null,
     challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
     capacityMode: "unlimited",
   };
@@ -285,6 +351,23 @@ export type UnlimitedLiveDetailMapped = {
     qualifiedParticipantCount?: number | null;
     /** Viewer's own prize-pool eligibility from detail/my-active (pending|eligible|not_eligible). */
     prizePoolEligibilityStatus?: string | null;
+    viewerStartAt?: string | null;
+    viewerEndAt?: string | null;
+    viewerStatus?: string | null;
+    viewerTimezone?: string | null;
+    currentDayStartAt?: string | null;
+    currentDayEndAt?: string | null;
+    currentDayIndex?: number | null;
+    currentDayLocalDate?: string | null;
+    currentUserParticipating?: boolean;
+    viewerResultsReady?: boolean | null;
+    viewerResultsStatus?: string | null;
+    viewerResultReasonCode?: string | null;
+    eligibilityReasonCode?: string | null;
+    passedDays?: number | null;
+    failedDays?: number | null;
+    pendingDays?: number | null;
+    completedDays?: number | null;
   };
   participants: Array<{
     id: string;
@@ -339,14 +422,12 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
     asString(pick(user, "id", "userId", "user_id")) ??
     asString(pick(obj, "participantId", "participant_id", "id"));
   if (!userId) return null;
-  const username =
-    asString(
-      pick(obj, "displayName", "display_name", "fullName", "full_name", "username", "name", "handle"),
-    ) ??
-    asString(
-      pick(user, "displayName", "display_name", "fullName", "full_name", "username", "name", "handle"),
-    ) ??
-    "Walker";
+  const username = firstProfileUsername(
+    pick(obj, "displayName", "display_name", "fullName", "full_name"),
+    pick(user, "displayName", "display_name", "fullName", "full_name"),
+    pick(obj, "username", "handle"),
+    pick(user, "username", "handle"),
+  );
   const statusRaw = asString(
     pick(obj, "status", "participantStatus", "participant_status", "registrationStatus"),
   );
@@ -404,7 +485,14 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
     userId,
     currentSteps,
     // Default active so preview rows without status aren't filtered out of Live Race.
-    status: statusRaw ?? "active",
+    // Qualification labels (eligible / pending) are not leave/DQ — keep them on the board.
+    status:
+      statusRaw &&
+      ["left", "removed", "forfeited", "quit", "disqualified"].includes(
+        statusRaw.toLowerCase(),
+      )
+        ? statusRaw
+        : "active",
     rank: asNumber(pick(obj, "rank", "displayRank", "display_rank", "position")),
     username,
     countryFlag:
@@ -441,13 +529,13 @@ function isSeedDummyUsername(name: string | null | undefined): boolean {
   return !!name && /^du[a-f0-9]{12}$/i.test(name.trim());
 }
 
-/** Prefer a human-readable label over seed `du…` codes when merging rosters. */
 function preferLiveDisplayUsername(primary: string, overlay: string): string {
-  if (!overlay || overlay === "Walker") return primary || overlay || "Walker";
-  if (!primary || primary === "Walker") return overlay;
+  if (isRolePlaceholderName(overlay)) return isRolePlaceholderName(primary) ? "Runner" : primary;
+  if (isRolePlaceholderName(primary)) return overlay;
+  if (!overlay) return primary || "Runner";
+  if (!primary) return overlay;
   if (isSeedDummyUsername(overlay) && !isSeedDummyUsername(primary)) return primary;
   if (isSeedDummyUsername(primary) && !isSeedDummyUsername(overlay)) return overlay;
-  // Detail roster is authoritative for names when enriching from leaderboard.
   return primary;
 }
 
@@ -478,12 +566,13 @@ export function mergeUnlimitedLiveParticipants(
       !prev.challengeDayKey ||
       !mapped.challengeDayKey ||
       prev.challengeDayKey === mapped.challengeDayKey;
-    // Prefer detail (primary) currentSteps when overlaying leaderboard enrichment.
-    const currentSteps = preferPrimaryCurrentSteps
-      ? prev.currentSteps
-      : sameDay
-        ? Math.max(prev.currentSteps, mapped.currentSteps)
-        : mapped.currentSteps;
+    const currentSteps = sameDay
+      ? preferPrimaryCurrentSteps
+        ? prev.currentSteps > 0
+          ? prev.currentSteps
+          : Math.max(prev.currentSteps ?? 0, mapped.currentSteps ?? 0)
+        : Math.max(prev.currentSteps ?? 0, mapped.currentSteps ?? 0)
+      : mapped.currentSteps;
     byUser.set(mapped.userId, {
       ...prev,
       ...mapped,
@@ -607,6 +696,24 @@ export function coerceUnlimitedRaceInProgress(
   };
 }
 
+/** Array or `{ data|items|results|players|participants: [] }` — same unwrap as waiting room. */
+function asPlayerList(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  const rec = asRecord(value);
+  if (!rec) return [];
+  for (const key of ["data", "items", "results", "players", "participants", "members"]) {
+    const nested = rec[key];
+    if (Array.isArray(nested) && nested.length > 0) return nested;
+  }
+  return [];
+}
+
+function readUnlimitedDetailPlayers(payload: unknown): unknown[] {
+  const root = asRecord(payload);
+  if (!root) return [];
+  return collectRosterFromEnvelope(root);
+}
+
 /** Map GET /api/unlimited-challenges/:id → live-detail race + participants. */
 export function mapUnlimitedDetailToLiveDetail(
   payload: unknown,
@@ -616,10 +723,13 @@ export function mapUnlimitedDetailToLiveDetail(
 
   const root = asRecord(payload);
   const challenge =
-    (root && asRecord(pick(root, "challenge", "unlimitedChallenge", "data"))) ??
+    (root ? pickChallengeRecord(root) : null) ??
     root ??
     {};
 
+  const viewer =
+    asRecord(pick(root ?? {}, "viewer")) ??
+    asRecord(pick(challenge, "viewer"));
   const endAt = asString(
     pick(
       challenge,
@@ -627,8 +737,12 @@ export function mapUnlimitedDetailToLiveDetail(
       "challenge_end_at_utc",
       "challengeEndAt",
       "challenge_end_at",
-      "endAtUtc",
-      "end_at_utc",
+    ),
+  ) ?? asString(
+    pick(
+      viewer ?? root ?? {},
+      "viewerEndAt",
+      "viewer_end_at",
     ),
   );
   const startAt =
@@ -645,16 +759,9 @@ export function mapUnlimitedDetailToLiveDetail(
   });
 
   const entryCents = waiting.race.entryAmountCents ?? 0;
-  // Prefer explicit challenge.participantCount — never inflate from a duplicated list.
-  const participantCount = waiting.race.hasExplicitPlayerCount
-    ? Math.max(waiting.race.currentPlayers, 1)
-    : Math.max(waiting.race.currentPlayers, waiting.participants.length, 1);
   const apiPrize =
     asNumber(pick(challenge, "prizePoolCents", "prize_pool_cents", "currentPrizePoolCents")) ??
     0;
-  const prizeCents =
-    apiPrize > 0 ? apiPrize : entryCents > 0 ? entryCents * participantCount : 0;
-  const prizeDollars = prizeCents / 100;
 
   const title = displayChallengeTitle(
     asString(pick(challenge, "title", "name")) ??
@@ -664,26 +771,26 @@ export function mapUnlimitedDetailToLiveDetail(
   const hostUserId =
     asString(pick(challenge, "hostUserId", "host_user_id")) ?? "";
 
-  let participants = waiting.participants
-    .map((p, i) => mapParticipant(p, i))
-    .filter((p): p is NonNullable<typeof p> => p != null);
+  // GET /unlimited-challenges/:id → `players` is the membership roster (same as
+  // classic GET /races/:id `participants`).
+  const envelopeRoster = readUnlimitedDetailPlayers(payload);
+  const roster = envelopeRoster.length > 0 ? envelopeRoster : waiting.participants;
 
-  // Ensure host appears if participants empty.
-  if (participants.length === 0 && hostUserId) {
-    participants = [
-      {
-        id: hostUserId,
-        userId: hostUserId,
-        currentSteps: 0,
-        status: "active",
-        rank: 1,
-        username: asString(pick(challenge, "hostUsername", "host_username")) ?? "Host",
-        countryFlag: null,
-        avatarColor: "#00E676",
-        isHost: true,
-      },
-    ];
-  }
+  let participants = roster
+    .map((p, i) => mapParticipant(p, i))
+    .filter((p): p is NonNullable<typeof p> => p != null)
+    .map((p) => ({
+      ...p,
+      isHost: p.isHost || (!!hostUserId && p.userId === hostUserId),
+    }));
+
+  const participantCount = Math.max(
+    participants.length,
+    waiting.race.currentPlayers,
+  );
+  const prizeCents =
+    apiPrize > 0 ? apiPrize : entryCents > 0 ? entryCents * participantCount : 0;
+  const prizeDollars = prizeCents / 100;
 
   return {
     race: {
@@ -695,9 +802,7 @@ export function mapUnlimitedDetailToLiveDetail(
       entryAmountCents: entryCents,
       entryAmountDollars: entryCents / 100,
       targetSteps: waiting.race.targetSteps,
-      currentPlayers: waiting.race.hasExplicitPlayerCount
-        ? participantCount
-        : Math.max(participantCount, participants.length, 1),
+      currentPlayers: participantCount,
       maxPlayers: null,
       startedAt: status === "waiting" ? null : startAt,
       completedAt: status === "completed" ? endAt : null,
@@ -714,7 +819,7 @@ export function mapUnlimitedDetailToLiveDetail(
         pick(challenge, "durationDays", "duration_days", "challengeDurationDays"),
       ),
       prizePoolCents: prizeCents,
-      hasExplicitPlayerCount: !!waiting.race.hasExplicitPlayerCount,
+      hasExplicitPlayerCount: participants.length > 0,
       challengeTimezone: asString(
         pick(challenge, "challengeTimezone", "challenge_timezone", "timezone"),
       ),
@@ -741,6 +846,33 @@ export function mapUnlimitedDetailToLiveDetail(
       prizePoolEligibilityStatus:
         asString(pick(challenge, "prizePoolEligibilityStatus", "prize_pool_eligibility_status")) ??
         asString(pick(root ?? {}, "prizePoolEligibilityStatus", "prize_pool_eligibility_status")),
+      viewerStartAt: asString(pick(viewer ?? root ?? {}, "viewerStartAt", "viewer_start_at")),
+      viewerEndAt: asString(pick(viewer ?? root ?? {}, "viewerEndAt", "viewer_end_at")),
+      viewerStatus: asString(pick(viewer ?? root ?? {}, "viewerStatus", "viewer_status")),
+      viewerTimezone: asString(pick(viewer ?? root ?? {}, "viewerTimezone", "viewer_timezone")),
+      currentDayStartAt: asString(pick(viewer ?? root ?? {}, "currentDayStartAt", "current_day_start_at")),
+      currentDayEndAt: asString(pick(viewer ?? root ?? {}, "currentDayEndAt", "current_day_end_at")),
+      currentDayIndex: asNumber(pick(viewer ?? root ?? {}, "currentDayIndex", "current_day_index")),
+      currentDayLocalDate: asString(pick(viewer ?? root ?? {}, "currentDayLocalDate", "current_day_local_date")),
+      currentUserParticipating:
+        asBool(pick(root ?? {}, "currentUserRegistered", "current_user_registered")) ??
+        asBool(pick(challenge, "currentUserRegistered", "current_user_registered")) ??
+        undefined,
+      viewerResultsReady:
+        asBool(pick(viewer ?? root ?? {}, "viewerResultsReady", "viewer_results_ready")),
+      viewerResultsStatus: asString(
+        pick(viewer ?? root ?? {}, "viewerResultsStatus", "viewer_results_status"),
+      ),
+      viewerResultReasonCode: asString(
+        pick(viewer ?? root ?? {}, "viewerResultReasonCode", "viewer_result_reason_code"),
+      ),
+      eligibilityReasonCode: asString(
+        pick(viewer ?? root ?? {}, "eligibilityReasonCode", "eligibility_reason_code"),
+      ),
+      passedDays: asNumber(pick(viewer ?? root ?? {}, "passedDays", "passed_days", "completedDays")),
+      failedDays: asNumber(pick(viewer ?? root ?? {}, "failedDays", "failed_days")),
+      pendingDays: asNumber(pick(viewer ?? root ?? {}, "pendingDays", "pending_days")),
+      completedDays: asNumber(pick(viewer ?? root ?? {}, "completedDays", "completed_days", "passedDays")),
     },
     participants,
   };

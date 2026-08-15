@@ -32,6 +32,7 @@ import { useWalk } from "@/context/WalkContext";
 import { useApp } from "@/context/AppContext";
 import { BadgePill } from "@/components/BadgePill";
 import { formatDistance, stepsToDistance, formatWalletAmount } from "@/utils/format";
+import { UsdAmountWithInr } from "@/components/InrHint";
 import { getStoredSession } from "@/services/authService";
 import { authFetch } from "@/utils/authFetch";
 import { profileMePath } from "@/utils/profileApi";
@@ -1109,9 +1110,19 @@ function ProfileScreenContent() {
             <Text style={[styles.statCard3Label, { color: colors.mutedForeground }]}>Day Streak</Text>
           </View>
           <View style={[styles.statCard3, { backgroundColor: colors.card, borderColor: "#FFD70030" }]}>
-            <Text style={[styles.statCard3Num, { color: "#FFD700" }]}>
-              {formatWalletAmount(totalEarned, walletCurrency)}
-            </Text>
+            {walletCurrency === "INR" ? (
+              <Text style={[styles.statCard3Num, { color: "#FFD700" }]}>
+                {formatWalletAmount(totalEarned, walletCurrency)}
+              </Text>
+            ) : (
+              <UsdAmountWithInr
+                usd={totalEarned}
+                label={formatWalletAmount(totalEarned, walletCurrency)}
+                style={[styles.statCard3Num, { color: "#FFD700" }]}
+                color="#FFD700"
+                align="center"
+              />
+            )}
             <Text style={[styles.statCard3Label, { color: colors.mutedForeground }]}>Total Earnings</Text>
           </View>
         </View>

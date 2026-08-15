@@ -22,7 +22,7 @@ assert.equal(
 );
 assert.equal(
   UNLIMITED_COPY.modalWarning,
-  "Miss any required day and you are out of the challenge.",
+  "Miss a required day and you lose prize eligibility. You stay in the race until you forfeit.",
 );
 
 assert.equal(missedDayFooterCopy(2), "Missed Day 2 • Prize pool not eligible");

@@ -60,7 +60,7 @@ export function clampUsdFixedEntryDollars(value: unknown): number {
     return USD_FIXED_ENTRY_DEFAULT_DOLLARS;
   }
   if (isValidUsdFixedEntryDollars(value)) return value;
-  let best = USD_FIXED_ENTRY_DEFAULT_DOLLARS;
+  let best: number = USD_FIXED_ENTRY_DEFAULT_DOLLARS;
   let bestDist = Number.POSITIVE_INFINITY;
   for (const tier of USD_FIXED_ENTRY_DOLLARS) {
     const dist = Math.abs(tier - value);
@@ -404,6 +404,19 @@ export type HostPayloadMeta = {
   endAt: Date;
 };
 
+function formatCivilDateInZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timeZone.trim() || "UTC",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((p) => p.type === "year")?.value ?? "1970";
+  const month = parts.find((p) => p.type === "month")?.value ?? "01";
+  const day = parts.find((p) => p.type === "day")?.value ?? "01";
+  return `${year}-${month}-${day}`;
+}
+
 export function buildHostPayload(
   draft: CreateChallengeDraft,
   timezone: string,
@@ -461,13 +474,16 @@ export function buildHostPayload(
     const durationDays = draft.unlimited.durationDays;
     const platformFeeCents = UNLIMITED_GOAL_PLATFORM_FEE_CENTS;
     const title = streakChallengeTitle(draft.unlimited.dailyGoalSteps);
+    const startLocalDate = formatCivilDateInZone(scheduledStartAt!, timezone);
     const body: Record<string, unknown> = {
       visibility: draft.visibility === "private" ? "private" : "public",
       entryFeeCents,
       dailyGoalSteps: draft.unlimited.dailyGoalSteps,
       durationDays,
+      startLocalDate,
       startAtIso: scheduledStartAt!.toISOString(),
       challengeTimezone: timezone,
+      hostTimezone: timezone,
       title,
     };
     return {

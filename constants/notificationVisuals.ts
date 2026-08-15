@@ -35,6 +35,10 @@ export const NOTIFICATION_VISUAL_BY_TYPE: Record<string, NotificationVisualType>
   friend_daily_goal_completed: "goal_completed",
 
   chat_message_received: "chat",
+  global_chat_message: "chat",
+  global_chat_message_received: "chat",
+  global_chat: "chat",
+  chat_global: "chat",
 
   daily_goal_reminder: "goal_progress",
 
@@ -49,6 +53,7 @@ export const NOTIFICATION_VISUAL_BY_TYPE: Record<string, NotificationVisualType>
   race_invite: "room_invite",
   race_starting_soon: "upcoming_race",
   race_starting: "race_started",
+  race_started: "race_started",
   race_joined: "live_race",
   race_finished: "race_finished",
   race_verification_pending: "race_finished",

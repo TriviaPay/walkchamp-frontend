@@ -66,17 +66,21 @@ function copyNotificationIcons(projectRoot) {
     fs.copyFileSync(from, path.join(moduleNotifDir, fileName));
   };
 
+  // Union of both sources by filename — `assets/notifications` wins when it has a
+  // given icon, but a missing icon there (e.g. only a subset was customized) must
+  // still fall back to the module's bundled PNG instead of silently vanishing.
+  const pngNames = new Set();
   if (fs.existsSync(assetNotifDir)) {
     for (const entry of fs.readdirSync(assetNotifDir)) {
-      if (!/^notification_.+\.png$/i.test(entry)) continue;
-      copyPngNamed(entry);
-    }
-  } else if (fs.existsSync(moduleNotifDir)) {
-    for (const entry of fs.readdirSync(moduleNotifDir)) {
-      if (!/^notification_.+\.png$/i.test(entry)) continue;
-      copyPngNamed(entry);
+      if (/^notification_.+\.png$/i.test(entry)) pngNames.add(entry);
     }
   }
+  if (fs.existsSync(moduleNotifDir)) {
+    for (const entry of fs.readdirSync(moduleNotifDir)) {
+      if (/^notification_.+\.png$/i.test(entry)) pngNames.add(entry);
+    }
+  }
+  for (const entry of pngNames) copyPngNamed(entry);
 
   const brandSrcCandidates = [
     path.join(assetNotifDir, "ic_onesignal_large_icon_default.png"),
@@ -468,6 +472,7 @@ function withWalkChampRaceProgress(config) {
       ? cfg.modResults.UIBackgroundModes
       : [cfg.modResults.UIBackgroundModes];
     if (!modes.includes("fetch")) modes.push("fetch");
+    if (!modes.includes("remote-notification")) modes.push("remote-notification");
     cfg.modResults.UIBackgroundModes = modes;
     return cfg;
   });

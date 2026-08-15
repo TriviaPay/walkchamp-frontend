@@ -91,6 +91,15 @@ import {
 } from "@/utils/unlimitedGoal";
 import { computeUnlimitedViewerSchedule } from "@/utils/unlimitedViewerSchedule";
 import { getDeviceTimezone } from "@/utils/timezone";
+import { readKnownRaceSnapshot } from "@/utils/knownRaceSnapshot";
+import {
+  isUnlimitedWalkMembership,
+  pickApiChallengeEndAt,
+  resolveWalkCardEndsAt,
+  walkSoonCardTypeFromValues,
+} from "@/utils/walkMyRaceCards"; // keep only this import — do not redeclare locally
+import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
+import { ensureActiveRaceInStore } from "@/core/steps/stepProgressCoordinator";
 import {
   resolveUnlimitedResultStatus,
   resolveUnlimitedResultCardState,
@@ -104,7 +113,10 @@ import { UnlimitedGoalFeeBreakdown } from "@/components/UnlimitedGoalFeeBreakdow
 import { CreateChallengeFlow } from "@/components/CreateChallengeFlow";
 import { TrendingChallengesPreview } from "@/components/trending/TrendingChallengesPreview";
 import { fetchAvailableChallengeCount } from "@/services/trendingChallengesApi";
-import { fetchAvailableUnlimitedChallenges, fetchMyOpenUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
+import {
+  fetchMyOpenUnlimitedChallenges,
+  fetchUnlimitedDetailRoom,
+} from "@/services/unlimitedChallengesListApi";
 import { mergeUpcomingRoomsById } from "@/utils/unlimitedChallengeRooms";
 import {
   loadLeftUnlimitedChallengeIds,
@@ -135,6 +147,7 @@ import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import { useRace, useRaceUiProgress } from "@/context/RaceContext";
 import { formatDistance, formatCalories, stepsToDistance, formatWalletAmount } from "@/utils/format";
+import { InrHint, UsdAmountWithInr } from "@/components/InrHint";
 import { getApiBase } from "@/utils/apiUrl";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import MyTitlesModal, { type ActiveTitle, difficultyColor } from "@/components/MyTitlesModal";
@@ -156,15 +169,15 @@ import {
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { androidHCService } from "@/services/steps/androidHealthConnectService";
 import { rf, rs } from "@/utils/responsive";
-import { useDispatch, useSelector } from "react-redux";
+import { shallowEqual, useDispatch, useSelector } from "react-redux";
 import type { RootState, AppDispatch } from "@/store";
 import { fetchTrackThemes, purchaseTrackTheme, clearPurchaseError } from "@/store/slices/trackThemesSlice";
 import {
-  TRACK_LAYOUT_OPTIONS,
   type TrackLayoutId,
-  FREE_TRACK_CODES,
   isTrackLayoutId,
 } from "@/constants/trackLayouts";
+import { useOwnedTrackLayouts } from "@/hooks/useOwnedTrackLayouts";
+import { TrackThemeImage } from "@/components/TrackThemeImage";
 import { fetchCoinBalance, selectCurrentCoinBalance } from "@/store/slices/coinsSlice";
 import { raceProgressActions } from "@/store/slices/raceProgressSlice";
 import { store } from "@/store";
@@ -172,6 +185,11 @@ import { activeChallengeSync } from "@/services/activeChallengeSync";
 import CoinsInfoModal from "@/components/CoinsInfoModal";
 import CoinsStoreModal from "@/components/CoinsStoreModal";
 import ActiveRaceModal, { type ActiveRaceInfo, isSponsoredActiveRaceConflict, normalizeActiveRaceInfo } from "@/components/ActiveRaceModal";
+import {
+  activeRaceFromConflictBody,
+  fetchBlockingNonSponsoredChallenge,
+  isOneChallengeConflictCode,
+} from "@/utils/blockingChallengeMembership";
 import AlreadyHostingModal from "@/components/AlreadyHostingModal";
 import CoinIcon from "@/components/CoinIcon";
 import DraggableShopIcon from "@/components/DraggableShopIcon";
@@ -231,23 +249,55 @@ function walkAvailableCountCacheKey(userId: string): string {
   return `screen_walk_available_count:${userId}`;
 }
 
-/** Instant track theme for live-detail re-entry (avoids default bg flash). */
+/** User-scoped My Race / upcoming rooms — instant paint without opening Live. */
+function walkUpcomingRoomsCacheKey(userId: string): string {
+  return `screen_walk_upcoming_rooms:${userId}`;
+}
+
+function raceHintToSoonCardType(
+  hint?: string | null,
+  isSponsored?: boolean,
+): RaceStartingSoonChallengeType {
+  const h = String(hint ?? "").toLowerCase();
+  if (isSponsored || h.includes("sponsor")) return "sponsored";
+  if (h.includes("coin")) return "coins";
+  if (
+    h.includes("cash") ||
+    h.includes("paid") ||
+    h.includes("unlimited") ||
+    h.includes("streak")
+  ) {
+    return "cash";
+  }
+  return "free";
+}
+
 function liveRaceNavParams(
   raceId: string,
   userId?: string | null,
-): { id: string; trackLayout?: string } {
-  const cached = screenCache.getSync<{ race?: { trackLayout?: string } }>(
+): { id: string; trackLayout?: string; challengeType?: string; capacityMode?: string } {
+  const cached = screenCache.getSync<{ race?: { trackLayout?: string; challengeType?: string; capacityMode?: string; entryType?: string } }>(
     `live-race-detail:v1:${userId || "anon"}:${raceId}`,
   );
   // Legacy unscoped key (pre multi-account) — read-only fallback.
   const legacy =
     cached ??
-    screenCache.getSync<{ race?: { trackLayout?: string } }>(
+    screenCache.getSync<{ race?: { trackLayout?: string; challengeType?: string; capacityMode?: string; entryType?: string } }>(
       `live-race-detail:v1:${raceId}`,
     );
+  const known = readKnownRaceSnapshot(raceId, userId);
+  const unlimited = isUnlimitedGoalChallenge({
+    challengeType: legacy?.race?.challengeType ?? known?.challengeType,
+    entryType: legacy?.race?.entryType ?? known?.entryType,
+    capacityMode: legacy?.race?.capacityMode ?? known?.capacityMode,
+    maxPlayers: known?.maxPlayers,
+  });
   const layout = legacy?.race?.trackLayout;
-  if (isTrackLayoutId(layout)) return { id: raceId, trackLayout: layout };
-  return { id: raceId };
+  const extra = unlimited
+    ? { challengeType: "unlimited_goal" as const, capacityMode: "unlimited" as const }
+    : {};
+  if (isTrackLayoutId(layout)) return { id: raceId, trackLayout: layout, ...extra };
+  return { id: raceId, ...extra };
 }
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
@@ -770,7 +820,10 @@ function PrizeRow({ rank, amount, split, colors }: { rank: number; amount: numbe
         {rank === 1 ? "1st" : rank === 2 ? "2nd" : "3rd"}
       </Text>
       <Text style={[styles.prizeSplit, { color: colors.mutedForeground }]}>{split} of pool</Text>
-      <Text style={[styles.prizeAmt, { color: rankColors[rank - 1] }]}>${amount.toFixed(2)}</Text>
+      <Text style={[styles.prizeAmt, { color: rankColors[rank - 1] }]}>
+        ${amount.toFixed(2)}
+        <InrHint usd={amount} style={styles.prizeAmt} />
+      </Text>
     </View>
   ); }
 
@@ -1517,10 +1570,25 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
               { label: "Total Steps",  value: (profileStats?.allTimeSteps ?? allTimeSteps ?? 0).toLocaleString(), color: colors.primary },
               { label: "Login Streak", value: `${profileStats?.dayStreak ?? currentStreak ?? 0}d`,               color: colors.destructive },
               { label: "Global Rank",  value: `#${profileRank}`,                                                  color: colors.gold },
-              { label: "Total Earnings", value: formatWalletAmount(totalEarned, walletCurrency),                  color: "#FFD700" },
-            ]).map((s) => (
+              {
+                label: "Total Earnings",
+                value: formatWalletAmount(totalEarned, walletCurrency),
+                color: "#FFD700",
+                usdHint: walletCurrency === "INR" ? null : totalEarned,
+              },
+            ] as Array<{ label: string; value: string; color: string; usdHint?: number | null }>).map((s) => (
               <View key={s.label} style={[pmStyles.statCard, { backgroundColor: colors.card, borderColor: s.color + "30" }]}>
-                <Text style={[pmStyles.statValue, { color: s.color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{s.value}</Text>
+                {s.usdHint ? (
+                  <UsdAmountWithInr
+                    usd={s.usdHint}
+                    label={s.value}
+                    style={[pmStyles.statValue, { color: s.color }]}
+                    color={s.color}
+                    align="center"
+                  />
+                ) : (
+                  <Text style={[pmStyles.statValue, { color: s.color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{s.value}</Text>
+                )}
                 <Text style={[pmStyles.statLabel, { color: colors.mutedForeground }]}>{s.label}</Text>
               </View>
             ))}
@@ -1920,6 +1988,7 @@ function WalkScreenContent() {
   const { counts, formatCount } = usePresenceCounts();
   const dispatch = useDispatch<AppDispatch>();
   const themes = useSelector((s: RootState) => s.trackThemes.themes);
+  const { layouts: ownedTrackLayouts } = useOwnedTrackLayouts();
   const themesPurchaseLoading = useSelector((s: RootState) => s.trackThemes.purchaseLoading);
   const serverSelectedThemeCode = useSelector((s: RootState) => s.trackThemes.selectedThemeCode);
   const themesLoading = useSelector((s: RootState) => s.trackThemes.loading);
@@ -1929,6 +1998,28 @@ function WalkScreenContent() {
       ? Math.max(0, Math.floor(s.raceProgress.todaySteps))
       : 0,
   );
+  const walkRaceActive = useSelector((s: RootState) =>
+    s.raceProgress.userId === user?.id &&
+    (s.raceProgress.raceStatus === "active" || !!s.raceProgress.companionRaceId),
+  );
+  const reduxLiveRace = useSelector((s: RootState) => {
+    if (s.raceProgress.userId !== user?.id || s.raceProgress.raceStatus !== "active") {
+      return null;
+    }
+    const id = s.raceProgress.activeRaceId;
+    if (!id) return null;
+    return {
+      raceId: id,
+      raceType: s.raceProgress.activeRaceType,
+      isSponsored: s.raceProgress.activeRaceIsSponsored === true,
+      goalSteps: s.raceProgress.goalSteps,
+      totalParticipants: s.raceProgress.totalParticipants ?? 1,
+      raceStartTime: s.raceProgress.raceStartTime,
+      raceSteps: s.raceProgress.raceSteps,
+      challengeEndAt: s.raceProgress.challengeEndAt,
+      timeLeftSeconds: s.raceProgress.timeLeftSeconds,
+    };
+  }, shallowEqual);
   const verifiedTodaySteps = useSelector((s: RootState) =>
     s.raceProgress.userId === user?.id
       ? Math.max(0, Math.floor(s.raceProgress.verifiedTodaySteps ?? 0))
@@ -1944,14 +2035,21 @@ function WalkScreenContent() {
   });
   // Prefer the same resolution as the ongoing notification so Walk cannot show a
   // poisoned sensor absolute while Profile / backend already show HC/HK.
-  const liveTodaySteps =
+  const liveTodayStepsBase =
     stepsSourceReady && verificationLevel === "verified"
       ? resolveWalkNotificationSteps({
-          verifiedTodaySteps: Math.max(verifiedTodaySteps, contextTodaySteps),
+          verifiedTodaySteps,
           provisionalSensorTodaySteps,
           todaySteps: Math.max(canonicalTodaySteps, contextTodaySteps),
+          raceActive: walkRaceActive,
         })
       : resolveDisplayTodaySteps(contextTodaySteps, canonicalTodaySteps);
+  // Unlimited FGS raceSteps are the same daily HC total as the streak tray.
+  // Don't leave Walk / Daily Walk at 0 while that tray shows thousands.
+  const liveTodaySteps =
+    reduxLiveRace?.raceType === "unlimited_goal"
+      ? Math.max(liveTodayStepsBase, Math.max(0, reduxLiveRace.raceSteps ?? 0))
+      : liveTodayStepsBase;
   const [purchaseConfirmModal, setPurchaseConfirmModal] = useState<{ code: string; name: string; price: number } | null>(null);
   const [showCoinsInfo, setShowCoinsInfo] = useState(false);
   const [showCoinStore, setShowCoinStore] = useState(false);
@@ -2304,12 +2402,13 @@ function WalkScreenContent() {
       racePhase === "idle" &&
       (prev === "finished" || prev === "in_race" || prev === "waiting")
     ) {
-      setChallengeStatuses({});
+      const stillLive = store.getState().raceProgress.raceStatus === "active";
+      if (!stillLive) setChallengeStatuses({});
       void loadChallengeStatuses({ force: true });
     } else if (
       racePhase === "in_race" ||
       racePhase === "finished" ||
-      racePhase === "waiting" ||
+      (racePhase as string) === "waiting" ||
       racePhase === "countdown"
     ) {
       // Race starting / live / just finished — chips must flip without waiting on poll.
@@ -2347,6 +2446,68 @@ function WalkScreenContent() {
     }, []),
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      const uid = user?.id;
+      if (!uid) return;
+
+      let cancelled = false;
+      void raceProgressNotificationService.getNativeRaceState().then((raw) => {
+        if (cancelled || !raw) return;
+        try {
+          const json = JSON.parse(raw) as Record<string, unknown>;
+          const nativeRaceId =
+            typeof json.raceId === "string" && json.raceId.trim()
+              ? json.raceId.trim()
+              : null;
+          const nativeUserId = typeof json.userId === "string" ? json.userId : null;
+          if (nativeUserId && nativeUserId !== uid) return;
+          const startMs = Number(json.raceStartTimeMs);
+          const startIso =
+            Number.isFinite(startMs) && startMs > 0
+              ? new Date(startMs).toISOString()
+              : undefined;
+          const rp = store.getState().raceProgress;
+          const nativeLive =
+            json.raceStatus === "in_progress" ||
+            json.raceStatus === "active" ||
+            json.raceStatus === "racing";
+          if (
+            nativeRaceId &&
+            nativeLive &&
+            rp.raceStatus !== "active"
+          ) {
+            ensureActiveRaceInStore({
+              raceId: nativeRaceId,
+              raceStartTime: startIso ?? new Date().toISOString(),
+              userId: uid,
+              username: user?.username ?? "Runner",
+              goalSteps: typeof json.goalSteps === "number" ? json.goalSteps : 0,
+              totalParticipants:
+                typeof json.totalParticipants === "number"
+                  ? json.totalParticipants
+                  : 1,
+              bootSteps: typeof json.raceSteps === "number" ? json.raceSteps : 0,
+              participantConfirmed: true,
+              isSponsored: json.isSponsored === true,
+              raceType:
+                typeof json.raceTypeHint === "string" && json.raceTypeHint
+                  ? json.raceTypeHint
+                  : undefined,
+              unlimitedDailyMode: json.unlimitedDailyMode === true,
+            });
+          }
+        } catch {
+          /* ignore corrupt native blob */
+        }
+      });
+
+      return () => {
+        cancelled = true;
+      };
+    }, [user?.id, user?.username]),
+  );
+
   // Challenge cards must not wait for Health Connect / step hydration.
   useFocusEffect(useCallback(() => {
     if (!raceReady) return;
@@ -2364,6 +2525,7 @@ function WalkScreenContent() {
       // Always re-apply when the Walk UI is holding an inflated sensor absolute vs HC.
       const inflatedVsVerified =
         verificationLevel === "verified" &&
+        verifiedTodaySteps > 0 &&
         isInflatedProvisionalVsVerified(verifiedTodaySteps, liveTodaySteps);
       const shouldApplyDisplay =
         inflatedVsVerified ||
@@ -2442,19 +2604,36 @@ function WalkScreenContent() {
     challenge_duration_days?: number;
     /** Unlimited Daily Goal Challenge only — result-state derivation (utils/unlimitedResults.ts). */
     settlement_status?: string | null;
+    prize_pool_cents?: number | null;
   };
   const [registeredUpcomingRooms, setRegisteredUpcomingRooms] = useState<WalkUpcomingRoom[]>([]);
   /** Distinguish loading from confirmed empty for Next Race / Live Race card. */
   const [registeredUpcomingStatus, setRegisteredUpcomingStatus] = useState<
     "idle" | "loading" | "ready" | "error"
   >("idle");
+  const registeredUpcomingRoomsRef = useRef<WalkUpcomingRoom[]>([]);
+  registeredUpcomingRoomsRef.current = registeredUpcomingRooms;
 
   // Drop Next Race cards immediately on logout so stale old-user rows never linger.
+  // Hydrate My Race from cache so Walk does not wait for the Live tab.
   useEffect(() => {
     if (!user?.id) {
       setRegisteredUpcomingRooms([]);
       setRegisteredUpcomingStatus("idle");
+      return;
     }
+    const cached = screenCache.getSync<WalkUpcomingRoom[]>(walkUpcomingRoomsCacheKey(user.id));
+    if (cached && cached.length > 0) {
+      setRegisteredUpcomingRooms(cached);
+      setRegisteredUpcomingStatus("ready");
+      return;
+    }
+    void screenCache.get<WalkUpcomingRoom[]>(walkUpcomingRoomsCacheKey(user.id)).then((disk) => {
+      if (!disk || disk.length === 0) return;
+      if (registeredUpcomingRoomsRef.current.length > 0) return;
+      setRegisteredUpcomingRooms(disk);
+      setRegisteredUpcomingStatus("ready");
+    });
   }, [user?.id]);
 
   // Group count for the compact "Groups" entry — reuse Groups screen cache only (no new API).
@@ -2543,13 +2722,11 @@ function WalkScreenContent() {
       const [
         { loadLeftUnlimitedChallengeIds },
         res,
-        unlimitedWaiting,
         unlimitedMine,
         classicActive,
       ] = await Promise.all([
         import("@/utils/hostedUnlimitedCache"),
         authFetch("/api/rooms/available?tab=upcoming"),
-        fetchAvailableUnlimitedChallenges({ viewerUserId: uid }),
         fetchMyOpenUnlimitedChallenges({ viewerUserId: uid }),
         import("@/services/stepProgressCoordinator").then((m) =>
           m.fetchMyActiveInProgressRaces(uid).catch(() => []),
@@ -2557,7 +2734,11 @@ function WalkScreenContent() {
       ]);
       // Logged out (or switched) while in flight — drop stale results.
       if (store.getState().auth.user?.id !== uid) return;
-      const unlimited = mergeUpcomingRoomsById(unlimitedWaiting, unlimitedMine);
+      // my-active is membership-scoped — never wait on public browse to paint My Race.
+      const unlimited = unlimitedMine.map((u) => ({
+        ...u,
+        current_user_registered: true,
+      }));
       if (!res.ok && unlimited.length === 0 && classicActive.length === 0) return;
       const leftIds = await loadLeftUnlimitedChallengeIds();
       if (store.getState().auth.user?.id !== uid) return;
@@ -2589,7 +2770,7 @@ function WalkScreenContent() {
           max_players: Math.max(1, r.currentPlayers ?? 10),
           registered_count: Math.max(1, r.currentPlayers ?? 1),
           // API times only — never invent "now" on the client.
-          scheduled_start_at: r.startedAt ?? null,
+          scheduled_start_at: r.startedAt ?? r.scheduledStartAt ?? null,
           challenge_end_at: r.challengeEndAt ?? null,
           target_steps: r.targetSteps ?? 1000,
           host_user_id: r.isHost ? uid : "",
@@ -2617,10 +2798,36 @@ function WalkScreenContent() {
           challenge_timezone: u.challenge_timezone ?? null,
           challenge_duration_days: u.challenge_duration_days,
           settlement_status: u.settlement_status ?? null,
+          prize_pool_cents:
+            typeof u.reward_pool === "number" && u.reward_pool > 0
+              ? Math.round(u.reward_pool * 100)
+              : null,
         };
       });
+      const unlimitedHydrated: WalkUpcomingRoom[] = await Promise.all(
+        unlimitedAsWalk.map(async (u) => {
+          const detail = await fetchUnlimitedDetailRoom(u.room_id);
+          if (!detail) return u;
+          return {
+            ...u,
+            scheduled_start_at: detail.scheduled_start_at ?? u.scheduled_start_at,
+            challenge_end_at: detail.challenge_end_at ?? u.challenge_end_at ?? null,
+            registered_count: Math.max(u.registered_count, detail.registered_count),
+            target_steps: detail.target_steps || u.target_steps,
+            entry_fee: detail.entry_fee || u.entry_fee,
+            challenge_timezone: detail.challenge_timezone ?? u.challenge_timezone,
+            challenge_duration_days:
+              detail.challenge_duration_days || u.challenge_duration_days,
+            prize_pool_cents:
+              typeof detail.reward_pool === "number" && detail.reward_pool > 0
+                ? Math.round(detail.reward_pool * 100)
+                : u.prize_pool_cents ?? null,
+            status: detail.status || u.status,
+          };
+        }),
+      );
       const merged = mergeUpcomingRoomsById(
-        mergeUpcomingRoomsById(data.rooms ?? [], unlimitedAsWalk),
+        mergeUpcomingRoomsById(data.rooms ?? [], unlimitedHydrated),
         classicAsWalk,
       );
       const nextRaceRooms = merged.filter((r) => {
@@ -2633,8 +2840,13 @@ function WalkScreenContent() {
           ? !!r.current_user_registered
           : r.current_user_registered || (!!uid && r.host_user_id === uid);
         if (!isMine) return false;
-        if (!r.scheduled_start_at) return false;
         const status = (r.status ?? "").toLowerCase();
+        const isLiveStatus =
+          status === "active" ||
+          status === "starting" ||
+          status === "settling" ||
+          status === "in_progress";
+        if (!r.scheduled_start_at && !isLiveStatus) return false;
         if (
           status === "completed" ||
           status === "cancelled" ||
@@ -2645,8 +2857,9 @@ function WalkScreenContent() {
         ) {
           return false;
         }
+        if (!r.scheduled_start_at) return isLiveStatus;
         const startMs = new Date(r.scheduled_start_at).getTime();
-        if (!Number.isFinite(startMs)) return false;
+        if (!Number.isFinite(startMs)) return isLiveStatus;
         // Keep host/participant card through start + while Unlimited is still open/active.
         if (startMs > now) return true;
         return (
@@ -2662,18 +2875,24 @@ function WalkScreenContent() {
         );
       });
       if (store.getState().auth.user?.id !== uid) return;
-      console.log(
-        `[NextRace] unlimited=${unlimited.length} mine=${unlimitedMine.length} merged=${merged.length} nextRace=${nextRaceRooms.length} uid=${uid ?? "none"}`,
-        unlimited.map((u) => ({
-          id: u.room_id,
-          start: u.scheduled_start_at,
-          host: u.host_user_id,
-          reg: u.current_user_registered,
-          status: u.status,
-        })),
-      );
       setRegisteredUpcomingRooms(nextRaceRooms);
       setRegisteredUpcomingStatus("ready");
+      void screenCache.set(walkUpcomingRoomsCacheKey(uid), nextRaceRooms);
+      for (const room of nextRaceRooms) {
+        if (
+          !isUnlimitedGoalChallenge({
+            challengeType: room.challenge_type,
+            maxPlayers: room.max_players,
+          })
+        ) {
+          continue;
+        }
+        prefetchLiveRaceDetailRoster({
+          raceId: room.room_id,
+          userId: uid,
+          unlimited: true,
+        });
+      }
     } catch {
       /* keep previous Next Race list */
       setRegisteredUpcomingStatus((prev) => (prev === "ready" ? prev : "error"));
@@ -2682,17 +2901,19 @@ function WalkScreenContent() {
 
   // Wait for auth only — Live Race card must not wait for steps/HC/Pusher.
   // TTL: returning to Walk must not re-fan-out every rooms/count API every focus.
+  // Empty My Race always fetches immediately (do not wait until Live tab opens).
   useFocusEffect(useCallback(() => {
     if (!raceReady) return;
     const uid = user?.id ?? "anon";
     const forceRooms = pendingForceRoomsRefreshRef.current;
+    const myRaceEmpty = registeredUpcomingRoomsRef.current.length === 0;
     if (forceRooms) {
       pendingForceRoomsRefreshRef.current = false;
       resetApiFetchGate(`walk_rooms_focus:${uid}`);
       markApiFetched(`walk_rooms_focus:${uid}`);
       void fetchRegisteredUpcomingRooms();
       void loadChallengeStatuses({ force: true });
-    } else if (apiFetchAllowed(`walk_rooms_focus:${uid}`, 20_000)) {
+    } else if (myRaceEmpty || apiFetchAllowed(`walk_rooms_focus:${uid}`, 20_000)) {
       markApiFetched(`walk_rooms_focus:${uid}`);
       void fetchRegisteredUpcomingRooms();
     }
@@ -2710,11 +2931,62 @@ function WalkScreenContent() {
     refreshAvailableChallengeCount,
   ]));
 
+  // Streak My Race: fetch GET /unlimited-challenges/:id before Live Race opens.
+  useEffect(() => {
+    const uid = user?.id;
+    const raceId = reduxLiveRace?.raceId;
+    if (!uid || !raceId) return;
+    const existing = registeredUpcomingRoomsRef.current.find((r) => r.room_id === raceId);
+    const unlimited =
+      reduxLiveRace?.raceType === UNLIMITED_GOAL_CHALLENGE_TYPE ||
+      isUnlimitedGoalChallenge({
+        challengeType: existing?.challenge_type,
+        maxPlayers: existing?.max_players,
+      });
+    if (!unlimited) return;
+    if (existing?.challenge_end_at && existing.scheduled_start_at) return;
+    let cancelled = false;
+    void fetchUnlimitedDetailRoom(raceId).then((detail) => {
+      if (cancelled || !detail?.challenge_end_at) return;
+      if (store.getState().auth.user?.id !== uid) return;
+      setRegisteredUpcomingRooms((prev) =>
+        mergeUpcomingRoomsById(prev, [
+          {
+            room_id: detail.room_id,
+            challenge_type: detail.challenge_type,
+            entry_fee: detail.entry_fee,
+            coin_entry_amount: 0,
+            max_players: 0,
+            registered_count: detail.registered_count,
+            scheduled_start_at: detail.scheduled_start_at,
+            challenge_end_at: detail.challenge_end_at,
+            target_steps: detail.target_steps,
+            host_user_id: detail.host_user_id,
+            current_user_registered: true,
+            status: detail.status,
+            challenge_timezone: detail.challenge_timezone ?? null,
+            challenge_duration_days: detail.challenge_duration_days,
+            settlement_status: detail.settlement_status ?? null,
+            prize_pool_cents:
+              typeof detail.reward_pool === "number" && detail.reward_pool > 0
+                ? Math.round(detail.reward_pool * 100)
+                : null,
+          },
+        ]),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, reduxLiveRace?.raceId, reduxLiveRace?.raceType]);
+
   // When Walk stays focused while raceReady flips true, also refresh once (TTL-gated).
+  // Empty My Race always fetches — do not wait until Live Challenges is opened.
   useEffect(() => {
     if (!raceReady) return;
     const uid = user?.id ?? "anon";
-    if (apiFetchAllowed(`walk_rooms_ready:${uid}`, 20_000)) {
+    const myRaceEmpty = registeredUpcomingRoomsRef.current.length === 0;
+    if (myRaceEmpty || apiFetchAllowed(`walk_rooms_ready:${uid}`, 20_000)) {
       markApiFetched(`walk_rooms_ready:${uid}`);
       void fetchRegisteredUpcomingRooms();
     }
@@ -3086,7 +3358,13 @@ function WalkScreenContent() {
       (payload: { raceId?: string }) => {
         const raceId = payload?.raceId;
         if (!raceId) return;
-        setRegisteredUpcomingRooms((prev) => prev.filter((r) => r.room_id !== raceId));
+        setRegisteredUpcomingRooms((prev) => {
+          const next = prev.filter((r) => r.room_id !== raceId);
+          if (user?.id) {
+            void screenCache.set(walkUpcomingRoomsCacheKey(user.id), next);
+          }
+          return next;
+        });
         setScheduledRoomResult((prev) => (prev?.raceId === raceId ? null : prev));
         setChallengeStatuses((prev) => {
           let changed = false;
@@ -3291,6 +3569,7 @@ function WalkScreenContent() {
     phase: RaceStartingSoonPhase;
     scheduledStartAt: string | null;
     endsAt?: string | null;
+    timeLeftSeconds?: number | null;
     registeredCount: number;
     maxSlots: number;
     targetSteps?: number;
@@ -3373,7 +3652,59 @@ function WalkScreenContent() {
     const coveredRaceIds = new Set<string>();
     const now = nextRaceNowMs;
 
-    // Sponsored — future scheduled registration only (never live/racing)
+    // Sponsored — live first, then future scheduled registration.
+    if (
+      sponsoredStatus?.kind === "racing" &&
+      sponsoredStatus.eventId &&
+      !isRecentlyLeftRaceId(sponsoredStatus.eventId)
+    ) {
+      cards.push({
+        key: `sponsored-live:${sponsoredStatus.eventId}`,
+        challengeType: "sponsored",
+        phase: "racing",
+        scheduledStartAt: null,
+        endsAt: resolveWalkCardEndsAt({
+          raceId: sponsoredStatus.eventId,
+          userId: user?.id,
+          endsAt: sponsoredStatus.endsAt,
+        }),
+        registeredCount: sponsoredStatus.registeredCount ?? 1,
+        maxSlots: sponsoredStatus.maxSlots ?? 10,
+        targetSteps: sponsoredStatus.targetSteps,
+        prizePoolCents: sponsoredStatus.prizePoolCents,
+        prizePerWinnerCents: sponsoredStatus.prizePerWinnerCents,
+        onPressInCta: () => {
+          warmLiveRaceDetailNavigation({
+            raceId: sponsoredStatus.eventId,
+            userId: user?.id,
+            username: user?.username,
+            status: "in_progress",
+            preferExistingRoster: true,
+          });
+          prefetchLiveRaceDetailRoster({
+            raceId: sponsoredStatus.eventId,
+            userId: user?.id,
+          });
+        },
+        onPressCta: () => {
+          const params = warmLiveRaceDetailNavigation({
+            raceId: sponsoredStatus.eventId,
+            userId: user?.id,
+            username: user?.username,
+            status: "in_progress",
+            preferExistingRoster: true,
+          });
+          prefetchLiveRaceDetailRoster({
+            raceId: sponsoredStatus.eventId,
+            userId: user?.id,
+          });
+          router.push({ pathname: "/race/live-detail", params });
+        },
+        sortMs: now,
+      });
+      coveredRaceIds.add(sponsoredStatus.eventId);
+    }
+
     if (
       (sponsoredStatus?.kind === "registered" || sponsoredStatus?.kind === "join_window") &&
       sponsoredStatus.scheduledStartAt
@@ -3388,7 +3719,11 @@ function WalkScreenContent() {
           challengeType: "sponsored",
           phase,
           scheduledStartAt: sponsoredStatus.scheduledStartAt,
-          endsAt: sponsoredStatus.endsAt ?? null,
+          endsAt: resolveWalkCardEndsAt({
+            raceId: sponsoredStatus.eventId,
+            userId: user?.id,
+            endsAt: sponsoredStatus.endsAt,
+          }),
           registeredCount: sponsoredStatus.registeredCount ?? 0,
           maxSlots: sponsoredStatus.maxSlots ?? 10,
           targetSteps: sponsoredStatus.targetSteps,
@@ -3416,17 +3751,44 @@ function WalkScreenContent() {
       // Currently participating / live — show under My Race immediately.
       if (isActive) {
         // Prefer API startedAt; fall back to scheduledStartAt. Never invent "now".
-        const liveIso = cs.startedAt ?? cs.scheduledStartAt ?? null;
+        const known = readKnownRaceSnapshot(cs.raceId, user?.id);
+        const liveIso = cs.startedAt ?? cs.scheduledStartAt ?? known?.startedAt ?? null;
         const liveMs = liveIso ? new Date(liveIso).getTime() : NaN;
-        const joined = cs.joinedCount ?? 1;
-        const challengeType = entryKeyToReminderType(entryKey);
-        const isUnlimitedEntry = entryKey === "unlimited_goal";
+        const joined = cs.joinedCount ?? known?.currentPlayers ?? 1;
+        const roomMeta = registeredUpcomingRooms.find((r) => r.room_id === cs.raceId);
+        const unlimitedDays =
+          roomMeta?.challenge_duration_days ?? known?.challengeDurationDays ?? null;
+        const isUnlimitedEntry = isUnlimitedWalkMembership({
+          entryKey,
+          roomType: roomMeta?.challenge_type,
+          knownChallengeType: known?.challengeType,
+          knownEntryType: known?.entryType,
+          durationDays: unlimitedDays,
+        });
+        const prizeCents = cs.prizePoolCents ?? known?.prizePoolCents ?? undefined;
+        const entryCents = cs.entryAmountCents ?? known?.entryAmountCents ?? undefined;
+        const coinEntry = cs.coinEntryAmount ?? known?.coinEntryAmount ?? undefined;
+        const challengeType = walkSoonCardTypeFromValues({
+          fallback: entryKeyToReminderType(entryKey),
+          isSponsored: entryKeyToReminderType(entryKey) === "sponsored",
+          entryAmountCents: entryCents,
+          coinEntryAmount: coinEntry,
+          prizePoolCents: prizeCents,
+        });
+        const liveEndsAt = resolveWalkCardEndsAt({
+          endsAt: pickApiChallengeEndAt(
+            cs.challengeEndAt,
+            (cs as { challenge_end_at?: string | null }).challenge_end_at,
+            roomMeta?.challenge_end_at,
+          ),
+        });
         const warmOpts = {
           raceId: cs.raceId as string,
           userId: user?.id,
           username: user?.username,
           status: "in_progress" as const,
           startedAt: liveIso,
+          challengeEndAt: liveEndsAt,
           targetSteps: cs.targetSteps,
           maxPlayers: isUnlimitedEntry ? null : cs.maxPlayers || 10,
           currentPlayers: joined,
@@ -3448,17 +3810,25 @@ function WalkScreenContent() {
           challengeType,
           phase: "racing",
           scheduledStartAt: liveIso,
-          endsAt: cs.challengeEndAt ?? null,
+          endsAt: liveEndsAt,
+          timeLeftSeconds:
+            reduxLiveRace?.raceId === cs.raceId
+              ? reduxLiveRace.timeLeftSeconds
+              : known?.timeLeftSeconds,
           registeredCount: joined,
-          maxSlots: cs.maxPlayers || 10,
-          targetSteps: cs.targetSteps,
+          maxSlots: isUnlimitedEntry ? 0 : cs.maxPlayers || known?.maxPlayers || 10,
+          targetSteps: cs.targetSteps ?? known?.targetSteps ?? undefined,
           prizePoolCents:
             challengeType === "cash"
-              ? cashPrizePoolCents(cs.prizePoolCents, cs.entryAmountCents, joined)
-              : cs.prizePoolCents,
-          coinEntryAmount: cs.coinEntryAmount,
-          entryAmountCents: cs.entryAmountCents,
+              ? cashPrizePoolCents(prizeCents, entryCents, joined)
+              : prizeCents,
+          coinEntryAmount: coinEntry,
+          entryAmountCents: entryCents,
           isUnlimitedGoal: isUnlimitedEntry,
+          unlimitedChallengeTimezone: isUnlimitedEntry
+            ? roomMeta?.challenge_timezone
+            : undefined,
+          unlimitedDurationDays: isUnlimitedEntry ? unlimitedDays ?? undefined : undefined,
           onPressInCta: () => {
             warmLiveRaceDetailNavigation(warmOpts);
             // Start full roster GET during press — often lands before Live Detail mounts.
@@ -3488,23 +3858,34 @@ function WalkScreenContent() {
         continue;
       }
 
-      const startIso = cs.scheduledStartAt ?? cs.startedAt ?? null;
+      const knownWait = readKnownRaceSnapshot(cs.raceId, user?.id);
+      const startIso = cs.scheduledStartAt ?? cs.startedAt ?? knownWait?.startedAt ?? null;
       if (!startIso) continue;
       const startMs = new Date(startIso).getTime();
       if (!(startMs > now)) continue;
       const msLeft = startMs - now;
       const phase: RaceStartingSoonPhase =
         msLeft < 10 * 60_000 ? "join_window" : "registered";
-      const joined = cs.joinedCount ?? 1;
+      const joined = cs.joinedCount ?? knownWait?.currentPlayers ?? 1;
       const challengeType = entryKeyToReminderType(entryKey);
+      const waitRoomMeta = registeredUpcomingRooms.find((r) => r.room_id === cs.raceId);
+      const isUnlimitedWait = isUnlimitedWalkMembership({
+        entryKey,
+        roomType: waitRoomMeta?.challenge_type,
+        knownChallengeType: knownWait?.challengeType,
+        knownEntryType: knownWait?.entryType,
+        durationDays: waitRoomMeta?.challenge_duration_days ?? knownWait?.challengeDurationDays,
+      });
       cards.push({
         key: `challenge:${entryKey}:${cs.raceId}`,
         challengeType,
         phase,
         scheduledStartAt: startIso,
-        endsAt: cs.challengeEndAt ?? null,
+        endsAt: resolveWalkCardEndsAt({
+          endsAt: cs.challengeEndAt,
+        }),
         registeredCount: joined,
-        maxSlots: cs.maxPlayers || 10,
+        maxSlots: isUnlimitedWait ? 0 : cs.maxPlayers || 10,
         targetSteps: cs.targetSteps,
         prizePoolCents:
           challengeType === "cash"
@@ -3519,8 +3900,14 @@ function WalkScreenContent() {
     }
 
     const srr = scheduledRoomResult;
+    const srrIsUnlimited =
+      srr?.entryType === UNLIMITED_GOAL_CHALLENGE_TYPE ||
+      isUnlimitedGoalChallenge({ challengeType: srr?.entryType });
+    // Streak My Race must come from my-active / GET :id, not this local seed
+    // (seed has no challengeEndAtUtc and paints 1/10 like a classic cash card).
     if (
       srr?.raceId &&
+      !srrIsUnlimited &&
       srr.scheduledStartAt &&
       new Date(srr.scheduledStartAt).getTime() > now &&
       !coveredRaceIds.has(srr.raceId)
@@ -3538,7 +3925,11 @@ function WalkScreenContent() {
         challengeType,
         phase,
         scheduledStartAt: srr.scheduledStartAt,
-        endsAt: null,
+        endsAt: resolveWalkCardEndsAt({
+          raceId: srr.raceId,
+          userId: user?.id,
+          endsAt: (srr as { challengeEndAt?: string | null }).challengeEndAt ?? null,
+        }),
         registeredCount: joined,
         maxSlots: maxPlayers,
         targetSteps: srr.targetSteps,
@@ -3574,20 +3965,25 @@ function WalkScreenContent() {
 
     // Available Rooms — registered upcoming + Unlimited still racing after start.
     for (const room of registeredUpcomingRooms) {
-      if (!room.scheduled_start_at || coveredRaceIds.has(room.room_id)) continue;
+      if (coveredRaceIds.has(room.room_id)) continue;
       if (isRecentlyLeftRaceId(room.room_id)) continue;
-      const startMs = new Date(room.scheduled_start_at).getTime();
-      if (!Number.isFinite(startMs)) continue;
       const status = (room.status ?? "").toLowerCase();
-      const isUnlimitedRoom = isUnlimitedGoalChallenge({
+      const isUnlimitedRoomEarly = isUnlimitedGoalChallenge({
         challengeType: room.challenge_type,
         maxPlayers: room.max_players,
       });
-      const isLiveStatus =
+      const isLiveStatusEarly =
         status === "active" ||
         status === "starting" ||
         status === "settling" ||
         status === "in_progress";
+      if (!room.scheduled_start_at && !(isUnlimitedRoomEarly || isLiveStatusEarly)) continue;
+      const startMs = room.scheduled_start_at
+        ? new Date(room.scheduled_start_at).getTime()
+        : now;
+      if (!Number.isFinite(startMs) && !isLiveStatusEarly) continue;
+      const isUnlimitedRoom = isUnlimitedRoomEarly;
+      const isLiveStatus = isLiveStatusEarly;
       const hasStarted = startMs <= now || isLiveStatus;
       // Classic + Unlimited: keep Live Race card while the race is actively running.
       if (!isUnlimitedRoom && hasStarted && !isLiveStatus) continue;
@@ -3653,13 +4049,19 @@ function WalkScreenContent() {
         challengeType,
         phase,
         scheduledStartAt: room.scheduled_start_at,
-        endsAt: room.challenge_end_at ?? null,
+        endsAt: resolveWalkCardEndsAt({
+          endsAt: room.challenge_end_at,
+        }),
         registeredCount,
         maxSlots: isUnlimitedRoom ? 0 : room.max_players || 10,
         targetSteps: room.target_steps,
         prizePoolCents:
           challengeType === "cash"
-            ? cashPrizePoolCents(undefined, entryAmountCents, registeredCount)
+            ? cashPrizePoolCents(
+                room.prize_pool_cents ?? undefined,
+                entryAmountCents,
+                registeredCount,
+              )
             : undefined,
         coinEntryAmount: room.coin_entry_amount,
         entryAmountCents,
@@ -3789,6 +4191,116 @@ function WalkScreenContent() {
       coveredRaceIds.add(room.room_id);
     }
 
+    // Session-owned live race (FGS / Redux / RaceContext) if APIs haven't mapped it yet.
+    const sessionLiveId =
+      reduxLiveRace?.raceId ||
+      ((racePhase === "in_race" || (racePhase as string) === "waiting" || racePhase === "countdown") &&
+      activeRaceId
+        ? activeRaceId
+        : null);
+    if (
+      sessionLiveId &&
+      !coveredRaceIds.has(sessionLiveId) &&
+      !isRecentlyLeftRaceId(sessionLiveId)
+    ) {
+      const knownLive = readKnownRaceSnapshot(sessionLiveId, user?.id);
+      const liveIso = reduxLiveRace?.raceStartTime ?? knownLive?.startedAt ?? null;
+      const joined = Math.max(
+        1,
+        reduxLiveRace?.totalParticipants ?? knownLive?.currentPlayers ?? 1,
+      );
+      const roomMeta = registeredUpcomingRooms.find((r) => r.room_id === sessionLiveId);
+      const isUnlimitedLive = isUnlimitedWalkMembership({
+        roomType: roomMeta?.challenge_type,
+        knownChallengeType: knownLive?.challengeType ?? reduxLiveRace?.raceType,
+        knownEntryType: knownLive?.entryType,
+        durationDays: roomMeta?.challenge_duration_days ?? knownLive?.challengeDurationDays,
+      });
+      const skipHollowStreak = isUnlimitedLive && !roomMeta?.challenge_end_at;
+      if (!skipHollowStreak) {
+        const liveEntryCents =
+          roomMeta && roomMeta.entry_fee > 0
+            ? Math.round(roomMeta.entry_fee * 100)
+            : knownLive?.entryAmountCents ?? undefined;
+        const challengeType = walkSoonCardTypeFromValues({
+          fallback: raceHintToSoonCardType(
+            reduxLiveRace?.raceType,
+            reduxLiveRace?.isSponsored === true,
+          ),
+          isSponsored: reduxLiveRace?.isSponsored === true,
+          entryAmountCents: liveEntryCents,
+          coinEntryAmount: roomMeta?.coin_entry_amount ?? knownLive?.coinEntryAmount,
+          prizePoolCents: roomMeta?.prize_pool_cents ?? knownLive?.prizePoolCents,
+        });
+        const unlimitedDays =
+          roomMeta?.challenge_duration_days ?? knownLive?.challengeDurationDays ?? null;
+        const liveEndsAt = resolveWalkCardEndsAt({
+          endsAt: pickApiChallengeEndAt(roomMeta?.challenge_end_at),
+        });
+        const warmOpts = {
+          raceId: sessionLiveId,
+          userId: user?.id,
+          username: user?.username,
+          status: "in_progress" as const,
+          startedAt: liveIso,
+          challengeEndAt: liveEndsAt,
+          targetSteps: reduxLiveRace?.goalSteps ?? knownLive?.targetSteps,
+          currentPlayers: joined,
+          entryAmountCents: liveEntryCents,
+          preferExistingRoster: true,
+          entryType: isUnlimitedLive
+            ? UNLIMITED_GOAL_CHALLENGE_TYPE
+            : knownLive?.entryType ?? undefined,
+          challengeType: isUnlimitedLive
+            ? UNLIMITED_GOAL_CHALLENGE_TYPE
+            : knownLive?.challengeType ?? undefined,
+          capacityMode: isUnlimitedLive ? "unlimited" : undefined,
+        };
+        cards.push({
+          key: `session-live:${sessionLiveId}`,
+          challengeType,
+          phase: (racePhase as string) === "waiting" || racePhase === "countdown" ? "join_window" : "racing",
+          scheduledStartAt: liveIso,
+          endsAt: liveEndsAt,
+          registeredCount: Math.max(joined, roomMeta?.registered_count ?? 0),
+          maxSlots: isUnlimitedLive ? 0 : joined,
+          targetSteps: reduxLiveRace?.goalSteps || roomMeta?.target_steps || undefined,
+          prizePoolCents:
+            challengeType === "cash"
+              ? cashPrizePoolCents(
+                  roomMeta?.prize_pool_cents ?? knownLive?.prizePoolCents ?? undefined,
+                  liveEntryCents ?? undefined,
+                  joined,
+                )
+              : knownLive?.prizePoolCents ?? undefined,
+          coinEntryAmount: roomMeta?.coin_entry_amount ?? knownLive?.coinEntryAmount ?? undefined,
+          entryAmountCents: liveEntryCents ?? undefined,
+          isUnlimitedGoal: isUnlimitedLive,
+          unlimitedChallengeTimezone: isUnlimitedLive ? roomMeta?.challenge_timezone : undefined,
+          unlimitedDurationDays: isUnlimitedLive ? unlimitedDays ?? undefined : undefined,
+          onPressInCta: () => {
+            warmLiveRaceDetailNavigation(warmOpts);
+            prefetchLiveRaceDetailRoster({
+              raceId: sessionLiveId,
+              userId: user?.id,
+              unlimited: isUnlimitedLive,
+            });
+          },
+          onPressCta: () => {
+            const params = warmLiveRaceDetailNavigation(warmOpts);
+            prefetchLiveRaceDetailRoster({
+              raceId: sessionLiveId,
+              userId: user?.id,
+              unlimited: isUnlimitedLive,
+            });
+            router.push({ pathname: "/race/live-detail", params });
+          },
+          sortMs: liveIso ? new Date(liveIso).getTime() || now : now,
+        });
+        coveredRaceIds.add(sessionLiveId);
+      }
+    }
+
     // Live/participating races first, then upcoming by start time.
     cards.sort((a, b) => {
       if (a.phase === "racing" && b.phase !== "racing") return -1;
@@ -3797,6 +4309,7 @@ function WalkScreenContent() {
     });
     return cards;
   }, [
+    activeRaceId,
     challengeStatuses,
     entryKeyToReminderType,
     joinRace,
@@ -3804,6 +4317,8 @@ function WalkScreenContent() {
     nextRaceNowMs,
     openChallengeWaitingRoom,
     openSponsoredWaitingRoom,
+    racePhase,
+    reduxLiveRace,
     registeredUpcomingRooms,
     scheduledRoomResult,
     setActiveRace,
@@ -4047,11 +4562,11 @@ function WalkScreenContent() {
           isHosting = false;
         } else {
           const body1 = await res.json().catch(() => ({})) as Record<string, unknown>;
-          if (res.status === 409 && body1.code === "ACTIVE_RACE_EXISTS") {
+          if (res.status === 409 && isOneChallengeConflictCode(body1.code)) {
             pendingRaceActionRef.current = handleJoinRace;
-            if (body1.active_race) {
-              setActiveRaceModal(normalizeActiveRaceInfo(body1.active_race as Record<string, unknown>));
-            }
+            const conflict = activeRaceFromConflictBody(body1);
+            if (conflict) setActiveRaceModal(conflict);
+            else AppAlert.alert("Already in a challenge", String(body1.error ?? "Leave your current challenge first."));
             return;
           }
           // Room gone — fall through to host a new one
@@ -4063,11 +4578,11 @@ function WalkScreenContent() {
           });
           if (!res2.ok) {
             const body2 = await res2.json().catch(() => ({})) as Record<string, unknown>;
-            if (res2.status === 409 && body2.code === "ACTIVE_RACE_EXISTS") {
+            if (res2.status === 409 && isOneChallengeConflictCode(body2.code)) {
               pendingRaceActionRef.current = handleJoinRace;
-              if (body2.active_race) {
-                setActiveRaceModal(normalizeActiveRaceInfo(body2.active_race as Record<string, unknown>));
-              }
+              const conflict = activeRaceFromConflictBody(body2);
+              if (conflict) setActiveRaceModal(conflict);
+              else AppAlert.alert("Already in a challenge", String(body2.error ?? "Leave your current challenge first."));
               return;
             }
             AppAlert.alert("Could not join", cashChallengeBlockedMessage(body2.error as string | undefined));
@@ -4087,11 +4602,11 @@ function WalkScreenContent() {
         });
         if (!res.ok) {
           const body = await res.json().catch(() => ({})) as Record<string, unknown>;
-          if (res.status === 409 && body.code === "ACTIVE_RACE_EXISTS") {
+          if (res.status === 409 && isOneChallengeConflictCode(body.code)) {
             pendingRaceActionRef.current = handleJoinRace;
-            if (body.active_race) {
-              setActiveRaceModal(normalizeActiveRaceInfo(body.active_race as Record<string, unknown>));
-            }
+            const conflict = activeRaceFromConflictBody(body);
+            if (conflict) setActiveRaceModal(conflict);
+            else AppAlert.alert("Already in a challenge", String(body.error ?? "Leave your current challenge first."));
             return;
           }
           AppAlert.alert("Could not create room", cashChallengeBlockedMessage(body.error as string | undefined));
@@ -4143,6 +4658,12 @@ function WalkScreenContent() {
       });
       if (!gate.allowed) return;
     }
+    const blocking = await fetchBlockingNonSponsoredChallenge();
+    if (blocking && blocking.room_id !== raceId) {
+      pendingRaceActionRef.current = () => doDirectJoin(raceId, fee, maxPlayers, entryKey);
+      setActiveRaceModal(blocking);
+      return;
+    }
     setFreeJoining(true);
     setJoiningEntryKey(entryKey);
     try {
@@ -4152,12 +4673,11 @@ function WalkScreenContent() {
       const res = await authFetch(endpoint, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as Record<string, unknown>;
-        if (res.status === 409 && body.code === "ACTIVE_RACE_EXISTS") {
-          // User already consented — re-try join directly after resolving conflict
+        if (res.status === 409 && isOneChallengeConflictCode(body.code)) {
           pendingRaceActionRef.current = () => doDirectJoin(raceId, fee, maxPlayers, entryKey);
-          if (body.active_race) {
-            setActiveRaceModal(normalizeActiveRaceInfo(body.active_race as Record<string, unknown>));
-          }
+          const conflict = activeRaceFromConflictBody(body);
+          if (conflict) setActiveRaceModal(conflict);
+          else AppAlert.alert("Already in a challenge", String(body.error ?? "Leave your current challenge first."));
           return;
         }
         AppAlert.alert("Could not join", (body.error as string) ?? "Room may be full or closed.");
@@ -4200,13 +4720,13 @@ function WalkScreenContent() {
       const res = await authFetch(`/api/coins-battle/${raceId}/join`, { method: "POST" });
       const data = await res.json() as { raceId?: string; error?: string; code?: string; currentPlayers?: number };
       if (!res.ok) {
-        if (data.code === "ACTIVE_RACE_EXISTS") {
-          const ar = (data as { active_race?: Record<string, unknown> }).active_race;
+        if (isOneChallengeConflictCode(data.code)) {
+          const ar = activeRaceFromConflictBody(data as Record<string, unknown>);
           if (ar) {
             pendingRaceActionRef.current = () => handleCoinsBattleJoin(raceId);
-            setActiveRaceModal(normalizeActiveRaceInfo(ar));
+            setActiveRaceModal(ar);
           } else {
-            AppAlert.alert("Already In A Race", "You are already in an active race.");
+            AppAlert.alert("Already in a challenge", data.error ?? "Leave your current challenge first.");
           }
         } else if (data.code === "INSUFFICIENT_COINS") {
           AppAlert.alert("Not Enough Coins", "You don't have enough coins to join this battle.");
@@ -4386,9 +4906,11 @@ function WalkScreenContent() {
       const res = await authFetch(hostUrl, {
         method: "POST",
         body: JSON.stringify(body),
+        timeoutMs: 45_000,
+        retryOnUnauthorized: false,
       });
 
-      const data = await res.json() as {
+      const data = (await res.json().catch(() => ({}))) as {
         raceId?: string;
         id?: string;
         code?: string;
@@ -4410,6 +4932,8 @@ function WalkScreenContent() {
           startAtIso?: string;
           startAtUtc?: string;
           scheduledStartAt?: string;
+          challengeEndAtUtc?: string;
+          challengeEndAt?: string;
           dailyGoalSteps?: number;
           durationDays?: number;
           status?: string;
@@ -4425,6 +4949,8 @@ function WalkScreenContent() {
           maxPlayers?: number;
           isPrivate?: boolean;
           inviteCode?: string | null;
+          trackLayout?: string;
+          challengeTimezone?: string;
         };
         active_race?: {
           room_id: string;
@@ -4553,6 +5079,11 @@ function WalkScreenContent() {
           data.scheduledStartAt ??
           meta.scheduledStartAt?.toISOString() ??
           new Date().toISOString();
+        const apiEndAt =
+          unlimitedChallenge?.challengeEndAtUtc ??
+          unlimitedChallenge?.challengeEndAt ??
+          meta.endAt?.toISOString() ??
+          null;
         const entryAmountCents =
           unlimitedChallenge?.entryFeeCents ??
           data.race?.entryAmountCents ??
@@ -4578,7 +5109,7 @@ function WalkScreenContent() {
             registered_count: unlimitedChallenge?.participantCount ?? 1,
             scheduled_start_at: scheduledStartAt,
             challenge_duration_days: unlimitedChallenge?.durationDays ?? meta.durationDays,
-            challenge_end_at: meta.endAt?.toISOString() ?? null,
+            challenge_end_at: apiEndAt,
             selected_track_theme_id: draft.trackLayout || "bg",
             theme_name: "Streak Challenge",
             is_private: !!isPrivateRoom,
@@ -4679,11 +5210,19 @@ function WalkScreenContent() {
         setChallengeModal(false);
         setChallengeCreating(false);
       });
-    } catch {
+    } catch (err) {
       if (meta.isUnlimited) {
         trackEvent("unlimited_challenge_create_failed");
       }
-      AppAlert.alert("Error", "Network error. Please try again.");
+      const name = err instanceof Error ? err.name : "";
+      const message = err instanceof Error ? err.message : "";
+      const alert =
+        name === "AbortError" || /aborted|timeout/i.test(message)
+          ? "The request timed out. Please try again."
+          : message === "No session"
+            ? "Please sign in again, then retry Create & Pay."
+            : "Network error. Please try again.";
+      AppAlert.alert("Error", alert);
     } finally {
       if (!navigating) setChallengeCreating(false);
     }
@@ -4726,7 +5265,7 @@ function WalkScreenContent() {
         {/* Header */}
         <View style={styles.pageHeader}>
           <View style={styles.pageTitleRow}>
-            <Text style={[styles.pageTitle, { color: colors.foreground }]}>WalkChamp</Text>
+            <Text style={[styles.pageTitle, { color: colors.foreground }]}>Walk Champ</Text>
           </View>
           <View style={styles.headerRight}>
             {/* Coin pill — tappable to open Coins Info */}
@@ -4933,6 +5472,7 @@ function WalkScreenContent() {
                 phase={card.phase}
                 scheduledStartAt={card.scheduledStartAt}
                 endsAt={card.endsAt}
+                timeLeftSeconds={card.timeLeftSeconds}
                 registeredCount={card.registeredCount}
                 maxSlots={card.maxSlots}
                 targetSteps={card.targetSteps}
@@ -5768,15 +6308,28 @@ function WalkScreenContent() {
               ) : (
                 <>
                   {[
-                    { label: "Entry Fee", value: `$${(setupModal?.fee ?? 1).toFixed(2)} per player`, color: colors.accent },
-                    { label: "Players", value: String(playerCount), color: colors.foreground },
-                    { label: "Entry Pool / Prize Pool", value: `$${computedPool.toFixed(2)}`, color: colors.gold },
+                    {
+                      label: "Entry Fee",
+                      value: `$${(setupModal?.fee ?? 1).toFixed(2)} per player`,
+                      usdHint: setupModal?.fee ?? 1,
+                      color: colors.accent,
+                    },
+                    { label: "Players", value: String(playerCount), usdHint: null, color: colors.foreground },
+                    {
+                      label: "Entry Pool / Prize Pool",
+                      value: `$${computedPool.toFixed(2)}`,
+                      usdHint: computedPool,
+                      color: colors.gold,
+                    },
                   ].map((row, i) => (
                     <View key={i}>
                       {i > 0 && <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />}
                       <View style={styles.detailRow}>
                         <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>{row.label}</Text>
-                        <Text style={[styles.detailValue, { color: row.color }]}>{row.value}</Text>
+                        <Text style={[styles.detailValue, { color: row.color }]}>
+                          {row.value}
+                          {row.usdHint ? <InrHint usd={row.usdHint} style={styles.detailValue} /> : null}
+                        </Text>
                       </View>
                     </View>
                   ))}
@@ -5819,11 +6372,7 @@ function WalkScreenContent() {
               style={styles.trackLayoutScroll}
             >
               {(() => {
-                const ownedLayouts = TRACK_LAYOUT_OPTIONS.filter((layout) => {
-                  const themeData = themes.find((t) => t.code === layout.id);
-                  return themeData?.owned ?? FREE_TRACK_CODES.has(layout.id);
-                });
-                return ownedLayouts.map((layout) => {
+                return ownedTrackLayouts.map((layout) => {
                   const active = selectedTrackLayout === layout.id;
                   return (
                     <TouchableOpacity
@@ -5838,7 +6387,11 @@ function WalkScreenContent() {
                         },
                       ]}
                     >
-                      <Image source={layout.source} resizeMode="cover" style={styles.trackLayoutImage} />
+                      <TrackThemeImage
+                        media={layout.media}
+                        variant="thumb"
+                        style={styles.trackLayoutImage}
+                      />
                       <LinearGradient colors={["transparent", "rgba(0,0,0,0.78)"]} style={styles.trackLayoutOverlay} />
                       <View style={styles.trackLayoutFooter}>
                         <Text style={styles.trackLayoutTitle} numberOfLines={1}>{layout.label}</Text>
@@ -6020,6 +6573,7 @@ function WalkScreenContent() {
                 <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Entry Fee</Text>
                 <Text style={[styles.detailValue, { color: colors.accent }]}>
                   ${clampUsdFixedEntryDollars(confirmEntry?.fee ?? 3).toFixed(2)}
+                  <InrHint usd={clampUsdFixedEntryDollars(confirmEntry?.fee ?? 3)} style={styles.detailValue} />
                 </Text>
               </View>
               {/* Host flow: allow $3–$25 entry selection. Join flow keeps room fee fixed. */}

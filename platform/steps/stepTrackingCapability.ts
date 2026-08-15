@@ -202,8 +202,9 @@ async function resolveAndroidCapability(
       };
     }
 
+    const permission = String(status.permission);
     const permissionGranted =
-      status.permission === "granted" || status.permission === "authorized";
+      permission === "granted" || permission === "authorized";
 
     if (!permissionGranted) {
       return {

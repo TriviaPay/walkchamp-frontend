@@ -43,3 +43,4 @@ attached_assets/
 
 # Monorepo siblings (not needed in mobile builds)
 ../backend/
+Backend/

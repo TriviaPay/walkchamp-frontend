@@ -33,7 +33,7 @@ export const sizes = {
   /** Border / hairline — keep fixed */
   hairline: 1,
   /** Shop FAB (DraggableShopIcon) — intentional fixed size */
-  shopFab: 47,
+  shopFab: 53,
 } as const;
 
 export type SizeToken = keyof typeof sizes;

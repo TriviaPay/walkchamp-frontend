@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   AccessibilityInfo,
   Animated,
@@ -17,12 +17,7 @@ import {
   getSponsoredPrizePerWinnerUsd,
   SPONSORED_DEFAULT_TARGET_STEPS,
 } from "@/utils/sponsoredEventsApi";
-import {
-  computeUnlimitedViewerSchedule,
-  formatViewerEndLabel,
-  formatViewerStartLabel,
-} from "@/utils/unlimitedViewerSchedule";
-import { getDeviceTimezone } from "@/utils/timezone";
+import { freeRaceCoinPrizePool } from "@/utils/freeRaceRewards";
 
 export type RaceStartingSoonPhase = "registered" | "join_window" | "racing";
 export type RaceStartingSoonChallengeType = "free" | "coins" | "cash" | "sponsored";
@@ -34,6 +29,8 @@ export type RaceStartingSoonCardProps = {
   scheduledStartAt: string | null;
   /** Race end from API only (`challengeEndAt` / `endsAt`) — never invent on client. */
   endsAt?: string | null;
+  /** Live remaining seconds — used only when `endsAt` is missing. */
+  timeLeftSeconds?: number | null;
   registeredCount: number;
   maxSlots: number;
   targetSteps?: number;
@@ -176,6 +173,35 @@ const THEMES: Record<RaceStartingSoonChallengeType, Theme> = {
 
 function pad2(n: number) {
   return String(Math.max(0, n)).padStart(2, "0");
+}
+
+function useElapsedParts(iso: string | null, enabled: boolean) {
+  const [parts, setParts] = useState({ h: 0, m: 0, s: 0 });
+  const partsRef = useRef(parts);
+  partsRef.current = parts;
+
+  useEffect(() => {
+    if (!enabled || !iso) {
+      if (partsRef.current.h !== 0 || partsRef.current.m !== 0 || partsRef.current.s !== 0) {
+        setParts({ h: 0, m: 0, s: 0 });
+      }
+      return;
+    }
+    const tick = () => {
+      const diff = Math.max(0, Date.now() - new Date(iso).getTime());
+      const h = Math.floor(diff / 3_600_000);
+      const m = Math.floor((diff % 3_600_000) / 60_000);
+      const s = Math.floor((diff % 60_000) / 1_000);
+      const prev = partsRef.current;
+      if (prev.h === h && prev.m === m && prev.s === s) return;
+      setParts({ h, m, s });
+    };
+    tick();
+    const id = setInterval(tick, 1_000);
+    return () => clearInterval(id);
+  }, [iso, enabled]);
+
+  return parts;
 }
 
 function useStartsInParts(iso: string | null) {
@@ -543,6 +569,7 @@ export function RaceStartingSoonCard({
   phase,
   scheduledStartAt,
   endsAt,
+  timeLeftSeconds: _timeLeftSeconds,
   registeredCount,
   maxSlots,
   targetSteps = SPONSORED_DEFAULT_TARGET_STEPS,
@@ -555,35 +582,24 @@ export function RaceStartingSoonCard({
   onPressInCta,
   style,
   isUnlimitedGoal = false,
-  unlimitedChallengeTimezone,
-  unlimitedDurationDays,
+  unlimitedChallengeTimezone: _unlimitedChallengeTimezone,
+  unlimitedDurationDays: _unlimitedDurationDays,
 }: RaceStartingSoonCardProps) {
   const theme = THEMES[challengeType];
   const isCash = challengeType === "cash";
   const reducedMotion = useReducedMotion();
-  // Unlimited: target the viewer's own local-midnight start on the host's
-  // selected calendar date, not scheduledStartAt converted into device time.
-  const unlimitedViewerSchedule = useMemo(() => {
-    if (!isUnlimitedGoal || !scheduledStartAt || !unlimitedDurationDays) return null;
-    return computeUnlimitedViewerSchedule(
-      {
-        startAtUtc: scheduledStartAt,
-        challengeTimezone: unlimitedChallengeTimezone ?? null,
-        durationDays: unlimitedDurationDays,
-      },
-      { fallbackTimezone: getDeviceTimezone() },
-    );
-  }, [isUnlimitedGoal, scheduledStartAt, unlimitedChallengeTimezone, unlimitedDurationDays]);
-  const unlimitedViewerStartIso = unlimitedViewerSchedule
-    ? new Date(unlimitedViewerSchedule.viewerStartAtMs).toISOString()
-    : null;
-  const effectiveStartAt = unlimitedViewerStartIso ?? scheduledStartAt;
+  // Start / end / TIME LEFT come from API `scheduledStartAt` + `endsAt` only.
+  const effectiveStartAt = scheduledStartAt;
   const hasStart = Boolean(effectiveStartAt);
-  const parts = useStartsInParts(phase === "racing" ? null : effectiveStartAt);
+  const liveEndIso = endsAt ?? null;
+  const phaseLive = phase === "racing";
+  const countdownIso = phaseLive ? liveEndIso : effectiveStartAt;
+  const parts = useStartsInParts(countdownIso);
+  const elapsed = useElapsedParts(effectiveStartAt, phaseLive && !liveEndIso);
   const urgent =
     phase === "join_window" ||
-    (!parts.expired && parts.totalMs > 0 && parts.totalMs < 10 * 60_000);
-  const isLive = phase === "racing" || (hasStart && parts.expired && phase !== "registered");
+    (!phaseLive && !parts.expired && parts.totalMs > 0 && parts.totalMs < 10 * 60_000);
+  const isLive = phaseLive || (hasStart && parts.expired && phase !== "registered");
 
   const glow = useRef(new Animated.Value(0.45)).current;
 
@@ -613,11 +629,12 @@ export function RaceStartingSoonCard({
   });
 
   const title = isLive ? "LIVE NOW ⚡" : "Race Starting Soon! 🚀";
-  const subtitle = isLive
-    ? isParticipant
-      ? "Your race is live. Open it now!"
-      : "Your race is live. Join now!"
-    : null;
+  const subtitle =
+    isLive && !isUnlimitedGoal
+      ? isParticipant
+        ? "Your race is live. Open it now!"
+        : "Your race is live. Join now!"
+      : null;
   const ctaLabel = isLive
     ? isParticipant
       ? "View Race"
@@ -625,14 +642,8 @@ export function RaceStartingSoonCard({
     : urgent
       ? "Join Waiting Room"
       : "Open Waiting Room";
-  const startClock = unlimitedViewerSchedule
-    ? formatViewerStartLabel(unlimitedViewerSchedule)
-    : formatRaceClock(scheduledStartAt);
-  // Unlimited: viewer-local end (start + duration). Classic: API endsAt only.
-  // Waiting room → Starts only. Live → Started + Ends.
-  const endClock = unlimitedViewerSchedule
-    ? formatViewerEndLabel(unlimitedViewerSchedule)
-    : formatRaceClock(endsAt);
+  const startClock = formatRaceClock(scheduledStartAt);
+  const endClock = formatRaceClock(liveEndIso);
   const progressMsg = !isLive && !parts.expired
     ? daysToGoMessage(parts.totalMs)
     : "Almost time! Keep your steps going";
@@ -650,27 +661,27 @@ export function RaceStartingSoonCard({
             : "Coins Entry"
           : "Entry Free";
   const prizeLabel =
-    challengeType === "sponsored"
+    challengeType === "sponsored" || challengeType === "free"
       ? "REWARD"
-      : challengeType === "free"
-        ? "REWARDS"
-        : challengeType === "coins"
-          ? "COINS PRIZE POOL"
-          : "PRIZE POOL";
-  // Positive, challenge-specific reward copy — never "No cash prize".
+      : challengeType === "coins"
+        ? "COINS PRIZE POOL"
+        : "PRIZE POOL";
   const coinsPoolText =
     coinEntryAmount && coinEntryAmount > 0
       ? `${(coinEntryAmount * Math.max(1, registeredCount)).toLocaleString()} Coins`
       : null;
+  const freeRewardPool = freeRaceCoinPrizePool(registeredCount, targetSteps);
   const prizeDisplay =
     challengeType === "free"
-      ? "Coins + Badges"
+      ? prizePoolCents && prizePoolCents > 0
+        ? prizeText
+        : freeRewardPool > 0
+          ? `${freeRewardPool.toLocaleString()} Coins`
+          : coinsPoolText ?? prizeText
       : challengeType === "coins"
-        ? coinsPoolText ?? "Prize grows as players join"
+        ? coinsPoolText ?? prizeText
         : prizeText;
-  // Descriptive (word) rewards use a smaller two-line style; numeric pools stay large.
-  const prizeDescriptive =
-    challengeType === "free" || (challengeType === "coins" && !coinsPoolText);
+  const prizeDescriptive = false;
   const prizeAccent =
     challengeType === "cash"
       ? "#FDE047"
@@ -680,7 +691,20 @@ export function RaceStartingSoonCard({
           ? "#FDBA74"
           : "#6EE7B7";
 
-  const showCountdown = !isLive && hasStart && !parts.expired;
+  const showStartCountdown = !isLive && hasStart && !parts.expired;
+  const showLiveRemaining = isLive && Boolean(liveEndIso) && !parts.expired;
+  const showLiveElapsed = isLive && !liveEndIso && hasStart;
+  const showCountdown = showStartCountdown || showLiveRemaining || showLiveElapsed;
+  const countdownLabel = showLiveRemaining
+    ? "TIME LEFT"
+    : showLiveElapsed
+      ? "TIME"
+      : "STARTS IN";
+  const countdownHRaw = showLiveElapsed ? elapsed.h : parts.h;
+  const countdownD = showLiveElapsed ? 0 : Math.floor(countdownHRaw / 24);
+  const countdownH = showLiveElapsed ? countdownHRaw : countdownHRaw % 24;
+  const countdownM = showLiveElapsed ? elapsed.m : parts.m;
+  const countdownS = showLiveElapsed ? elapsed.s : parts.s;
 
   return (
     <Animated.View
@@ -741,15 +765,25 @@ export function RaceStartingSoonCard({
           >
             {title}
           </Text>
-          {(startClock || (isLive && endClock)) && (
+          {(startClock || endClock) && (
             <View style={styles.raceWindowTimes}>
               {startClock ? (
-                <Text style={styles.raceWindowText} numberOfLines={1}>
+                <Text
+                  style={styles.raceWindowText}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.65}
+                >
                   {isLive ? "Started" : "Starts"} {startClock}
                 </Text>
               ) : null}
-              {isLive && endClock ? (
-                <Text style={styles.raceWindowText} numberOfLines={1}>
+              {endClock ? (
+                <Text
+                  style={styles.raceWindowText}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.65}
+                >
                   Ends {endClock}
                 </Text>
               ) : null}
@@ -777,13 +811,24 @@ export function RaceStartingSoonCard({
           <View style={styles.countdownBlock}>
             {showCountdown && (
               <>
-                <Text style={[styles.startsIn, { color: theme.startsIn }]}>STARTS IN</Text>
+                <Text style={[styles.startsIn, { color: theme.startsIn }]}>{countdownLabel}</Text>
                 <View style={styles.timeRow}>
-                  <TimeBox value={pad2(parts.h)} label="HRS" urgent={urgent} theme={theme} />
+                  {countdownD > 0 ? (
+                    <>
+                      <TimeBox
+                        value={String(countdownD)}
+                        label="DAYS"
+                        urgent={urgent || showLiveRemaining}
+                        theme={theme}
+                      />
+                      <Text style={[styles.colon, { color: theme.colon }]}>:</Text>
+                    </>
+                  ) : null}
+                  <TimeBox value={pad2(countdownH)} label="HRS" urgent={urgent || showLiveRemaining} theme={theme} />
                   <Text style={[styles.colon, { color: theme.colon }]}>:</Text>
-                  <TimeBox value={pad2(parts.m)} label="MINS" urgent={urgent} theme={theme} />
+                  <TimeBox value={pad2(countdownM)} label="MINS" urgent={urgent || showLiveRemaining} theme={theme} />
                   <Text style={[styles.colon, { color: theme.colon }]}>:</Text>
-                  <TimeBox value={pad2(parts.s)} label="SECS" urgent={urgent} theme={theme} />
+                  <TimeBox value={pad2(countdownS)} label="SECS" urgent={urgent || showLiveRemaining} theme={theme} />
                 </View>
               </>
             )}
@@ -792,7 +837,7 @@ export function RaceStartingSoonCard({
                 <Text style={styles.livePillText}>You're registered — waiting room open</Text>
               </View>
             )}
-            {isLive && (
+            {isLive && !showCountdown && (
               <View style={styles.livePill}>
                 <Text style={styles.livePillText}>Race in progress</Text>
               </View>

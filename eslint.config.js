@@ -18,6 +18,7 @@ export default defineConfig([
     "ios/**",
     ".expo/**",
     "src/**",
+    "Backend/**",
     "vite.config.ts",
     "scripts/**",
     "**/*.test.ts",

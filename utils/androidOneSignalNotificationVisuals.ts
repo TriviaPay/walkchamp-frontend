@@ -2,20 +2,21 @@
  * Android OneSignal rich-notification visual helpers.
  * Backend / OneSignal dashboard should send drawable resource names (not Expo paths).
  *
+ * Right-side large icon = type illustration (notification_race_started, notification_chat, …).
+ * Never the launcher / app icon. Do not send big_picture for these assets — that makes them huge.
+ *
  * Example additionalData:
  * {
- *   "notificationType": "race_starting_soon",
- *   "visualType": "upcoming_race"
+ *   "notificationType": "race_started",
+ *   "visualType": "race_started"
  * }
  *
- * Example Android fields (OneSignal REST) — optional when the app extension is installed:
- * large_icon: "notification_walkchamp_brand"
- * big_picture: "notification_upcoming_race"  // or https URL
- * small_icon: "ic_stat_onesignal_default" (monochrome; app default if omitted)
+ * Example Android fields (OneSignal REST):
+ * large_icon: "notification_race_started"
+ * small_icon: "ic_stat_onesignal_default"
  *
- * Client-side Android: WalkChampNotificationServiceExtension
- *   brand → large icon, type illustration → big picture.
- * Client-side iOS NSE: attaches type illustration as rich media.
+ * Client-side Android: WalkChampNotificationServiceExtension sets large icon from visualType.
+ * Client-side iOS NSE: attaches type illustration as rich media thumbnail.
  */
 import {
   notificationVisualDrawableName,
@@ -32,9 +33,9 @@ export function androidOneSignalVisualPayload(input: {
   visualType?: string | null;
 }): {
   visualType: NotificationVisualType;
-  /** WalkChamp brand drawable (large icon). */
+  /** Type-specific illustration (right-side large icon). */
   large_icon: string;
-  /** Type-specific illustration drawable (big picture). */
+  /** @deprecated Type art must not be used as big_picture (renders huge). */
   big_picture_drawable: string;
   /** Never send Expo asset paths as Android resource names. */
   brandAssetPathForDocsOnly: string;
@@ -42,10 +43,11 @@ export function androidOneSignalVisualPayload(input: {
   const visualType = resolveNotificationVisualType(
     input.visualType ?? input.type ?? "default",
   );
+  const typeDrawable = notificationVisualDrawableName(visualType);
   return {
     visualType,
-    large_icon: ANDROID_ONESIGNAL_BRAND_LARGE_ICON,
-    big_picture_drawable: notificationVisualDrawableName(visualType),
+    large_icon: typeDrawable,
+    big_picture_drawable: typeDrawable,
     brandAssetPathForDocsOnly: WALKCHAMP_NOTIFICATION_BRAND_ICON,
   };
 }

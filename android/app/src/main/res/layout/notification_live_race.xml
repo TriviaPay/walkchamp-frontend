@@ -150,7 +150,7 @@
             android:gravity="center_horizontal"
             android:includeFontPadding="false"
             android:maxLines="1"
-            android:text="Live Race"
+            android:text=""
             android:textColor="?android:attr/textColorSecondary"
             android:textSize="9sp" />
     </LinearLayout>

@@ -558,6 +558,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         isSponsored:
           store.getState().raceProgress.activeRaceId === raceId &&
           store.getState().raceProgress.activeRaceIsSponsored === true,
+        raceType: store.getState().raceProgress.activeRaceType,
         ...(store.getState().raceProgress.activeRaceIsSponsored === true &&
         raceEndTimeRef.current
           ? { challengeEndAt: raceEndTimeRef.current.toISOString() }
@@ -1754,6 +1755,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         bootSteps: floor,
         participantConfirmed: true,
         isSponsored: sponsored,
+        raceType: store.getState().raceProgress.activeRaceType,
         ...(sponsored && raceEndAt
           ? { challengeEndAt: raceEndAt.toISOString() }
           : {}),

@@ -26,6 +26,7 @@
     "**/*.spec.ts",
     "**/*.test.ts",
     "src",
+    "Backend",
     "vite.config.ts",
     "index.html"
   ]

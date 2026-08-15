@@ -18,6 +18,15 @@ export default function NotFoundScreen() {
   useEffect(() => {
     if (pathname.includes("payment-complete")) {
       router.replace("/(tabs)/wallet");
+      return;
+    }
+    // Forfeit / back from a dismissed race stack often lands on a missing route.
+    if (
+      pathname.includes("race") ||
+      pathname.includes("matchmaking") ||
+      pathname.includes("spectator")
+    ) {
+      router.replace("/(tabs)/walk");
     }
   }, [pathname, router]);
 
@@ -32,7 +41,7 @@ export default function NotFoundScreen() {
           This screen doesn&apos;t exist.
         </Text>
 
-        <Link href="/" style={styles.link}>
+        <Link href="/(tabs)/walk" style={styles.link}>
           <Text style={[styles.linkText, { color: colors.primary }]}>
             Go to home screen!
           </Text>

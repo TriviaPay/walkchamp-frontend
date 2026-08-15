@@ -202,6 +202,7 @@ assert.deepEqual([...UNLIMITED_GOAL_DURATION_DAYS], [7, 10, 30, 60, 90]);
   const built = buildHostPayload(draft, "America/Chicago", now);
   if (built.ok && built.meta.isUnlimited) {
     assert.ok(typeof built.body.startAtIso === "string");
+    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(String(built.body.startLocalDate)));
     assert.ok(typeof built.body.challengeEndAtIso === "undefined");
     assert.equal(built.body.challengeTimezone, "America/Chicago");
     assert.ok(built.meta.scheduledStartAt);

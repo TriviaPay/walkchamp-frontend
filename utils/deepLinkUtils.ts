@@ -248,6 +248,12 @@ export function resolveNotificationRoute(
       }
       return "/(tabs)/chat?tab=private";
 
+    case "global_chat_message":
+    case "global_chat_message_received":
+    case "global_chat":
+    case "chat_global":
+      return "/(tabs)/chat?tab=global";
+
     case "friend_daily_goal_completed":
       if (profileUserId) return `/public-profile/${encodeURIComponent(profileUserId)}`;
       return "/(tabs)/walk";

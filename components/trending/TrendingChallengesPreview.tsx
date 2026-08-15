@@ -1,7 +1,7 @@
 /**
- * Walk-tab Unlimited Challenge preview — below Create Challenge.
- * Feature-flagged; cash unlimited + fixed-player only.
- * Hidden unless at least one joinable challenge is loaded.
+ * Walk-tab Trending Challenges preview — below Create Challenge.
+ * Feature-flagged. Free / coins / cash / unlimited upcoming rooms.
+ * Never show blank/skeleton cards — hide until real (or cached) data exists.
  */
 
 import React, { memo, useCallback, useEffect, useRef, useState } from "react";
@@ -21,7 +21,13 @@ import { fetchTrendingChallenges } from "@/services/trendingChallengesApi";
 import { trackEvent } from "@/services/analytics";
 import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 import { useAuth } from "@/context/AuthContext";
+import { screenCache } from "@/utils/screenCache";
 import type { TrendingChallenge } from "@/utils/trendingChallenges";
+import {
+  shouldShowTrendingPreview,
+  TRENDING_PREVIEW_CACHE_TTL_MS,
+  trendingPreviewCacheKey,
+} from "@/utils/trendingChallenges";
 import { rf } from "@/utils/responsive";
 import * as Haptics from "@/utils/haptics";
 import { CHALLENGE_LEFT_EVENT } from "@/utils/challengeLocalEvents";
@@ -57,25 +63,54 @@ function TrendingChallengesPreviewInner({ onCountChange }: Props) {
   const { width: winW } = useWindowDimensions();
   const contentWidth = Math.max(winW - 32, 280);
   const cardWidth = Math.min(contentWidth * 0.58, 210);
-  const cardHeight = Math.min(cardWidth * 1.02, 188);
+  const cardHeight = Math.min(Math.max(cardWidth * 1.02, 196), 210);
 
-  const [challenges, setChallenges] = useState<TrendingChallenge[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = trendingPreviewCacheKey(user?.id);
+  const [challenges, setChallenges] = useState<TrendingChallenge[]>(
+    () => screenCache.getSync<TrendingChallenge[]>(cacheKey, TRENDING_PREVIEW_CACHE_TTL_MS) ?? [],
+  );
+  const [loading, setLoading] = useState(() => !shouldShowTrendingPreview(challenges));
   const impressedRef = useRef(false);
   const cardImpressedRef = useRef<string | null>(null);
+  const challengesRef = useRef(challenges);
+  challengesRef.current = challenges;
+  const prevUserIdRef = useRef(user?.id);
+
+  useEffect(() => {
+    if (prevUserIdRef.current === user?.id) return;
+    prevUserIdRef.current = user?.id;
+    const nextKey = trendingPreviewCacheKey(user?.id);
+    const cached =
+      screenCache.getSync<TrendingChallenge[]>(nextKey, TRENDING_PREVIEW_CACHE_TTL_MS) ?? [];
+    setChallenges(cached);
+    onCountChange?.(cached.length);
+  }, [onCountChange, user?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void screenCache.get<TrendingChallenge[]>(cacheKey, TRENDING_PREVIEW_CACHE_TTL_MS).then((disk) => {
+      if (cancelled || !shouldShowTrendingPreview(disk)) return;
+      setChallenges((prev) => (shouldShowTrendingPreview(prev) ? prev : disk ?? prev));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [cacheKey]);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const hasVisible = shouldShowTrendingPreview(challengesRef.current);
+    if (!hasVisible) setLoading(true);
     try {
       const rows = await fetchTrendingChallenges({ viewerUserId: user?.id });
       setChallenges(rows);
       onCountChange?.(rows.length);
+      void screenCache.set(trendingPreviewCacheKey(user?.id), rows);
       if (rows.length === 0) {
         trackEvent("walk_trending_preview_empty", { variant: "preview_below_create" });
       }
     } catch {
       trackEvent("walk_trending_preview_error", { variant: "preview_below_create" });
-      onCountChange?.(0);
+      if (!shouldShowTrendingPreview(challengesRef.current)) onCountChange?.(0);
     } finally {
       setLoading(false);
     }
@@ -245,7 +280,7 @@ function TrendingChallengesPreviewInner({ onCountChange }: Props) {
     [challenges, index, resumeSoon, setIndex],
   );
 
-  if (challenges.length === 0) {
+  if (!shouldShowTrendingPreview(challenges)) {
     return null;
   }
 

@@ -84,6 +84,7 @@ import { isWalkBackendSyncPaused } from "@/services/walkSyncCoordinator";
 import {
   isInflatedProvisionalVsVerified,
   resolveWalkNotificationSteps,
+  shouldAcceptVerifiedZero,
 } from "@/services/steps/walkDisplaySteps";
 import {
   clearWalkStepsOutbox,
@@ -1775,7 +1776,15 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       if (stepProviderManager.usesVerifiedStepSource()) {
         // Drop yesterday-style absolutes only. Live sensor/HC growth must keep
         // updating Walk + the ongoing notification (same as before).
-        if (isInflatedProvisionalVsVerified(safeReal, current)) {
+        // Empty mid-day HC polls (0 records) must not zero a known total.
+        if (
+          isInflatedProvisionalVsVerified(safeReal, current) &&
+          shouldAcceptVerifiedZero({
+            incomingSteps: safeReal,
+            previousSteps: current,
+            freshLocalDay: isFreshLocalDay(),
+          })
+        ) {
           displaySteps = safeReal;
           stepEngineLog(
             "WalkScreen",
@@ -1840,13 +1849,10 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           verifiedTodaySteps: Math.max(
             fromProvider,
             Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0)),
-            // Keep a modest live floor from the current Walk UI (not inflated Redux).
-            todayStepsRef.current <= fromProvider + 250
-              ? todayStepsRef.current
-              : fromProvider,
           ),
           provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
           todaySteps: reduxSteps,
+          raceActive: rp.raceStatus === "active" || !!rp.companionRaceId,
         });
       }
       return Math.max(fromProvider, reduxSteps, todayStepsRef.current);
@@ -1863,8 +1869,6 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         const verified = Math.max(
           0,
           Math.floor(store.getState().raceProgress.verifiedTodaySteps ?? 0),
-          // Prefer HC provider floor already on the Walk UI when Redux verified lags.
-          todayStepsRef.current <= 250 ? todayStepsRef.current : 0,
         );
         if (isInflatedProvisionalVsVerified(verified, display)) {
           stepEngineLog(
@@ -1963,6 +1967,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     if (
       (freshDay && display === 0) ||
       (verifiedActive &&
+        display > 0 &&
         isInflatedProvisionalVsVerified(display, todayStepsRef.current))
     ) {
       await forceSetTodayStepDisplay(display);
@@ -2001,12 +2006,14 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
               verifiedTodaySteps: Math.max(display, verifiedLane),
               provisionalSensorTodaySteps: rp.provisionalSensorTodaySteps,
               todaySteps: reduxToday,
+              raceActive: rp.raceStatus === "active" || !!rp.companionRaceId,
             })
           : Math.max(display, todayStepsRef.current, reduxToday);
 
     if (
       (freshDay && finalSteps === 0) ||
       (verifiedActive &&
+        finalSteps > 0 &&
         isInflatedProvisionalVsVerified(finalSteps, todayStepsRef.current))
     ) {
       await forceSetTodayStepDisplay(finalSteps);
@@ -2022,9 +2029,11 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     }
 
     // Only push true HC/HK into the verified lane — never a Math.max'd UI total.
+    // Empty mid-day HC polls must not write verified=0.
     if (
       !freshDay &&
       verifiedActive &&
+      finalSteps > 0 &&
       finalSteps !== store.getState().raceProgress.verifiedTodaySteps
     ) {
       updateStepProgressFromRealSource({
@@ -2091,6 +2100,16 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           console.log(
             `[WalkContext] liveSteps provider=${result.providerId} steps=${result.steps}`,
           );
+        }
+        if (
+          stepProviderManager.usesVerifiedStepSource() &&
+          !shouldAcceptVerifiedZero({
+            incomingSteps: result.steps,
+            previousSteps: todayStepsRef.current,
+            freshLocalDay: isFreshLocalDay(),
+          })
+        ) {
+          return;
         }
         const display = resolveLiveDisplaySteps(result.steps);
         void applyTodayStepCount(display, true);

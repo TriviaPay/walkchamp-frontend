@@ -18,6 +18,7 @@ import { useAuth } from "@/context/AuthContext";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { AppAlert } from "@/components/AppAlert";
 import { SkeletonList } from "@/components/SkeletonRows";
+import { InrHint } from "@/components/InrHint";
 import { rf, rs } from "@/utils/responsive";
 import {
   buildReferralShareMessage,
@@ -60,7 +61,7 @@ function StatCard({
   colors,
 }: {
   label: string;
-  value: string;
+  value: React.ReactNode;
   icon: React.ComponentProps<typeof Feather>["name"];
   colors: ReturnType<typeof useColors>;
 }) {
@@ -157,7 +158,7 @@ export default function InviteFriendsScreen() {
 
   const summaryCards = useMemo(() => {
     if (!details) return [];
-    const cards: Array<{ label: string; value: string; icon: React.ComponentProps<typeof Feather>["name"] }> = [];
+    const cards: Array<{ label: string; value: React.ReactNode; icon: React.ComponentProps<typeof Feather>["name"] }> = [];
     if (details.stats.friendsJoined != null) {
       cards.push({
         label: "Friends Joined",
@@ -188,7 +189,14 @@ export default function InviteFriendsScreen() {
     if (details.stats.rewardsEarned != null) {
       cards.push({
         label: "Rewards Earned",
-        value: formatReferralReward(details.stats.rewardsEarned, details.config.currency),
+        value: (
+          <>
+            {formatReferralReward(details.stats.rewardsEarned, details.config.currency)}
+            {details.config.currency.toUpperCase() !== "INR" ? (
+              <InrHint usd={details.stats.rewardsEarned} style={st.statValue} />
+            ) : null}
+          </>
+        ),
         icon: "dollar-sign",
       });
     }

@@ -113,35 +113,33 @@ function TrendingChallengeStackInner({
   if (challenges.length === 0) return null;
 
   return (
-    <View style={[styles.stage, { height: cardHeight + 8 }]}>
+    <View style={[styles.stage, { height: cardHeight + 12 }]}>
       <FlatList
         ref={listRef}
         data={challenges}
+        extraData={challenges.length}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
         horizontal
         showsHorizontalScrollIndicator={false}
-        // Allow fast swipes to coast across multiple cards; still snap to intervals.
-        decelerationRate="normal"
+        decelerationRate="fast"
         snapToInterval={step}
         snapToAlignment="start"
-        disableIntervalMomentum={false}
-        bounces
+        disableIntervalMomentum
+        bounces={false}
         overScrollMode="never"
         nestedScrollEnabled
         directionalLockEnabled
+        removeClippedSubviews={false}
+        windowSize={5}
+        initialNumToRender={3}
+        maxToRenderPerBatch={4}
         contentContainerStyle={styles.content}
         onScrollBeginDrag={onScrollBeginDrag}
         onScrollEndDrag={onScrollEndDrag}
         onMomentumScrollEnd={onMomentumScrollEnd}
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
-        getItemLayout={(_, index) => ({
-          length: step,
-          offset: step * index,
-          index,
-        })}
-        initialScrollIndex={Math.min(activeIndex, Math.max(0, challenges.length - 1))}
       />
     </View>
   );

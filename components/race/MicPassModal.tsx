@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -23,6 +24,7 @@ import {
 } from "@/services/iapService";
 import { getApiBase } from "@/utils/apiUrl";
 import { rf } from "@/utils/responsive";
+import { useSafeLayout } from "@/hooks/useSafeLayout";
 
 // ── MicPassModal ──────────────────────────────────────────────────────────────
 // Shown when a user without Mic Pass taps the mic icon.
@@ -36,6 +38,7 @@ interface Props {
 }
 
 export function MicPassModal({ visible, onClose, onGranted }: Props) {
+  const { safeBottom } = useSafeLayout();
   const [loading, setLoading] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -235,8 +238,16 @@ export function MicPassModal({ visible, onClose, onGranted }: Props) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={st.overlay} onPress={onClose}>
-        <Pressable style={st.sheet} onPress={(e) => e.stopPropagation()}>
-
+        <Pressable
+          style={[st.sheet, { paddingBottom: Math.max(safeBottom, 24) + 12 }]}
+          onPress={(e) => e.stopPropagation()}
+        >
+          <ScrollView
+            bounces={false}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={st.scrollContent}
+          >
           <LinearGradient colors={["#1A0533", "#0D0D1A"]} style={st.header}>
             <View style={st.micIconWrap}>
               <LinearGradient colors={["#7C3AED", "#A855F7"]} style={st.micIconBg}>
@@ -308,12 +319,14 @@ export function MicPassModal({ visible, onClose, onGranted }: Props) {
               onPress={() => { void handleRestorePurchases(); }}
               disabled={loading || restoring}
               activeOpacity={0.7}
+              hitSlop={{ top: 16, bottom: 16, left: 24, right: 24 }}
             >
               {restoring
                 ? <ActivityIndicator color="#7C3AED" />
                 : <Text style={st.restoreText}>Restore Purchase</Text>}
             </TouchableOpacity>
           </View>
+          </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>
@@ -322,13 +335,14 @@ export function MicPassModal({ visible, onClose, onGranted }: Props) {
 
 const st = StyleSheet.create({
   overlay:         { flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "flex-end" },
-  sheet:           { backgroundColor: "#0D0D1A", borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: "hidden" },
+  sheet:           { backgroundColor: "#0D0D1A", borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: "hidden", maxHeight: "92%" },
+  scrollContent:   { paddingBottom: 8 },
   header:          { alignItems: "center", paddingTop: 28, paddingBottom: 24, paddingHorizontal: 24 },
   micIconWrap:     { marginBottom: 14 },
   micIconBg:       { width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center" },
   title:           { fontSize: rf(22), fontWeight: "800", color: "#FFFFFF", marginBottom: 6 },
   subtitle:        { fontSize: rf(14), color: "#C4B5FD", textAlign: "center", lineHeight: 20 },
-  body:            { paddingHorizontal: 24, paddingBottom: 36, paddingTop: 16 },
+  body:            { paddingHorizontal: 24, paddingBottom: 16, paddingTop: 16 },
   note:            { fontSize: rf(13), color: "#9CA3AF", lineHeight: 19, marginBottom: 16, textAlign: "center" },
   pricingWrap:     { backgroundColor: "#1A0533", borderRadius: 14, borderWidth: 1, borderColor: "#7C3AED50", padding: 14, alignItems: "center", marginBottom: 18, gap: 6 },
   promoBadge:      { backgroundColor: "#7C3AED", borderRadius: 20, paddingHorizontal: 12, paddingVertical: 4 },
@@ -347,6 +361,6 @@ const st = StyleSheet.create({
   purchaseBtnText: { color: "#FFFFFF", fontSize: rf(15), fontWeight: "800", textAlign: "center" },
   laterBtn:        { alignItems: "center", paddingVertical: 12 },
   laterText:       { color: "#6B7280", fontSize: rf(14) },
-  restoreBtn:      { alignItems: "center", paddingVertical: 6 },
+  restoreBtn:      { alignItems: "center", justifyContent: "center", paddingVertical: 12, minHeight: 44 },
   restoreText:     { color: "#7C3AED", fontSize: rf(12), textDecorationLine: "underline" },
 });

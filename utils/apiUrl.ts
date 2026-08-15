@@ -25,7 +25,7 @@ export function getApiBase(): string {
 
   if (envUrl) {
     _cached = envUrl;
-    return _cached;
+    return envUrl;
   }
 
   if (Platform.OS === "web") {

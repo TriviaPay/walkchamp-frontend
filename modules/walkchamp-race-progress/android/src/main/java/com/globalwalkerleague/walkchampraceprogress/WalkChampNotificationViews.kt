@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Build
 import android.util.Log
+import android.util.TypedValue
 import android.view.View
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
@@ -104,12 +105,16 @@ object WalkChampNotificationViews {
     val rankLine = "Rank #${state.rank.coerceAtLeast(1)} of ${state.totalParticipants.coerceAtLeast(1)}"
     val participantsLine =
       "${state.totalParticipants.coerceAtLeast(1)} Participants"
-    val typeLabel = "Live Race"
+    val typeLabel = NotificationVisuals.raceTypeLabel(
+      isSponsored = state.isSponsored,
+      raceTypeHint = state.raceTypeHint,
+      unlimitedDailyMode = state.unlimitedDailyMode,
+    )
 
     return try {
       fun bindFullRaceLayout(views: RemoteViews) {
         bindBrandIconOnly(views, typeIcon)
-        // Never show status / lead / "Live Race" on the left.
+        // Never show status / lead / race-type label on the left.
         views.setViewVisibility(R.id.notification_subtitle, View.GONE)
         views.setViewVisibility(R.id.notification_headline, View.GONE)
         views.setTextViewText(R.id.notification_steps_line, stepsLine)
@@ -117,8 +122,13 @@ object WalkChampNotificationViews {
         views.setProgressBar(R.id.notification_progress, 100, if (goal > 0) pct else 0, false)
         views.setTextViewText(R.id.notification_rank_line, rankLine)
         views.setTextViewText(R.id.notification_participants_line, participantsLine)
-        // Label sits under the PNG on the right.
+        // Label sits under the PNG on the right — shrink text instead of expanding layout.
         views.setTextViewText(R.id.notification_type_label, typeLabel)
+        views.setTextViewTextSize(
+          R.id.notification_type_label,
+          TypedValue.COMPLEX_UNIT_SP,
+          NotificationVisuals.raceTypeLabelTextSizeSp(typeLabel),
+        )
         views.setImageViewResource(R.id.notification_type_icon, typeIcon)
         applyTextTheme(
           ctx,
@@ -135,7 +145,7 @@ object WalkChampNotificationViews {
 
       // One full layout in the collapsed tray — no big-content view → nothing to expand.
       val full = RemoteViews(ctx.packageName, R.layout.notification_live_race).also(::bindFullRaceLayout)
-      // Clear system title/text so "Live Race" is only under the PNG, not on the left.
+      // Clear system title/text so the type label is only under the PNG, not on the left.
       builder.setContentTitle("")
       builder.setContentText("")
       finishNonExpandableCustomBuilder(builder, full)

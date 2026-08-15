@@ -58,7 +58,6 @@ import {
 import {
   coerceUnlimitedRaceInProgress,
   mapUnlimitedDetailToLiveDetail,
-  mergeUnlimitedLiveParticipants,
 } from "@/utils/unlimitedLiveRace";
 import { formatChallengeDayKey } from "@/utils/challengeDayKey";
 import {
@@ -73,6 +72,7 @@ import {
   resolvePrizePoolEligibilityStatus,
 } from "@/utils/unlimitedResults";
 import { isUnlimitedPrizeLost, UNLIMITED_COPY } from "@/utils/unlimitedLiveUiCopy";
+import { isStreakManualLeaveStatus } from "@/utils/unlimitedStreakParticipation";
 import { fetchUnlimitedDailyHistory } from "@/services/unlimitedResultsApi";
 import {
   dayRowsFromDailyHistory,
@@ -108,8 +108,10 @@ import { usePresenceActions } from "@/context/PresenceContext";
 import { useRaceProgress } from "@/hooks/useRaceProgress";
 import { updateRankFromBackend, ensureActiveRaceInStore, clearActiveRaceProgress, suppressLiveRaceNotification, suppressSpectatorLiveRaceNotifications, switchDailyStepsNotification, handleMidnightRolloverIfNeeded } from "@/services/stepProgressCoordinator";
 import { findEligibleLiveRaceParticipant } from "@/utils/raceNotificationEligibility";
+import { resolveRaceNotificationTypeHint } from "@/utils/raceNotificationType";
 import { stepEngineLog, isFreshLocalDay } from "@/utils/stepAccuracy";
 import { store } from "@/store";
+import { readKnownRaceSnapshot } from "@/utils/knownRaceSnapshot";
 import { raceProgressActions } from "@/store/slices/raceProgressSlice";
 import {
   resolveFinalRaceAuthority,
@@ -261,8 +263,8 @@ function buildInstantLiveRaceShell(opts: {
     currentPlayers: 1,
     maxPlayers: unlimited ? null : 10,
     startedAt: new Date().toISOString(),
-    completedAt: null,
-    creatorId: opts.userId ?? "",
+        completedAt: null,
+        creatorId: "",
     prizePool: 0,
     prizeTiers: [],
     spectatorCount: 0,
@@ -272,9 +274,7 @@ function buildInstantLiveRaceShell(opts: {
     challengeDurationDays:
       typeof opts.durationDays === "number" && opts.durationDays > 0
         ? opts.durationDays
-        : unlimited
-          ? 7
-          : null,
+        : null,
     hasExplicitPlayerCount: false,
   };
   const participants: RaceParticipant[] = opts.userId
@@ -285,10 +285,10 @@ function buildInstantLiveRaceShell(opts: {
           currentSteps: 0,
           status: "active",
           rank: 1,
-          username: opts.username?.trim() || "You",
+          username: opts.username?.trim() || "Runner",
           countryFlag: null,
           avatarColor: "#00E676",
-          isHost: true,
+          isHost: false,
         },
       ]
     : [];
@@ -350,6 +350,23 @@ interface RaceData {
   participantsPendingCount?: number | null;
   prizePoolEligibilityStatus?: string | null;
   qualifiedParticipantCount?: number | null;
+  viewerStartAt?: string | null;
+  viewerEndAt?: string | null;
+  viewerStatus?: string | null;
+  viewerTimezone?: string | null;
+  currentDayStartAt?: string | null;
+  currentDayEndAt?: string | null;
+  currentDayIndex?: number | null;
+  currentDayLocalDate?: string | null;
+  currentUserParticipating?: boolean;
+  viewerResultsReady?: boolean | null;
+  viewerResultsStatus?: string | null;
+  viewerResultReasonCode?: string | null;
+  eligibilityReasonCode?: string | null;
+  passedDays?: number | null;
+  failedDays?: number | null;
+  pendingDays?: number | null;
+  completedDays?: number | null;
 }
 
 interface RaceParticipant {
@@ -446,106 +463,79 @@ async function fetchAllUnlimitedLeaderboardRows(challengeId: string): Promise<un
 }
 
 /**
- * Unlimited detail + first leaderboard page in parallel for faster first paint,
- * then remaining pages merge in the background via fetchAllUnlimitedLeaderboardRows.
+ * One GET, same as classic `/api/races/:id` — roster is `players` on the detail body.
+ * Do not wait on leaderboard pagination; that blocked Live Race for seconds.
  */
 async function fetchUnlimitedLiveDetailPayload(
   challengeId: string,
   opts?: {
     currentUserId?: string | null;
     currentUsername?: string | null;
-    /** Client already tracking this challenge as a live race (Waiting Room → Live). */
     forceLive?: boolean;
   },
 ): Promise<LiveRaceDetailCache | null> {
   if (!isUnlimitedGoalFrontendEnabled()) return null;
   try {
-    const [detailRes, firstPage] = await Promise.all([
-      authFetch(`/api/unlimited-challenges/${challengeId}`),
-      fetchParticipantListFromPath(
-        `/api/unlimited-challenges/${challengeId}/leaderboard?limit=100&offset=0`,
-      ),
-    ]);
+    const detailRes = await authFetch(`/api/unlimited-challenges/${challengeId}`);
     if (!detailRes.ok) return null;
-    let mapped = mapUnlimitedDetailToLiveDetail(await detailRes.json().catch(() => null));
+    const raw = await detailRes.json().catch(() => null);
+    const mapped = mapUnlimitedDetailToLiveDetail(raw);
     if (!mapped) return null;
 
-    // Enrich with first page immediately.
-    if (firstPage.length > 0) {
-      mapped = {
-        ...mapped,
-        participants: mergeUnlimitedLiveParticipants(
-          mapped.participants,
-          firstPage,
-          { preferPrimaryCurrentSteps: true },
-        ),
-      };
-    }
-
-    // Remaining pages — only if first page was full.
-    if (firstPage.length >= 100) {
-      try {
-        const rest: unknown[] = [];
-        let offset = 100;
-        for (let page = 1; page < 50; page += 1) {
-          const rows = await fetchParticipantListFromPath(
-            `/api/unlimited-challenges/${challengeId}/leaderboard?limit=100&offset=${offset}`,
-          );
-          if (rows.length === 0) break;
-          rest.push(...rows);
-          if (rows.length < 100) break;
-          offset += 100;
-        }
-        if (rest.length > 0) {
-          mapped = {
-            ...mapped,
-            participants: mergeUnlimitedLiveParticipants(
-              mapped.participants,
-              [...firstPage, ...rest],
-              { preferPrimaryCurrentSteps: true },
-            ),
-          };
-        }
-      } catch {
-        // Keep first-page enrichment.
-      }
-    }
-
-    mapped = {
-      ...mapped,
-      race: coerceUnlimitedRaceInProgress(mapped.race, {
-        forceLive: opts?.forceLive === true,
-      }),
-    };
-
-    // Trust detail `players` / `participants` as the roster (same as Waiting Room).
+    const race = coerceUnlimitedRaceInProgress(mapped.race, {
+      forceLive: opts?.forceLive === true,
+    });
     let participants = mapped.participants as RaceParticipant[];
-
-    // Guarantee the current viewer appears on Race Track / Live Board.
-    const meId = opts?.currentUserId;
-    if (meId && !participants.some((p) => p.userId === meId)) {
+    const root = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+    const viewer =
+      root?.viewer && typeof root.viewer === "object"
+        ? (root.viewer as Record<string, unknown>)
+        : null;
+    const membership =
+      root?.membership && typeof root.membership === "object"
+        ? (root.membership as Record<string, unknown>)
+        : null;
+    const memberStatus = String(membership?.status ?? "").trim().toLowerCase();
+    const viewerSteps = Math.max(
+      0,
+      Number(root?.currentSteps ?? viewer?.currentSteps ?? 0) || 0,
+    );
+    const registered =
+      mapped.race.currentUserParticipating === true ||
+      root?.currentUserRegistered === true ||
+      root?.current_user_registered === true ||
+      (memberStatus.length > 0 && !isStreakManualLeaveStatus(memberStatus));
+    // Always paint the viewer if they still have a membership row. Do not skip
+    // this when prize-pool math inflated currentPlayers to 2 with players: [].
+    if (
+      opts?.currentUserId &&
+      registered &&
+      !participants.some((p) => p.userId === opts.currentUserId)
+    ) {
       participants = [
+        ...participants,
         {
-          id: meId,
-          userId: meId,
-          currentSteps: 0,
-          status: "active",
+          id: opts.currentUserId,
+          userId: opts.currentUserId,
+          currentSteps: viewerSteps,
+          status: memberStatus || "active",
           rank: participants.length + 1,
-          username: opts?.currentUsername?.trim() || "You",
+          username: opts.currentUsername?.trim() || "You",
           countryFlag: null,
           avatarColor: "#00E676",
-          isHost: mapped.race.creatorId === meId,
-        } as RaceParticipant,
-        ...participants,
+          isHost: false,
+        },
       ];
     }
 
     return {
       race: {
-        ...mapped.race,
-        currentPlayers: mapped.race.hasExplicitPlayerCount
-          ? Math.max(mapped.race.currentPlayers, 1)
-          : Math.max(mapped.race.currentPlayers, participants.length, 1),
+        ...race,
+        currentPlayers: Math.max(participants.length, race.currentPlayers || 0),
+        currentUserParticipating:
+          race.currentUserParticipating !== undefined
+            ? race.currentUserParticipating
+            : registered,
       } as RaceData,
       participants,
     };
@@ -989,7 +979,9 @@ const RunnerMarker = React.memo(function RunnerMarker({ player, index, width, he
         >
           {player.isMe ? "You" : player.name}
           {player.country ? ` ${player.country}` : ""}
-          {player.isHost ? <Text style={{ color: "#FFD700" }}> Host</Text> : ""}
+          {player.isHost && !/^host$/i.test((player.name ?? "").trim()) ? (
+            <Text style={{ color: "#FFD700" }}> Host</Text>
+          ) : null}
         </Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 2, justifyContent: "center" }}>
           <BlueShoe size={rs(8)} />
@@ -2122,7 +2114,12 @@ function LiveRaceDetailScreenContent() {
 
   const leaveLiveDetail = useCallback(() => {
     if (!leaveArmedRef.current) return;
-    safeGoBack("/(tabs)/live", navigation);
+    try {
+      const { router } = require("expo-router") as typeof import("expo-router");
+      router.replace("/(tabs)/walk");
+    } catch {
+      safeGoBack("/(tabs)/walk", navigation);
+    }
   }, [navigation]);
 
   const {
@@ -2145,14 +2142,32 @@ function LiveRaceDetailScreenContent() {
     durationDays?: string;
   }>();
   const { user, sessionToken } = useAuth();
+  const initialCache =
+    raceId && typeof raceId === "string"
+      ? screenCache.getSync<LiveRaceDetailCache>(
+          liveRaceDetailCacheKey(raceId, user?.id),
+        )
+      : null;
+  const knownUnlimited = isUnlimitedGoalChallenge({
+    challengeType:
+      paramChallengeType ??
+      initialCache?.race?.challengeType ??
+      (typeof raceId === "string"
+        ? readKnownRaceSnapshot(raceId, user?.id)?.challengeType
+        : null),
+    capacityMode: paramCapacityMode ?? initialCache?.race?.capacityMode,
+    entryType:
+      paramChallengeType ??
+      initialCache?.race?.entryType ??
+      (typeof raceId === "string"
+        ? readKnownRaceSnapshot(raceId, user?.id)?.entryType
+        : null),
+    maxPlayers: initialCache?.race?.maxPlayers,
+  });
   const unlimitedHint =
     paramCapacityMode === "unlimited" ||
     paramChallengeType === "unlimited_goal" ||
-    isUnlimitedGoalChallenge({
-      challengeType: paramChallengeType,
-      capacityMode: paramCapacityMode,
-      entryType: paramChallengeType,
-    });
+    knownUnlimited;
   const useDummyRace = shouldUseDummyUnlimitedRace(
     typeof raceId === "string" ? raceId : null,
     paramDummyRace,
@@ -2163,13 +2178,6 @@ function LiveRaceDetailScreenContent() {
     !useDummyRace &&
     isUnlimitedGoalFrontendEnabled() &&
     unlimitedHint;
-  // Cache key includes userId so account A never hydrates account B's "You"/roster.
-  const initialCache =
-    raceId && typeof raceId === "string"
-      ? screenCache.getSync<LiveRaceDetailCache>(
-          liveRaceDetailCacheKey(raceId, user?.id),
-        )
-      : null;
   const parsedTargetSteps = Number(paramTargetSteps);
   const parsedDurationDays = Number(paramDurationDays);
   const instantShell = useMemo(() => {
@@ -2272,16 +2280,32 @@ function LiveRaceDetailScreenContent() {
         : 0,
     ),
   );
+  // Must exist before the first `.current` read below (render, not an effect).
+  const unlimitedPeakDailyStepsRef = useRef(0);
   // After local midnight Redux zeros verified/provisional, but a leftover
   // sensor absolute can briefly reappear before HC/HK rebases. Never paint that
   // leftover as "today" while verified is still 0 inside the fresh-day window.
-  const unlimitedDailySteps =
+  const unlimitedDailyRaw =
     isFreshLocalDay() && unlimitedVerifiedSteps <= 0
       ? 0
       : resolveUnlimitedDisplayedLiveSteps(
-          unlimitedVerifiedSteps,
+          Math.max(
+            unlimitedVerifiedSteps,
+            stepOwnerOk ? Math.max(0, raceProgress.todaySteps ?? 0) : 0,
+            stepOwnerOk ? Math.max(0, liveRaceSteps) : 0,
+          ),
           unlimitedProvisionalSteps,
         );
+  if (isFreshLocalDay() && unlimitedVerifiedSteps <= 0) {
+    unlimitedPeakDailyStepsRef.current = 0;
+  }
+  const unlimitedDailySteps =
+    isFreshLocalDay() && unlimitedVerifiedSteps <= 0
+      ? 0
+      : Math.max(unlimitedPeakDailyStepsRef.current, unlimitedDailyRaw);
+  if (!(isFreshLocalDay() && unlimitedVerifiedSteps <= 0)) {
+    unlimitedPeakDailyStepsRef.current = unlimitedDailySteps;
+  }
   const unlimitedProgressSource =
     unlimitedProvisionalSteps > unlimitedVerifiedSteps
       ? unlimitedVerifiedSteps > 0
@@ -2613,45 +2637,6 @@ function LiveRaceDetailScreenContent() {
     };
   }, [raceId, user?.id]);
 
-  // Instant "You" seed for Unlimited — don't wait on detail API / late auth hydrate.
-  useEffect(() => {
-    if (!user?.id) return;
-    if (!(unlimitedHint && isUnlimitedGoalFrontendEnabled())) return;
-    setParticipants((prev) => {
-      const idx = prev.findIndex(
-        (p) =>
-          p.userId === user.id ||
-          (!!user.username &&
-            !!p.username &&
-            p.username.toLowerCase() === user.username.toLowerCase()),
-      );
-      if (idx >= 0) {
-        const cur = prev[idx]!;
-        if (cur.userId === user.id && cur.username === "You") return prev;
-        const next = prev.slice();
-        next[idx] = { ...cur, userId: user.id, username: "You" };
-        return next;
-      }
-      // Empty / single shell roster only — never invent membership on a full remote roster.
-      if (prev.length > 1) return prev;
-      return [
-        {
-          id: user.id,
-          userId: user.id,
-          currentSteps: 0,
-          status: "active",
-          rank: 1,
-          username: "You",
-          countryFlag: null,
-          avatarColor: "#00E676",
-          isHost: true,
-        },
-        ...prev,
-      ];
-    });
-  }, [user?.id, user?.username, unlimitedHint]);
-
-  const scrollRef     = useRef<ScrollView>(null);
   const cheerScrollRef = useRef<ScrollView>(null);
   const reactionCooldownRef = useRef<Record<string, number>>({});
   useEffect(() => {
@@ -2817,9 +2802,6 @@ function LiveRaceDetailScreenContent() {
   // Match regular live races: once RaceContext is tracking this id, treat as LIVE
   // even if Unlimited detail briefly still says "waiting".
   const isCompleted = race?.status === "completed";
-  const isActive =
-    !isCompleted &&
-    (race?.status === "in_progress" || trackingThisRace);
   const isFree      = race?.entryType === "free";
   const isSponsored = race?.type === "sponsored";
   const isUnlimitedHeader =
@@ -2832,6 +2814,37 @@ function LiveRaceDetailScreenContent() {
       capacityMode: race.capacityMode,
       maxPlayers: race.maxPlayers,
     });
+  const unlimitedServerLive =
+    isUnlimitedHeader &&
+    ["in_progress", "active", "starting", "settling", "live", "running"].includes(
+      String(
+        (race as { rawStatus?: string | null } | null)?.rawStatus ?? race?.status ?? "",
+      ).toLowerCase(),
+    );
+  const isActive =
+    !isCompleted &&
+    (race?.status === "in_progress" || trackingThisRace || unlimitedServerLive);
+
+  useEffect(() => {
+    if (!isUnlimitedHeader || !user?.id) return;
+    if (race?.currentUserParticipating === false) return;
+    setParticipants((prev) => {
+      if (prev.length > 0) return prev;
+      return [
+        {
+          id: user.id,
+          userId: user.id,
+          currentSteps: 0,
+          status: "active",
+          rank: 1,
+          username: user.username?.trim() || "You",
+          countryFlag: null,
+          avatarColor: "#00E676",
+          isHost: false,
+        },
+      ];
+    });
+  }, [isUnlimitedHeader, user?.id, user?.username, race?.currentUserParticipating]);
 
   const currentParticipant = useMemo(
     () => participants.find((p) =>
@@ -2840,6 +2853,15 @@ function LiveRaceDetailScreenContent() {
     ) ?? null,
     [participants, user?.id, user?.username],
   );
+
+  /**
+   * True only when the signed-in user actually has a roster row (or the
+   * backend explicitly confirmed membership). Spectators (no roster row,
+   * `currentUserParticipating !== true`) must never get the participant-only
+   * live-race ongoing notification / provisional-progress uploads just from
+   * opening a Streak Challenge they are not part of.
+   */
+  const isUnlimitedParticipant = !!currentParticipant || race?.currentUserParticipating === true;
 
   /**
    * Multi-day end strip — alternates with tagline every 3s in the same slot.
@@ -2864,6 +2886,17 @@ function LiveRaceDetailScreenContent() {
         durationDays: race.challengeDurationDays ?? null,
         dailyGoalSteps: race.targetSteps,
         challengeStatus: race.status,
+        viewerStartAt: race.viewerStartAt,
+        viewerEndAt: race.viewerEndAt,
+        viewerStatus: race.viewerStatus,
+        viewerTimezone: race.viewerTimezone,
+        currentDayStartAt: race.currentDayStartAt,
+        currentDayEndAt: race.currentDayEndAt,
+        currentDayIndex: race.currentDayIndex,
+        currentDayLocalDate: race.currentDayLocalDate,
+        completedDays: race.completedDays ?? race.passedDays,
+        passedDays: race.passedDays,
+        failedDays: race.failedDays,
       },
       {
         liveDay: currentParticipant
@@ -2873,7 +2906,8 @@ function LiveRaceDetailScreenContent() {
               localDate: currentParticipant.challengeDayKey,
               dailyGoalSteps: currentParticipant.dailyGoalSteps,
               qualificationStatus: currentParticipant.qualificationStatus,
-              completedDays: currentParticipant.completedDays,
+              completedDays: currentParticipant.completedDays ?? race.completedDays ?? race.passedDays,
+              failedDays: race.failedDays,
             }
           : null,
         fallbackTimezone: getDeviceTimezone(),
@@ -2887,11 +2921,29 @@ function LiveRaceDetailScreenContent() {
     race?.challengeDurationDays,
     race?.targetSteps,
     race?.status,
+    race?.viewerStartAt,
+    race?.viewerEndAt,
+    race?.viewerStatus,
+    race?.viewerTimezone,
+    race?.currentDayStartAt,
+    race?.currentDayEndAt,
+    race?.currentDayIndex,
+    race?.currentDayLocalDate,
+    race?.completedDays,
+    race?.passedDays,
+    race?.failedDays,
     currentParticipant,
   ]);
   /** True once the viewer's OWN local day has begun (or for classic races, always true). */
   const unlimitedViewerDayStarted =
-    !isUnlimitedHeader || unlimitedTaglineSchedule?.viewerStatus !== "scheduled";
+    !isUnlimitedHeader ||
+    (unlimitedTaglineSchedule
+      ? Date.now() >= unlimitedTaglineSchedule.viewerStartAtMs &&
+        (unlimitedTaglineSchedule.viewerStatus as string) !== "ended" &&
+        unlimitedTaglineSchedule.viewerStatus !== "completed" &&
+        unlimitedTaglineSchedule.viewerStatus !== "failed" &&
+        unlimitedTaglineSchedule.viewerStatus !== "left"
+      : true);
   // Keep localStepsRef aligned with the correct progress lane for Pusher / finalize.
   localStepsRef.current =
     isUnlimitedHeader
@@ -2957,7 +3009,7 @@ function LiveRaceDetailScreenContent() {
               todaySteps: rp.todaySteps,
             })
           : 0;
-      if (unlimitedViewerDayStarted && user?.id) {
+      if (unlimitedViewerDayStarted && user?.id && isUnlimitedParticipant) {
         ensureActiveRaceInStore({
           raceId,
           raceStartTime: new Date(
@@ -2970,6 +3022,7 @@ function LiveRaceDetailScreenContent() {
           bootSteps: notifSteps,
           participantConfirmed: true,
           unlimitedDailyMode: true,
+          raceType: "unlimited_goal",
           challengeEndAt: race?.challengeEndAt ?? undefined,
         });
         updateRankFromBackend({
@@ -3028,7 +3081,7 @@ function LiveRaceDetailScreenContent() {
                 todaySteps: rp.todaySteps,
               })
             : 0;
-        if (unlimitedViewerDayStarted && user?.id) {
+        if (unlimitedViewerDayStarted && user?.id && isUnlimitedParticipant) {
           if (store.getState().raceProgress.activeRaceId !== raceId) {
             ensureActiveRaceInStore({
               raceId,
@@ -3042,6 +3095,7 @@ function LiveRaceDetailScreenContent() {
               bootSteps: notifSteps,
               participantConfirmed: true,
               unlimitedDailyMode: true,
+              raceType: "unlimited_goal",
               challengeEndAt: race?.challengeEndAt ?? undefined,
             });
           }
@@ -3112,6 +3166,7 @@ function LiveRaceDetailScreenContent() {
     user?.id,
     user?.username,
     participants.length,
+    isUnlimitedParticipant,
   ]);
 
   // Keep global Live header "racing" count aligned while this screen is open.
@@ -3131,7 +3186,14 @@ function LiveRaceDetailScreenContent() {
       // Unlimited: local avatar uses daily HC/HK totals, not classic raceSteps —
       // but only once the viewer's OWN local day has started (see unlimitedViewerDayStarted).
       if (isMe && isUnlimitedHeader && (isActive || race?.status === "in_progress")) {
-        return unlimitedViewerDayStarted ? unlimitedDailySteps : 0;
+        // Prefer live/HC totals even if viewerStatus is still "scheduled" —
+        // otherwise the tray can show 6,890 while Live Race / Challenge Progress stay 0.
+        return Math.max(
+          unlimitedViewerDayStarted ? unlimitedDailySteps : 0,
+          unlimitedDailySteps,
+          liveRaceSteps,
+          raceProgress.todaySteps ?? 0,
+        );
       }
       // Own steps always come from the live tracker while this race is active —
       // same as classic Live Race (never show stale API 0 for self).
@@ -3148,6 +3210,7 @@ function LiveRaceDetailScreenContent() {
       unlimitedDailySteps,
       unlimitedViewerDayStarted,
       race?.status,
+      raceProgress.todaySteps,
     ],
   );
 
@@ -3344,9 +3407,10 @@ function LiveRaceDetailScreenContent() {
         ? filterUnlimitedParticipantsForDisplay(participants)
         : filterRaceParticipantsForDisplay(participants)
     ).filter((p) => {
-      if (seenIds.has(p.id) || seenUserIds.has(p.userId)) return false;
-      seenIds.add(p.id);
-      seenUserIds.add(p.userId);
+      if (p.id && seenIds.has(p.id)) return false;
+      if (p.userId && seenUserIds.has(p.userId)) return false;
+      if (p.id) seenIds.add(p.id);
+      if (p.userId) seenUserIds.add(p.userId);
       return true;
     });
     const hostId = race?.creatorId;
@@ -3383,7 +3447,10 @@ function LiveRaceDetailScreenContent() {
             : p.rank && p.rank > 0
               ? p.rank
               : 1;
-      const username = p.username || "Runner";
+      const usernameRaw = (p.username || "Runner").trim();
+      const username = /^host(\s+host)?$/i.test(usernameRaw)
+        ? (isMe ? (user?.username?.trim() || "You") : "Runner")
+        : usernameRaw;
       const avatarAccent = accentColorForUser(p.userId, p.avatarColor);
       return {
         id: p.id, userId: p.userId, rank,
@@ -3435,13 +3502,19 @@ function LiveRaceDetailScreenContent() {
     [sortedPlayers, trackPlayers],
   );
 
-  // Leave / forfeit / DQ / complete: stop participant-only live race notification for this race.
+  // Leave / forfeit only: missed-day streak users stay on the board and keep steps.
   useEffect(() => {
     if (!raceId || !user?.id || !currentParticipant) return;
+    if (isUnlimitedHeader) {
+      if (!isStreakManualLeaveStatus(currentParticipant.status)) return;
+      void suppressLiveRaceNotification(raceId, `participant_${currentParticipant.status ?? "left"}`);
+      stopRaceStepTracking(`participant_${currentParticipant.status ?? "left"}`);
+      return;
+    }
     if (findEligibleLiveRaceParticipant([currentParticipant], user)) return;
     void suppressLiveRaceNotification(raceId, `participant_${currentParticipant.status ?? "ineligible"}`);
     stopRaceStepTracking(`participant_${currentParticipant.status ?? "ineligible"}`);
-  }, [raceId, user?.id, user?.username, currentParticipant, currentParticipant?.status, stopRaceStepTracking]);
+  }, [raceId, user?.id, user?.username, currentParticipant, currentParticipant?.status, stopRaceStepTracking, isUnlimitedHeader]);
 
   // Unlimited Results: never auto-navigate from Live — only via "View Results" tap.
 
@@ -3473,22 +3546,19 @@ function LiveRaceDetailScreenContent() {
     if (!nonForfeited.length) return [];
 
     if (isCompleted) {
-      // Completed race: only show prize-eligible winners (1 for 2p, 2 for 3p, 3 for 4p+).
-      // Non-prize ranks should not appear with "Winner" badges or coin amounts.
+      // Completed race: prize slots by actual race steps (not stale backend rank).
+      // Rank-only order can show a low-step player as #2 while someone with more
+      // steps is further on the track.
       const winnerSlots = getWinnerCount(race?.currentPlayers ?? participants.length);
-      const limit = winnerSlots > 0 ? winnerSlots : 3; // graceful fallback
-      const withRank = nonForfeited.filter((p) => p.rank != null);
-      if (withRank.length > 0) {
-        return [...withRank]
-          .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
-          .slice(0, limit);
-      }
-      // Fallback when results not yet written: top-N by steps
+      const limit = winnerSlots > 0 ? winnerSlots : 3;
       return [...nonForfeited]
         .sort((a, b) => {
           const aMe = a.userId === user?.id;
           const bMe = b.userId === user?.id;
-          return resolveParticipantRaceSteps(b, bMe) - resolveParticipantRaceSteps(a, aMe);
+          const stepDiff =
+            resolveParticipantRaceSteps(b, bMe) - resolveParticipantRaceSteps(a, aMe);
+          if (stepDiff !== 0) return stepDiff;
+          return (a.rank ?? 99) - (b.rank ?? 99);
         })
         .slice(0, limit);
     }
@@ -3517,15 +3587,24 @@ function LiveRaceDetailScreenContent() {
   // flag alone flips true as soon as any participant's midnight passes, which
   // would otherwise show this viewer's ordinary (unrelated) daily step count
   // before their own Day 1 has actually begun.
-  const mySteps = myPlayer?.isMe
-    ? (isActive
-        ? (isUnlimitedHeader
-            ? (unlimitedViewerDayStarted ? unlimitedDailySteps : 0)
-            : liveRaceSteps)
-        : (finalRaceSteps ?? myPlayer.steps ?? 0))
-    : (myPlayer?.steps ?? 0);
+  // Spectators (myPlayer?.isMe === false — not on the roster) must never show
+  // any personal step figure here: unlimitedDailySteps is the viewer's own
+  // real-world daily total and is unrelated to a race they haven't joined.
+  const mySteps = isUnlimitedHeader
+    ? myPlayer?.isMe
+      ? Math.max(unlimitedDailySteps, liveRaceSteps, myPlayer.steps ?? 0)
+      : 0
+    : myPlayer?.isMe && isActive
+      ? liveRaceSteps
+      : myPlayer?.isMe
+        ? (myPlayer?.steps ?? 0)
+        : 0;
   const myProgress = Math.min(mySteps / Math.max(race?.targetSteps ?? 1, 1), 1);
-  const trackPositionText = myPlayer
+  // Only render a rank/position for the signed-in viewer's OWN roster row — a
+  // spectator (no roster row) must never inherit the fallback top-of-track
+  // player's rank/steps as if it were their own (myPlayer falls back to
+  // trackPlayers[0] purely so the track always has a display anchor).
+  const trackPositionText = myPlayer?.isMe
     ? isUnlimitedHeader
       ? `#${canonicalRank ?? myPlayer.rank} · ${formatPlayerCountDisplay({
           current:
@@ -3536,7 +3615,12 @@ function LiveRaceDetailScreenContent() {
           isUnlimited: true,
         })}`
       : `#${canonicalRank ?? myPlayer.rank} of ${race?.currentPlayers ?? participants.length ?? raceProgress.totalParticipants ?? Math.max(sortedPlayers.length, 1)}`
-    : "Waiting";
+    : isUnlimitedHeader
+      ? formatPlayerCountDisplay({
+          current: Math.max(race?.currentPlayers ?? 0, participants.length, 1),
+          isUnlimited: true,
+        })
+      : "Waiting";
   const trackStatusText = isCompleted ? "FINISHED" : isActive ? "LIVE" : "WAITING";
 
   useEffect(() => {
@@ -3665,6 +3749,7 @@ function LiveRaceDetailScreenContent() {
             bootSteps: notifSteps,
             participantConfirmed: true,
             unlimitedDailyMode: true,
+            raceType: "unlimited_goal",
             challengeEndAt: liveRaceData.challengeEndAt ?? undefined,
           });
           updateRankFromBackend({
@@ -3805,6 +3890,12 @@ function LiveRaceDetailScreenContent() {
       participantConfirmed: true,
       preserveAsCompanion,
       isSponsored: liveRaceData.type === "sponsored",
+      raceType: resolveRaceNotificationTypeHint({
+        type: liveRaceData.type,
+        entryType: liveRaceData.entryType,
+        challengeType: liveRaceData.challengeType,
+        isSponsored: liveRaceData.type === "sponsored",
+      }),
       challengeEndAt,
     });
     if (!raceResumedRef.current) {
@@ -3882,7 +3973,7 @@ function LiveRaceDetailScreenContent() {
         racePhase === "in_race" &&
         (contextRaceId === raceId ||
           store.getState().raceProgress.activeRaceId === raceId);
-      if (preferUnlimitedDetail) {
+      if (isUnlimitedGoalFrontendEnabled()) {
         const unlimited = await fetchUnlimitedLiveDetailPayload(raceId, {
           currentUserId: user?.id,
           currentUsername: user?.username,
@@ -3900,7 +3991,27 @@ function LiveRaceDetailScreenContent() {
           // a raw empty Unlimited paint that would mark us spectator and stop steps.
           let mergedParts = unlimited.participants;
           setParticipants((prev) => {
+            if (unlimited.participants.length >= 2) {
+              mergedParts = mergeParticipantsPreservingSteps(prev, unlimited.participants, {
+                raceCompleted: raceDone,
+                dayAware: true,
+                viewerUserId: user?.id,
+              });
+              if (mergedParts.length < unlimited.participants.length) {
+                mergedParts = unlimited.participants;
+              }
+              return mergedParts;
+            }
             if (!unlimited.participants.length) {
+              mergedParts = prev;
+              return prev;
+            }
+            const incomingIsSelfOnly =
+              unlimited.participants.length <= 1 &&
+              (!unlimited.participants[0] ||
+                !user?.id ||
+                unlimited.participants[0].userId === user.id);
+            if (incomingIsSelfOnly && prev.length > 1) {
               mergedParts = prev;
               return prev;
             }
@@ -4064,7 +4175,7 @@ function LiveRaceDetailScreenContent() {
               todaySteps: rp.todaySteps,
             })
           : 0;
-      if (unlimitedViewerDayStarted && user?.id) {
+      if (unlimitedViewerDayStarted && user?.id && isUnlimitedParticipant) {
         ensureActiveRaceInStore({
           raceId,
           raceStartTime: new Date(
@@ -4077,6 +4188,7 @@ function LiveRaceDetailScreenContent() {
           bootSteps: notifSteps,
           participantConfirmed: true,
           unlimitedDailyMode: true,
+          raceType: "unlimited_goal",
           challengeEndAt: race?.challengeEndAt ?? undefined,
         });
         updateRankFromBackend({
@@ -4129,6 +4241,12 @@ function LiveRaceDetailScreenContent() {
         participantConfirmed: true,
         preserveAsCompanion,
         isSponsored: race?.type === "sponsored",
+        raceType: resolveRaceNotificationTypeHint({
+          type: race?.type,
+          entryType: race?.entryType,
+          challengeType: race?.challengeType,
+          isSponsored: race?.type === "sponsored",
+        }),
         challengeEndAt,
       });
       stepEngineLog(
@@ -4163,7 +4281,7 @@ function LiveRaceDetailScreenContent() {
         void resumeStepWatching();
       }, 0);
     };
-  }, [raceId, race, user?.id, user?.username, resumeStepWatching, refreshTodaySteps, triggerSync, stopRaceStepTracking, setRaceTargetSteps, racePhase, contextRaceId, requestUnlimitedStepsRefresh, unlimitedViewerDayStarted]));
+  }, [raceId, race, user?.id, user?.username, resumeStepWatching, refreshTodaySteps, triggerSync, stopRaceStepTracking, setRaceTargetSteps, racePhase, contextRaceId, requestUnlimitedStepsRefresh, unlimitedViewerDayStarted, isUnlimitedParticipant]));
 
   useEffect(() => {
     if (!raceId || !user?.id) return;
@@ -4231,30 +4349,38 @@ function LiveRaceDetailScreenContent() {
         (contextRaceId === raceId ||
           store.getState().raceProgress.activeRaceId === raceId);
       let confirmedMissing = false;
-      if (preferUnlimitedDetail) {
-        racePayload = await fetchUnlimitedLiveDetailPayload(raceId, {
-          currentUserId: user?.id,
-          currentUsername: user?.username,
-          forceLive,
-        });
+      const unlimitedPayload =
+        isUnlimitedGoalFrontendEnabled()
+          ? await fetchUnlimitedLiveDetailPayload(raceId, {
+              currentUserId: user?.id,
+              currentUsername: user?.username,
+              forceLive,
+            })
+          : null;
+      if (
+        unlimitedPayload &&
+        (preferUnlimitedDetail || isUnlimitedGoalChallenge(unlimitedPayload.race))
+      ) {
+        racePayload = unlimitedPayload;
       }
       if (!racePayload) {
         const detailRes = await authFetch(`/api/races/${raceId}`);
         if (detailRes.ok) {
           const data = await detailRes.json() as { race?: RaceData; participants?: RaceParticipant[] };
-          racePayload = {
+          const classic: LiveRaceDetailCache = {
             race: data.race as RaceData,
             participants: Array.isArray(data.participants) ? data.participants : [],
           };
-        } else if (detailRes.status === 404 && preferUnlimitedDetail) {
+          const unlimitedBetter =
+            !!unlimitedPayload &&
+            ((unlimitedPayload.participants?.length ?? 0) >
+              (classic.participants?.length ?? 0) ||
+              isUnlimitedGoalChallenge(unlimitedPayload.race));
+          racePayload = unlimitedBetter ? unlimitedPayload : classic;
+        } else if (unlimitedPayload) {
+          racePayload = unlimitedPayload;
+        } else if (detailRes.status === 404) {
           confirmedMissing = true;
-        } else if (!preferUnlimitedDetail) {
-          racePayload = await fetchUnlimitedLiveDetailPayload(raceId, {
-            currentUserId: user?.id,
-            currentUsername: user?.username,
-            forceLive,
-          });
-          if (!racePayload && detailRes.status === 404) confirmedMissing = true;
         }
       }
 
@@ -4267,15 +4393,22 @@ function LiveRaceDetailScreenContent() {
           raceAlreadyStartedRef.current = true;
         }
         const raceDone = racePayload.race.status === "completed";
-        // First paint: use detail roster directly so users always show.
+        const viewerId = user?.id;
         let mergedParts = parts;
         setParticipants((prev) => {
+          const incomingIsSelfOnly =
+            parts.length <= 1 &&
+            (!parts[0] || !viewerId || parts[0].userId === viewerId);
+          if (incomingIsSelfOnly && prev.length > 1) {
+            mergedParts = prev;
+            return prev;
+          }
           mergedParts =
             prev.length === 0
               ? parts
               : mergeParticipantsPreservingSteps(prev, parts, {
                   raceCompleted: raceDone,
-                  viewerUserId: user?.id,
+                  viewerUserId: viewerId,
                 });
           return mergedParts;
         });
@@ -4969,7 +5102,7 @@ function LiveRaceDetailScreenContent() {
         emoji,
         isGold: rank === 1,
         haptic: "success",
-        durationMs: 4000,
+        durationMs: 10000,
       });
 
       showCheerToast(`${username} finished goal in ${ordinal} place ${emoji}`);
@@ -4979,6 +5112,9 @@ function LiveRaceDetailScreenContent() {
 
     const stillRacing = (p: RaceParticipant) => {
       const s = (p.status ?? "").toLowerCase();
+      if (isUnlimitedHeader) {
+        return !isStreakManualLeaveStatus(s);
+      }
       return s !== "forfeited" && s !== "left" && s !== "quit" && s !== "disqualified";
     };
 
@@ -5334,6 +5470,17 @@ function LiveRaceDetailScreenContent() {
           durationDays: race.challengeDurationDays ?? null,
           dailyGoalSteps: race.targetSteps,
           challengeStatus: race.status,
+          viewerStartAt: race.viewerStartAt,
+          viewerEndAt: race.viewerEndAt,
+          viewerStatus: race.viewerStatus,
+          viewerTimezone: race.viewerTimezone,
+          currentDayStartAt: race.currentDayStartAt,
+          currentDayEndAt: race.currentDayEndAt,
+          currentDayIndex: race.currentDayIndex,
+          currentDayLocalDate: race.currentDayLocalDate,
+          completedDays: race.completedDays ?? race.passedDays,
+          passedDays: race.passedDays,
+          failedDays: race.failedDays,
         },
         {
           liveDay: currentParticipant
@@ -5343,7 +5490,8 @@ function LiveRaceDetailScreenContent() {
                 localDate: currentParticipant.challengeDayKey,
                 dailyGoalSteps: currentParticipant.dailyGoalSteps,
                 qualificationStatus: currentParticipant.qualificationStatus,
-                completedDays: currentParticipant.completedDays,
+                completedDays: currentParticipant.completedDays ?? race.passedDays ?? race.completedDays,
+                failedDays: race.failedDays,
               }
             : null,
           fallbackTimezone: getDeviceTimezone(),
@@ -5358,7 +5506,6 @@ function LiveRaceDetailScreenContent() {
         settlementStatus: race.settlementStatus,
         viewerPersonallyFinished:
           unlimitedViewerSchedule?.viewerStatus === "completed" ||
-          unlimitedViewerSchedule?.viewerStatus === "failed" ||
           unlimitedViewerSchedule?.viewerStatus === "left",
       })
     : "challenge_in_progress";
@@ -5688,40 +5835,52 @@ function LiveRaceDetailScreenContent() {
                 setActiveRace(null, false);
                 leaveLiveDetail();
 
-                const leavePath = isUnlimitedHeader
-                  ? `/api/unlimited-challenges/${raceId}/leave`
-                  : `/api/races/${raceId}/leave`;
-                // Refresh My Race chips only after leave settles — early refetch resurrects the card.
-                void authFetch(leavePath, {
-                  method: "POST",
-                  body: JSON.stringify({ reason: "user_quit" }),
-                })
-                  .then(async (res) => {
-                    if (!res.ok && raceId) {
-                      clearRecentlyLeftRaceId(raceId);
-                      if (isUnlimitedHeader) {
-                        void import("@/utils/hostedUnlimitedCache")
-                          .then(({ clearUnlimitedChallengeLeft }) =>
-                            clearUnlimitedChallengeLeft(raceId),
-                          )
-                          .catch(() => {});
-                      }
-                    }
-                    emitChallengeStatusesRefresh("user_forfeit");
-                  })
-                  .catch(() => {
-                    if (raceId) {
-                      clearRecentlyLeftRaceId(raceId);
-                      if (isUnlimitedHeader) {
-                        void import("@/utils/hostedUnlimitedCache")
-                          .then(({ clearUnlimitedChallengeLeft }) =>
-                            clearUnlimitedChallengeLeft(raceId),
-                          )
-                          .catch(() => {});
-                      }
-                    }
-                    emitChallengeStatusesRefresh("user_forfeit");
+                const looksUnlimited =
+                  isUnlimitedHeader ||
+                  isUnlimitedGoalChallenge({
+                    challengeType: race?.challengeType,
+                    entryType: race?.entryType,
+                    type: race?.type,
+                    capacityMode: race?.capacityMode,
+                    maxPlayers: race?.maxPlayers,
                   });
+                const unlimitedPath = `/api/unlimited-challenges/${raceId}/leave`;
+                const classicPath = `/api/races/${raceId}/leave`;
+                const postLeave = (path: string) =>
+                  authFetch(path, {
+                    method: "POST",
+                    body: JSON.stringify({ reason: "user_quit" }),
+                  });
+                // Streak must hit unlimited leave. If header detection missed, fall back
+                // so classic /races/:id/leave is not the only attempt.
+                void (async () => {
+                  const primary = looksUnlimited ? unlimitedPath : classicPath;
+                  const fallback = looksUnlimited ? classicPath : unlimitedPath;
+                  let res: Response | null = null;
+                  try {
+                    res = await postLeave(primary);
+                  } catch {
+                    res = null;
+                  }
+                  if (!res?.ok) {
+                    try {
+                      res = await postLeave(fallback);
+                    } catch {
+                      res = null;
+                    }
+                  }
+                  if (!res?.ok && raceId) {
+                    clearRecentlyLeftRaceId(raceId);
+                    if (looksUnlimited) {
+                      void import("@/utils/hostedUnlimitedCache")
+                        .then(({ clearUnlimitedChallengeLeft }) =>
+                          clearUnlimitedChallengeLeft(raceId),
+                        )
+                        .catch(() => {});
+                    }
+                  }
+                  emitChallengeStatusesRefresh("user_forfeit");
+                })();
               }},
             ]) }>
             <LinearGradient colors={["#FF3333", "#BB0000"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.leaveBtn}>
@@ -5769,8 +5928,12 @@ function LiveRaceDetailScreenContent() {
         />
       </View>
 
-      {/* ── Unlimited Daily Goal: today goal / countdown (no Day N of Y — avoids chip overlap) ── */}
-      {isUnlimitedLive && unlimitedViewerSchedule ? (
+      {/* ── Unlimited Daily Goal: today goal — participants only (not spectators) ── */}
+      {isUnlimitedLive &&
+      unlimitedViewerSchedule &&
+      currentParticipant &&
+      race.currentUserParticipating !== false &&
+      !isStreakManualLeaveStatus(currentParticipant.status) ? (
         <UnlimitedCurrentDayCard
           schedule={unlimitedViewerSchedule}
           todaySteps={unlimitedDailySteps}
@@ -5779,6 +5942,9 @@ function LiveRaceDetailScreenContent() {
           historyRows={unlimitedHistoryRows}
           qualificationStatus={currentParticipant?.qualificationStatus}
           onPressViewResults={goToUnlimitedResults}
+          viewerResultsReady={race.viewerResultsReady}
+          viewerResultReasonCode={race.viewerResultReasonCode}
+          resultsStatus={race.resultsStatus}
         />
       ) : null}
       {isUnlimitedLive ? (
@@ -6025,7 +6191,7 @@ function LiveRaceDetailScreenContent() {
             >
               {isUnlimitedHeader && unlimitedEligibility === "not_eligible"
                 ? UNLIMITED_COPY.lostAfterMiss
-                : myPlayer
+                : myPlayer?.isMe
                   ? isUnlimitedHeader
                     ? (() => {
                         const myRank = myPlayer.rank ?? 0;
@@ -6045,32 +6211,40 @@ function LiveRaceDetailScreenContent() {
             </Text>
             {isActive && !(isUnlimitedHeader && unlimitedEligibility === "not_eligible") ? (
               <Text style={[st.progSub, { fontSize: Math.max(8, rs(9)), marginTop: 2, opacity: 0.85 }]}>
-                {isUnlimitedHeader
-                  ? unlimitedHcPending
-                    ? `Live · ${formatSteps(mySteps)} steps · verification pending`
-                    : unlimitedProgressSource === "verified"
-                      ? `Verified daily · ${formatSteps(unlimitedVerifiedSteps)} steps`
-                      : `Live tracking · ${formatSteps(mySteps)} steps`
-                  : FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR
-                    ? `Live tracking · ${formatSteps(mySteps)} race steps`
-                    : "Live tracking"}
-                {isUnlimitedHeader
-                  ? unlimitedHcPending
-                    ? " · Sensor live; prizes use Health Connect / HealthKit"
-                    : unlimitedVerifiedSteps > 0
-                      ? " · Walk sync verifying"
-                      : " · Walk with Health Connect enabled to verify"
-                  : raceVerification
-                    ? raceVerification.status === "verification_delayed" ||
-                      raceVerification.status === "provider_unavailable"
-                      ? " · Health verification pending"
-                      : raceVerification.status === "matched" ||
-                          raceVerification.status === "within_tolerance"
-                        ? ` · Verified ${formatSteps(raceVerification.verifiedRaceSteps)}`
-                        : " · Health verification pending"
+                {/* Spectators (not on this race's roster) must never see any personal
+                    step/verification figure here — unlimitedVerifiedSteps / mySteps are
+                    the viewer's own device totals and are unrelated to a race they
+                    haven't joined. */}
+                {!myPlayer?.isMe
+                  ? "Spectating — join to track your own progress"
+                  : isUnlimitedHeader
+                    ? unlimitedHcPending
+                      ? `Live · ${formatSteps(mySteps)} steps · verification pending`
+                      : unlimitedProgressSource === "verified"
+                        ? `Verified daily · ${formatSteps(unlimitedVerifiedSteps)} steps`
+                        : `Live tracking · ${formatSteps(mySteps)} steps`
                     : FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR
-                      ? " · Health verification pending"
-                      : ""}
+                      ? `Live tracking · ${formatSteps(mySteps)} race steps`
+                      : "Live tracking"}
+                {!myPlayer?.isMe
+                  ? ""
+                  : isUnlimitedHeader
+                    ? unlimitedHcPending
+                      ? " · Sensor live; prizes use Health Connect / HealthKit"
+                      : unlimitedVerifiedSteps > 0
+                        ? " · Walk sync verifying"
+                        : " · Walk with Health Connect enabled to verify"
+                    : raceVerification
+                      ? raceVerification.status === "verification_delayed" ||
+                        raceVerification.status === "provider_unavailable"
+                        ? " · Health verification pending"
+                        : raceVerification.status === "matched" ||
+                            raceVerification.status === "within_tolerance"
+                          ? ` · Verified ${formatSteps(raceVerification.verifiedRaceSteps)}`
+                          : " · Health verification pending"
+                      : FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR
+                        ? " · Health verification pending"
+                        : ""}
               </Text>
             ) : null}
           </View>

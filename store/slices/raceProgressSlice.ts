@@ -17,6 +17,7 @@ export type StepProgressSource =
   | "android_step_counter"
   | "android_health_connect"
   | "ios_healthkit"
+  | "ios_pedometer"
   | "device_sensor";
 
 export type DailyDisplaySource =
@@ -61,7 +62,11 @@ export interface RaceProgressState {
   activeRaceIsSponsored: boolean;
   /** Whether the companion tray race is sponsored. */
   companionRaceIsSponsored: boolean;
+  /** free / coins_battle / cash / sponsored / unlimited_goal — ongoing tray label. */
+  activeRaceType: string | null;
   raceStartTime: string | null;
+  /** Absolute race end (ISO) for Walk remaining-time + end clock. */
+  challengeEndAt: string | null;
   raceStatus: RaceProgressStatus;
 
   /** Live race steps (sensor / pedometer) — provisional uploads. */
@@ -156,7 +161,9 @@ const initialState: RaceProgressState = {
   companionRaceId: null,
   activeRaceIsSponsored: false,
   companionRaceIsSponsored: false,
+  activeRaceType: null,
   raceStartTime: null,
+  challengeEndAt: null,
   raceStatus: "idle",
   raceSteps: 0,
   raceStepsLastUpdatedAt: null,
@@ -224,6 +231,9 @@ const raceProgressSlice = createSlice({
         /** When opening race B while race A is still active (sponsored dual). */
         preserveAsCompanion?: boolean;
         isSponsored?: boolean;
+        /** free / coins_battle / cash / sponsored / unlimited_goal */
+        raceType?: string | null;
+        challengeEndAt?: string | number | null;
       }>,
     ) {
       const boot = Math.max(0, action.payload.bootSteps ?? 0);
@@ -270,7 +280,6 @@ const raceProgressSlice = createSlice({
           : null;
       if (reuseSession) {
         state.liveRaceSessionId = reuseSession;
-        state.liveRaceSequence = state.liveRaceSequence;
       } else {
         // Inline mint — keep slice free of circular imports.
         const u = String(action.payload.userId ?? "u")
@@ -288,10 +297,30 @@ const raceProgressSlice = createSlice({
       }
       state.rank = state.rank ?? 1;
       state.timeLeftSeconds = state.timeLeftSeconds ?? 0;
+      const incomingEnd = action.payload.challengeEndAt;
+      if (incomingEnd != null && incomingEnd !== "") {
+        const endIso =
+          typeof incomingEnd === "number"
+            ? new Date(incomingEnd).toISOString()
+            : String(incomingEnd);
+        if (!Number.isNaN(new Date(endIso).getTime())) {
+          state.challengeEndAt = endIso;
+        }
+      } else if (prevActive !== action.payload.raceId) {
+        state.challengeEndAt = null;
+      }
       // Sticky sponsored: once true for this race, don't wipe to Live Race title on rejoin.
       state.activeRaceIsSponsored =
         action.payload.isSponsored === true ||
         (prevActive === action.payload.raceId && prevSponsored);
+      const incomingType = String(action.payload.raceType ?? "").trim().toLowerCase();
+      if (incomingType) {
+        state.activeRaceType = incomingType;
+      } else if (action.payload.isSponsored === true) {
+        state.activeRaceType = "sponsored";
+      } else if (prevActive !== action.payload.raceId) {
+        state.activeRaceType = "free";
+      }
       state.syncError = null;
       if (__DEV__) {
         console.log(
@@ -332,7 +361,9 @@ const raceProgressSlice = createSlice({
       state.companionRaceId = null;
       state.activeRaceIsSponsored = false;
       state.companionRaceIsSponsored = false;
+      state.activeRaceType = null;
       state.raceStartTime = null;
+      state.challengeEndAt = null;
       state.raceStatus = action.payload.status;
       state.raceSteps = 0;
       state.raceStepsLastUpdatedAt = null;
@@ -401,7 +432,7 @@ const raceProgressSlice = createSlice({
             const isFirstProvisionalReading = state.provisionalSensorTodaySteps == null;
             const prev = isFirstProvisionalReading
               ? Math.max(0, state.verifiedTodaySteps)
-              : state.provisionalSensorTodaySteps;
+              : (state.provisionalSensorTodaySteps ?? 0);
             const verified = Math.max(0, state.verifiedTodaySteps);
             // Reject yesterday-style absolutes (huge jump from near HC), but allow
             // live session growth past +250 so the ongoing notification keeps moving
@@ -568,6 +599,8 @@ const raceProgressSlice = createSlice({
         timeLeftSeconds?: number;
         /** Sticky true once known — never demote Sponsored → Live via an omit/false update. */
         isSponsored?: boolean;
+        raceType?: string | null;
+        challengeEndAt?: string | number | null;
         syncedAt?: string;
       }>,
     ) {
@@ -595,8 +628,22 @@ const raceProgressSlice = createSlice({
       if (action.payload.timeLeftSeconds !== undefined) {
         state.timeLeftSeconds = action.payload.timeLeftSeconds;
       }
+      const incomingEnd = action.payload.challengeEndAt;
+      if (incomingEnd != null && incomingEnd !== "") {
+        const endIso =
+          typeof incomingEnd === "number"
+            ? new Date(incomingEnd).toISOString()
+            : String(incomingEnd);
+        if (!Number.isNaN(new Date(endIso).getTime())) {
+          state.challengeEndAt = endIso;
+        }
+      }
       if (action.payload.isSponsored === true) {
         state.activeRaceIsSponsored = true;
+      }
+      const incomingType = String(action.payload.raceType ?? "").trim().toLowerCase();
+      if (incomingType) {
+        state.activeRaceType = incomingType;
       }
       state.lastBackendSyncedAt = syncedAt;
       state.isSyncing = false;
@@ -754,7 +801,9 @@ const raceProgressSlice = createSlice({
       state.companionRaceId = null;
       state.activeRaceIsSponsored = false;
       state.companionRaceIsSponsored = false;
+      state.activeRaceType = null;
       state.raceStartTime = null;
+      state.challengeEndAt = null;
       state.raceStatus = "idle";
       state.raceSteps = 0;
       state.raceStepsLastUpdatedAt = null;

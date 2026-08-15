@@ -1048,6 +1048,7 @@ function MatchmakingScreenContent() {
     const joinedAt = new Date().toISOString();
     setParticipants(
       dummies.map((d) => ({
+        id: d.id || d.userId,
         userId: d.userId,
         username: d.username,
         country: null,
@@ -1100,7 +1101,7 @@ function MatchmakingScreenContent() {
   // without waiting for the first 3-second poll to complete.
   const [liveRoom, setLiveRoom] = useState<{
     currentPlayers: number;
-    maxPlayers: number;
+    maxPlayers: number | null;
     status: string;
     targetSteps?: number;
     entryType?: string;
@@ -1484,14 +1485,16 @@ function MatchmakingScreenContent() {
             return { ok: true as const, body };
           }
 
-          const useLeave = status === "open" || status === "full";
+          const useLeave = status === "open" || status === "full" || isUnlimitedGoalRoom;
           res = await authFetch(
-            useLeave
-              ? `/api/races/${backendRaceId}/leave`
-              : `/api/rooms/${backendRaceId}/cancel-registration`,
+            isUnlimitedGoalRoom
+              ? `/api/unlimited-challenges/${backendRaceId}/leave`
+              : useLeave
+                ? `/api/races/${backendRaceId}/leave`
+                : `/api/rooms/${backendRaceId}/cancel-registration`,
             {
               method: "POST",
-              ...(useLeave
+              ...(useLeave || isUnlimitedGoalRoom
                 ? { body: JSON.stringify({ reason: "cancel_registration" }) }
                 : {}),
               timeoutMs: 12_000,
@@ -1664,6 +1667,8 @@ function MatchmakingScreenContent() {
         const seeded = Number(params.initialCurrentPlayers) || 0;
         setLiveRoom({
           ...cached.liveRoom,
+          maxPlayers: cached.liveRoom.maxPlayers ?? 0,
+          status: cached.liveRoom.status || "open",
           // Never let a stale 1-player cache wipe a real list/nav count.
           currentPlayers: Math.max(
             cached.liveRoom.currentPlayers ?? 0,
@@ -1853,6 +1858,7 @@ function MatchmakingScreenContent() {
               bootSteps: 0,
               participantConfirmed: true,
               unlimitedDailyMode: true,
+              raceType: "unlimited_goal",
             });
           }
         } catch {
@@ -2243,8 +2249,12 @@ function MatchmakingScreenContent() {
           minParticipants?: number;
           min_players?: number;
           minimum_participants?: number;
+          minimumParticipants?: number;
+          registeredCount?: number;
+          registered_count?: number;
           room_expires_at?: string | null;
           created_at?: string | null;
+          createdAt?: string | null;
           cancellation_reason?: string | null;
           cancelReason?: string | null;
           scheduledStartAt?: string | null;
@@ -2351,7 +2361,7 @@ function MatchmakingScreenContent() {
         const nextLiveRoom = {
           currentPlayers: resolvedPlayerCount,
           maxPlayers: unlimitedCapacity ? 0 : (dataRace.maxPlayers ?? raceMaxPlayers),
-          status: dataRace.status,
+          status: dataRace.status ?? "open",
           targetSteps:
             dataRace.targetSteps ??
             dataRace.dailyGoalSteps ??

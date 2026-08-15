@@ -1,12 +1,12 @@
 /**
 
- * Unlimited Challenge preview helpers — Available Rooms (cash only).
+ * Trending Challenges preview helpers — Available Rooms (all public types).
 
  *
 
- * Shows unlimited-goal + fixed-player cash rooms.
+ * Shows free, coins, cash, and unlimited-goal upcoming rooms.
 
- * Ranking: most recent scheduled start first (newest upcoming).
+ * Ranking: soonest start first.
 
  */
 
@@ -31,6 +31,18 @@ export const TRENDING_MAX_CARDS = 20;
 export const TRENDING_AUTOPLAY_MS = 5_000;
 
 export const TRENDING_RESUME_AFTER_INTERACTION_MS = 7_000;
+
+export const TRENDING_PREVIEW_CACHE_TTL_MS = 5 * 60 * 1000;
+
+export function trendingPreviewCacheKey(userId?: string | null): string {
+  const uid = String(userId || "anon").trim() || "anon";
+  return `walk_trending:${uid}`;
+}
+
+/** Walk tab must not render blank/skeleton trending cards. */
+export function shouldShowTrendingPreview(rows: readonly unknown[] | null | undefined): boolean {
+  return Array.isArray(rows) && rows.length > 0;
+}
 
 
 
@@ -109,7 +121,11 @@ export type AvailableRoomLike = {
 
   challenge_end_at?: string | null;
 
+  challengeEndAt?: string | null;
+
   challenge_duration_days?: number | null;
+
+  prizePoolCents?: number | null;
 
   created_at?: string | null;
 
@@ -189,7 +205,7 @@ export function resolveTrendingFormat(room: AvailableRoomLike): TrendingChalleng
 
 
 
-/** Unlimited Challenge section: cash unlimited + fixed-player cash only. */
+/** Cash unlimited + fixed-player cash (legacy helper). */
 
 export function isUnlimitedChallengePreviewFormat(
 
@@ -198,6 +214,28 @@ export function isUnlimitedChallengePreviewFormat(
 ): boolean {
 
   return format === "unlimited_goal" || format === "fixed_cash";
+
+}
+
+/** Walk Trending preview: every public joinable challenge type. */
+
+export function isTrendingPreviewFormat(
+
+  format: TrendingChallengeFormat,
+
+): boolean {
+
+  return (
+
+    format === "unlimited_goal" ||
+
+    format === "fixed_cash" ||
+
+    format === "free" ||
+
+    format === "coins"
+
+  );
 
 }
 
@@ -235,6 +273,10 @@ export function formatTrendingPrizePool(room: AvailableRoomLike): string {
     return formatUsdDollars(room.reward_pool);
   }
 
+  if (typeof room.prizePoolCents === "number" && room.prizePoolCents > 0) {
+    return formatUsdDollars(room.prizePoolCents / 100);
+  }
+
   if (room.reward_label?.trim()) return room.reward_label.trim();
 
   const entry = room.entry_fee ?? 0;
@@ -261,15 +303,17 @@ export function formatTrendingStartLabel(startsAtUtc: string, now = new Date()):
 
 /** Resolve end time from API end stamp or start + duration days. */
 export function resolveTrendingEndsAtUtc(room: AvailableRoomLike): string | null {
-  if (room.challenge_end_at) {
-    const t = new Date(room.challenge_end_at).getTime();
-    if (Number.isFinite(t)) return room.challenge_end_at;
+  const endIso = room.challenge_end_at ?? room.challengeEndAt ?? null;
+  if (endIso) {
+    const t = new Date(endIso).getTime();
+    if (Number.isFinite(t)) return endIso;
   }
   const startIso = room.scheduled_start_at;
   if (!startIso) return null;
   const startMs = new Date(startIso).getTime();
   if (!Number.isFinite(startMs)) return null;
-  const days = Math.max(1, room.challenge_duration_days ?? 1);
+  const days = Math.max(0, Math.floor(room.challenge_duration_days ?? 0));
+  if (days <= 0) return null;
   return new Date(startMs + days * 86_400_000).toISOString();
 }
 
@@ -277,11 +321,11 @@ export function resolveTrendingEndsAtUtc(room: AvailableRoomLike): string | null
 
 /**
 
- * Public upcoming cash rooms for Trending / Unlimited Challenge preview.
+ * Public upcoming rooms for Trending preview.
 
  * Excludes: private, sponsored, ended, past start.
 
- * Hosted-by-viewer rooms stay eligible so creators see their public Unlimited.
+ * Hosted-by-viewer rooms stay eligible so creators see their public challenges.
 
  */
 
@@ -329,7 +373,7 @@ export function isEligibleTrendingRoom(
 
   if (!Number.isFinite(startMs) || startMs <= nowMs) return false;
 
-  if (!isUnlimitedChallengePreviewFormat(resolveTrendingFormat(room))) return false;
+  if (!isTrendingPreviewFormat(resolveTrendingFormat(room))) return false;
 
   return true;
 
@@ -337,19 +381,7 @@ export function isEligibleTrendingRoom(
 
 
 
-function recentRankMs(room: AvailableRoomLike): number {
-
-  const created = room.created_at ? new Date(room.created_at).getTime() : NaN;
-
-  if (Number.isFinite(created)) return created;
-
-  return new Date(room.scheduled_start_at!).getTime();
-
-}
-
-
-
-/** Most recent challenges first; stable room_id tie-break. Cash unlimited + fixed only. */
+/** Soonest start first; stable room_id tie-break. */
 
 export function rankTrendingRooms(
 
@@ -365,11 +397,11 @@ export function rankTrendingRooms(
 
   return eligible.sort((a, b) => {
 
-    const ra = recentRankMs(a);
+    const sa = new Date(a.scheduled_start_at!).getTime();
 
-    const rb = recentRankMs(b);
+    const sb = new Date(b.scheduled_start_at!).getTime();
 
-    if (ra !== rb) return rb - ra;
+    if (sa !== sb) return sa - sb;
 
     return a.room_id.localeCompare(b.room_id);
 

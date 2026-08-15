@@ -6,12 +6,8 @@ import React, { memo } from "react";
 import { Text, View } from "react-native";
 import { useTickingNow } from "@/components/perf/LiveClockText";
 
-function fmtTime(seconds: number) {
-  const s = Math.max(0, Math.floor(seconds));
-  return `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
-}
-
-function fmtCountdown(seconds: number) {
+/** Elapsed / remaining race time — always hh:mm:ss. */
+function fmtHms(seconds: number) {
   const s = Math.max(0, Math.floor(seconds));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -78,8 +74,8 @@ export const RaceClockInfoBar = memo(function RaceClockInfoBar({
   const infoTimeValue =
     isCompleted || isActive
       ? isActive && isSponsored
-        ? fmtCountdown(sponsoredRemaining)
-        : fmtTime(elapsed)
+        ? fmtHms(sponsoredRemaining)
+        : fmtHms(elapsed)
       : statusLabel;
 
   const color =

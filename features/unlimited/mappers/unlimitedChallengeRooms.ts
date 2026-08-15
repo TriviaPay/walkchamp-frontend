@@ -126,10 +126,17 @@ export function extractUnlimitedChallengeRows(payload: unknown): unknown[] {
 
   if (looksLikeChallengeRow(obj)) return [obj];
 
-  // Detail envelope: { challenge: {...}, players: [...] }
+  // Detail envelope: { challenge: {...}, players: [...] } — keep roster on the row.
   for (const key of ["challenge", "unlimitedChallenge", "unlimited_challenge", "room"] as const) {
     const nested = asRecord(obj[key]);
-    if (nested && looksLikeChallengeRow(nested)) return [nested];
+    if (nested && looksLikeChallengeRow(nested)) {
+      const envelopePlayers = obj.players ?? obj.participants;
+      const nestedPlayers = nested.players ?? nested.participants;
+      if (envelopePlayers != null && nestedPlayers == null) {
+        return [{ ...nested, players: envelopePlayers, participants: envelopePlayers }];
+      }
+      return [nested];
+    }
   }
 
   for (const key of LIST_ARRAY_KEYS) {
@@ -199,6 +206,13 @@ export type UnlimitedUpcomingRoom = {
   host_avatar_url: string | null;
   host_country_flag: string | null;
   current_user_registered: boolean;
+  /**
+   * The viewer's own qualification status when they were (or still are) a
+   * participant — e.g. "disqualified", "left", "forfeited", "eligible".
+   * Null when the viewer never joined at all. Lets the UI tell "spectator"
+   * apart from "my streak broke" instead of collapsing both into false.
+   */
+  participation_status?: string | null;
   eligible_to_register: boolean;
   capacity_mode: "unlimited";
   platform_fee_cents?: number | null;
@@ -209,7 +223,75 @@ export type UnlimitedUpcomingRoom = {
   /** Raw backend settlement bookkeeping — see utils/unlimitedResults.ts resolveUnlimitedResultStatus. */
   settlement_status?: string | null;
   qualified_participant_count?: number | null;
+  /** Top-3 roster from list APIs (`players` / `participants`). Empty when the server sent none. */
+  players?: UnlimitedCardPlayer[];
 };
+
+export type UnlimitedCardPlayer = {
+  id: string;
+  userId: string;
+  username: string;
+  countryFlag: string | null;
+  avatarColor: string | null;
+  avatarUrl: string | null;
+  currentSteps: number;
+  rank: number;
+  isHost: boolean;
+  status: string | null;
+  qualificationStatus: string | null;
+};
+
+function asPlayerRecordList(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((row): row is Record<string, unknown> => !!asRecord(row));
+}
+
+/** List cards attach a trimmed roster on the challenge row (same keys as detail). */
+export function readUnlimitedCardPlayers(raw: Record<string, unknown>): UnlimitedCardPlayer[] {
+  const fromPlayers = asPlayerRecordList(pickRaw(raw, "players", "Players"));
+  const fromParticipants = asPlayerRecordList(
+    pickRaw(raw, "participants", "Participants"),
+  );
+  const source = fromPlayers.length >= fromParticipants.length ? fromPlayers : fromParticipants;
+  const seen = new Set<string>();
+  const out: UnlimitedCardPlayer[] = [];
+  for (let i = 0; i < source.length; i++) {
+    const row = source[i]!;
+    const nested = asRecord(pickRaw(row, "user", "profile", "member")) ?? {};
+    const userId =
+      asString(pickRaw(row, "userId", "user_id", "id")) ??
+      asString(pickRaw(nested, "id", "userId", "user_id"));
+    if (!userId || seen.has(userId)) continue;
+    seen.add(userId);
+    const username =
+      asString(pickRaw(row, "username", "displayName", "display_name", "fullName", "name")) ??
+      asString(pickRaw(nested, "username", "displayName", "display_name")) ??
+      `Player ${i + 1}`;
+    out.push({
+      id: asString(pickRaw(row, "id", "participantId", "participant_id")) ?? userId,
+      userId,
+      username,
+      countryFlag:
+        asString(pickRaw(row, "countryFlag", "country_flag")) ??
+        asString(pickRaw(nested, "countryFlag", "country_flag")),
+      avatarColor:
+        asString(pickRaw(row, "avatarColor", "avatar_color")) ??
+        asString(pickRaw(nested, "avatarColor", "avatar_color")),
+      avatarUrl:
+        asString(pickRaw(row, "avatarUrl", "avatar_url")) ??
+        asString(pickRaw(nested, "avatarUrl", "avatar_url")),
+      currentSteps:
+        asNumber(pickRaw(row, "currentSteps", "current_steps", "steps", "verifiedSteps")) ?? 0,
+      rank: asNumber(pickRaw(row, "rank", "roster_rank", "rosterRank")) ?? i + 1,
+      isHost: asBool(pickRaw(row, "isHost", "is_host")) === true,
+      status: asString(pickRaw(row, "status", "qualificationStatus", "qualification_status")),
+      qualificationStatus: asString(
+        pickRaw(row, "qualificationStatus", "qualification_status", "status"),
+      ),
+    });
+  }
+  return out;
+}
 
 /**
  * Map a raw unlimited challenge / room row into the Upcoming Rooms card shape.
@@ -254,8 +336,7 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
   const visibility = asString(pickRaw(obj, "visibility"))?.toLowerCase() ?? null;
   const isPrivate =
     asBool(pickRaw(obj, "is_private", "isPrivate")) ??
-    visibility === "private" ??
-    false;
+    visibility === "private";
 
   const startAt = asString(
     pickRaw(
@@ -274,20 +355,26 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
     ),
   );
 
+  // Full challenge end only (`challengeEndAtUtc`). Never viewer/day `endAtUtc` /
+  // `currentDayEndAt` — those are ~24h windows and made My Race show the wrong clock
+  // until Live Race opened detail.
+  const viewer = asRecord(pickRaw(obj, "viewer"));
   const endAt = asString(
     pickRaw(
       obj,
-      "challenge_end_at",
-      "challengeEndAt",
-      "challengeEndAtIso",
       "challengeEndAtUtc",
       "challenge_end_at_utc",
-      "endAtIso",
-      "end_at_iso",
-      "endAtUtc",
-      "end_at_utc",
-      "endsAtUtc",
-      "ends_at_utc",
+      "challengeEndAtIso",
+      "challenge_end_at",
+      "challengeEndAt",
+      "viewerEndAt",
+      "viewer_end_at",
+    ),
+  ) ?? asString(
+    pickRaw(
+      viewer ?? {},
+      "viewerEndAt",
+      "viewer_end_at",
     ),
   );
 
@@ -348,8 +435,8 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
 
   const hostUsername =
     asString(pickRaw(obj, "host_username", "hostUsername")) ??
-    asString(pickRaw(host, "username", "name", "displayName")) ??
-    "Host";
+    asString(pickRaw(host, "username", "displayName", "display_name", "fullName")) ??
+    "";
 
   const memberExplicit = asBool(
     pickRaw(
@@ -374,10 +461,12 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
   )?.toLowerCase();
   const hasLeft =
     participationStatus === "left" ||
+    participationStatus === "forfeited" ||
     participationStatus === "withdrawn" ||
     participationStatus === "cancelled" ||
     participationStatus === "canceled" ||
-    participationStatus === "refunded";
+    participationStatus === "refunded" ||
+    participationStatus === "quit";
 
   // Membership must be explicit (or left). Do NOT infer from isHost / hostUserId —
   // creator id remains after Leave and would keep Next Race cards stuck.
@@ -438,6 +527,7 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
       asString(pickRaw(obj, "host_country_flag", "hostCountryFlag")) ??
       asString(pickRaw(host, "countryFlag", "country_flag")),
     current_user_registered: member,
+    participation_status: participationStatus ?? null,
     eligible_to_register: eligible && !member,
     capacity_mode: "unlimited",
     platform_fee_cents: asNumber(pickRaw(obj, "platformFeeCents", "platform_fee_cents")),
@@ -447,6 +537,7 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
     qualified_participant_count: asNumber(
       pickRaw(obj, "qualifiedParticipantCount", "qualified_participant_count"),
     ),
+    players: readUnlimitedCardPlayers(obj),
   };
 }
 
@@ -487,6 +578,7 @@ export function mergeUpcomingRoomsById<T extends { room_id: string; current_user
   ...lists: Array<T[] | null | undefined>
 ): T[] {
   const map = new Map<string, T>();
+  const isEmpty = (v: unknown) => v == null || v === "";
   for (const list of lists) {
     for (const room of list ?? []) {
       if (!room?.room_id) continue;
@@ -495,12 +587,38 @@ export function mergeUpcomingRoomsById<T extends { room_id: string; current_user
         map.set(room.room_id, room);
         continue;
       }
-      const merged = { ...prev, ...room } as T;
-      // Never let a later row clear membership once we've seen registered=true.
+      const merged = { ...prev, ...room } as T & Record<string, unknown>;
+      // Later rows must not wipe API start/end/prize/count with null hosted-cache leftovers.
+      for (const key of [
+        "challenge_end_at",
+        "scheduled_start_at",
+        "challenge_timezone",
+        "challenge_duration_days",
+        "reward_pool",
+        "prize_pool_cents",
+        "title",
+        "status",
+      ] as const) {
+        const nextVal = (room as Record<string, unknown>)[key];
+        const prevVal = (prev as Record<string, unknown>)[key];
+        if (isEmpty(nextVal) && !isEmpty(prevVal)) {
+          (merged as Record<string, unknown>)[key] = prevVal;
+        }
+      }
+      const prevCount = Number((prev as { registered_count?: number }).registered_count ?? 0);
+      const nextCount = Number((room as { registered_count?: number }).registered_count ?? 0);
+      if (prevCount > 0 || nextCount > 0) {
+        (merged as { registered_count?: number }).registered_count = Math.max(prevCount, nextCount);
+      }
       if (prev.current_user_registered === true || room.current_user_registered === true) {
         merged.current_user_registered = true;
       }
-      map.set(room.room_id, merged);
+      const prevPlayers = (prev as { players?: unknown[] }).players;
+      const nextPlayers = (room as { players?: unknown[] }).players;
+      if ((prevPlayers?.length ?? 0) > 0 && (nextPlayers?.length ?? 0) === 0) {
+        (merged as { players?: unknown[] }).players = prevPlayers;
+      }
+      map.set(room.room_id, merged as T);
     }
   }
   return [...map.values()];

@@ -88,6 +88,45 @@ assert.equal(mappedLive.entryType, "$30");
 assert.equal(mappedLive.maxPlayers, 0);
 assert.equal(mappedLive.challengeType, "unlimited_goal");
 assert.equal(mappedLive.capacityMode, "unlimited");
+assert.equal(mappedLive.players.length, 0);
+
+const liveRoomWithRoster: UnlimitedUpcomingRoom = {
+  ...liveRoom,
+  registered_count: 2,
+  players: [
+    {
+      id: "p-a",
+      userId: "user-a",
+      username: "Alice",
+      countryFlag: "IN",
+      avatarColor: "#00E676",
+      avatarUrl: null,
+      currentSteps: 400,
+      rank: 1,
+      isHost: true,
+      status: "eligible",
+      qualificationStatus: "eligible",
+    },
+    {
+      id: "p-b",
+      userId: "user-b",
+      username: "Bob",
+      countryFlag: null,
+      avatarColor: null,
+      avatarUrl: null,
+      currentSteps: 120,
+      rank: 2,
+      isHost: false,
+      status: "eligible",
+      qualificationStatus: "eligible",
+    },
+  ],
+};
+const mappedRoster = mapUnlimitedUpcomingToLiveRaceFields(liveRoomWithRoster, nowAfterStart);
+assert.ok(mappedRoster);
+assert.equal(mappedRoster.players.length, 2, "list-card players[] must paint the streak roster");
+assert.equal(mappedRoster.players[0]?.username, "Alice");
+assert.equal(mappedRoster.playerCount, 2);
 
 const detailMapped = mapUnlimitedDetailToLiveDetail({
   challenge: {
@@ -147,5 +186,95 @@ assert.equal(fromTotalOnly.find((p) => p.userId === "user-a")?.currentSteps, 5);
 const forced = coerceUnlimitedRaceInProgress(detailMapped.race, { forceLive: true });
 assert.equal(forced.status, "in_progress");
 assert.ok(forced.startedAt);
+
+const backendDetailEnvelope = {
+  challenge: {
+    id: "chal-live",
+    challengeType: "unlimited_goal",
+    entryType: "unlimited_goal",
+    status: "active",
+    startAtUtc: start,
+    challengeEndAtUtc: "2026-08-06T05:00:00.000Z",
+    dailyGoalSteps: 10000,
+    durationDays: 7,
+    entryFeeCents: 100000,
+    participantCount: 2,
+    hostUserId: "host-1",
+    prizePoolCents: 200000,
+  },
+  viewerStatus: "active",
+  viewerEndAt: "2026-08-07T05:00:00.000Z",
+  currentDayEndAt: "2026-07-31T05:00:00.000Z",
+  currentSteps: 0,
+  durationDays: 7,
+  dailyGoalSteps: 10000,
+  participantCount: 2,
+  players: [
+    {
+      id: "part-host",
+      participantId: "part-host",
+      userId: "host-1",
+      username: "Priya",
+      displayName: "Priya",
+      currentSteps: 0,
+      isHost: true,
+      status: "active",
+      qualificationStatus: "active",
+    },
+    {
+      id: "part-other",
+      participantId: "part-other",
+      userId: "user-2",
+      username: "Rithik",
+      displayName: "Rithik",
+      currentSteps: 40,
+      isHost: false,
+      status: "active",
+      qualificationStatus: "active",
+    },
+  ],
+};
+backendDetailEnvelope.participants = backendDetailEnvelope.players;
+
+const liveFromBackend = mapUnlimitedDetailToLiveDetail(backendDetailEnvelope);
+assert.ok(liveFromBackend);
+assert.equal(liveFromBackend.participants.length, 2, "detail players[] must paint both runners");
+assert.equal(liveFromBackend.race.currentPlayers, 2);
+assert.equal(liveFromBackend.race.challengeEndAt, "2026-08-06T05:00:00.000Z");
+assert.ok(liveFromBackend.participants.some((p) => p.userId === "user-2"));
+
+const wrapped = mapUnlimitedDetailToLiveDetail({ data: backendDetailEnvelope });
+assert.ok(wrapped);
+assert.equal(wrapped.participants.length, 2, "wrapped { data: detail } must still expose players[]");
+
+const emptyRosterPrizePool = mapUnlimitedDetailToLiveDetail({
+  challenge: {
+    id: "chal-empty",
+    challengeType: "unlimited_goal",
+    status: "active",
+    startAtUtc: start,
+    dailyGoalSteps: 10000,
+    durationDays: 5,
+    entryFeeCents: 100000,
+    participantCount: 0,
+    prizePoolCents: 200000,
+    hostUserId: "host-1",
+  },
+  participantCount: 0,
+  currentSteps: 40,
+  players: [],
+  participants: [],
+});
+assert.ok(emptyRosterPrizePool);
+assert.equal(
+  emptyRosterPrizePool.participants.length,
+  0,
+  "empty players[] must not invent runners",
+);
+assert.equal(
+  emptyRosterPrizePool.race.currentPlayers,
+  0,
+  "prize pool / entry fee must not become '2 joined' when roster is empty",
+);
 
 console.log("unlimitedLiveRace.test.ts: ok");

@@ -34,6 +34,11 @@ import ActiveRaceModal, {
   type ActiveRaceInfo,
   normalizeActiveRaceInfo,
 } from "@/components/ActiveRaceModal";
+import {
+  activeRaceFromConflictBody,
+  fetchBlockingNonSponsoredChallenge,
+  isOneChallengeConflictCode,
+} from "@/utils/blockingChallengeMembership";
 import AlreadyRegisteredModal, { type RegisteredRaceInfo } from "@/components/AlreadyRegisteredModal";
 import { JoinProgressOverlay } from "@/components/RaceJoinBadge";
 import JoinWithCodeModal, { type JoinWithCodeResult } from "@/components/JoinWithCodeModal";
@@ -2050,19 +2055,22 @@ function AvailableRoomsScreenContent() {
         const activeRace = bodyRes.active_race as ActiveRaceInfo | undefined;
         if (
           res.status === 409 &&
-          (code === "REGULAR_RACE_REGISTRATION_EXISTS" || code === "ACTIVE_RACE_EXISTS") &&
-          activeRace
+          isOneChallengeConflictCode(code) &&
+          (activeRace || bodyRes.blocking)
         ) {
           setConsentUpcomingRoom(null);
           setConsentRoom(null);
-          const status = activeRace.room_status;
-          if (status === "scheduled") {
-            setRegisteredRaceModal(enrichRegisteredRace(activeRace));
-          } else {
-            pendingRaceActionRef.current = null;
-            setActiveRaceModal(activeRace);
+          const conflict = activeRaceFromConflictBody(bodyRes) ?? (activeRace ? normalizeActiveRaceInfo(activeRace as unknown as Record<string, unknown>) : null);
+          if (conflict) {
+            const status = conflict.room_status;
+            if (status === "scheduled" || status === "waiting") {
+              setRegisteredRaceModal(enrichRegisteredRace(conflict));
+            } else {
+              pendingRaceActionRef.current = null;
+              setActiveRaceModal(conflict);
+            }
+            return;
           }
-          return;
         }
         AppAlert.alert("Registration failed", (bodyRes.error as string) ?? (bodyRes.message as string) ?? "Could not register.");
         return;
@@ -2081,6 +2089,7 @@ function AvailableRoomsScreenContent() {
           eligible_to_register: false,
           registered_count: (bodyRes.registered_count as number) ?? room.registered_count + 1,
           host_user_id: room.host_user_id || "",
+          capacity_mode: "unlimited",
         });
       }
     } catch {
@@ -2115,25 +2124,25 @@ function AvailableRoomsScreenContent() {
       return;
     }
 
-    // Scenario 2: already in an active/waiting race → show ActiveRaceModal immediately.
-    try {
-      const res = await authFetch("/api/races/current-active");
-      if (res.ok) {
-        const data = await res.json() as {
-          has_active_race?: boolean;
-          active_race?: ActiveRaceInfo | null;
-        };
-        const ar = data.active_race;
-        if (data.has_active_race && ar && !ar.is_sponsored && ar.room_type !== "sponsored") {
+    // Scenario 2: already in an active/waiting race or streak — show modal.
+    // Sponsored may run alongside; skip this gate when registering for a sponsored room.
+    if (room.challenge_type !== "sponsored") {
+      try {
+        const blocking = await fetchBlockingNonSponsoredChallenge();
+        if (blocking && blocking.room_id !== room.room_id) {
           setConsentUpcomingRoom(null);
           setConsentRoom(null);
           pendingRaceActionRef.current = null;
-          setActiveRaceModal(normalizeActiveRaceInfo(ar as unknown as Record<string, unknown>));
+          if (blocking.room_status === "scheduled" || blocking.room_status === "waiting") {
+            setRegisteredRaceModal(enrichRegisteredRace(blocking));
+          } else {
+            setActiveRaceModal(normalizeActiveRaceInfo(blocking as unknown as Record<string, unknown>));
+          }
           return;
         }
+      } catch {
+        // Fall through to register — server must still reject.
       }
-    } catch {
-      // Fall through to normal register / consent.
     }
 
     if (room.entry_fee > 0) {
@@ -2142,7 +2151,7 @@ function AvailableRoomsScreenContent() {
     } else {
       void doRegister(room, roomCode);
     }
-  }, [doRegister, upcomingRooms, user?.id]);
+  }, [doRegister, upcomingRooms, user?.id, enrichRegisteredRace]);
 
   const handleRegister = useCallback(async (room: UpcomingRoom) => {
     // Private rooms require the correct room code before registration.

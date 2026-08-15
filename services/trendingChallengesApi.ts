@@ -64,9 +64,7 @@ export async function fetchTrendingChallenges(opts?: {
   viewerUserId?: string | null;
 }): Promise<TrendingChallenge[]> {
   if (isWalkTrendingChallengesMockEnabled()) {
-    return getTrendingChallengeMocks(getDeviceTimezone())
-      .filter((c) => c.challengeFormat === "unlimited_goal" || c.challengeFormat === "fixed_cash")
-      .slice(0, TRENDING_MAX_CARDS);
+    return getTrendingChallengeMocks(getDeviceTimezone()).slice(0, TRENDING_MAX_CARDS);
   }
 
   // Prefer the same upcoming tab Available Rooms uses (scheduled public rooms),

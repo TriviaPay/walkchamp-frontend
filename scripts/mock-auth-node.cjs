@@ -8,6 +8,17 @@
  */
 "use strict";
 
+if (!globalThis.expo) {
+  class FakeEventEmitter {
+    addListener() {
+      return { remove() {} };
+    }
+    removeAllListeners() {}
+    emit() {}
+  }
+  globalThis.expo = { EventEmitter: FakeEventEmitter };
+}
+
 const Module = require("module");
 const store = new Map();
 

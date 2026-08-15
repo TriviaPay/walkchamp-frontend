@@ -142,14 +142,12 @@ function TrendingChallengeCardInner({
             {startLabel}
           </Text>
         </View>
-        {endLabel ? (
-          <View style={styles.dateRow}>
-            <Text style={styles.dateKey}>End Date</Text>
-            <Text style={[styles.dateValue, { color: theme.accent }]} numberOfLines={1}>
-              {endLabel}
-            </Text>
-          </View>
-        ) : null}
+        <View style={styles.dateRow}>
+          <Text style={styles.dateKey}>End Date</Text>
+          <Text style={[styles.dateValue, { color: theme.accent }]} numberOfLines={1}>
+            {endLabel ?? "TBD"}
+          </Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -203,8 +201,8 @@ const styles = StyleSheet.create({
     lineHeight: rs(15),
   },
   artBox: {
-    height: 28,
-    marginBottom: 4,
+    height: 22,
+    marginBottom: 3,
   },
   prizeBanner: {
     flexDirection: "row",

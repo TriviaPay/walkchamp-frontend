@@ -226,7 +226,13 @@ class WalkChampRaceForegroundService : Service() {
           usedCustomRaceViews = WalkChampNotificationViews.applyRaceCustomViews(ctx, builder, state)
           if (!usedCustomRaceViews) {
             builder
-              .setContentTitle("Live Race")
+              .setContentTitle(
+                NotificationVisuals.raceTypeLabel(
+                  isSponsored = state.isSponsored,
+                  raceTypeHint = state.raceTypeHint,
+                  unlimitedDailyMode = state.unlimitedDailyMode,
+                ),
+              )
               .setContentText(body)
               .setStyle(NotificationCompat.BigTextStyle().bigText(body))
           }
@@ -234,7 +240,13 @@ class WalkChampRaceForegroundService : Service() {
           Log.w(TAG, "Custom race notification rendering failed — legacy content kept: ${e.message}")
           usedCustomRaceViews = false
           builder
-            .setContentTitle("Live Race")
+            .setContentTitle(
+              NotificationVisuals.raceTypeLabel(
+                isSponsored = state.isSponsored,
+                raceTypeHint = state.raceTypeHint,
+                unlimitedDailyMode = state.unlimitedDailyMode,
+              ),
+            )
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
         }
@@ -1747,11 +1759,15 @@ class WalkChampRaceForegroundService : Service() {
   private fun raceDisplayState(state: RaceNotificationState): RaceNotificationDisplayState {
     val goal = state.goalSteps.coerceAtLeast(0)
     val steps = state.raceSteps.coerceAtLeast(0)
-    // Match ongoing custom views: one Live Race illustration + label for all types.
+    // Match ongoing custom views: one LIVE illustration + type label (Free / Coins / Cash / Sponsored).
     val visual = NotificationVisualType.LIVE_RACE
     return RaceNotificationDisplayState(
       raceId = state.raceId,
-      raceTypeLabel = "Live Race",
+      raceTypeLabel = NotificationVisuals.raceTypeLabel(
+        isSponsored = state.isSponsored,
+        raceTypeHint = state.raceTypeHint,
+        unlimitedDailyMode = state.unlimitedDailyMode,
+      ),
       steps = steps,
       goal = goal,
       percentage = NotificationVisuals.clampPercent(steps, if (goal > 0) goal else 1),

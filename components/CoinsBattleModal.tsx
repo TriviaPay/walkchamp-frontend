@@ -20,6 +20,7 @@ import { getValidSession } from "@/services/authService";
 import { Image } from "expo-image";
 import CoinsStoreModal from "@/components/CoinsStoreModal";
 import { getApiBase } from "@/utils/apiUrl";
+import { fetchBlockingNonSponsoredChallenge } from "@/utils/blockingChallengeMembership";
 import { getLocalDateStr } from "@/utils/timezone";
 import { useOwnedTrackLayouts } from "@/hooks/useOwnedTrackLayouts";
 import { useDispatch, useSelector } from "react-redux";
@@ -316,6 +317,12 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
     try {
       const session = await getValidSession();
       if (!session) { setError("Not authenticated"); setLoading(false); return; }
+      const blocking = await fetchBlockingNonSponsoredChallenge();
+      if (blocking) {
+        setError("You already have an active challenge. Leave it before starting a Coins Battle.");
+        setLoading(false);
+        return;
+      }
       const res = await fetch(`${getApiBase()}/api/coins-battle/host`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session}` },
@@ -323,7 +330,7 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
       });
       const data = await res.json() as { raceId?: string; error?: string; code?: string };
       if (!res.ok) {
-        if (data.code === "ACTIVE_RACE_EXISTS") setError("You are already in an active race.");
+        if (data.code === "ACTIVE_RACE_EXISTS" || data.code === "one_challenge_at_a_time") setError("You already have an active challenge.");
         else if (data.code === "INSUFFICIENT_COINS") setError(`You need ${fmtCoins(coinEntry)} coins to host this battle.`);
         else setError(data.error ?? "Failed to create room");
         setLoading(false);

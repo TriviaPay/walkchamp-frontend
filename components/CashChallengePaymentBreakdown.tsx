@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ActivityIndicator, Pressable } from "react-nati
 import type { CashChallengePaymentQuote } from "@/services/cashChallengeApi";
 import { formatUsdFromDollars, refundBreakdownFromQuote } from "@/services/cashChallengeApi";
 import { rf } from "@/utils/responsive";
+import { UsdAmountWithInr } from "@/components/InrHint";
 
 type Props = {
   quote: CashChallengePaymentQuote | null;
@@ -61,9 +62,12 @@ export function CashChallengePaymentBreakdown({
           <>
             <View style={styles.row}>
               <Text style={[styles.label, { color: colors.mutedForeground }]}>Entry Fee</Text>
-              <Text style={[styles.value, { color: colors.foreground }]}>
-                {formatUsdFromDollars(entryFeeDollars)}
-              </Text>
+              <UsdAmountWithInr
+                usd={entryFeeDollars ?? 0}
+                label={formatUsdFromDollars(entryFeeDollars)}
+                style={styles.value}
+                color={colors.foreground}
+              />
             </View>
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             <View style={styles.row}>
@@ -116,23 +120,45 @@ export function CashChallengePaymentBreakdown({
   const rows = [
     ...(showPool
       ? [
-          { label: "Entry Fee", value: `${formatUsdFromDollars(matchedQuote.entryFee)} per player`, accent: false },
-          { label: "Players", value: String(matchedQuote.numberOfPlayers), accent: false },
-          { label: "Entry Pool / Prize Pool", value: formatUsdFromDollars(matchedQuote.prizePool), accent: true },
+          {
+            label: "Entry Fee",
+            value: `${formatUsdFromDollars(matchedQuote.entryFee)} per player`,
+            usd: matchedQuote.entryFee,
+            accent: false,
+          },
+          { label: "Players", value: String(matchedQuote.numberOfPlayers), usd: 0, accent: false },
+          {
+            label: "Entry Pool / Prize Pool",
+            value: formatUsdFromDollars(matchedQuote.prizePool),
+            usd: matchedQuote.prizePool,
+            accent: true,
+          },
         ]
       : []),
-    { label: "Entry Fee", value: formatUsdFromDollars(matchedQuote.entryFee), accent: false },
+    {
+      label: "Entry Fee",
+      value: formatUsdFromDollars(matchedQuote.entryFee),
+      usd: matchedQuote.entryFee,
+      accent: false,
+    },
     {
       label: "Tax / Payment Processing Fee",
       value: formatUsdFromDollars(matchedQuote.paymentProcessingFee),
+      usd: matchedQuote.paymentProcessingFee,
       accent: false,
     },
     {
       label: "Platform Service Fee",
       value: formatUsdFromDollars(matchedQuote.platformServiceFee),
+      usd: matchedQuote.platformServiceFee,
       accent: false,
     },
-    { label: "Total Payable", value: formatUsdFromDollars(matchedQuote.totalPayable), accent: true },
+    {
+      label: "Total Payable",
+      value: formatUsdFromDollars(matchedQuote.totalPayable),
+      usd: matchedQuote.totalPayable,
+      accent: true,
+    },
   ];
 
   const uniqueRows = showPool
@@ -150,15 +176,15 @@ export function CashChallengePaymentBreakdown({
           {i > 0 && <View style={[styles.divider, { backgroundColor: colors.border }]} />}
           <View style={styles.row}>
             <Text style={[styles.label, { color: colors.mutedForeground }]}>{row.label}</Text>
-            <Text
+            <UsdAmountWithInr
+              usd={row.usd}
+              label={row.value}
               style={[
                 styles.value,
-                { color: row.accent ? colors.primary : colors.foreground },
                 row.label === "Total Payable" && styles.total,
               ]}
-            >
-              {row.value}
-            </Text>
+              color={row.accent ? colors.primary : colors.foreground}
+            />
           </View>
         </View>
       ))}
@@ -193,7 +219,12 @@ export function CashChallengeRewardSplit({
             <Text style={{ fontWeight: "700", color: colors.foreground }}>{slot.label}</Text>
             <Text style={{ fontSize: rf(12), color: colors.mutedForeground }}>{slot.percentage}% of pool</Text>
           </View>
-          <Text style={{ fontWeight: "900", color: colors.primary }}>{formatUsdFromDollars(slot.amount)}</Text>
+          <UsdAmountWithInr
+            usd={slot.amount}
+            label={formatUsdFromDollars(slot.amount)}
+            style={{ fontWeight: "900", fontSize: rf(14) }}
+            color={colors.primary}
+          />
         </View>
       ))}
     </View>
@@ -233,11 +264,26 @@ export function CashChallengeRefundBreakdown({
       };
 
   const rows = [
-    { label: "Amount Paid", value: formatUsdFromDollars(resolved.amountPaid), accent: false },
-    { label: "Entry Fee", value: formatUsdFromDollars(resolved.entryFee), accent: false },
-    { label: "Tax / Payment Processing Fee", value: formatUsdFromDollars(resolved.paymentProcessingFee), accent: false },
-    { label: "Platform Service Fee", value: formatUsdFromDollars(resolved.platformServiceFee), accent: false },
-    { label: "Refund to Wallet", value: formatUsdFromDollars(resolved.walletRefundAmount), accent: true },
+    { label: "Amount Paid", value: formatUsdFromDollars(resolved.amountPaid), usd: resolved.amountPaid, accent: false },
+    { label: "Entry Fee", value: formatUsdFromDollars(resolved.entryFee), usd: resolved.entryFee, accent: false },
+    {
+      label: "Tax / Payment Processing Fee",
+      value: formatUsdFromDollars(resolved.paymentProcessingFee),
+      usd: resolved.paymentProcessingFee,
+      accent: false,
+    },
+    {
+      label: "Platform Service Fee",
+      value: formatUsdFromDollars(resolved.platformServiceFee),
+      usd: resolved.platformServiceFee,
+      accent: false,
+    },
+    {
+      label: "Refund to Wallet",
+      value: formatUsdFromDollars(resolved.walletRefundAmount),
+      usd: resolved.walletRefundAmount,
+      accent: true,
+    },
   ];
 
   return (
@@ -248,21 +294,21 @@ export function CashChallengeRefundBreakdown({
           {i > 0 && <View style={[styles.divider, { backgroundColor: colors.border }]} />}
           <View style={styles.row}>
             <Text style={[styles.label, { color: colors.mutedForeground }]}>{row.label}</Text>
-            <Text
+            <UsdAmountWithInr
+              usd={row.usd}
+              label={row.value}
               style={[
                 styles.value,
-                {
-                  color: row.label === "Refund to Wallet"
-                    ? colors.success ?? colors.primary
-                    : row.accent
-                      ? colors.primary
-                      : colors.foreground,
-                },
                 row.label === "Refund to Wallet" && styles.total,
               ]}
-            >
-              {row.value}
-            </Text>
+              color={
+                row.label === "Refund to Wallet"
+                  ? colors.success ?? colors.primary
+                  : row.accent
+                    ? colors.primary
+                    : colors.foreground
+              }
+            />
           </View>
         </View>
       ))}

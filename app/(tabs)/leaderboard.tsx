@@ -38,6 +38,10 @@ import { PublicProfileModal } from "@/components/PublicProfileModal";
 import type { PublicProfileInitialData } from "@/components/PublicProfileModal";
 import { GroupPublicStatsModal } from "@/components/GroupPublicStatsModal";
 import type { GroupPublicInitialData } from "@/components/GroupPublicStatsModal";
+import {
+  leaderboardDiskKey,
+  leaderboardMemoryKey,
+} from "@/utils/leaderboardCacheKey";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type MainTab = "global" | "regional" | "race" | "coins" | "groups";
@@ -461,20 +465,42 @@ export default function LeaderboardScreen() {
   }, []);
 
   const sentRequests = useRef<Set<string>>(new Set());
+  const fetchGenRef = useRef(0);
+  const groupFetchGenRef = useRef(0);
+  const groupEntriesRef = useRef<GroupLeaderEntry[]>([]);
+  groupEntriesRef.current = groupEntries;
 
-  // Per-key data cache — keyed by `${mainTab}_${stepsSubTab}` or `race_${raceSubTab}`.
-  // Lets us show cached data instantly when switching tabs while fresh data loads.
+  // Per-key data cache — user + category + filter scoped.
   const dataCache = useRef<Map<string, { entries: LeaderEntry[]; userRank: number; userWins: number; userTotalWinning?: number }>>(new Map());
+  const groupCache = useRef<Map<string, GroupLeaderEntry[]>>(new Map());
 
-  // On mount: warm the in-memory cache from AsyncStorage for the initially active tab.
-  // This makes the leaderboard instant even after the user kills and relaunches the app.
+  const lbKeyOpts = useCallback(() => ({
+    userId: user?.id,
+    mainTab,
+    stepsSubTab,
+    raceSubTab,
+    groupPeriod,
+    countryCode: user?.countryCode,
+  }), [user?.id, user?.countryCode, mainTab, stepsSubTab, raceSubTab, groupPeriod]);
+
+  const prevUserIdRef = useRef(user?.id);
   useEffect(() => {
-    const initialKey = mainTab === "race"
-      ? `race_${raceSubTab}`
-      : mainTab === "coins" ? "coins"
-      : `${mainTab}_${stepsSubTab}`;
-    void screenCache.get<{ entries: LeaderEntry[]; userRank: number; userWins: number; userTotalWinning?: number }>(`lb_${initialKey}`).then((cached) => {
-      if (cached && !dataCache.current.has(initialKey)) {
+    if (prevUserIdRef.current !== user?.id) {
+      prevUserIdRef.current = user?.id;
+      dataCache.current.clear();
+      groupCache.current.clear();
+      setEntries([]);
+      setGroupEntries([]);
+      setUserRank(9999);
+      setUserWins(0);
+      setUserTotalWinning(0);
+      setError(null);
+    }
+    const initialKey = leaderboardMemoryKey(lbKeyOpts());
+    void screenCache.get<{ entries: LeaderEntry[]; userRank: number; userWins: number; userTotalWinning?: number }>(
+      leaderboardDiskKey(lbKeyOpts()),
+    ).then((cached) => {
+      if (cached && !dataCache.current.has(initialKey) && prevUserIdRef.current === user?.id) {
         dataCache.current.set(initialKey, cached);
         setEntries(cached.entries);
         setUserRank(cached.userRank);
@@ -482,8 +508,7 @@ export default function LeaderboardScreen() {
         setUserTotalWinning(cached.userTotalWinning ?? 0);
       }
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // mount only — tab-switch effect handles subsequent navigations
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Profile modal state ──────────────────────────────────────────────────────
   const [profileUserId, setProfileUserId] = useState<string | null>(null);
@@ -507,30 +532,70 @@ export default function LeaderboardScreen() {
 
   // ── Groups fetch ─────────────────────────────────────────────────────────────
   const fetchGroupData = useCallback(async (period: GroupPeriodTab, isRefresh = false) => {
+    const gen = ++groupFetchGenRef.current;
+    const memKey = leaderboardMemoryKey({ userId: user?.id, mainTab: "groups", groupPeriod: period });
+    const diskKey = leaderboardDiskKey({ userId: user?.id, mainTab: "groups", groupPeriod: period });
+    const cached = groupCache.current.get(memKey);
+    if (cached && cached.length > 0 && !isRefresh) setGroupEntries(cached);
     if (isRefresh) setGroupRefreshing(true);
-    else setGroupLoading(true);
+    else if (!cached && groupEntriesRef.current.length === 0) setGroupLoading(true);
     try {
       const params = new URLSearchParams({ period });
       if (period === "today") params.set("localDate", getLocalDateStr());
       const res = await authFetch(`/api/leaderboard/groups?${params.toString()}`);
-      if (res.ok) {
-        const d = (await res.json()) as { groups: GroupLeaderEntry[]; leaderboard: GroupLeaderEntry[] };
-        setGroupEntries(d.groups ?? d.leaderboard ?? []);
+      if (!res.ok) throw new Error(`${res.status}`);
+      const d = (await res.json()) as { groups: GroupLeaderEntry[]; leaderboard: GroupLeaderEntry[] };
+      const next = d.groups ?? d.leaderboard ?? [];
+      if (gen !== groupFetchGenRef.current) return;
+      groupCache.current.set(memKey, next);
+      void screenCache.set(diskKey, next);
+      setGroupEntries(next);
+    } catch {
+      if (gen !== groupFetchGenRef.current) return;
+    } finally {
+      if (gen === groupFetchGenRef.current) {
+        setGroupLoading(false);
+        setGroupRefreshing(false);
       }
-    } catch {} finally {
-      setGroupLoading(false);
-      setGroupRefreshing(false);
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
-    if (mainTab === "groups") void fetchGroupData(groupPeriod);
-  }, [mainTab, groupPeriod, fetchGroupData]);
+    if (mainTab !== "groups") return;
+    const memKey = leaderboardMemoryKey({ userId: user?.id, mainTab: "groups", groupPeriod });
+    const cached = groupCache.current.get(memKey);
+    if (cached) {
+      setGroupEntries(cached);
+      void fetchGroupData(groupPeriod, true);
+      return;
+    }
+    void screenCache.get<GroupLeaderEntry[]>(
+      leaderboardDiskKey({ userId: user?.id, mainTab: "groups", groupPeriod }),
+    ).then((disk) => {
+      if (prevUserIdRef.current !== user?.id) return;
+      if (disk && disk.length > 0) {
+        groupCache.current.set(memKey, disk);
+        setGroupEntries(disk);
+        void fetchGroupData(groupPeriod, true);
+      } else {
+        void fetchGroupData(groupPeriod, false);
+      }
+    });
+  }, [mainTab, groupPeriod, fetchGroupData, user?.id]);
 
   // ── Fetch ───────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async (silent = false) => {
     if (mainTab === "groups") return; // handled separately
-    const cacheKey = mainTab === "race" ? `race_${raceSubTab}` : mainTab === "coins" ? "coins" : `${mainTab}_${stepsSubTab}`;
+    const gen = ++fetchGenRef.current;
+    const keyOpts = {
+      userId: user?.id,
+      mainTab,
+      stepsSubTab,
+      raceSubTab,
+      countryCode: user?.countryCode,
+    };
+    const cacheKey = leaderboardMemoryKey(keyOpts);
+    const diskKey = leaderboardDiskKey(keyOpts);
     const cached = dataCache.current.get(cacheKey);
 
     setError(null);
@@ -594,27 +659,39 @@ export default function LeaderboardScreen() {
         newUserWins = 0;
       }
 
+      if (gen !== fetchGenRef.current) return;
+
       // Cache and display the fresh result (in-memory + disk)
       dataCache.current.set(cacheKey, { entries: newEntries, userRank: newUserRank, userWins: newUserWins, userTotalWinning: newUserTotalWinning });
-      void screenCache.set(`lb_${cacheKey}`, { entries: newEntries, userRank: newUserRank, userWins: newUserWins, userTotalWinning: newUserTotalWinning });
+      void screenCache.set(diskKey, { entries: newEntries, userRank: newUserRank, userWins: newUserWins, userTotalWinning: newUserTotalWinning });
       setEntries(newEntries);
       setUserRank(newUserRank);
       setUserWins(newUserWins);
       setUserTotalWinning(newUserTotalWinning);
     } catch {
+      if (gen !== fetchGenRef.current) return;
       // If we have cached data, keep it visible and don't show an error.
       // Only surface the error when there's nothing else to show.
       if (!cached) setError("Could not load leaderboard. Pull down to retry.");
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (gen === fetchGenRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [mainTab, stepsSubTab, raceSubTab, user]);
+  }, [mainTab, stepsSubTab, raceSubTab, user?.id, user?.countryCode]);
 
   // When tab/filter changes: immediately show cached data (if any) so the list
   // never disappears, then silently refresh from the backend in the background.
   useEffect(() => {
-    const cacheKey = mainTab === "race" ? `race_${raceSubTab}` : `${mainTab}_${stepsSubTab}`;
+    if (mainTab === "groups") return;
+    const cacheKey = leaderboardMemoryKey({
+      userId: user?.id,
+      mainTab,
+      stepsSubTab,
+      raceSubTab,
+      countryCode: user?.countryCode,
+    });
     const cached = dataCache.current.get(cacheKey);
     if (cached) {
       setEntries(cached.entries);
@@ -629,7 +706,9 @@ export default function LeaderboardScreen() {
 
   const onRefresh = () => {
     setRefreshing(true);
-    triggerSync().catch(() => {}).finally(() => void fetchData(true));
+    void triggerSync().catch(() => {});
+    if (mainTab === "groups") void fetchGroupData(groupPeriod, true);
+    else void fetchData(true);
   };
 
   // Whenever the Ranks tab gains focus, sync steps and refresh leaderboard in
@@ -643,8 +722,9 @@ export default function LeaderboardScreen() {
       }
       markApiFetched("leaderboard_tab_focus");
       void triggerSync().catch(() => {});
-      void fetchData(true);
-    }, [fetchData, triggerSync]),
+      if (mainTab === "groups") void fetchGroupData(groupPeriod, true);
+      else void fetchData(true);
+    }, [fetchData, fetchGroupData, groupPeriod, mainTab, triggerSync]),
   );
 
   // Refresh data when app returns from the background (e.g. user locks phone, re-opens app).
@@ -658,13 +738,15 @@ export default function LeaderboardScreen() {
         // still synced so a real refresh reflects the latest counts.
         if (apiFetchAllowed("leaderboard_resume", 60_000)) {
           markApiFetched("leaderboard_resume");
-          triggerSync().catch(() => {}).finally(() => void fetchData(true));
+          void triggerSync().catch(() => {});
+          if (mainTab === "groups") void fetchGroupData(groupPeriod, true);
+          else void fetchData(true);
         }
       }
       appStateRef.current = nextState;
     });
     return () => sub.remove();
-  }, [fetchData, triggerSync]);
+  }, [fetchData, fetchGroupData, groupPeriod, mainTab, triggerSync]);
 
   // ── Friend request ──────────────────────────────────────────────────────────
   const handleAddFriend = async (targetId: string) => {
@@ -859,9 +941,14 @@ export default function LeaderboardScreen() {
             </Text>
           )}
           <TouchableOpacity
-            onPress={() => isGroups
-              ? fetchGroupData(groupPeriod, true)
-              : triggerSync().catch(() => {}).finally(() => void fetchData(true))}
+            onPress={() => {
+              if (isGroups) {
+                void fetchGroupData(groupPeriod, true);
+                return;
+              }
+              void triggerSync().catch(() => {});
+              void fetchData(true);
+            }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Feather name="refresh-cw" size={14} color={colors.mutedForeground} />

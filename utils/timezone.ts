@@ -51,6 +51,21 @@ export function startOfLocalTodayMs(): number {
   return d.getTime();
 }
 
+/** Hours elapsed since the device's local midnight (timezone-correct). */
+export function hoursSinceLocalMidnight(now = new Date()): number {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  return Math.max(0, (now.getTime() - start.getTime()) / 3_600_000);
+}
+
+/**
+ * True in the first hours of the local calendar day, when Health Connect / HealthKit
+ * today is still empty and leftover DB/race totals must not be shown as today's walk.
+ */
+export function isEarlyLocalCalendarDay(maxHours = 6, now = new Date()): boolean {
+  return hoursSinceLocalMidnight(now) < maxHours;
+}
+
 /** True when a non-zero step count was last updated before today's local midnight. */
 export function isStepSnapshotFromBeforeToday(
   updatedAtMs: number | null | undefined,

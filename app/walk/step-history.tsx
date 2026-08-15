@@ -20,7 +20,7 @@ import { useColors } from "@/hooks/useColors";
 import { authFetch } from "@/utils/authFetch";
 import { getLocalDateStr } from "@/utils/timezone";
 import { useWalkContext } from "@/context/WalkContext";
-import { useWalkTodaySteps } from "@/services/walkTodayStepsStore";
+import { useAppSelector } from "@/store/hooks";
 import { getTodayKey } from "@/utils/format";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { rf } from "@/utils/responsive";
@@ -110,6 +110,8 @@ function fmtGoalLabel(n: number): string {
 // Replaces today's DB entry with the live pedometer value when it is higher.
 // Called both when server data arrives AND whenever todaySteps updates, so the
 // displayed steps are always max(db, live) — no race condition possible.
+// Past days = GET /api/walk/history. Overlay today only when verified HC is higher
+// than the DB row — never replace a stored row with 0.
 function applyLiveOverlay(days: DayData[], todayStr: string, liveSteps: number): DayData[] {
   if (liveSteps <= 0) return days;
   return days.map((d): DayData => {
@@ -156,7 +158,9 @@ export default function StepHistoryScreen() {
   // into WalkContext so the Walk tab updates immediately without requiring a restart.
   const { refreshTodayRank, currentStreak } = useWalkContext();
   const { isDark } = useTheme();
-  const todaySteps = useWalkTodaySteps();
+  const todaySteps = useAppSelector((s) =>
+    Math.max(0, Math.floor(s.raceProgress.verifiedTodaySteps ?? 0)),
+  );
 
   const todayStr = getLocalDateStr();
 
@@ -167,6 +171,28 @@ export default function StepHistoryScreen() {
     () => applyLiveOverlay(rawDays, todayStr, todaySteps),
     [rawDays, todayStr, todaySteps],
   );
+
+  const displayLifetime = useMemo(() => {
+    if (!lifetime) return null;
+    const rawToday = rawDays.find((d) => d.date === todayStr);
+    const shownToday = allDays.find((d) => d.date === todayStr);
+    const extraSteps = (shownToday?.steps ?? 0) - (rawToday?.steps ?? 0);
+    if (extraSteps === 0) return lifetime;
+    const extraDist = (shownToday?.distanceMeters ?? 0) - (rawToday?.distanceMeters ?? 0);
+    const extraCals = (shownToday?.caloriesBurned ?? 0) - (rawToday?.caloriesBurned ?? 0);
+    const extraMins = (shownToday?.activeMinutes ?? 0) - (rawToday?.activeMinutes ?? 0);
+    const totalSteps = Math.max(0, lifetime.totalSteps + extraSteps);
+    const totalDistanceMeters = Math.max(0, lifetime.totalDistanceMeters + extraDist);
+    return {
+      ...lifetime,
+      totalSteps,
+      totalDistanceMeters,
+      caloriesBurned: lifetime.caloriesBurned + extraCals,
+      activeMinutes: lifetime.activeMinutes + extraMins,
+      distanceDisplay: fmtDist(totalDistanceMeters, distanceUnit),
+      bestDaySteps: Math.max(lifetime.bestDaySteps, shownToday?.steps ?? 0),
+    };
+  }, [lifetime, rawDays, allDays, todayStr, distanceUnit]);
 
   const periodDays = useMemo(() => allDays.slice(-RANGE_DAYS[range]), [allDays, range]);
 
@@ -712,7 +738,7 @@ export default function StepHistoryScreen() {
             </View>
 
             {/* ── Card 3: Lifetime Summary ── */}
-            {lifetime && (
+            {displayLifetime && (
               <View style={[S.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <View style={{
                   flexDirection: "row",
@@ -721,9 +747,9 @@ export default function StepHistoryScreen() {
                   marginBottom: 4,
                 }}>
                   <Text style={[S.sectionTitle, { color: colors.foreground }]}>Lifetime Summary</Text>
-                  {lifetime.joinedLabel && (
+                  {displayLifetime.joinedLabel && (
                     <Text style={{ fontSize: rf(10), color: colors.mutedForeground }}>
-                      {lifetime.joinedLabel}
+                      {displayLifetime.joinedLabel}
                     </Text>
                   )}
                 </View>
@@ -732,27 +758,27 @@ export default function StepHistoryScreen() {
                   <LifetimeTile
                     iconSource={FOOTSTEP_IMG}
                     label="All-Time Steps"
-                    value={fmtK(lifetime.totalSteps)}
+                    value={fmtK(displayLifetime.totalSteps)}
                     colors={colors}
                   />
                   <LifetimeTile
                     emoji="📍"
                     label="Distance"
-                    value={lifetime.distanceDisplay || fmtDist(lifetime.totalDistanceMeters, distanceUnit)}
+                    value={displayLifetime.distanceDisplay || fmtDist(displayLifetime.totalDistanceMeters, distanceUnit)}
                     colors={colors}
                   />
-                  <LifetimeTile emoji="⚡" label="Calories" value={fmtK(lifetime.caloriesBurned)} colors={colors} />
-                  <LifetimeTile emoji="⏱" label="Active Mins" value={fmtK(lifetime.activeMinutes)} colors={colors} />
+                  <LifetimeTile emoji="⚡" label="Calories" value={fmtK(displayLifetime.caloriesBurned)} colors={colors} />
+                  <LifetimeTile emoji="⏱" label="Active Mins" value={fmtK(displayLifetime.activeMinutes)} colors={colors} />
                   <LifetimeTile
                     iconSource={streakIconSource({
                       completed: currentStreak > 0,
                       isDark,
                     })}
                     label="Active Days"
-                    value={String(lifetime.activeDays)}
+                    value={String(displayLifetime.activeDays)}
                     colors={colors}
                   />
-                  <LifetimeTile emoji="🏆" label="Best Day" value={fmtK(lifetime.bestDaySteps)} colors={colors} />
+                  <LifetimeTile emoji="🏆" label="Best Day" value={fmtK(displayLifetime.bestDaySteps)} colors={colors} />
                 </View>
               </View>
             )}

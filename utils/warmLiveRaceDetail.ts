@@ -25,6 +25,7 @@ export type WarmLiveRaceDetailInput = {
   maxPlayers?: number | null;
   currentPlayers?: number | null;
   startedAt?: string | null;
+  challengeEndAt?: string | null;
   completedAt?: string | null;
   trackLayout?: string | null;
   challengeDurationDays?: number | null;
@@ -204,9 +205,15 @@ export function warmLiveRaceDetailNavigation(
         targetSteps: target,
         currentPlayers,
         maxPlayers: unlimited ? null : (input.maxPlayers ?? 10),
-        startedAt: input.startedAt ?? new Date().toISOString(),
+        startedAt: input.startedAt ?? existing?.race?.startedAt ?? new Date().toISOString(),
+        challengeEndAt:
+          input.challengeEndAt ??
+          (typeof existing?.race?.challengeEndAt === "string"
+            ? existing.race.challengeEndAt
+            : null),
         completedAt: input.completedAt ?? null,
-        creatorId: userId,
+        creatorId:
+          (typeof existing?.race?.creatorId === "string" && existing.race.creatorId) || "",
         prizePool: input.prizePool ?? 0,
         prizeTiers: [],
         spectatorCount: 0,
@@ -218,8 +225,9 @@ export function warmLiveRaceDetailNavigation(
           typeof input.challengeDurationDays === "number" &&
           input.challengeDurationDays > 0
             ? input.challengeDurationDays
-            : unlimited
-              ? 7
+            : typeof existing?.race?.challengeDurationDays === "number" &&
+                existing.race.challengeDurationDays > 0
+              ? existing.race.challengeDurationDays
               : null,
       },
       participants,
@@ -294,45 +302,14 @@ export function prefetchLiveRaceDetailRoster(opts: {
     try {
       const { authFetch } = await import("@/utils/authFetch");
       if (opts.unlimited) {
-        const {
-          mapUnlimitedDetailToLiveDetail,
-          mergeUnlimitedLiveParticipants,
-        } = await import("@/utils/unlimitedLiveRace");
+        const { mapUnlimitedDetailToLiveDetail } = await import("@/utils/unlimitedLiveRace");
 
-        const [detailRes, lbRes] = await Promise.all([
-          authFetch(`/api/unlimited-challenges/${raceId}`),
-          authFetch(
-            `/api/unlimited-challenges/${raceId}/leaderboard?limit=100&offset=0`,
-          ),
-        ]);
+        const detailRes = await authFetch(`/api/unlimited-challenges/${raceId}`);
         if (!detailRes.ok) return;
-        let mapped = mapUnlimitedDetailToLiveDetail(
+        const mapped = mapUnlimitedDetailToLiveDetail(
           await detailRes.json().catch(() => null),
         );
         if (!mapped) return;
-
-        if (lbRes.ok) {
-          const lbBody = await lbRes.json().catch(() => null);
-          const rows = Array.isArray(lbBody)
-            ? lbBody
-            : Array.isArray((lbBody as { participants?: unknown })?.participants)
-              ? (lbBody as { participants: unknown[] }).participants
-              : Array.isArray((lbBody as { leaderboard?: unknown })?.leaderboard)
-                ? (lbBody as { leaderboard: unknown[] }).leaderboard
-                : Array.isArray((lbBody as { entries?: unknown })?.entries)
-                  ? (lbBody as { entries: unknown[] }).entries
-                  : [];
-          if (rows.length > 0) {
-            mapped = {
-              ...mapped,
-              participants: mergeUnlimitedLiveParticipants(
-                mapped.participants,
-                rows,
-                { preferPrimaryCurrentSteps: true },
-              ),
-            };
-          }
-        }
 
         // Don't clobber a richer roster that arrived while we were fetching.
         const latest = screenCache.getSync<LiveDetailCacheShape>(cacheKey);

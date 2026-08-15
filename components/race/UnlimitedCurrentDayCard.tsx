@@ -6,6 +6,7 @@
 import React, { memo } from "react";
 import { Image, Text, TouchableOpacity, View, StyleSheet } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { useTheme } from "@/context/ThemeContext";
 import type { UnlimitedViewerSchedule } from "@/utils/unlimitedViewerSchedule";
 import type { PrizePoolEligibilityStatus } from "@/utils/unlimitedResults";
 import {
@@ -14,9 +15,14 @@ import {
   missedDayFooterCopy,
   resolveUnlimitedMissedDayIndex,
 } from "@/utils/unlimitedLiveUiCopy";
-import type { UnlimitedDayRow } from "@/utils/unlimitedDayProgress";
+import {
+  remainingDaysAfterDisplayDay,
+  resolveUnlimitedDisplayDayIndex,
+  type UnlimitedDayRow,
+} from "@/utils/unlimitedDayProgress";
+import { resolveStreakDetailUiBranch } from "@/utils/unlimitedStreakParticipation";
 import { rf } from "@/utils/responsive";
-import { CHALLENGE_IMG } from "@/utils/brandImages";
+import { streakIconSource } from "@/utils/brandImages";
 
 type Props = {
   schedule: UnlimitedViewerSchedule;
@@ -27,6 +33,9 @@ type Props = {
   historyRows?: UnlimitedDayRow[] | null;
   qualificationStatus?: string | null;
   onPressViewResults?: () => void;
+  viewerResultsReady?: boolean | null;
+  viewerResultReasonCode?: string | null;
+  resultsStatus?: string | null;
 };
 
 /** Compact calendar tile — green header + current day number (1–99). */
@@ -106,13 +115,21 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
   historyRows,
   qualificationStatus,
   onPressViewResults,
+  viewerResultsReady,
+  viewerResultReasonCode,
+  resultsStatus,
 }: Props) {
+  const { isDark } = useTheme();
+  const uiBranch = resolveStreakDetailUiBranch({
+    viewerResultsReady,
+    viewerResultReasonCode,
+    viewerStatus: schedule.viewerStatus,
+    resultsStatus,
+  });
   const beforeStart = schedule.viewerStatus === "scheduled";
-  const finished =
-    schedule.viewerStatus === "completed" ||
-    schedule.viewerStatus === "failed" ||
-    schedule.viewerStatus === "left";
-  const lost = isUnlimitedPrizeLost({
+  const left = schedule.viewerStatus === "left";
+  const finished = uiBranch === "final" || left || schedule.viewerStatus === "completed";
+  const lost = uiBranch === "broken" || isUnlimitedPrizeLost({
     eligibility,
     qualificationStatus,
     viewerStatus: schedule.viewerStatus,
@@ -122,7 +139,8 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
     schedule,
     eligibility,
   });
-  const daysLeft = schedule.remainingDaysAfterToday;
+  const displayDay = resolveUnlimitedDisplayDayIndex(schedule, historyRows);
+  const daysLeft = remainingDaysAfterDisplayDay(schedule.durationDays, displayDay);
   const displaySteps = beforeStart ? 0 : todaySteps;
   const footerLabel = lost
     ? missedDayFooterCopy(missedDay)
@@ -131,7 +149,7 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
   const body = (
     <>
       <View style={styles.row}>
-        <CalendarGoalIcon dayNumber={schedule.currentDayIndex} />
+        <CalendarGoalIcon dayNumber={displayDay} />
 
         <View style={styles.mid}>
           {/* Day N of Y is intentionally omitted here — shown in Challenge Progress only. */}
@@ -163,7 +181,7 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
           {!finished ? (
             <View style={styles.flameRow}>
               <Image
-                source={CHALLENGE_IMG}
+                source={streakIconSource({ completed: !lost, isDark })}
                 style={{ width: 14, height: 14 }}
                 resizeMode="contain"
               />
@@ -174,24 +192,38 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
           ) : null}
           {/* Eligible mock: miss-a-day sits under flame on the right */}
           {!lost ? (
-            <View style={styles.rightFooter}>
+            <TouchableOpacity
+              onPress={onPressInfo}
+              disabled={!onPressInfo}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={styles.rightFooter}
+              accessibilityRole="button"
+              accessibilityLabel="View challenge progress"
+            >
               <Text style={styles.footerText} numberOfLines={1}>
                 {footerLabel}
               </Text>
-              <Feather name="info" size={12} color="#4DA3FF" />
-            </View>
+              <Feather name="info" size={16} color="#4DA3FF" />
+            </TouchableOpacity>
           ) : null}
         </View>
       </View>
 
       {/* LOST mock: full-width muted footer under the row */}
       {lost ? (
-        <View style={styles.lostFooter}>
+        <TouchableOpacity
+          onPress={onPressInfo}
+          disabled={!onPressInfo}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          style={styles.lostFooter}
+          accessibilityRole="button"
+          accessibilityLabel="View challenge progress"
+        >
           <Text style={styles.lostFooterText} numberOfLines={1}>
             {footerLabel}
           </Text>
-          <Feather name="info" size={12} color="#4DA3FF" />
-        </View>
+          <Feather name="info" size={16} color="#4DA3FF" />
+        </TouchableOpacity>
       ) : null}
     </>
   );
@@ -211,7 +243,12 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
         body
       )}
 
-      {finished && onPressViewResults ? (
+      {lost && onPressViewResults ? (
+        <TouchableOpacity style={styles.viewResultsBtn} onPress={onPressViewResults}>
+          <Text style={styles.viewResultsText}>View Results</Text>
+          <Feather name="arrow-right" size={13} color="#0B0F1A" />
+        </TouchableOpacity>
+      ) : finished && onPressViewResults ? (
         <TouchableOpacity style={styles.viewResultsBtn} onPress={onPressViewResults}>
           <Text style={styles.viewResultsText}>View Results</Text>
           <Feather name="arrow-right" size={13} color="#0B0F1A" />
@@ -294,8 +331,10 @@ const styles = StyleSheet.create({
   rightFooter: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    gap: 6,
     marginTop: 2,
+    minHeight: 28,
+    paddingVertical: 4,
   },
   footerText: {
     fontSize: rf(11),

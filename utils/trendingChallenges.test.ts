@@ -1,6 +1,6 @@
 /**
 
- * Unlimited Challenge helpers — cash unlimited + fixed, most recent first.
+ * Trending Challenges helpers — free / coins / cash / unlimited, soonest start first.
 
  * Run: npx tsx utils/trendingChallenges.test.ts
 
@@ -23,6 +23,7 @@ import {
   isEligibleTrendingRoom,
 
   isUnlimitedChallengePreviewFormat,
+  isTrendingPreviewFormat,
 
   mergeAvailableRoomLists,
 
@@ -30,7 +31,11 @@ import {
 
   resolveTrendingFormat,
 
+  shouldShowTrendingPreview,
+
   stableHash,
+
+  trendingPreviewCacheKey,
 
   TRENDING_MAX_CARDS,
 
@@ -94,13 +99,21 @@ assert.equal(isUnlimitedChallengePreviewFormat("free"), false);
 
 assert.equal(isUnlimitedChallengePreviewFormat("coins"), false);
 
+assert.equal(isTrendingPreviewFormat("free"), true);
+
+assert.equal(isTrendingPreviewFormat("coins"), true);
+
+assert.equal(isTrendingPreviewFormat("fixed_cash"), true);
+
+assert.equal(isTrendingPreviewFormat("unlimited_goal"), true);
 
 
-// eligibility — free/coins excluded; cash ok
+
+// eligibility — free / coins / cash / unlimited all ok
 
 assert.equal(isEligibleTrendingRoom(room({ room_id: "a" })), true);
 
-assert.equal(isEligibleTrendingRoom(room({ room_id: "free", challenge_type: "free", entry_fee: 0 })), false);
+assert.equal(isEligibleTrendingRoom(room({ room_id: "free", challenge_type: "free", entry_fee: 0 })), true);
 
 assert.equal(
 
@@ -110,7 +123,7 @@ assert.equal(
 
   ),
 
-  false,
+  true,
 
 );
 
@@ -188,7 +201,7 @@ assert.equal(
 
 
 
-// ranking: most recent first (created_at, else scheduled_start_at desc)
+// ranking: soonest start first
 
 const ranked = rankTrendingRooms([
 
@@ -228,13 +241,13 @@ assert.deepEqual(
 
   ranked.map((r) => r.room_id),
 
-  ["new", "mid", "old"],
+  ["mid", "new", "old"],
 
 );
 
 
 
-// free/coins filtered out of ranking
+// free / coins / cash / unlimited all ranked by soonest start
 
 const typed = rankTrendingRooms([
 
@@ -266,7 +279,7 @@ assert.deepEqual(
 
   typed.map((r) => r.room_id),
 
-  ["cash1", "unl1"],
+  ["coins1", "cash1", "free1", "unl1"],
 
 );
 
@@ -312,7 +325,11 @@ assert.equal(merged.length, 2);
 
 assert.equal(merged.find((r) => r.room_id === "x")?.current_players, 9);
 
-
+assert.equal(shouldShowTrendingPreview(undefined), false);
+assert.equal(shouldShowTrendingPreview([]), false);
+assert.equal(shouldShowTrendingPreview([{ id: "a" }]), true);
+assert.equal(trendingPreviewCacheKey("u1"), "walk_trending:u1");
+assert.notEqual(trendingPreviewCacheKey("u1"), trendingPreviewCacheKey("u2"));
 
 console.log("trendingChallenges.test.ts: ok");
 

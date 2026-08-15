@@ -74,7 +74,7 @@ function ensureDomEventPolyfill(): void {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const webrtc = require("@livekit/react-native-webrtc") as { Event?: unknown };
     if (typeof webrtc.Event === "function") {
-      g.Event = webrtc.Event;
+      g.Event = webrtc.Event as typeof g.Event;
       return;
     }
   } catch {
@@ -96,7 +96,7 @@ function ensureDomEventPolyfill(): void {
       this.currentTarget = null;
       this.target = null;
     }
-  };
+  } as typeof g.Event;
 }
 
 function loadSDK(): ClientModule | null {

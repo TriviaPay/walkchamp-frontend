@@ -7,6 +7,13 @@ const config = getDefaultConfig(__dirname);
 // tries to watch before they're cleaned up, causing ENOENT crashes.
 // Also skip heavy generated trees — watching them can hang Metro on Windows
 // ("Failed to start watch mode" after the watcher timeout).
+//
+// Backend/ is a standalone Node API server (own package.json + node_modules,
+// tens of thousands of files) living inside this repo. The RN app never
+// imports from it, but Metro watches the whole project root by default, so
+// without this exclusion it crawls Backend/ on every build too — on Windows
+// (no Watchman) that extra tree is what blows past Node's default V8 heap
+// limit and crashes the bundler with "JavaScript heap out of memory".
 config.resolver = config.resolver ?? {};
 config.resolver.blockList = [
   ...(Array.isArray(config.resolver.blockList) ? config.resolver.blockList : []),
@@ -18,6 +25,7 @@ config.resolver.blockList = [
   /[/\\]ios[/\\]build[/\\]/,
   /[/\\]\.gradle[/\\]/,
   /[/\\]\.cxx[/\\]/,
+  /[/\\]Backend[/\\]/,
 ];
 
 /**

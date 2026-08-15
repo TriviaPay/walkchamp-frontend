@@ -41,11 +41,45 @@ function asParticipantList(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   const rec = asRecord(value);
   if (!rec) return [];
-  for (const key of ["data", "items", "results", "participants", "registrations", "members"]) {
+  for (const key of ["data", "items", "results", "players", "participants", "registrations", "members"]) {
     const nested = rec[key];
     if (Array.isArray(nested)) return nested;
   }
   return [];
+}
+
+export function pickChallengeRecord(
+  root: Record<string, unknown>,
+): Record<string, unknown> {
+  for (const key of ["challenge", "unlimitedChallenge", "unlimited_challenge"]) {
+    const rec = asRecord(root[key]);
+    if (!rec) continue;
+    if (asString(pick(rec, "id", "challengeId", "challenge_id", "room_id"))) return rec;
+  }
+  const data = asRecord(root.data);
+  if (data) {
+    const nested = asRecord(pick(data, "challenge", "unlimitedChallenge"));
+    if (nested && asString(pick(nested, "id", "challengeId", "challenge_id"))) {
+      return nested;
+    }
+    if (asString(pick(data, "id", "challengeId", "challenge_id"))) return data;
+  }
+  if (asString(pick(root, "id", "challengeId", "challenge_id", "room_id"))) return root;
+  return asRecord(pick(root, "challenge")) ?? root;
+}
+
+export function collectRosterFromEnvelope(root: Record<string, unknown>): unknown[] {
+  const challenge = pickChallengeRecord(root);
+  const data = asRecord(root.data);
+  let best: unknown[] = [];
+  for (const src of [root, challenge, data, asRecord(data?.challenge)]) {
+    if (!src) continue;
+    const players = asParticipantList(src.players);
+    const parts = asParticipantList(src.participants);
+    const roster = players.length >= parts.length ? players : parts;
+    if (roster.length > best.length) best = roster;
+  }
+  return best;
 }
 
 const COUNT_KEYS = [
@@ -163,13 +197,26 @@ function resolveParticipantCount(
   root: Record<string, unknown>,
   listLength: number,
 ): { count: number; hasExplicit: boolean } {
+  const explicitField = (obj: Record<string, unknown>): number | null => {
+    const raw = obj.participantCount ?? obj.participant_count;
+    return typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : null;
+  };
+  const explicitChallenge = explicitField(challenge);
+  const explicitRoot = explicitField(root);
+
   // Prefer challenge.participantCount (authoritative) over list length / prize math.
   const fromExplicit = Math.max(
     collectNestedCounts(challenge),
     collectNestedCounts(root),
   );
   if (fromExplicit > 0) {
-    return { count: fromExplicit, hasExplicit: true };
+    return { count: Math.max(fromExplicit, listLength), hasExplicit: true };
+  }
+
+  // Detail sends participantCount: 0 when players[] is empty. Do NOT invent
+  // joiners from prizePool / entryFee ($2000 / $1000 = "2 joined").
+  if (explicitChallenge === 0 || explicitRoot === 0) {
+    return { count: listLength, hasExplicit: true };
   }
 
   const fromPrize = Math.max(
@@ -230,8 +277,7 @@ export function mapUnlimitedDetailToWaitingRoom(
   const root = asRecord(payload);
   if (!root) return null;
 
-  const challenge =
-    asRecord(pick(root, "challenge", "unlimitedChallenge", "data")) ?? root;
+  const challenge = pickChallengeRecord(root);
 
   const id = asString(
     pick(challenge, "id", "challengeId", "challenge_id", "room_id", "roomId"),
@@ -261,17 +307,22 @@ export function mapUnlimitedDetailToWaitingRoom(
     ),
   );
 
-  // Backend returns the same roster as both `players` and `participants` — collect
-  // once per source key family, then dedupe by userId so counts stay exact.
-  const participantKeys = [
-    "players",
-    "participants",
+  // Prefer the real membership roster (`players`) — never a 1-row preview/leaderboard
+  // slice when the detail payload already has the full list.
+  const envelopeRoster = collectRosterFromEnvelope(root);
+  const fromPlayers = asParticipantList(root.players);
+  const fromParticipants = asParticipantList(root.participants);
+  const primaryRoster =
+    envelopeRoster.length >= Math.max(fromPlayers.length, fromParticipants.length)
+      ? envelopeRoster
+      : fromPlayers.length >= fromParticipants.length
+        ? fromPlayers
+        : fromParticipants;
+  const extraKeys = [
     "registrations",
     "registeredParticipants",
     "registered_participants",
     "members",
-    "previewParticipants",
-    "preview_participants",
     "leaderboard",
     "standings",
     "rankings",
@@ -279,10 +330,12 @@ export function mapUnlimitedDetailToWaitingRoom(
     "live_leaderboard",
     "entries",
   ] as const;
-  const rawParticipants: unknown[] = [];
-  for (const source of [root, challenge]) {
-    for (const key of participantKeys) {
-      rawParticipants.push(...asParticipantList(source[key]));
+  const rawParticipants: unknown[] = [...primaryRoster];
+  if (primaryRoster.length < 2) {
+    for (const source of [root, challenge]) {
+      for (const key of extraKeys) {
+        rawParticipants.push(...asParticipantList(source[key]));
+      }
     }
   }
   const participants = dedupeParticipantRows(rawParticipants);

@@ -53,7 +53,9 @@ import {
   type UnlimitedChallengeResultStatus,
   type PrizePoolEligibilityStatus,
 } from "@/utils/unlimitedResults";
+import { UNLIMITED_COPY } from "@/utils/unlimitedLiveUiCopy";
 import { UnlimitedProgressSummary } from "@/components/race/UnlimitedProgressSummary";
+import { isViewerStreakBroken } from "@/utils/unlimitedStreakParticipation";
 import { subscribeToChannel, unsubscribeFromChannel, CHANNELS } from "@/services/realtimeService";
 import { rf } from "@/utils/responsive";
 
@@ -150,7 +152,9 @@ export default function UnlimitedResultsScreen() {
               localDate: currentParticipant.challengeDayKey,
               dailyGoalSteps: currentParticipant.dailyGoalSteps,
               qualificationStatus: currentParticipant.qualificationStatus,
-              completedDays: currentParticipant.completedDays,
+              completedDays: currentParticipant.completedDays ?? data?.race.passedDays ?? data?.race.completedDays,
+              passedDays: data?.race.passedDays,
+              failedDays: data?.race.failedDays,
             }
           : null,
         fallbackTimezone: getDeviceTimezone(),
@@ -162,8 +166,8 @@ export default function UnlimitedResultsScreen() {
     if (!data) return "challenge_in_progress";
     const personallyFinished =
       schedule?.viewerStatus === "completed" ||
-      schedule?.viewerStatus === "failed" ||
-      schedule?.viewerStatus === "left";
+      schedule?.viewerStatus === "left" ||
+      Boolean(data.race.viewerResultsReady && data.race.viewerResultReasonCode !== "daily_goal_missed");
     return resolveUnlimitedResultStatus({
       resultsStatus: data.race.resultsStatus,
       challengeStatus: data.race.rawStatus ?? data.race.status,
@@ -215,6 +219,14 @@ export default function UnlimitedResultsScreen() {
     participantsFinishedCount: data?.race.participantsFinishedCount,
     participantsPendingCount: data?.race.participantsPendingCount,
   });
+  const streakBroken = isViewerStreakBroken({
+    viewerResultsReady: data?.race.viewerResultsReady,
+    viewerResultReasonCode: data?.race.viewerResultReasonCode,
+    viewerStatus: data?.race.viewerStatus ?? schedule?.viewerStatus,
+    resultsStatus: data?.race.resultsStatus,
+    failedDays: data?.race.failedDays,
+    eligibilityReasonCode: data?.race.eligibilityReasonCode,
+  });
   const durationDays = data?.race.challengeDurationDays ?? schedule?.durationDays ?? 0;
 
   if (loading && !data) {
@@ -264,9 +276,17 @@ export default function UnlimitedResultsScreen() {
           <View>
             <StatusHeaderCard
               resultStatus={resultStatus}
-              statusHeadline={copy.statusHeadline}
-              message={copy.message}
-              secondaryText={copy.secondaryText}
+              statusHeadline={streakBroken ? UNLIMITED_COPY.lostBadge : copy.statusHeadline}
+              message={
+                streakBroken
+                  ? UNLIMITED_COPY.lostAfterMiss
+                  : copy.message
+              }
+              secondaryText={
+                streakBroken
+                  ? UNLIMITED_COPY.modalWarning
+                  : copy.secondaryText
+              }
               durationDays={durationDays}
               completedDays={daySummary.completedCount}
               participantCount={data.race.currentPlayers}

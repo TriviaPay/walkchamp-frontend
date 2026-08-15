@@ -12,7 +12,6 @@ const appJson = require("./app.json");
 // gitignored `.env` — load it explicitly, then fall back to the public
 // Descope project ID already committed in eas.json (safe to embed).
 try {
-  // eslint-disable-next-line import/no-extraneous-dependencies
   require("dotenv").config({ path: path.join(__dirname, ".env") });
 } catch {
   // dotenv optional — Expo CLI may already have injected EXPO_PUBLIC_*

@@ -114,6 +114,20 @@ const leftStatus = normalizeUnlimitedChallengeToUpcomingRoom({
 assert.ok(leftStatus);
 assert.equal(leftStatus!.current_user_registered, false);
 
+const forfeitedStatus = normalizeUnlimitedChallengeToUpcomingRoom({
+  id: "ul-forfeit-status",
+  visibility: "public",
+  entryFeeCents: 1000,
+  dailyGoalSteps: 100,
+  durationDays: 7,
+  startAtUtc: "2026-08-02T05:00:00.000Z",
+  hostUserId: "host-left",
+  isHost: true,
+  participationStatus: "forfeited",
+});
+assert.ok(forfeitedStatus);
+assert.equal(forfeitedStatus!.current_user_registered, false);
+
 const stillJoined = normalizeUnlimitedChallengeToUpcomingRoom({
   id: "ul-joined",
   visibility: "public",
@@ -178,5 +192,45 @@ assert.equal(
   }).length,
   0,
 );
+
+{
+  const listed = extractUnlimitedChallengeRows({
+    challenges: [
+      {
+        id: "ul-live-roster",
+        challengeType: "unlimited_goal",
+        visibility: "public",
+        entryFeeCents: 100000,
+        dailyGoalSteps: 10000,
+        durationDays: 5,
+        startAtUtc: "2026-08-14T18:30:00.000Z",
+        participantCount: 2,
+        players: [
+          {
+            userId: "u-1",
+            username: "priya",
+            currentSteps: 400,
+            rank: 1,
+            isHost: true,
+            qualificationStatus: "eligible",
+          },
+          {
+            userId: "u-2",
+            username: "krishna",
+            current_steps: 120,
+            rank: 2,
+            is_host: false,
+            status: "eligible",
+          },
+        ],
+      },
+    ],
+  });
+  const card = normalizeUnlimitedChallengeToUpcomingRoom(listed[0]!);
+  assert.ok(card);
+  assert.equal(card!.players?.length, 2, "list challenges[].players must survive normalize");
+  assert.equal(card!.players?.[0]?.username, "priya");
+  assert.equal(card!.players?.[1]?.userId, "u-2");
+}
 
 console.log("unlimitedChallengeRooms.test.ts: ok");

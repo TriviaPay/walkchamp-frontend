@@ -217,10 +217,11 @@ const rrStyles = StyleSheet.create({
 // ── ReplyPreviewBlock (inside message bubble) ─────────────────────────────────
 
 function ReplyBlock({ preview, isMe, colors }: { preview: ReplyPreview; isMe: boolean; colors: ReturnType<typeof useColors> }) {
+  const quoteColor = isMe ? colors.primaryForeground : colors.foreground;
   return (
-    <View style={[rpStyles.block, { backgroundColor: isMe ? "rgba(255,255,255,0.15)" : colors.border + "60", borderLeftColor: isMe ? "rgba(255,255,255,0.6)" : colors.primary }]}>
-      <Text style={[rpStyles.username, { color: isMe ? "rgba(255,255,255,0.85)" : colors.primary }]}>@{preview.username}</Text>
-      <Text style={[rpStyles.text, { color: isMe ? "rgba(255,255,255,0.7)" : colors.mutedForeground }]} numberOfLines={1}>{preview.text}</Text>
+    <View style={[rpStyles.block, { backgroundColor: isMe ? "rgba(0,0,0,0.12)" : colors.border + "60", borderLeftColor: isMe ? colors.primaryForeground : colors.primary }]}>
+      <Text style={[rpStyles.username, { color: quoteColor }]}>@{preview.username}</Text>
+      <Text style={[rpStyles.text, { color: quoteColor }]} numberOfLines={1}>{preview.text}</Text>
     </View>
   ); }
 

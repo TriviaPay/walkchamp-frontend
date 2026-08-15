@@ -34,6 +34,7 @@ import { useNetwork } from "@/context/NetworkContext";
 import { canStartCashPaymentFlow } from "@/config/featureFlags";
 import { isPaymentsLiveMode } from "@/config/env";
 import { formatCurrency, formatWalletAmount } from "@/utils/format";
+import { InrHint } from "@/components/InrHint";
 import { rf, rs } from "@/utils/responsive";
 import type { WalletTransaction } from "@/utils/mockData";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
@@ -199,6 +200,7 @@ function TransactionRow({
       >
         {isCredit ? "+" : ""}
         {formatCurrency(Math.abs(tx.amount))}
+        <InrHint usd={Math.abs(tx.amount)} style={styles.txAmount} />
       </Text>
     </View>
   );
@@ -656,6 +658,9 @@ function WalletScreenContent() {
           </Text>
           <Text style={[styles.balanceBig, { color: colors.foreground }]}>
             {formatWalletAmount(availableBalance, displayCurrency)}
+            {displayCurrency !== "INR" ? (
+              <InrHint usd={availableBalance} style={styles.balanceBig} />
+            ) : null}
           </Text>
 
           {/* 3 balance columns */}
@@ -667,6 +672,9 @@ function WalletScreenContent() {
               </Text>
               <Text style={[styles.balanceColValue, { color: colors.warning }]}>
                 {formatWalletAmount(pendingBalance, displayCurrency)}
+                {displayCurrency !== "INR" ? (
+                  <InrHint usd={pendingBalance} style={styles.balanceColValue} />
+                ) : null}
               </Text>
             </View>
             <View style={[styles.balanceColDivider, { backgroundColor: colors.border }]} />
@@ -676,6 +684,9 @@ function WalletScreenContent() {
               </Text>
               <Text style={[styles.balanceColValue, { color: colors.primary }]}>
                 {formatWalletAmount(withdrawableBalance, displayCurrency)}
+                {displayCurrency !== "INR" ? (
+                  <InrHint usd={withdrawableBalance} style={styles.balanceColValue} />
+                ) : null}
               </Text>
             </View>
             <View style={[styles.balanceColDivider, { backgroundColor: colors.border }]} />
@@ -685,6 +696,9 @@ function WalletScreenContent() {
               </Text>
               <Text style={[styles.balanceColValue, { color: colors.gold }]}>
                 {formatWalletAmount(totalEarned, displayCurrency)}
+                {displayCurrency !== "INR" ? (
+                  <InrHint usd={totalEarned} style={styles.balanceColValue} />
+                ) : null}
               </Text>
             </View>
           </View>
@@ -1206,6 +1220,7 @@ function WalletScreenContent() {
               </Text>
               <Text style={[styles.modalBalanceValue, { color: colors.primary }]}>
                 {formatCurrency(withdrawableBalance)}
+                <InrHint usd={withdrawableBalance} style={styles.modalBalanceValue} />
               </Text>
             </View>
 

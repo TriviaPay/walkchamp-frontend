@@ -18,6 +18,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { initializeAds } from "@/services/ads/adMobService";
+import { primeFxRate } from "@/utils/fxRate";
 import { Provider as ReduxProvider } from "react-redux";
 import { store } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -218,6 +219,11 @@ function AppSplashGate({ onFinish }: { onFinish: () => void }) {
     if (!user?.id || loading || isAuthenticating) return;
     warmCriticalDataDuringSplash(user.id);
   }, [user?.id, loading, isAuthenticating]);
+
+  // Prime the USD→INR display-rate cache once per session (non-blocking, display-only).
+  useEffect(() => {
+    primeFxRate();
+  }, []);
 
   useEffect(() => {
     if (!ENABLE_PREMIUM_ONBOARDING) {

@@ -1,6 +1,7 @@
 import { PermissionsAndroid, Platform } from "react-native";
 import Constants from "expo-constants";
 import { getValidSession } from "./authService";
+import { authFetch } from "@/utils/authFetch";
 import { storageGet, storageSet, STORAGE_KEYS } from "@/utils/storage";
 import { resolveNotificationRoute } from "@/utils/deepLinkUtils";
 import {
@@ -26,6 +27,7 @@ import {
 const IS_EXPO_GO = (Constants.executionEnvironment as string) === "storeClient";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
+const APP_VERSION = Constants.expoConfig?.version ?? "1.0.1";
 
 /** Display-only visual metadata for OneSignal additionalData (does not change routes). */
 export function resolvePushVisualMeta(data: Record<string, unknown>): {
@@ -199,7 +201,8 @@ async function setupPushSubscriptionListener(): Promise<void> {
     const subId = event.current?.id;
     if (!subId) return;
     pushLog(`push subscription changed id=${subId}`);
-    void registerDeviceWithBackend();
+    // Re-bind external_id after FCM/APNS token exists (critical after package rename).
+    void bindExternalIdThenRegister(OneSignal, subId);
   };
 
   try {
@@ -210,6 +213,22 @@ async function setupPushSubscriptionListener(): Promise<void> {
   } catch (error) {
     pushLog("subscription listener setup failed", error);
   }
+}
+
+/** Bind OneSignal external_id now that a real push subscription exists. */
+async function bindExternalIdThenRegister(
+  OneSignal: OneSignalV5,
+  subscriptionId?: string | null,
+): Promise<void> {
+  if (_loggedInUserId) {
+    try {
+      await OneSignal.login(_loggedInUserId);
+      pushLog(`OneSignal external_id bound userId=${_loggedInUserId}`);
+    } catch (error) {
+      pushLog("OneSignal external_id bind failed", error);
+    }
+  }
+  await registerDeviceWithBackend(subscriptionId ?? undefined);
 }
 
 // ── Initialize OneSignal and associate authenticated user ─────────────────────
@@ -223,6 +242,9 @@ export async function initOneSignal(userId: string): Promise<void> {
     pushLog(`OneSignal login userId=${userId}`);
     const subId = await resolvePushSubscriptionId(OneSignal);
     pushLog(`push subscription id=${subId ?? "pending"}`);
+    if (subId) {
+      await registerDeviceWithBackend(subId);
+    }
   } catch (error) {
     pushLog("login failed", error);
   }
@@ -321,7 +343,9 @@ export async function registerPushAfterPermissionGranted(): Promise<void> {
     const subId = await waitForPushSubscriptionId(OneSignal, 8000);
     if (!subId) {
       schedulePushRegistrationRetry();
+      return;
     }
+    await bindExternalIdThenRegister(OneSignal, subId);
   } catch (error) {
     pushLog("registerPushAfterPermissionGranted failed", error);
   }
@@ -507,7 +531,7 @@ export async function ensurePushRegistration(): Promise<boolean> {
   }
 
   pushLog(`registering token userId=${_loggedInUserId ?? "unknown"} subscriptionId=${subscriptionId}`);
-  await registerDeviceWithBackend(subscriptionId);
+  await bindExternalIdThenRegister(OneSignal, subscriptionId);
   return true;
 }
 
@@ -526,19 +550,12 @@ export async function registerDeviceWithBackend(subscriptionId?: string): Promis
       return;
     }
 
-    const session = await getValidSession();
-    if (!session) return;
-
-    const res = await fetch(`${API_BASE}/api/push/register-device`, {
+    const res = await authFetch("/api/push/register-device", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${session}`,
-      },
       body: JSON.stringify({
         onesignalSubscriptionId: resolvedId,
         devicePlatform: Platform.OS,
-        appVersion: "1.0.0",
+        appVersion: APP_VERSION,
       }),
     });
     if (res.ok) {

@@ -179,7 +179,7 @@ export async function postRaceVerify(
     logger.debug("RaceVerify", `post failed: ${String(err)}`);
     return {
       ok: false,
-      featureEnabled: _verifyFeatureEnabled !== false,
+      featureEnabled: true,
       status: 0,
       reason: "network_error",
     };

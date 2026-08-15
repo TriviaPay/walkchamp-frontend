@@ -54,6 +54,18 @@ export interface UnlimitedChallengeScheduleInput {
   dailyGoalSteps?: number | null;
   /** Backend challenge.status: waiting|starting|active|settling|completed|cancelled_by_platform. */
   challengeStatus?: string | null;
+  /** GET /unlimited-challenges/:id and my-active `viewer` block (authoritative). */
+  viewerStartAt?: string | null;
+  viewerEndAt?: string | null;
+  viewerStatus?: string | null;
+  viewerTimezone?: string | null;
+  currentDayStartAt?: string | null;
+  currentDayEndAt?: string | null;
+  currentDayIndex?: number | null;
+  currentDayLocalDate?: string | null;
+  completedDays?: number | null;
+  passedDays?: number | null;
+  failedDays?: number | null;
 }
 
 export interface UnlimitedViewerLiveDay {
@@ -64,6 +76,8 @@ export interface UnlimitedViewerLiveDay {
   dailyGoalSteps?: number | null;
   qualificationStatus?: string | null;
   completedDays?: number | null;
+  passedDays?: number | null;
+  failedDays?: number | null;
 }
 
 export interface UnlimitedViewerSchedule {
@@ -88,6 +102,7 @@ export interface UnlimitedViewerSchedule {
   remainingDaysAfterToday: number;
   dailyGoalSteps: number;
   completedDays: number;
+  failedDays: number;
 }
 
 // ── IANA-safe zoned-midnight math (frontend port of Backend/src/lib/challengeDayWindow.ts) ──
@@ -255,20 +270,36 @@ export function computeUnlimitedViewerSchedule(
     Math.floor(Number(opts.liveDay?.dailyGoalSteps ?? challenge.dailyGoalSteps ?? 0)),
   );
 
-  const viewerTimezoneRaw = isValidIanaTimezone(opts.liveDay?.timezone)
+  const viewerTimezoneRaw = isValidIanaTimezone(challenge.viewerTimezone)
+    ? challenge.viewerTimezone
+    : isValidIanaTimezone(opts.liveDay?.timezone)
     ? (opts.liveDay!.timezone as string)
     : null;
   const viewerTimezone =
     viewerTimezoneRaw ?? (isValidIanaTimezone(opts.fallbackTimezone) ? opts.fallbackTimezone : "UTC");
   const viewerTimezoneLocked = !!viewerTimezoneRaw;
 
-  const viewerStartAtMs = zonedMidnightMsFromDateKey(startLocalDate, viewerTimezone) ?? startAtMs;
+  const apiStartMs =
+    challenge.viewerStartAt != null ? new Date(challenge.viewerStartAt).getTime() : NaN;
+  const apiEndMs =
+    challenge.viewerEndAt != null ? new Date(challenge.viewerEndAt).getTime() : NaN;
+  const viewerStartAtMs = Number.isFinite(apiStartMs)
+    ? apiStartMs
+    : zonedMidnightMsFromDateKey(startLocalDate, viewerTimezone) ?? startAtMs;
   const endLocalDate = addCalendarDaysToKey(startLocalDate, durationDays);
-  const viewerEndAtMs = zonedMidnightMsFromDateKey(endLocalDate, viewerTimezone) ?? viewerStartAtMs;
+  const viewerEndAtMs = Number.isFinite(apiEndMs)
+    ? apiEndMs
+    : zonedMidnightMsFromDateKey(endLocalDate, viewerTimezone) ?? viewerStartAtMs;
 
   let currentDayIndex: number;
   let currentDayLocalDate: string;
-  if (opts.liveDay?.dayNumber != null && opts.liveDay.localDate) {
+  if (
+    challenge.currentDayIndex != null &&
+    challenge.currentDayLocalDate
+  ) {
+    currentDayIndex = Math.min(durationDays, Math.max(1, Math.floor(challenge.currentDayIndex)));
+    currentDayLocalDate = challenge.currentDayLocalDate;
+  } else if (opts.liveDay?.dayNumber != null && opts.liveDay.localDate) {
     currentDayIndex = Math.min(durationDays, Math.max(1, Math.floor(opts.liveDay.dayNumber)));
     currentDayLocalDate = opts.liveDay.localDate;
   } else if (nowMs < viewerStartAtMs) {
@@ -287,20 +318,34 @@ export function computeUnlimitedViewerSchedule(
     currentDayLocalDate = addCalendarDaysToKey(startLocalDate, currentDayIndex - 1);
   }
 
-  const currentDayStartAtMs =
-    zonedMidnightMsFromDateKey(currentDayLocalDate, viewerTimezone) ?? viewerStartAtMs;
-  const currentDayEndAtMs =
-    zonedMidnightMsFromDateKey(addCalendarDaysToKey(currentDayLocalDate, 1), viewerTimezone) ??
-    currentDayStartAtMs;
+  const apiDayStart =
+    challenge.currentDayStartAt != null ? new Date(challenge.currentDayStartAt).getTime() : NaN;
+  const apiDayEnd =
+    challenge.currentDayEndAt != null ? new Date(challenge.currentDayEndAt).getTime() : NaN;
+  const currentDayStartAtMs = Number.isFinite(apiDayStart)
+    ? apiDayStart
+    : zonedMidnightMsFromDateKey(currentDayLocalDate, viewerTimezone) ?? viewerStartAtMs;
+  const currentDayEndAtMs = Number.isFinite(apiDayEnd)
+    ? apiDayEnd
+    : zonedMidnightMsFromDateKey(addCalendarDaysToKey(currentDayLocalDate, 1), viewerTimezone) ??
+      currentDayStartAtMs;
   const remainingDaysAfterToday = Math.max(0, durationDays - currentDayIndex);
 
-  const viewerStatus = resolveViewerStatus({
-    challengeStatus: challenge.challengeStatus,
-    qualificationStatus: opts.liveDay?.qualificationStatus,
-    nowMs,
-    viewerStartAtMs,
-    viewerEndAtMs,
-  });
+  const apiStatus = (challenge.viewerStatus ?? "").trim().toLowerCase();
+  const viewerStatus: UnlimitedViewerStatus =
+    apiStatus === "scheduled" ||
+    apiStatus === "active" ||
+    apiStatus === "completed" ||
+    apiStatus === "failed" ||
+    apiStatus === "left"
+      ? apiStatus
+      : resolveViewerStatus({
+          challengeStatus: challenge.challengeStatus,
+          qualificationStatus: opts.liveDay?.qualificationStatus,
+          nowMs,
+          viewerStartAtMs,
+          viewerEndAtMs,
+        });
 
   return {
     startLocalDate,
@@ -316,7 +361,21 @@ export function computeUnlimitedViewerSchedule(
     currentDayEndAtMs,
     remainingDaysAfterToday,
     dailyGoalSteps,
-    completedDays: Math.max(0, Math.floor(Number(opts.liveDay?.completedDays ?? 0))),
+    completedDays: Math.max(
+      0,
+      Math.floor(
+        Number(
+          opts.liveDay?.completedDays ??
+            challenge.completedDays ??
+            challenge.passedDays ??
+            0,
+        ),
+      ),
+    ),
+    failedDays: Math.max(
+      0,
+      Math.floor(Number(opts.liveDay?.failedDays ?? challenge.failedDays ?? 0)),
+    ),
   };
 }
 

@@ -46,6 +46,8 @@ import {
   isAcceptedLiveRaceSource,
 } from "@/services/steps/liveRaceSources";
 import { findEligibleLiveRaceParticipant } from "@/utils/raceNotificationEligibility";
+import { resolveRaceNotificationTypeHint } from "@/utils/raceNotificationType";
+import { postWalkDailyTotal } from "@/services/postWalkDailySteps";
 
 let notificationTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingNotification = false;
@@ -58,6 +60,43 @@ let lastWalkNotificationSteps = -1;
 let lastWalkNotificationPushMs = 0;
 let lastKnownTrackingDate: string | null = null;
 let midnightCheckTimer: ReturnType<typeof setTimeout> | null = null;
+/** Avoid hammering POST /walk/steps on every midnight-check poll. */
+let flushedHistoryDateKey: string | null = null;
+
+function shiftLocalDateKey(isoDate: string, days: number): string {
+  const parts = isoDate.split("-").map((p) => Number(p));
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return isoDate;
+  const dt = new Date(parts[0], parts[1] - 1, parts[2]);
+  dt.setDate(dt.getDate() + days);
+  return (
+    `${dt.getFullYear()}-` +
+    `${String(dt.getMonth() + 1).padStart(2, "0")}-` +
+    `${String(dt.getDate()).padStart(2, "0")}`
+  );
+}
+
+async function persistLocalDayToWalkHistory(
+  userId: string,
+  localDate: string,
+  extraSteps = 0,
+): Promise<void> {
+  if (localDate === getLocalDateStr()) {
+    // Today is written only by verified HC/HK walk sync — never leftover race totals.
+    return;
+  }
+  const stored = await readDailyStepsForUserDate(userId, localDate);
+  const lastSynced =
+    (await storageGet<number>(
+      stepScopedKeys(userId, localDate).lastSyncedStepsCount,
+    )) ?? 0;
+  const total = Math.max(0, stored, lastSynced, extraSteps);
+  if (total <= 0) {
+    flushedHistoryDateKey = `${userId}:${localDate}`;
+    return;
+  }
+  const ok = await postWalkDailyTotal({ totalSteps: total, localDate });
+  if (ok) flushedHistoryDateKey = `${userId}:${localDate}`;
+}
 /**
  * Consecutive-zero counter for the "drop polluted verified lane" guard in
  * resolveAuthoritativeTodaySteps. A single Health Connect / HealthKit read
@@ -278,6 +317,10 @@ export async function resolveAuthoritativeTodaySteps(
     // only when HC/HK genuinely reported 0 for a fresh read, never on a skipped
     // or failed read, and only once confirmed twice in a row (a lone glitchy 0
     // must never zero out a real, already-confirmed total on a transient hiccup).
+    // Mid-day Samsung/HC empty polls (records=0) are NOT a genuine zero.
+    if (providerReadOk && providerSteps === 0 && verifiedLane > 250 && !isFreshLocalDay()) {
+      providerReadOk = false;
+    }
     if (providerReadOk && providerSteps === 0 && verifiedLane > 250) {
       consecutiveZeroProviderReads += 1;
       if (consecutiveZeroProviderReads >= 2) {
@@ -368,11 +411,13 @@ export async function pushWalkNotificationFromCanonicalStore(
     return;
   }
 
+  const raceProgressNow = store.getState().raceProgress;
   let steps = resolveWalkNotificationSteps({
-    verifiedTodaySteps: store.getState().raceProgress.verifiedTodaySteps ?? 0,
-    provisionalSensorTodaySteps:
-      store.getState().raceProgress.provisionalSensorTodaySteps,
-    todaySteps: store.getState().raceProgress.todaySteps,
+    verifiedTodaySteps: raceProgressNow.verifiedTodaySteps ?? 0,
+    provisionalSensorTodaySteps: raceProgressNow.provisionalSensorTodaySteps,
+    todaySteps: raceProgressNow.todaySteps,
+    raceActive:
+      raceProgressNow.raceStatus === "active" || !!raceProgressNow.companionRaceId,
   });
   const now = Date.now();
   const cfg = STEP_TRACKING_NOTIFICATION_CONFIG;
@@ -511,8 +556,28 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
       await storageSet(scopedKeys.currentLocalDate, today);
     }
     lastKnownTrackingDate = today;
+    const yesterday = shiftLocalDateKey(today, -1);
+    if (flushedHistoryDateKey !== `${activeUserId}:${yesterday}`) {
+      await persistLocalDayToWalkHistory(activeUserId, yesterday);
+    }
     return false;
   }
+
+  const previousDate =
+    trackingDate && trackingDate !== today
+      ? trackingDate
+      : lastKnownTrackingDate && lastKnownTrackingDate !== today
+        ? lastKnownTrackingDate
+        : shiftLocalDateKey(today, -1);
+  const verifiedBeforeReset = Math.max(
+    0,
+    Math.floor(store.getState().raceProgress.verifiedTodaySteps ?? 0),
+  );
+  await persistLocalDayToWalkHistory(
+    activeUserId,
+    previousDate,
+    verifiedBeforeReset,
+  );
 
   stepDebugVerboseLog(
     "StepReset",
@@ -756,6 +821,9 @@ async function pushNotificationFromStore(): Promise<void> {
     raceStatus: "in_progress",
     lastSyncedAt: s.lastBackendSyncedAt ?? undefined,
     isSponsored: s.activeRaceIsSponsored === true,
+    raceType:
+      s.activeRaceType ??
+      (s.activeRaceIsSponsored === true ? "sponsored" : "free"),
   };
 
   logger.debug("AndroidNotification", `update raceSteps=${payload.raceSteps} rank=${payload.rank} source=store`);
@@ -763,7 +831,13 @@ async function pushNotificationFromStore(): Promise<void> {
   await raceProgressNotificationService.onLocalRaceStepsUpdated(payload);
   // Keep companion race tray (id 1002) in sync with device today steps.
   if (s.companionRaceId) {
-    await raceProgressNotificationService.onCompanionDeviceStepsUpdated(s.todaySteps);
+    const companionToday = resolveWalkNotificationSteps({
+      verifiedTodaySteps: s.verifiedTodaySteps ?? 0,
+      provisionalSensorTodaySteps: s.provisionalSensorTodaySteps,
+      todaySteps: s.todaySteps,
+      raceActive: true,
+    });
+    await raceProgressNotificationService.onCompanionDeviceStepsUpdated(companionToday);
   }
   store.dispatch(raceProgressActions.markNotificationUpdated());
 }
@@ -918,6 +992,7 @@ async function handOffStepTrackingToNative(
         verifiedTodaySteps: s.verifiedTodaySteps ?? 0,
         provisionalSensorTodaySteps: s.provisionalSensorTodaySteps,
         todaySteps: s.todaySteps,
+        raceActive: s.raceStatus === "active" || !!s.companionRaceId,
       });
       if (stepTrackingNotificationService.isActive()) {
         // Revive walk FGS + sensor ownership (also keeps sensor alive during a race).
@@ -1289,7 +1364,10 @@ async function hydrateFromNativeStepState(): Promise<void> {
 
   // HC / HealthKit remain the verified sync source, but FGS TYPE_STEP_COUNTER
   // advances live display while HC lags (Samsung often returns records=0).
-  // Adopt monotonic native todaySteps into Redux so Walk + ongoing notification match.
+  // This value is still the on-device sensor's count, not an HC-confirmed read —
+  // tag it `provisional` explicitly so it can never masquerade as a verified
+  // total (which would otherwise let a stale/phantom sensor tick permanently
+  // inflate the number that gets synced to the backend as "real" steps).
   if (stepProviderManager.usesVerifiedStepSource()) {
     const nativeToday = Math.max(0, Math.floor(native.todaySteps ?? 0));
     if (nativeToday > current.todaySteps) {
@@ -1305,10 +1383,11 @@ async function hydrateFromNativeStepState(): Promise<void> {
         ),
         updatedAt,
         fromWatch: true,
+        dailyLane: "provisional",
       });
       logger.debug(
         "AppResume",
-        `merged native display ahead todaySteps=${nativeToday} (verified source kept)`,
+        `merged native display ahead todaySteps=${nativeToday} (kept provisional — not HC-verified)`,
       );
     } else {
       logger.debug(
@@ -1500,6 +1579,8 @@ export function ensureActiveRaceInStore(params: {
   /** Keep previous activeRaceId as companion for sponsored dual-race sync. */
   preserveAsCompanion?: boolean;
   isSponsored?: boolean;
+  /** free / coins_battle / cash / sponsored / unlimited_goal */
+  raceType?: string | null;
   /** Sponsored / timed races — seeds native countdown chronometer. */
   challengeEndAt?: string | number | null;
   /** Unlimited Daily Goal — live-race tray notification without classic progress POSTs. */
@@ -1529,16 +1610,31 @@ export function ensureActiveRaceInStore(params: {
     const needSponsoredFix =
       resolvedSponsored && s.activeRaceIsSponsored !== true;
     const needGoalFix = nextGoal != null && nextGoal !== s.goalSteps;
-    const challengeEndAt =
-      params.challengeEndAt != null && params.challengeEndAt !== ""
-        ? params.challengeEndAt
-        : undefined;
+    const incomingType = String(params.raceType ?? "").trim().toLowerCase();
+    const storedType = String(s.activeRaceType ?? "").trim().toLowerCase();
+    const resolvedType =
+      incomingType ||
+      storedType ||
+      (resolvedSponsored ? "sponsored" : "free");
+    const needTypeFix = !!incomingType && incomingType !== storedType;
+    const incomingEndIso = (() => {
+      if (params.challengeEndAt == null || params.challengeEndAt === "") return null;
+      const iso =
+        typeof params.challengeEndAt === "number"
+          ? new Date(params.challengeEndAt).toISOString()
+          : String(params.challengeEndAt);
+      return Number.isNaN(new Date(iso).getTime()) ? null : iso;
+    })();
+    const needEndFix = !!incomingEndIso && incomingEndIso !== s.challengeEndAt;
+    const challengeEndAt = incomingEndIso ?? undefined;
 
-    if (needGoalFix || needSponsoredFix) {
+    if (needGoalFix || needSponsoredFix || needTypeFix || needEndFix) {
       store.dispatch(
         raceProgressActions.updateFromBackend({
           ...(needGoalFix && nextGoal != null ? { goalSteps: nextGoal } : {}),
           ...(needSponsoredFix ? { isSponsored: true } : {}),
+          ...(needTypeFix ? { raceType: incomingType } : {}),
+          ...(needEndFix && incomingEndIso ? { challengeEndAt: incomingEndIso } : {}),
           syncedAt: new Date().toISOString(),
         }),
       );
@@ -1553,6 +1649,8 @@ export function ensureActiveRaceInStore(params: {
           goalSteps: nextGoal ?? s.goalSteps ?? 0,
           timeLeftSeconds: s.timeLeftSeconds ?? 0,
           isSponsored: resolvedSponsored,
+          raceType: resolvedType,
+          ...(params.unlimitedDailyMode === true ? { unlimitedDailyMode: true } : {}),
           ...(challengeEndAt != null ? { challengeEndAt } : {}),
         },
         true,
@@ -1570,6 +1668,7 @@ export function ensureActiveRaceInStore(params: {
           goalSteps: s.goalSteps ?? nextGoal ?? 0,
           timeLeftSeconds: s.timeLeftSeconds ?? 0,
           isSponsored: true,
+          raceType: resolvedType,
           challengeEndAt,
         },
         true,
@@ -1609,6 +1708,7 @@ export function ensureActiveRaceInStore(params: {
             store.getState().raceProgress.goalSteps ?? nextGoal ?? 0,
           timeLeftSeconds: store.getState().raceProgress.timeLeftSeconds ?? 0,
           isSponsored: resolvedSponsored,
+          raceType: resolvedType,
           ...(params.unlimitedDailyMode === true ? { unlimitedDailyMode: true } : {}),
           ...(challengeEndAtRestart != null
             ? { challengeEndAt: challengeEndAtRestart }
@@ -1656,6 +1756,7 @@ export function setActiveRaceProgress(params: {
   participantConfirmed: boolean;
   preserveAsCompanion?: boolean;
   isSponsored?: boolean;
+  raceType?: string | null;
   challengeEndAt?: string | number | null;
   /**
    * Unlimited Daily Goal Challenge: start the same live-race ongoing notification
@@ -1741,6 +1842,7 @@ export function setActiveRaceProgress(params: {
           timeLeftSeconds: prev.timeLeftSeconds ?? 0,
           raceStartTime: prev.raceStartTime,
           isSponsored: prev.activeRaceIsSponsored === true,
+          raceType: prev.activeRaceType ?? undefined,
           challengeEndAt: undefined as string | number | undefined,
         }
       : null;
@@ -1781,6 +1883,7 @@ export function setActiveRaceProgress(params: {
       goalSteps: resolvedGoal,
       timeLeftSeconds: 0,
       isSponsored: resolvedSponsored,
+      ...(params.raceType ? { raceType: params.raceType } : {}),
       ...(params.unlimitedDailyMode === true ? { unlimitedDailyMode: true } : {}),
       ...(challengeEndAt != null ? { challengeEndAt } : {}),
     },
@@ -1800,6 +1903,9 @@ export function setActiveRaceProgress(params: {
         goalSteps: prevCompanionSnapshot.goalSteps,
         timeLeftSeconds: prevCompanionSnapshot.timeLeftSeconds,
         isSponsored: prevCompanionSnapshot.isSponsored,
+        ...(prevCompanionSnapshot.raceType
+          ? { raceType: prevCompanionSnapshot.raceType }
+          : {}),
         ...(prevCompanionSnapshot.challengeEndAt != null
           ? { challengeEndAt: prevCompanionSnapshot.challengeEndAt }
           : {}),
@@ -1974,6 +2080,7 @@ export async function switchDailyStepsNotification(
       s.todaySteps,
       Math.max(0, Math.floor(todaySteps ?? 0)),
     ),
+    raceActive: s.raceStatus === "active" || !!s.companionRaceId,
   });
   const goal =
     typeof dailyGoalOverride === "number" && dailyGoalOverride > 0
@@ -2612,6 +2719,7 @@ export type MyActiveInProgressRace = {
   id: string;
   status: string;
   startedAt: string | null;
+  scheduledStartAt?: string | null;
   targetSteps: number;
   currentPlayers: number;
   isHost?: boolean;
@@ -2752,6 +2860,10 @@ export async function ensureCompanionRaceNotification(params: {
         goalSteps,
         timeLeftSeconds: 0,
         isSponsored: race?.type === "sponsored",
+        raceType: resolveRaceNotificationTypeHint({
+          type: race?.type,
+          isSponsored: race?.type === "sponsored",
+        }),
         ...(challengeEndAt ? { challengeEndAt } : {}),
       },
       race?.startedAt
@@ -2854,7 +2966,12 @@ export async function restoreActiveLiveRaceNotificationForUser(
         ) {
           bootSteps = Math.max(bootSteps, Math.floor(rp.raceSteps));
         }
-        raceType = detail.race?.type ?? race.type;
+        raceType = resolveRaceNotificationTypeHint({
+          type: detail.race?.type ?? race.type,
+          entryType: race.entryType,
+          challengeType: race.challengeType,
+          isSponsored: (detail.race?.type ?? race.type) === "sponsored",
+        });
         challengeEndAt =
           detail.race?.challengeEndAt ??
           (raceType === "sponsored" && (detail.race?.startedAt ?? race.startedAt)
@@ -2925,6 +3042,7 @@ export async function restoreActiveLiveRaceNotificationForUser(
       bootSteps: primaryHydrated.bootSteps,
       participantConfirmed: true,
       isSponsored: primaryHydrated.raceType === "sponsored",
+      raceType: primaryHydrated.raceType,
       challengeEndAt: primaryHydrated.challengeEndAt,
     });
 

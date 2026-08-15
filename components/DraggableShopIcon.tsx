@@ -3,10 +3,10 @@ import { Animated, Dimensions, Image, PanResponder, StyleSheet } from "react-nat
 import { storageGet, storageSet } from "@/utils/storage";
 
 // Match the profile avatar size (42px) — slightly larger outer container
-const SHOP_SIZE = 47;
-const IMG_SIZE = 39;
+const SHOP_SIZE = 53;
+const IMG_SIZE = 45;
 const DRAG_THRESHOLD = 5;
-const IDLE_DELAY = 5000;
+const IDLE_DELAY_MS = 10_000;
 const IDLE_OPACITY = 0.45;
 const SHOP_POS_KEY = "walkchamp_shop_icon_pos";
 
@@ -53,7 +53,7 @@ export default function DraggableShopIcon({ tabBarHeight, onOpenStore, focused }
         duration: 600,
         useNativeDriver: false,
       }).start();
-    }, IDLE_DELAY);
+    }, IDLE_DELAY_MS);
   }, [clearIdle, opacity]);
 
   const bringToFull = useCallback(() => {

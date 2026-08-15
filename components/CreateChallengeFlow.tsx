@@ -41,10 +41,7 @@ import { fetchCashChallengePaymentQuote, type CashChallengePaymentQuote } from "
 import { previewUnlimitedGoalPaymentQuote, type UnlimitedGoalPaymentQuote } from "@/services/unlimitedGoalApi";
 import { ENABLE_CASH_CHALLENGES, isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
 import { trackEvent } from "@/services/analytics";
-import {
-  TRACK_LAYOUT_OPTIONS,
-  FREE_TRACK_CODES,
-} from "@/constants/trackLayouts";
+import { useOwnedTrackLayouts } from "@/hooks/useOwnedTrackLayouts";
 import { getDeviceTimezone } from "@/utils/timezone";
 import { rf, rs } from "@/utils/responsive";
 import * as Haptics from "@/utils/haptics";
@@ -472,10 +469,8 @@ export function CreateChallengeFlow({
   const startDateLabel = liveSchedule.startDisplayDate;
   const startTimeLabel = liveSchedule.startDisplayTime;
 
-  const ownedLayouts = TRACK_LAYOUT_OPTIONS.filter((layout) => {
-    const themeData = themes.find((t) => t.code === layout.id);
-    return themeData?.owned ?? FREE_TRACK_CODES.has(layout.id);
-  });
+  // Full owned-theme catalog (remote R2 images), not the 2-entry bundled fallback list.
+  const { layouts: ownedLayouts } = useOwnedTrackLayouts();
 
   const applyStartDate = useCallback((raw: Date) => {
     const now = new Date();
@@ -975,8 +970,8 @@ export function CreateChallengeFlow({
                       accessibilityState={{ selected: fixedSelected }}
                       accessibilityLabel={
                         fixedSelected
-                          ? "24-Hour Sprint, selected"
-                          : "24-Hour Sprint, not selected"
+                          ? "Top Finishers Challenge, selected"
+                          : "Top Finishers Challenge, not selected"
                       }
                       onPress={() => {
                         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -1039,7 +1034,7 @@ export function CreateChallengeFlow({
                                   },
                                 ]}
                               >
-                                ⚡ 24-Hour Sprint
+                                ⚡ Top Finishers Challenge
                               </Text>
                               <Text
                                 style={[

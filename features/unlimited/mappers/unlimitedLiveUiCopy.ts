@@ -11,7 +11,7 @@ export const UNLIMITED_COPY = {
   missADayOut: "Miss a day = out",
   prizePoolNotEligible: "Prize pool not eligible",
   lostAfterMiss: "Challenge lost after missing a required day.",
-  modalWarning: "Miss any required day and you are out of the challenge.",
+  modalWarning: "Miss a required day and you lose prize eligibility. You stay in the race until you forfeit.",
   modalInfoPrefix: "Full rankings are available in ",
   modalInfoHighlight: "Live Board",
   modalCta: "Let's go!",

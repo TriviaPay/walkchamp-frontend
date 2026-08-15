@@ -8,6 +8,8 @@ import {
   buildUnlimitedDayWeekSections,
   dayRowsFromDailyHistory,
   mergeUnlimitedHistoryWithSchedule,
+  remainingDaysAfterDisplayDay,
+  resolveUnlimitedDisplayDayIndex,
 } from "./unlimitedDayProgress";
 import { computeUnlimitedViewerSchedule, type UnlimitedViewerSchedule } from "./unlimitedViewerSchedule";
 
@@ -80,8 +82,9 @@ for (const durationDays of [7, 10, 30, 60, 90]) {
   assert.equal(rows[0]!.status, "passed");
   assert.equal(rows[1]!.status, "passed");
   assert.equal(rows[2]!.status, "failed");
-  // Days after the failure are locked/upcoming, never independently "in_progress" or "passed".
-  assert.ok(rows.slice(3).every((r) => r.status === "upcoming"));
+  // Missed-day users stay in the race: current day stays in progress.
+  assert.equal(rows[3]!.status, "in_progress");
+  assert.ok(rows.slice(4).every((r) => r.status === "upcoming"));
 }
 
 // ── STATUS: validation_pending for a finalized day the aggregate hasn't caught up to ──
@@ -182,6 +185,37 @@ for (const durationDays of [7, 10, 30, 60, 90]) {
   const merged = mergeUnlimitedHistoryWithSchedule(partial!.slice(0, 2), schedule, 8420);
   assert.equal(merged.length, 7);
   assert.equal(merged[1]!.verifiedSteps, 8420);
+}
+
+// Schedule index ahead of history in_progress → display the live history day.
+{
+  const schedule = scheduleFor({ durationDays: 7, currentDayIndex: 2, completedDays: 0 });
+  const history = [
+    { dayNumber: 1, localDate: "2026-08-09", status: "in_progress" as const, dailyGoalSteps: 10_000, verifiedSteps: 132 },
+    { dayNumber: 2, localDate: "2026-08-10", status: "upcoming" as const, dailyGoalSteps: 10_000, verifiedSteps: null },
+  ];
+  assert.equal(resolveUnlimitedDisplayDayIndex(schedule, history), 1);
+  assert.equal(remainingDaysAfterDisplayDay(7, 1), 6);
+  const merged = mergeUnlimitedHistoryWithSchedule(history, schedule, 132);
+  assert.equal(merged[0]!.status, "in_progress");
+  assert.equal(merged[0]!.verifiedSteps, 132);
+  assert.equal(merged[1]!.status, "upcoming");
+}
+
+// Past days still marked in_progress with met goal → passed (not Pending).
+{
+  const schedule = scheduleFor({ durationDays: 7, currentDayIndex: 7, completedDays: 6 });
+  const history = Array.from({ length: 7 }, (_, i) => ({
+    dayNumber: i + 1,
+    localDate: `2026-08-${String(9 + i).padStart(2, "0")}`,
+    status: "in_progress" as const,
+    dailyGoalSteps: 100,
+    verifiedSteps: i === 6 ? 40 : 100,
+  }));
+  const merged = mergeUnlimitedHistoryWithSchedule(history, schedule, 40);
+  assert.equal(merged[0]!.status, "passed");
+  assert.equal(merged[5]!.status, "passed");
+  assert.equal(merged[6]!.status, "in_progress");
 }
 
 console.log("unlimitedDayProgress.test.ts: ok");

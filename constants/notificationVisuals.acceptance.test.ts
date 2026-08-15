@@ -58,8 +58,16 @@ assert(resolveNotificationVisualType("unknown_xyz") === "default", "unknown → 
 assert(resolveNotificationVisualType(null) === "default", "null → default");
 
 const friend = androidOneSignalVisualPayload({ type: "friend_request" });
-assert(friend.large_icon === "notification_walkchamp_brand", "Android large = brand");
-assert(friend.big_picture_drawable === "notification_friend", "Android big picture = type");
+assert(friend.large_icon === "notification_friend", "Android large = type icon (right)");
+assert(friend.visualType === "friend", "friend visual");
+
+const raceStarted = androidOneSignalVisualPayload({ type: "race_started" });
+assert(raceStarted.large_icon === "notification_race_started", "race started large = type");
+assert(raceStarted.visualType === "race_started", "race started visual");
+
+const globalChat = androidOneSignalVisualPayload({ type: "global_chat_message" });
+assert(globalChat.large_icon === "notification_chat", "global chat large = chat");
+assert(globalChat.visualType === "chat", "global chat visual");
 
 const upcoming = androidOneSignalVisualPayload({ type: "race_starting_soon" });
 assert(upcoming.visualType === "upcoming_race", "upcoming visual");

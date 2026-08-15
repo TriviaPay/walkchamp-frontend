@@ -22,6 +22,7 @@ import {
   isUnlimitedTerminalExcludedFromLive,
   isUnlimitedFinishedForLiveTab,
   mapUnlimitedUpcomingToLiveRaceFields,
+  mapUnlimitedRoomPlayersToLiveCard,
   type UnlimitedLiveRaceFields,
 } from "@/utils/unlimitedLiveRace";
 import type { AvailableRoomLike } from "@/utils/trendingChallenges";
@@ -102,7 +103,7 @@ async function fetchUnlimitedFromRacesMyActive(): Promise<UnlimitedUpcomingRoom[
         capacityMode: "unlimited",
         entryFeeCents: r.entryAmountCents ?? r.entry_amount_cents,
         dailyGoalSteps: r.targetSteps ?? r.target_steps ?? r.dailyGoalSteps,
-        durationDays: r.challengeDurationDays ?? r.challenge_duration_days ?? 7,
+        durationDays: r.challengeDurationDays ?? r.challenge_duration_days,
         startAtUtc: r.startedAt ?? r.scheduledStartAt ?? r.startAtUtc ?? r.createdAt,
         challengeEndAtUtc: r.challengeEndAt ?? r.challenge_end_at,
         hostUserId: r.creatorId ?? r.hostUserId,
@@ -193,23 +194,42 @@ async function fetchPathRows(path: string): Promise<UnlimitedUpcomingRoom[]> {
   }
 }
 
-async function fetchUnlimitedDetailRoom(id: string): Promise<UnlimitedUpcomingRoom | null> {
+export async function fetchUnlimitedDetailRoom(id: string): Promise<UnlimitedUpcomingRoom | null> {
   try {
     const res = await authFetch(`/api/unlimited-challenges/${id}`);
     if (!res.ok) return null;
     const data: unknown = await res.json().catch(() => null);
     const root = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
-    const rows = extractUnlimitedChallengeRows(data);
-    const first =
-      rows[0] ??
-      (root ? root.challenge ?? data : data);
-    const normalized = normalizeUnlimitedChallengeToUpcomingRoom(first);
-    if (!normalized) return null;
-    // Detail puts membership on the envelope, not always on challenge.
+    const challenge =
+      root && root.challenge && typeof root.challenge === "object"
+        ? (root.challenge as Record<string, unknown>)
+        : (extractUnlimitedChallengeRows(data)[0] as Record<string, unknown> | undefined) ??
+          root;
+    if (!challenge) return null;
+    const viewer =
+      root?.viewer && typeof root.viewer === "object"
+        ? (root.viewer as Record<string, unknown>)
+        : challenge.viewer && typeof challenge.viewer === "object"
+          ? (challenge.viewer as Record<string, unknown>)
+          : null;
     const registered =
       root?.currentUserRegistered === true ||
       root?.current_user_registered === true ||
-      normalized.current_user_registered === true;
+      challenge.currentUserRegistered === true ||
+      challenge.current_user_registered === true;
+    const normalized = normalizeUnlimitedChallengeToUpcomingRoom({
+      ...challenge,
+      ...(viewer ? { viewer } : {}),
+      viewerEndAt: root?.viewerEndAt ?? viewer?.viewerEndAt ?? challenge.viewerEndAt,
+      currentUserRegistered: registered,
+      participantCount:
+        root?.participantCount ??
+        challenge.participantCount ??
+        challenge.participant_count,
+      players: challenge.players ?? root?.players,
+      participants: challenge.participants ?? root?.participants ?? challenge.players ?? root?.players,
+    });
+    if (!normalized) return null;
     return registered
       ? { ...normalized, current_user_registered: true, eligible_to_register: false }
       : normalized;
@@ -481,15 +501,18 @@ export async function fetchMyOpenUnlimitedChallenges(opts?: {
     return true;
   });
 
+  const memberIds = new Set([
+    ...myActive.map((r) => r.room_id),
+    ...fromRaces.map((r) => r.room_id),
+  ]);
+
   return open
     // Local forfeit/leave must win over stale my-active / hosted-seed merges.
     .filter((room) => !leftIds.has(room.room_id))
     .map((room) => {
-      const serverReg = room.current_user_registered === true;
-      if (serverReg) {
+      if (memberIds.has(room.room_id) || room.current_user_registered === true) {
         return { ...room, current_user_registered: true, eligible_to_register: false };
       }
-      // Host id alone is not membership after leave — only server/hosted registration is.
       return room;
     });
 }
@@ -669,7 +692,7 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
               ? `$${room.entry_fee}`
               : `$${room.entry_fee.toFixed(2)}`
             : "USD Entry",
-        playerCount: Math.max(1, room.registered_count ?? 1),
+        playerCount: Math.max(room.registered_count ?? 0, (room.players ?? []).length),
         maxPlayers: 0,
         targetSteps: room.target_steps || 0,
         status: "in_progress",
@@ -683,7 +706,7 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
         startedAt: room.scheduled_start_at,
         completedAt: null,
         createdAt: room.scheduled_start_at ?? new Date(nowMs).toISOString(),
-        players: [],
+        players: mapUnlimitedRoomPlayersToLiveCard(room),
         trackLayout: room.selected_track_theme_id || "bg",
         reactionCounts: {},
         elapsedSeconds: room.scheduled_start_at
@@ -696,6 +719,7 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
         challengeDurationDays: room.challenge_duration_days ?? 0,
         hostUserId: room.host_user_id || null,
         currentUserParticipating: !!room.current_user_registered,
+        currentUserParticipantStatus: room.participation_status ?? null,
         challengeType: "unlimited_goal" as const,
         capacityMode: "unlimited" as const,
       });
@@ -730,19 +754,18 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
     finished.push({ ...mapped, status: "completed" });
   }
 
-  // Persist membership for live races only — never clearAll (that marked left and hid Walk).
+  // Persist membership for live races only. Never resumeAfterLeave — a Live
+  // tab refresh must not clear a just-forfeited / left Unlimited mark.
   await Promise.all(
     live.map(async (row) => {
       const room = merged.find((r) => r.room_id === row.id);
       if (!room?.current_user_registered) return;
-      await saveHostedUnlimitedChallenge(
-        {
-          ...room,
-          status: room.status,
-          current_user_registered: true,
-        },
-        { resumeAfterLeave: true },
-      );
+      if (leftIds.has(room.room_id)) return;
+      await saveHostedUnlimitedChallenge({
+        ...room,
+        status: room.status,
+        current_user_registered: true,
+      });
     }),
   );
 

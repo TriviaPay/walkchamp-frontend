@@ -8,17 +8,16 @@ import androidx.annotation.Keep
 import androidx.core.app.NotificationCompat
 import com.globalwalkerleague.walkchampraceprogress.NotificationVisualType
 import com.globalwalkerleague.walkchampraceprogress.NotificationVisuals
-import com.globalwalkerleague.walkchampraceprogress.WalkChampNotificationViews
 import com.onesignal.notifications.INotificationReceivedEvent
 import com.onesignal.notifications.INotificationServiceExtension
 import org.json.JSONObject
 
 /**
  * OneSignal Android presentation only:
- * - Small icon: monochrome walker (status bar)
- * - Large icon: WalkChamp brand only when the system does not already show
- *   the default app icon in the notification header (pre-N / unsupported)
- * - Big picture: notification-type illustration (notification_friend, …)
+ * - Small icon: monochrome walker (status bar) — unchanged
+ * - Large icon (right end): type illustration (race / friend / chat / …)
+ *   Never the launcher / app icon. Same pattern as Daily Walk + Live Race.
+ * - No BigPictureStyle — type art as an expanded full-bleed image looks huge.
  */
 @Keep
 class WalkChampNotificationServiceExtension : INotificationServiceExtension {
@@ -27,18 +26,9 @@ class WalkChampNotificationServiceExtension : INotificationServiceExtension {
       val notification = event.notification
       val context = event.context
       val visual = resolveVisual(notification.additionalData)
-
-      val showBrandLargeIcon =
-        !WalkChampNotificationViews.deviceShowsDefaultNotificationAppIcon()
-      val brandBitmap =
-        if (showBrandLargeIcon) {
-          decodeDrawable(context, "notification_walkchamp_brand")
-            ?: decodeDrawable(context, "notification_default")
-        } else {
-          null
-        }
-      val typeBitmap = decodeDrawable(context, drawableName(visual))
-        ?: decodeDrawable(context, "notification_default")
+      val typeBitmap =
+        BitmapFactory.decodeResource(context.resources, NotificationVisuals.resolveDrawable(visual))
+          ?: decodeDrawable(context, "notification_default")
 
       val smallIconId = resolveDrawableId(context, "ic_stat_onesignal_default")
         .takeIf { it != 0 }
@@ -48,28 +38,19 @@ class WalkChampNotificationServiceExtension : INotificationServiceExtension {
         if (smallIconId != 0) {
           builder.setSmallIcon(smallIconId)
         }
-        if (brandBitmap != null) {
-          builder.setLargeIcon(brandBitmap)
+        if (typeBitmap != null) {
+          builder.setLargeIcon(typeBitmap)
         }
-        builder.setColor(ACCENT_ARGB)
-
-        // Type illustration as expanded rich image when server did not send one.
-        if (notification.bigPicture.isNullOrBlank() && typeBitmap != null) {
-          val pictureStyle = NotificationCompat.BigPictureStyle().bigPicture(typeBitmap)
-          // Avoid a second brand mark when the system header already shows the app icon.
-          if (brandBitmap != null) {
-            pictureStyle.bigLargeIcon(brandBitmap)
-          } else {
-            pictureStyle.bigLargeIcon(null as android.graphics.Bitmap?)
-          }
-          builder.setStyle(pictureStyle)
+        // Per-category accent (gold for rewards, green for cash/walk, purple for
+        // races, blue for social) instead of one flat color for every type.
+        builder.setColor(NotificationVisuals.accentColorArgb(visual))
+        val body = notification.body
+        if (!body.isNullOrBlank()) {
+          builder.setStyle(NotificationCompat.BigTextStyle().bigText(body))
         }
         builder
       }
-      Log.d(
-        TAG,
-        "applied visual=$visual brandLarge=$showBrandLargeIcon typePicture=${drawableName(visual)}",
-      )
+      Log.d(TAG, "applied visual=$visual largeIcon=${drawableName(visual)}")
     } catch (e: Exception) {
       Log.w(TAG, "failed to apply notification visual: ${e.message}")
     }
@@ -128,6 +109,5 @@ class WalkChampNotificationServiceExtension : INotificationServiceExtension {
 
   companion object {
     private const val TAG = "WalkChampOSNotif"
-    private const val ACCENT_ARGB = 0xFF00B4FF.toInt()
   }
 }

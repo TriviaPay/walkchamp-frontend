@@ -195,7 +195,11 @@ export const CC = {
 } as const;
 
 export type CreateChallengeChrome = {
-  -readonly [K in keyof typeof CC]: (typeof CC)[K];
+  [K in keyof typeof CC]: (typeof CC)[K] extends string
+    ? string
+    : (typeof CC)[K] extends number
+      ? number
+      : (typeof CC)[K];
 };
 
 type ThemePalette = {

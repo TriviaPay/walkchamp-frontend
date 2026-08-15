@@ -47,22 +47,48 @@ export function normalizeUnlimitedDayStatus(raw: unknown): UnlimitedDayStatus | 
   return null;
 }
 
+/**
+ * Visible "current day" for Challenge Progress / live streak card.
+ * If daily-history still has exactly one in_progress day, prefer that over a
+ * schedule index that can be one day ahead (timezone / window edge).
+ */
+export function resolveUnlimitedDisplayDayIndex(
+  schedule: UnlimitedViewerSchedule,
+  historyRows?: UnlimitedDayRow[] | null,
+): number {
+  const inProgress = (historyRows ?? []).filter((r) => r.status === "in_progress");
+  if (inProgress.length === 1) {
+    const n = Math.floor(inProgress[0]!.dayNumber);
+    if (n >= 1 && n <= schedule.durationDays) return n;
+  }
+  return Math.min(schedule.durationDays, Math.max(1, Math.floor(schedule.currentDayIndex || 1)));
+}
+
+export function remainingDaysAfterDisplayDay(
+  durationDays: number,
+  displayDayIndex: number,
+): number {
+  return Math.max(0, Math.floor(durationDays) - Math.floor(displayDayIndex));
+}
+
 export function buildUnlimitedDayRows(schedule: UnlimitedViewerSchedule, todaySteps?: number): UnlimitedDayRow[] {
   const rows: UnlimitedDayRow[] = [];
   const disqualified = schedule.viewerStatus === "failed";
   const passedCount = Math.max(0, Math.min(schedule.completedDays, schedule.durationDays));
+  const failedCount = Math.max(0, Math.min(schedule.failedDays ?? 0, schedule.durationDays - passedCount));
   for (let day = 1; day <= schedule.durationDays; day += 1) {
     let status: UnlimitedDayStatus;
     if (day <= passedCount) {
       status = "passed";
+    } else if (failedCount > 0 && day === passedCount + 1) {
+      status = "failed";
     } else if (disqualified && day === passedCount + 1) {
       status = "failed";
-    } else if (disqualified && day > passedCount + 1) {
+    } else if ((disqualified || failedCount > 0) && day > passedCount + 1 && day < schedule.currentDayIndex) {
       status = "upcoming";
-    } else if (day === schedule.currentDayIndex && schedule.viewerStatus === "active") {
+    } else if (day === schedule.currentDayIndex && (schedule.viewerStatus === "active" || schedule.viewerStatus === "failed")) {
       status = "in_progress";
     } else if (day < schedule.currentDayIndex) {
-      // Finalized day the backend hasn't rolled into `completedDays` yet.
       status = "validation_pending";
     } else {
       status = "upcoming";
@@ -96,6 +122,13 @@ export type UnlimitedDailyHistoryPayload = {
   dailyGoalSteps?: number;
   startLocalDate?: string;
   days?: UnlimitedDailyHistoryDay[];
+  passedDays?: number;
+  failedDays?: number;
+  pendingDays?: number;
+  viewerResultsReady?: boolean;
+  viewerResultReasonCode?: string | null;
+  prizePoolEligibilityStatus?: string | null;
+  eligibilityReasonCode?: string | null;
 };
 
 /** Map backend daily-history payload → day rows (authoritative verified steps). */
@@ -118,6 +151,7 @@ export function dayRowsFromDailyHistory(
       const status =
         normalizeUnlimitedDayStatus(d.dayStatus) ??
         normalizeUnlimitedDayStatus(d.status) ??
+        normalizeUnlimitedDayStatus((d as { storedStatus?: string }).storedStatus) ??
         "upcoming";
       const localDate =
         (typeof d.localDate === "string" && d.localDate) ||
@@ -151,6 +185,19 @@ export function dayRowsFromDailyHistory(
 
   if (rows.length === 0) return null;
 
+  const passedHint = typeof payload?.passedDays === "number" ? payload.passedDays : 0;
+  const failedHint = typeof payload?.failedDays === "number" ? payload.failedDays : 0;
+  if (passedHint > 0 && !rows.some((r) => r.status === "passed")) {
+    for (const row of rows) {
+      if (row.dayNumber <= passedHint && row.status !== "failed") row.status = "passed";
+    }
+  }
+  if (failedHint > 0 && !rows.some((r) => r.status === "failed")) {
+    const failDay = Math.min(rows.length, passedHint + 1);
+    const hit = rows.find((r) => r.dayNumber === failDay);
+    if (hit && hit.status !== "passed") hit.status = "failed";
+  }
+
   // History may only return days that already started — pad to full challenge length
   // so the Challenge Progress UI can show the total week/duration (Image 1).
   if (fallback?.schedule && fallback.schedule.durationDays > rows.length) {
@@ -168,24 +215,65 @@ export function mergeUnlimitedHistoryWithSchedule(
   schedule: UnlimitedViewerSchedule,
   todaySteps?: number,
 ): UnlimitedDayRow[] {
-  const base = buildUnlimitedDayRows(schedule, todaySteps);
+  const displayDay = resolveUnlimitedDisplayDayIndex(schedule, historyRows);
+  const base = buildUnlimitedDayRows(
+    { ...schedule, currentDayIndex: displayDay },
+    todaySteps,
+  );
   if (!historyRows?.length) return base;
   const byDay = new Map(historyRows.map((r) => [r.dayNumber, r]));
   return base.map((row) => {
     const hit = byDay.get(row.dayNumber);
-    if (!hit) return row;
-    const verifiedSteps =
-      hit.status === "in_progress" &&
-      typeof todaySteps === "number" &&
-      (hit.verifiedSteps == null || todaySteps > hit.verifiedSteps)
-        ? todaySteps
-        : hit.verifiedSteps;
+    const isCurrent = row.dayNumber === displayDay;
+    if (!hit) {
+      return isCurrent && typeof todaySteps === "number"
+        ? { ...row, status: "in_progress", verifiedSteps: todaySteps }
+        : row;
+    }
+    if (isCurrent) {
+      const verifiedSteps =
+        typeof todaySteps === "number"
+          ? Math.max(todaySteps, hit.verifiedSteps ?? 0)
+          : hit.verifiedSteps;
+      return {
+        ...row,
+        ...hit,
+        status: "in_progress",
+        localDate: hit.localDate || row.localDate,
+        dailyGoalSteps: hit.dailyGoalSteps > 0 ? hit.dailyGoalSteps : row.dailyGoalSteps,
+        verifiedSteps,
+      };
+    }
+    // Don't paint today's live steps on a previous day still marked in_progress.
+    if (
+      (hit.status === "in_progress" || hit.status === "upcoming" || hit.status === "validation_pending") &&
+      row.dayNumber < displayDay
+    ) {
+      const goal = hit.dailyGoalSteps > 0 ? hit.dailyGoalSteps : row.dailyGoalSteps;
+      const steps = hit.verifiedSteps;
+      let status: UnlimitedDayStatus = "validation_pending";
+      if (typeof steps === "number" && goal > 0) {
+        status = steps >= goal ? "passed" : "failed";
+      } else if (schedule.completedDays > 0 && row.dayNumber <= schedule.completedDays) {
+        status = "passed";
+      } else if ((schedule.failedDays ?? 0) > 0 && row.dayNumber === schedule.completedDays + 1) {
+        status = "failed";
+      }
+      return {
+        ...row,
+        ...hit,
+        status,
+        verifiedSteps: hit.verifiedSteps,
+        localDate: hit.localDate || row.localDate,
+        dailyGoalSteps: goal,
+      };
+    }
     return {
       ...row,
       ...hit,
       localDate: hit.localDate || row.localDate,
       dailyGoalSteps: hit.dailyGoalSteps > 0 ? hit.dailyGoalSteps : row.dailyGoalSteps,
-      verifiedSteps,
+      verifiedSteps: hit.verifiedSteps,
     };
   });
 }

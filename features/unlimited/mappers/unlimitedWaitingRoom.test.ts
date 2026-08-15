@@ -109,4 +109,22 @@ const mappedMax = mapUnlimitedDetailToWaitingRoom({
 assert.ok(mappedMax);
 assert.equal(mappedMax!.race.currentPlayers, 101);
 
+const emptyWithPrize = mapUnlimitedDetailToWaitingRoom({
+  challenge: {
+    id: "ul-empty-prize",
+    participantCount: 0,
+    entryFeeCents: 100000,
+    prizePoolCents: 200000,
+    dailyGoalSteps: 10000,
+  },
+  participantCount: 0,
+  players: [],
+});
+assert.ok(emptyWithPrize);
+assert.equal(
+  emptyWithPrize.race.currentPlayers,
+  0,
+  "empty roster + prize pool must not invent 2 joined",
+);
+
 console.log("unlimitedWaitingRoom.test.ts: ok");

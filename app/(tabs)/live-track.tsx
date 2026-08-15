@@ -30,6 +30,7 @@ import { useRace } from "@/context/RaceContext";
 import { useRaceProgress } from "@/hooks/useRaceProgress";
 import { ensureActiveRaceInStore, clearActiveRaceProgress, suppressLiveRaceNotification, suppressSpectatorLiveRaceNotifications } from "@/services/stepProgressCoordinator";
 import { findEligibleLiveRaceParticipant } from "@/utils/raceNotificationEligibility";
+import { resolveRaceNotificationTypeHint } from "@/utils/raceNotificationType";
 import { store } from "@/store";
 import { stepEngineLog } from "@/utils/stepAccuracy";
 import { authFetch } from "@/utils/authFetch";
@@ -614,6 +615,12 @@ export default function LiveTrackTab() {
           participantConfirmed: true,
           preserveAsCompanion,
           isSponsored: detailRace.type === "sponsored",
+          raceType: resolveRaceNotificationTypeHint({
+            type: detailRace.type,
+            entryType: detailRace.entryType,
+            challengeType: detailRace.challengeType,
+            isSponsored: detailRace.type === "sponsored",
+          }),
           challengeEndAt,
         });
         if (!raceResumedRef.current) {
@@ -749,6 +756,12 @@ export default function LiveTrackTab() {
       participantConfirmed: true,
       preserveAsCompanion,
       isSponsored: race?.type === "sponsored",
+      raceType: resolveRaceNotificationTypeHint({
+        type: race?.type,
+        entryType: race?.entryType,
+        challengeType: race?.challengeType,
+        isSponsored: race?.type === "sponsored",
+      }),
       challengeEndAt,
     });
     stepEngineLog(

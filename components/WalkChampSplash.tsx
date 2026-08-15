@@ -143,7 +143,7 @@ function RaceTrackPreload({ enabled }: { enabled: boolean }) {
   return (
     <View style={styles.racePreloadHost} pointerEvents="none" collapsable={false}>
       <LottieView
-        source={source as object}
+        source={source as string | { uri: string }}
         autoPlay={false}
         loop={false}
         progress={0}
@@ -210,7 +210,7 @@ const RaceTrackLottie = React.memo(function RaceTrackLottie({
   if (!playing) {
     return (
       <LottieView
-        source={source as object}
+        source={source as string | { uri: string }}
         autoPlay={false}
         loop={false}
         progress={0}
@@ -225,7 +225,7 @@ const RaceTrackLottie = React.memo(function RaceTrackLottie({
   return (
     <LottieView
       key="race-play"
-      source={source as object}
+      source={source as string | { uri: string }}
       autoPlay
       loop={false}
       style={style}
@@ -258,7 +258,7 @@ const WalkingLottie = React.memo(function WalkingLottie({
   if (!LottieView || !source || !active) return null;
   return (
     <LottieView
-      source={source as object}
+      source={source as string | { uri: string }}
       autoPlay
       loop
       style={style}
@@ -317,7 +317,7 @@ function SplashAppIconIntroLottie({ onFinished }: { onFinished: () => void }) {
 
   return (
     <LottieView
-      source={source as object}
+      source={source as string | { uri: string }}
       autoPlay
       loop={false}
       style={styles.introLottie}

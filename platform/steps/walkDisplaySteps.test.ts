@@ -9,6 +9,7 @@ import {
   resolveWalkNotificationSteps,
   isInflatedProvisionalVsVerified,
   isStaleSensorAbsolute,
+  shouldAcceptVerifiedZero,
 } from "./walkDisplaySteps";
 
 // Real HC 433 vs bad sensor 1592 → show 433
@@ -45,13 +46,43 @@ assert.equal(
   120,
 );
 
-// Fresh local day: HC=0 must beat yesterday's sensor absolute
+// Midnight: HC=0 + leftover race/yesterday thousands → 0, never the +250 cap
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 0,
+    provisionalSensorTodaySteps: 3122,
+    todaySteps: 3122,
+    raceActive: true,
+  }),
+  0,
+);
 assert.equal(
   resolveWalkNotificationSteps({
     verifiedTodaySteps: 0,
     provisionalSensorTodaySteps: 9953,
+    todaySteps: 9953,
   }),
   0,
+);
+
+// During a live race with no HC today, leftover thousands stay off Daily Walk.
+// Small stored daily totals must not flicker to 0.
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 0,
+    provisionalSensorTodaySteps: 120,
+    todaySteps: 120,
+    raceActive: true,
+  }),
+  120,
+);
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 0,
+    todaySteps: 250,
+    raceActive: true,
+  }),
+  250,
 );
 assert.equal(
   resolveWalkNotificationSteps({
@@ -65,5 +96,43 @@ assert.equal(isInflatedProvisionalVsVerified(433, 1592), true);
 assert.equal(isInflatedProvisionalVsVerified(433, 450), false);
 assert.equal(isStaleSensorAbsolute(0, 1592), true);
 assert.equal(isStaleSensorAbsolute(5, 120), false);
+
+// During a live/sponsored race, do not let sensor/race totals replace HC daily.
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 113,
+    provisionalSensorTodaySteps: 241,
+    todaySteps: 241,
+    raceActive: true,
+  }),
+  113,
+);
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 113,
+    provisionalSensorTodaySteps: 130,
+    raceActive: true,
+  }),
+  130,
+);
+
+// Mid-day HC empty poll must not wipe a known total.
+assert.equal(
+  shouldAcceptVerifiedZero({ incomingSteps: 0, previousSteps: 6890, freshLocalDay: false }),
+  false,
+);
+// True midnight: HC=0 may clear yesterday.
+assert.equal(
+  shouldAcceptVerifiedZero({ incomingSteps: 0, previousSteps: 9953, freshLocalDay: true }),
+  true,
+);
+assert.equal(
+  shouldAcceptVerifiedZero({ incomingSteps: 0, previousSteps: 0, freshLocalDay: false }),
+  true,
+);
+assert.equal(
+  shouldAcceptVerifiedZero({ incomingSteps: 433, previousSteps: 1592, freshLocalDay: false }),
+  true,
+);
 
 console.log("walkDisplaySteps.test.ts: ok");

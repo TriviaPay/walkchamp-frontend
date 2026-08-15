@@ -11,6 +11,16 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const MIN_MS = 60 * 1000;
+/** Backend `FIXED_RACE_MAX_DURATION_MS` — classic free/coins/cash. */
+export const CLASSIC_RACE_DURATION_MS = DAY_MS;
+/** Backend sponsored live window. */
+export const SPONSORED_RACE_DURATION_MS = 3 * HOUR_MS;
+
+function parseDate(value: string | Date | null | undefined): Date | null {
+  if (value == null || value === "") return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 export type ChallengeScheduleFields = {
   challengeEndAt?: string | Date | null;
@@ -32,6 +42,68 @@ function inferDurationDaysFromGoal(targetSteps: number | null | undefined): numb
   if (steps >= 200_000) return 30;
   if (steps >= 50_000) return 7;
   return 0;
+}
+
+/**
+ * Absolute race end for Walk / My Race clocks.
+ * Matches Backend `races.ts`: sponsored = start+3h; multi-day = API / start+days;
+ * classic free/coins/cash = start+24h (same clock time next day).
+ * Never invent from a frozen `now + timeLeftSeconds` snapshot.
+ */
+export function resolveRaceWindowEndAt(opts: {
+  challengeEndAt?: string | Date | null;
+  challengeDurationDays?: number | null;
+  startedAt?: string | Date | null;
+  scheduledStartAt?: string | Date | null;
+  isSponsored?: boolean;
+  isUnlimited?: boolean;
+}): Date | null {
+  const start = parseDate(opts.startedAt) ?? parseDate(opts.scheduledStartAt);
+  const startMs = start?.getTime() ?? null;
+  const apiEnd = parseDate(opts.challengeEndAt);
+  const days = Math.max(0, Math.floor(Number(opts.challengeDurationDays) || 0));
+
+  if (opts.isUnlimited) {
+    if (apiEnd && startMs != null) {
+      const afterStart = apiEnd.getTime() - startMs;
+      // Real multi-day API end.
+      if (afterStart > 28 * HOUR_MS) return apiEnd;
+      // 24h-looking end is a daily window — prefer API durationDays when present.
+      if (days > 1) return new Date(startMs + days * DAY_MS);
+      return apiEnd;
+    }
+    if (apiEnd) return apiEnd;
+    if (days > 1 && startMs != null) {
+      return new Date(startMs + days * DAY_MS);
+    }
+    return null;
+  }
+
+  if (opts.isSponsored) {
+    if (startMs == null) return apiEnd;
+    return new Date(startMs + SPONSORED_RACE_DURATION_MS);
+  }
+
+  if (days > 1) {
+    if (apiEnd) return apiEnd;
+    if (startMs == null) return null;
+    return new Date(startMs + days * DAY_MS);
+  }
+
+  // Classic fixed race: 24h from start. Ignore drifting/invented API ends that
+  // are not that window (e.g. Date.now() + leftover countdown).
+  if (startMs == null) return apiEnd;
+  const classicEnd = new Date(startMs + CLASSIC_RACE_DURATION_MS);
+  if (apiEnd) {
+    const afterStart = apiEnd.getTime() - startMs;
+    if (
+      afterStart >= 20 * HOUR_MS &&
+      afterStart <= 28 * HOUR_MS
+    ) {
+      return apiEnd;
+    }
+  }
+  return classicEnd;
 }
 
 export function resolveChallengeEndAt(

@@ -177,6 +177,7 @@ let _permissionRequestInFlight = false;
 let _permissionRequestWaiters: Array<() => void> = [];
 /** In-memory cache — last confirmed today total. Updated on every successful HC read. */
 let _cachedTodaySteps = 0;
+let _cachedTodayDate = "";
 let _lastInitResult: HCInitResult | null = null;
 let _permCache: { status: HCPermStatus; at: number } | null = null;
 let _permBackoffUntil = 0;
@@ -192,6 +193,31 @@ function getLocalMidnight(): Date {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   return d;
+}
+
+function localDateKey(d = new Date()): string {
+  return (
+    `${d.getFullYear()}-` +
+    `${String(d.getMonth() + 1).padStart(2, "0")}-` +
+    `${String(d.getDate()).padStart(2, "0")}`
+  );
+}
+
+function rememberTodaySteps(steps: number): void {
+  const today = localDateKey();
+  if (_cachedTodayDate !== today) {
+    _cachedTodayDate = today;
+    _cachedTodaySteps = 0;
+  }
+  if (steps > 0) _cachedTodaySteps = Math.max(_cachedTodaySteps, steps);
+}
+
+function cachedTodayIfSameDay(): number {
+  return _cachedTodayDate === localDateKey() ? Math.max(0, _cachedTodaySteps) : 0;
+}
+
+function isLocalTodayRange(start: Date): boolean {
+  return Math.abs(start.getTime() - getLocalMidnight().getTime()) < 2 * 60_000;
 }
 
 function getUserTimezone(): string {
@@ -606,6 +632,7 @@ export const androidHCService = {
       let readMethod: "aggregate" | "readRecords" = "readRecords";
       let recordCount = 0;
       let dataOrigins: string[] | undefined;
+      let aggregateEmpty = false;
 
       if (typeof hc.aggregateRecord === "function") {
         try {
@@ -616,19 +643,53 @@ export const androidHCService = {
           steps = Math.max(0, agg?.COUNT_TOTAL ?? 0);
           dataOrigins = agg?.dataOrigins;
           readMethod = "aggregate";
+          aggregateEmpty =
+            steps === 0 && (!dataOrigins || dataOrigins.length === 0);
         } catch (aggErr) {
           hcLog("aggregateRecord failed — falling back to readRecords", aggErr);
         }
       }
 
-      if (readMethod !== "aggregate") {
-        const res = await hc.readRecords("Steps", { timeRangeFilter });
-        recordCount = res.records?.length ?? 0;
-        const total = (res.records ?? []).reduce(
-          (sum, r) => sum + (r.count ?? 0),
-          0,
-        );
-        steps = Math.max(0, total);
+      // Samsung/HC often returns aggregate COUNT_TOTAL=0 with no origins while
+      // steps still exist — fall back to readRecords before treating as zero.
+      if (readMethod !== "aggregate" || aggregateEmpty) {
+        try {
+          const res = await hc.readRecords("Steps", { timeRangeFilter });
+          recordCount = res.records?.length ?? 0;
+          const total = (res.records ?? []).reduce(
+            (sum, r) => sum + (r.count ?? 0),
+            0,
+          );
+          if (total > 0 || recordCount > 0) {
+            steps = Math.max(0, total);
+            readMethod = "readRecords";
+            dataOrigins = dataOrigins?.length
+              ? dataOrigins
+              : Array.from(
+                  new Set(
+                    (res.records ?? [])
+                      .map((r) => (r as { metadata?: { dataOrigin?: string } }).metadata?.dataOrigin)
+                      .filter((o): o is string => !!o),
+                  ),
+                );
+          }
+        } catch (recErr) {
+          if (readMethod !== "aggregate") {
+            hcLog("readRecords failed", recErr);
+          }
+        }
+      }
+
+      const emptyRead =
+        steps === 0 && recordCount === 0 && (!dataOrigins || dataOrigins.length === 0);
+      if (emptyRead && isLocalTodayRange(start)) {
+        const cached = cachedTodayIfSameDay();
+        if (cached > 0) {
+          hcLog(
+            `empty HC poll — keeping cached todaySteps=${cached} (aggregate/records=0)`,
+          );
+          steps = cached;
+        }
       }
 
       hcLog(
@@ -647,7 +708,9 @@ export const androidHCService = {
         /* audit optional */
       }
 
-      _cachedTodaySteps = steps;
+      if (isLocalTodayRange(start) && steps > 0) {
+        rememberTodaySteps(steps);
+      }
 
       return {
         steps,
@@ -760,6 +823,7 @@ export const androidHCService = {
   /** Clear in-memory today total after local midnight (HC range reads still authoritative). */
   resetTodayStepCache(): void {
     _cachedTodaySteps = 0;
+    _cachedTodayDate = "";
     hcLog("today cache reset for user/date scope change");
   },
 
@@ -820,6 +884,7 @@ export const androidHCService = {
     _initialized = false;
     _permissionRequested = false;
     _cachedTodaySteps = 0;
+    _cachedTodayDate = "";
     _availability = "not_supported";
   },
 };

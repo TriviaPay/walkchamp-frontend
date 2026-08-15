@@ -20,6 +20,8 @@ import type { UnlimitedViewerSchedule } from "@/utils/unlimitedViewerSchedule";
 import {
   buildUnlimitedDayRows,
   mergeUnlimitedHistoryWithSchedule,
+  remainingDaysAfterDisplayDay,
+  resolveUnlimitedDisplayDayIndex,
   type UnlimitedDayRow,
   type UnlimitedDayStatus,
 } from "@/utils/unlimitedDayProgress";
@@ -100,7 +102,7 @@ function DayCell({
   const passed = row.status === "passed";
   const upcoming = row.status === "upcoming";
   const validating = row.status === "validation_pending";
-  const inProgress = (row.status === "in_progress" || isCurrent) && !passed && !failed;
+  const inProgress = isCurrent && !passed && !failed;
   const goal = row.dailyGoalSteps > 0 ? row.dailyGoalSteps : 1;
   const ringProgress = inProgress
     ? Math.min(1, Math.max(0, (steps ?? 0) / goal))
@@ -166,11 +168,13 @@ function DayStrip({
   schedule,
   todaySteps,
   cellWidth,
+  displayDay,
 }: {
   rows: UnlimitedDayRow[];
   schedule: UnlimitedViewerSchedule | null;
   todaySteps: number;
   cellWidth: number;
+  displayDay: number;
 }) {
   return (
     <ScrollView
@@ -188,7 +192,7 @@ function DayStrip({
           key={`d-${item.dayNumber}`}
           row={item}
           todaySteps={todaySteps}
-          isCurrent={!!schedule && item.dayNumber === schedule.currentDayIndex}
+          isCurrent={!!schedule && item.dayNumber === displayDay}
           cellWidth={cellWidth}
         />
       ))}
@@ -214,7 +218,12 @@ export function UnlimitedDayProgressModal({
     }
     return buildUnlimitedDayRows(schedule, todaySteps);
   }, [historyRows, schedule, todaySteps]);
-  const daysLeft = schedule?.remainingDaysAfterToday ?? 0;
+  const displayDay = schedule
+    ? resolveUnlimitedDisplayDayIndex(schedule, historyRows)
+    : 1;
+  const daysLeft = schedule
+    ? remainingDaysAfterDisplayDay(schedule.durationDays, displayDay)
+    : 0;
   const goal = schedule?.dailyGoalSteps ?? rows[0]?.dailyGoalSteps ?? 0;
   const pct = goal > 0 ? Math.min(1, todaySteps / goal) : 0;
 
@@ -251,7 +260,7 @@ export function UnlimitedDayProgressModal({
             </Text>
             {schedule ? (
               <Text style={styles.dayOf}>
-                Day {schedule.currentDayIndex} of {schedule.durationDays}
+                Day {displayDay} of {schedule.durationDays}
               </Text>
             ) : null}
 
@@ -278,6 +287,7 @@ export function UnlimitedDayProgressModal({
                 schedule={schedule}
                 todaySteps={todaySteps}
                 cellWidth={cellWidth}
+                displayDay={displayDay}
               />
             </View>
 

@@ -29,6 +29,8 @@ data class RaceNotificationState(
   val raceStepsAtSensorBaseline: Int = 0,
   /** Explicit sponsored flag — drives notification title (do not infer from end time alone). */
   val isSponsored: Boolean = false,
+  /** free / coins_battle / cash / sponsored / unlimited_goal — label under LIVE badge. */
+  val raceTypeHint: String = "",
   /**
    * Unlimited Daily Goal — tray uses race_live UI but must NOT POST /api/races/:id/progress.
    * Verified steps go through /api/walk/steps; provisional through Unlimited live-progress.
@@ -95,6 +97,7 @@ data class RaceNotificationState(
       },
       isSponsored = isSponsored || incoming.isSponsored,
       unlimitedDailyMode = unlimitedDailyMode || incoming.unlimitedDailyMode,
+      raceTypeHint = incoming.raceTypeHint.ifBlank { raceTypeHint },
       lastUpdatedAt = maxOf(lastUpdatedAt, incoming.lastUpdatedAt),
       apiBaseUrl = incoming.apiBaseUrl.ifBlank { apiBaseUrl },
       authToken = incoming.authToken.ifBlank { authToken },
@@ -155,6 +158,7 @@ data class RaceNotificationState(
     put("raceStepsAtSensorBaseline", raceStepsAtSensorBaseline)
     put("isSponsored", isSponsored)
     put("unlimitedDailyMode", unlimitedDailyMode)
+    put("raceTypeHint", raceTypeHint)
   }
 
   companion object {
@@ -188,6 +192,7 @@ data class RaceNotificationState(
         raceStepsAtSensorBaseline = json.optInt("raceStepsAtSensorBaseline", 0),
         isSponsored = json.optBoolean("isSponsored", false),
         unlimitedDailyMode = json.optBoolean("unlimitedDailyMode", false),
+        raceTypeHint = json.optString("raceTypeHint", ""),
       ).takeIf { it.raceId.isNotBlank() }
     }
 
@@ -254,6 +259,12 @@ data class RaceNotificationState(
         is String -> v.equals("true", ignoreCase = true) || v == "1"
         else -> false
       }
+      val typeHint = listOf(
+        payload["raceTypeHint"],
+        payload["raceType"],
+        payload["challengeType"],
+        payload["entryType"],
+      ).firstNotNullOfOrNull { (it as? String)?.trim()?.takeIf { s -> s.isNotEmpty() } } ?: ""
       return RaceNotificationState(
         raceId = raceId,
         userId = userId,
@@ -274,6 +285,7 @@ data class RaceNotificationState(
         raceStepsAtSensorBaseline = raceStepsAtBaseline,
         isSponsored = sponsoredFlag,
         unlimitedDailyMode = unlimitedFlag,
+        raceTypeHint = typeHint,
       )
     }
 

@@ -38,6 +38,10 @@ object NotificationVisuals {
     "friend_request_rejected" to NotificationVisualType.FRIEND,
     "friend_daily_goal_completed" to NotificationVisualType.GOAL_COMPLETED,
     "chat_message_received" to NotificationVisualType.CHAT,
+    "global_chat_message" to NotificationVisualType.CHAT,
+    "global_chat_message_received" to NotificationVisualType.CHAT,
+    "global_chat" to NotificationVisualType.CHAT,
+    "chat_global" to NotificationVisualType.CHAT,
     "daily_goal_reminder" to NotificationVisualType.GOAL_PROGRESS,
     "walking_group_invite_received" to NotificationVisualType.GROUP,
     "walking_group_request_accepted" to NotificationVisualType.GROUP,
@@ -49,8 +53,13 @@ object NotificationVisuals {
     "race_invite" to NotificationVisualType.ROOM_INVITE,
     "race_starting_soon" to NotificationVisualType.UPCOMING_RACE,
     "race_starting" to NotificationVisualType.RACE_STARTED,
+    "race_started" to NotificationVisualType.RACE_STARTED,
     "race_joined" to NotificationVisualType.LIVE_RACE,
     "race_finished" to NotificationVisualType.RACE_FINISHED,
+    "race_verification_pending" to NotificationVisualType.RACE_FINISHED,
+    "race_reconciliation_complete" to NotificationVisualType.WINNER,
+    "race_won" to NotificationVisualType.WINNER,
+    "race_completed" to NotificationVisualType.RACE_FINISHED,
     "room_started" to NotificationVisualType.RACE_STARTED,
     "room_cancelled" to NotificationVisualType.ROOM_CANCELLED,
     "private_room_invitation" to NotificationVisualType.ROOM_INVITE,
@@ -98,18 +107,62 @@ object NotificationVisuals {
     return if (isSponsored) NotificationVisualType.SPONSORED_EVENT else NotificationVisualType.LIVE_RACE
   }
 
-  fun raceTypeLabel(isSponsored: Boolean, raceTypeHint: String? = null): String {
-    val hint = raceTypeHint?.trim().orEmpty()
-    if (hint.isNotBlank()) {
-      return when {
-        hint.contains("coin", ignoreCase = true) -> "Coins Battle"
-        hint.contains("cash", ignoreCase = true) -> "Cash Challenge"
-        hint.contains("sponsor", ignoreCase = true) -> "Sponsored Event"
-        hint.contains("free", ignoreCase = true) -> "Free Challenge"
-        else -> hint
-      }
+  fun raceTypeLabel(
+    isSponsored: Boolean,
+    raceTypeHint: String? = null,
+    unlimitedDailyMode: Boolean = false,
+  ): String {
+    if (unlimitedDailyMode) return "Streak Challenge"
+    val hint = raceTypeHint?.trim()?.lowercase().orEmpty()
+    when {
+      hint.contains("coin") || hint == "coins_battle" -> return "Coins Battle"
+      hint.contains("cash") || hint.contains("paid") -> return "Cash Race"
+      hint.contains("sponsor") || hint == "sponsored_event" -> return "Sponsored Race"
+      hint.contains("unlimited") || hint.contains("streak") -> return "Streak Challenge"
+      hint.contains("free") || hint == "quick" -> return "Free Race"
     }
-    return if (isSponsored) "Sponsored Event" else "Live Race"
+    return if (isSponsored) "Sponsored Race" else "Free Race"
+  }
+
+  /** Shrink label under the LIVE badge so longer names stay on one line. */
+  fun raceTypeLabelTextSizeSp(label: String): Float {
+    val len = label.trim().length
+    return when {
+      len <= 9 -> 9f
+      len <= 12 -> 8f
+      else -> 7f
+    }
+  }
+
+  /**
+   * Accent color (system tint on the small icon / title) matched to the same
+   * category colors used in-app (Live Challenges badges, banners), instead of
+   * one flat blue for every notification type.
+   */
+  fun accentColorArgb(visualType: NotificationVisualType): Int {
+    return when (visualType) {
+      NotificationVisualType.SPONSORED_EVENT,
+      NotificationVisualType.WINNER,
+      NotificationVisualType.REWARD,
+      NotificationVisualType.WALLET,
+      NotificationVisualType.TITLE_UNLOCKED -> 0xFFF5C518.toInt() // gold
+      NotificationVisualType.COINS_BATTLE,
+      NotificationVisualType.PROMOTION -> 0xFFF59E0B.toInt() // amber
+      NotificationVisualType.CASH_CHALLENGE,
+      NotificationVisualType.DAILY_WALK,
+      NotificationVisualType.GOAL_PROGRESS,
+      NotificationVisualType.GOAL_COMPLETED -> 0xFF22C55E.toInt() // WalkChamp green
+      NotificationVisualType.LIVE_RACE,
+      NotificationVisualType.UPCOMING_RACE,
+      NotificationVisualType.RACE_STARTED,
+      NotificationVisualType.RACE_FINISHED,
+      NotificationVisualType.ROOM_INVITE,
+      NotificationVisualType.ROOM_CANCELLED -> 0xFF7C3AED.toInt() // race purple
+      NotificationVisualType.FRIEND,
+      NotificationVisualType.CHAT,
+      NotificationVisualType.GROUP -> 0xFF0EA5E9.toInt() // social blue
+      NotificationVisualType.DEFAULT -> 0xFF00B4FF.toInt()
+    }
   }
 
   @DrawableRes

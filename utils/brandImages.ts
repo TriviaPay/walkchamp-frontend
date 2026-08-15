@@ -10,13 +10,13 @@ export const STREAK_LIGHT_IMG = require("@/assets/images/streaklight.png") as nu
 
 /**
  * Streak mark:
- * - completed / active streak → bright `streak.png`
- * - incomplete / failed → `streakdark` (dark theme) or `streaklight` (light theme)
+ * - completed / active streak → bright `streak.png` only
+ * - lost / broken → `streaklight` on dark theme, `streakdark` on light theme
  */
 export function streakIconSource(opts: {
   completed: boolean;
   isDark: boolean;
 }): number {
   if (opts.completed) return STREAK_ON_IMG;
-  return opts.isDark ? STREAK_DARK_IMG : STREAK_LIGHT_IMG;
+  return opts.isDark ? STREAK_LIGHT_IMG : STREAK_DARK_IMG;
 }

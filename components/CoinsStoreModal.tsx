@@ -62,6 +62,7 @@ import {
 } from "@/services/ads/adMobService";
 import { useColors } from "@/hooks/useColors";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
+import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { rf, rs } from "@/utils/responsive";
 import { TrackThemeImageBackground } from "@/components/TrackThemeImage";
 
@@ -298,8 +299,9 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
   const dispatch = useAppDispatch();
   const colors = useColors();
   const tabBarHeight = useTabBarHeight();
+  const { safeBottom } = useSafeLayout();
   const s = useMemo(() => makeStoreStyles(colors), [colors]);
-  const tabScrollPaddingBottom = rs(16);
+  const tabScrollPaddingBottom = rs(16) + Math.max(safeBottom, 24);
   const tabScrollContentStyle = useMemo(
     () => ({
       paddingHorizontal: rs(20),
@@ -1072,6 +1074,7 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
                     onPress={handleRestorePurchases}
                     disabled={restoringMic}
                     activeOpacity={0.7}
+                    hitSlop={{ top: 12, bottom: 12, left: 16, right: 16 }}
                   >
                     {restoringMic ? (
                       <ActivityIndicator size="small" color="#A855F7" />
@@ -1193,7 +1196,7 @@ function makeStoreStyles(c: ReturnType<typeof useColors>) {
     ownedText:      { color: "#22C55E", fontSize: rf(13), fontWeight: "800" as const },
     micActiveBar:   { flexDirection: "row" as const, alignItems: "center" as const, gap: 8, backgroundColor: "#0B2A1A", paddingHorizontal: 16, paddingVertical: 10 },
     micActiveText:  { fontSize: rf(12), color: "#4ADE80", flex: 1 },
-    restoreBtn:     { alignItems: "center" as const, paddingVertical: 14, backgroundColor: c.muted },
+    restoreBtn:     { alignItems: "center" as const, justifyContent: "center" as const, paddingVertical: 14, minHeight: 48, backgroundColor: c.muted },
     restoreTxt:     { fontSize: rf(13), color: "#A855F7", fontWeight: "600" as const },
     statsBanner:        { flexDirection: "row" as const, alignItems: "center" as const, justifyContent: "space-around" as const, backgroundColor: c.card, borderRadius: 14, borderWidth: 1, borderColor: c.border, paddingVertical: 14, paddingHorizontal: 10, marginTop: 8 },
     statsBannerItem:    { alignItems: "center" as const, gap: 4, flex: 1 },
