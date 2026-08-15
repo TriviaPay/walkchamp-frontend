@@ -216,7 +216,8 @@ import { clampDailyProgress } from "@/utils/stepProgress";
 import CoinsBattleModal from "@/components/CoinsBattleModal";
 import { screenCache } from "@/utils/screenCache";
 import { warmLiveRaceDetailNavigation, prefetchLiveRaceDetailRoster } from "@/utils/warmLiveRaceDetail";
-import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
+import { buildMatchmakingParams, readWaitingRoomCacheSync } from "@/utils/waitingRoomSeed";
+import { resolveRacePlayerCount } from "@/utils/waitingRoomTiming";
 import {
   apiFetchAllowed,
   markApiFetched,
@@ -252,6 +253,53 @@ function walkAvailableCountCacheKey(userId: string): string {
 /** User-scoped My Race / upcoming rooms — instant paint without opening Live. */
 function walkUpcomingRoomsCacheKey(userId: string): string {
   return `screen_walk_upcoming_rooms:${userId}`;
+}
+
+const WAITING_OR_LIVE_STATUSES = new Set([
+  "user_hosting_waiting",
+  "user_joined_waiting",
+  "user_hosting_active",
+  "user_joined_active",
+  "join_available",
+]);
+
+/**
+ * Walk "Hosting 0/10" was reading only `currentPlayers` from /challenges/available.
+ * Coins Battle (and scheduled rooms) can have a real roster while that column is
+ * still 0 — the waiting room already falls back to participant list length.
+ * Prefer registered/participant counts, waiting-room cache, and never show 0
+ * while the user is hosting or waiting in a live room.
+ */
+function resolveChallengeCardJoinedCount(
+  card: ChallengeStatus | (ChallengeStatus & Record<string, unknown>) | null | undefined,
+  opts?: {
+    userId?: string | null;
+    upcomingRooms?: Array<{ room_id: string; registered_count?: number }>;
+  },
+): number {
+  if (!card) return 0;
+  const fromPayload = resolveRacePlayerCount(card as Record<string, unknown>);
+  let cached = 0;
+  if (opts?.userId && card.raceId) {
+    const wr = readWaitingRoomCacheSync(opts.userId, card.raceId);
+    if (wr) {
+      cached = Math.max(
+        wr.liveRoom?.currentPlayers ?? 0,
+        wr.participants?.length ?? 0,
+      );
+    }
+  }
+  const upcoming =
+    card.raceId && opts?.upcomingRooms
+      ? Math.max(
+          0,
+          ...opts.upcomingRooms
+            .filter((r) => r.room_id === card.raceId)
+            .map((r) => Math.max(0, Math.floor(r.registered_count ?? 0))),
+        )
+      : 0;
+  const occupied = WAITING_OR_LIVE_STATUSES.has(card.status) && card.raceId ? 1 : 0;
+  return Math.max(fromPayload, cached, upcoming, occupied);
 }
 
 function raceHintToSoonCardType(
@@ -2257,6 +2305,7 @@ function WalkScreenContent() {
   // Shell + challenges unlock on raceReady; step hero still uses stepsHydrated below.
   const userReady = raceReady;
   const stepsReady = raceReady && stepsHydrated;
+  const walkStepsHoldRef = useRef<{ key: string; steps: number }>({ key: "", steps: 0 });
   const isAutoTrackingOn =
     stepPermissionStatus === "granted" || usingRealTracking;
   const stepsInitializing =
@@ -2264,8 +2313,34 @@ function WalkScreenContent() {
     !stepsSourceReady &&
     liveTodaySteps <= 0 &&
     isAutoTrackingOn;
+  // Once `raceReady` (auth resolved), don't force a fake "0" over an already-known
+  // positive live total just because WalkContext's own (separate, slower) local
+  // hydration flag hasn't flipped yet — that gap is what caused the Walk tab to
+  // flash 0 for ~1s on launch/reload while the ongoing notification (fed from the
+  // same underlying step store, unaffected by this flag) already showed the real
+  // count the whole time.
+  const rawConfirmedWalkSteps =
+    Number.isFinite(liveTodaySteps) && (stepsReady || (raceReady && liveTodaySteps > 0))
+      ? liveTodaySteps
+      : 0;
+  // Refresh (pull-to-refresh, tab focus, app resume) re-hydrates from
+  // HC/backend and can transiently report 0 for a render or two before the
+  // real value lands — hold the last confirmed value for *today* so the hero,
+  // calories, distance and goal ring don't flash down to 0 mid-refresh. Keyed
+  // by user+day so a genuine new day (or account switch) still starts at 0.
+  const walkStepsHoldKey = `${user?.id ?? ""}:${getTodayKey()}`;
+  if (walkStepsHoldRef.current.key !== walkStepsHoldKey) {
+    walkStepsHoldRef.current = { key: walkStepsHoldKey, steps: 0 };
+  }
+  if (rawConfirmedWalkSteps > 0) {
+    walkStepsHoldRef.current.steps = rawConfirmedWalkSteps;
+  }
   const confirmedWalkSteps =
-    stepsReady && Number.isFinite(liveTodaySteps) ? liveTodaySteps : 0;
+    rawConfirmedWalkSteps > 0
+      ? rawConfirmedWalkSteps
+      : stepsReady
+        ? walkStepsHoldRef.current.steps
+        : 0;
   const displayedWalkSteps = useIncrementalStepDisplay(confirmedWalkSteps);
   const { safeSteps: safeTodaySteps, safeGoal: goalSteps, progress: goalProgress, percent: goalPercent } =
     clampDailyProgress(
@@ -2380,7 +2455,10 @@ function WalkScreenContent() {
           ) {
             continue;
           }
-          map[c.entryType] = c;
+          map[c.entryType] = {
+            ...c,
+            joinedCount: resolveChallengeCardJoinedCount(c, { userId: user.id }),
+          };
         }
         setChallengeStatuses(map);
         void screenCache.set(cacheKey, map);
@@ -2390,6 +2468,54 @@ function WalkScreenContent() {
       }
     });
   }, [sessionToken, user?.id]);
+
+  const patchChallengeCardOccupancy = useCallback(
+    (
+      entryKey: string,
+      patch: {
+        status: ChallengeStatus["status"];
+        raceId: string;
+        isHost: boolean;
+        joinedCount?: number;
+        maxPlayers?: number;
+      },
+    ) => {
+      setChallengeStatuses((prev) => {
+        const current = prev[entryKey];
+        const nextCard: ChallengeStatus = {
+          status: patch.status,
+          raceId: patch.raceId,
+          isHost: patch.isHost,
+          isParticipant: true,
+          joinedCount: Math.max(
+            patch.joinedCount ?? 0,
+            current?.joinedCount ?? 0,
+            1,
+          ),
+          maxPlayers: patch.maxPlayers ?? current?.maxPlayers ?? 10,
+          targetSteps: current?.targetSteps,
+          scheduledStartAt: current?.scheduledStartAt,
+          startedAt: current?.startedAt,
+          challengeEndAt: current?.challengeEndAt,
+          entryAmountCents: current?.entryAmountCents,
+          coinEntryAmount: current?.coinEntryAmount,
+          prizePoolCents: current?.prizePoolCents,
+          canHost: false,
+          canJoin: false,
+          isActive: patch.status.includes("active"),
+          isFinished: false,
+          label: current?.label ?? (patch.isHost ? "Hosting" : "Waiting"),
+          liveCount: current?.liveCount,
+          waitingCount: current?.waitingCount,
+          canHostNew: false,
+        };
+        const next = { ...prev, [entryKey]: nextCard };
+        if (user?.id) void screenCache.set(walkChallengeCacheKey(user.id), next);
+        return next;
+      });
+    },
+    [user?.id],
+  );
 
   // Initial load handled by useFocusEffect below (avoids duplicate fetch on mount + focus).
 
@@ -3002,14 +3128,46 @@ function WalkScreenContent() {
     const refetch = () => {
       void fetchRegisteredUpcomingRooms();
       void refreshAvailableChallengeCount();
+      void loadChallengeStatuses({ force: true });
+    };
+    const applyJoinCount = (data: {
+      room_id?: string;
+      raceId?: string;
+      current_players?: number;
+      currentPlayers?: number;
+    }) => {
+      const raceId = data?.room_id ?? data?.raceId;
+      const count = data?.current_players ?? data?.currentPlayers;
+      if (!raceId || typeof count !== "number" || count < 1) {
+        refetch();
+        return;
+      }
+      setChallengeStatuses((prev) => {
+        let changed = false;
+        const next: Record<string, ChallengeStatus> = { ...prev };
+        for (const [key, cs] of Object.entries(next)) {
+          if (cs?.raceId !== raceId) continue;
+          const joined = Math.max(cs.joinedCount ?? 0, Math.floor(count));
+          if (joined === cs.joinedCount) continue;
+          next[key] = { ...cs, joinedCount: joined };
+          changed = true;
+        }
+        if (changed && user?.id) {
+          void screenCache.set(walkChallengeCacheKey(user.id), next);
+        }
+        return changed ? next : prev;
+      });
+      refetch();
     };
     ch.bind("room:created",   refetch);
     ch.bind("room:scheduled", refetch);
     ch.bind("room:started",   refetch);
     ch.bind("room:cancelled", refetch);
     ch.bind("room:finished",  refetch);
+    ch.bind("room:participant_joined", applyJoinCount);
+    ch.bind("room:participant_left", refetch);
     return () => { unsubscribeFromChannel("public-rooms-available"); };
-  }, [fetchRegisteredUpcomingRooms, refreshAvailableChallengeCount]);
+  }, [fetchRegisteredUpcomingRooms, refreshAvailableChallengeCount, loadChallengeStatuses, user?.id]);
 
   // Fetch sponsored events status for the Walk tab card; poll every 30 s while on tab
   useFocusEffect(useCallback(() => {
@@ -4740,6 +4898,13 @@ function WalkScreenContent() {
         return;
       }
       dispatch(fetchCoinBalance());
+      patchChallengeCardOccupancy("coins_battle", {
+        status: "user_joined_waiting",
+        raceId,
+        isHost: false,
+        joinedCount: Math.max(1, data.currentPlayers ?? 0),
+      });
+      void loadChallengeStatuses({ force: true });
       navToMatchmaking({ raceId, isHost: false });
     } catch {
       AppAlert.alert("Error", "Network error. Please try again.");
@@ -4748,7 +4913,7 @@ function WalkScreenContent() {
     }
       })();
     });
-  }, [dispatch, guardRewardAction]);
+  }, [dispatch, guardRewardAction, loadChallengeStatuses, patchChallengeCardOccupancy]);
 
   const handleStayInActiveRace = () => {
     const ar = activeRaceModal;
@@ -5623,7 +5788,16 @@ function WalkScreenContent() {
         {!walkCacheReady && <SkeletonList count={4} variant="walk" />}
         {RACE_OPTIONS.filter((opt) => showRaceOptionInJoinSection(opt.fee)).map((opt) => {
           const entryKey = feeToEntryType(opt.fee);
-          const cs = challengeStatuses[entryKey];
+          const rawCs = challengeStatuses[entryKey];
+          const cs = rawCs
+            ? {
+                ...rawCs,
+                joinedCount: resolveChallengeCardJoinedCount(rawCs, {
+                  userId: user?.id,
+                  upcomingRooms: registeredUpcomingRooms,
+                }),
+              }
+            : rawCs;
 
           const openHostModal = () => {
             if (showSponsoredBlockAlert()) return;
@@ -5836,6 +6010,15 @@ function WalkScreenContent() {
                 premCs = challengeStatuses.paid_3;
                 break;
               }
+            }
+            if (premCs) {
+              premCs = {
+                ...premCs,
+                joinedCount: resolveChallengeCardJoinedCount(premCs, {
+                  userId: user?.id,
+                  upcomingRooms: registeredUpcomingRooms,
+                }),
+              };
             }
             const premS = premCs?.status;
             const premFeeDollars = Math.max(
@@ -6842,7 +7025,14 @@ function WalkScreenContent() {
         onCreated={(raceId, isHost) => {
           setCoinsBattleVisible(false);
           dispatch(fetchCoinBalance());
-          navToMatchmaking({ raceId, isHost });
+          patchChallengeCardOccupancy("coins_battle", {
+            status: isHost ? "user_hosting_waiting" : "user_joined_waiting",
+            raceId,
+            isHost,
+            joinedCount: 1,
+          });
+          void loadChallengeStatuses({ force: true });
+          navToMatchmaking({ raceId, isHost, initialCurrentPlayers: 1 });
         }}
       />
 

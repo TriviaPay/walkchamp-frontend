@@ -415,6 +415,15 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     durationSeconds: 0,
   });
   const todayStepsRef = useRef<number>(0);
+  /**
+   * A single verified (HC/HK) read reporting a much lower total than what's
+   * already confirmed (e.g. HC=125 vs already-shown 5,000) can be a transient
+   * lagging/partial aggregate — not proof the previous total was a bad sensor
+   * baseline. Require the same low reading to repeat before trusting it as a
+   * genuine correction, so one bad read never instantly wipes real progress.
+   * Cleared as soon as a reading no longer looks inflated.
+   */
+  const verifiedDownwardCandidateRef = useRef<{ value: number; at: number } | null>(null);
   const syncingFromReduxRef = useRef(false);
   const todayDailyGoalRef = useRef<number>(10000);
   const allTimeStepsRef = useRef<number>(0);
@@ -1227,6 +1236,35 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
 
   // ── Persist steps to local storage ──────────────────────────────────────────
 
+  /**
+   * Gate for accepting a nonzero verified (HC/HK) reading that looks like a
+   * big downward "inflation correction" (e.g. HC now reads 125 after the UI
+   * already confirmed 5,000). A single HC/HK aggregate query can legitimately
+   * come back lower than the true total mid-day (record sync lag across data
+   * sources) — that must not be confused with the original bug this
+   * correction exists for (a stale/bad sensor baseline left over from before).
+   * Require a second, corroborating low reading within a short window before
+   * trusting the drop; a genuine midnight rollover or explicit verified-zero
+   * bypasses this (already separately gated by isFreshLocalDay/shouldAcceptVerifiedZero).
+   */
+  const shouldTrustVerifiedDownwardCorrection = useCallback(
+    (candidate: number): boolean => {
+      if (candidate <= 0 || isFreshLocalDay()) return true;
+      const pending = verifiedDownwardCandidateRef.current;
+      const corroborated =
+        pending != null &&
+        Math.abs(pending.value - candidate) <= 50 &&
+        Date.now() - pending.at < 5 * 60 * 1000;
+      if (corroborated) {
+        verifiedDownwardCandidateRef.current = null;
+        return true;
+      }
+      verifiedDownwardCandidateRef.current = { value: candidate, at: Date.now() };
+      return false;
+    },
+    [],
+  );
+
   const persistDailySteps = useCallback(async (steps: number) => {
     if (!user?.id) return;
     const today = getTodayKey();
@@ -1421,15 +1459,22 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
               todayStepsRef.current,
             )))
       ) {
-        if (
+        const isDownwardCorrection =
           (isFreshLocalDay() || verifiedActive) &&
           (hydratedDisplay === 0 ||
             isInflatedProvisionalVsVerified(
               hydratedDisplay,
               todayStepsRef.current,
-            ))
-        ) {
-          await forceSetTodayStepDisplay(hydratedDisplay);
+            ));
+        if (isDownwardCorrection) {
+          if (shouldTrustVerifiedDownwardCorrection(hydratedDisplay)) {
+            await forceSetTodayStepDisplay(hydratedDisplay);
+          } else {
+            stepEngineLog(
+              "WalkScreen",
+              `deferredInflationCorrection previous=${todayStepsRef.current} candidate=${hydratedDisplay} awaitingConfirmation=true`,
+            );
+          }
         } else if (hydratedDisplay > todayStepsRef.current) {
           await forceSetTodayStepDisplay(hydratedDisplay);
         }
@@ -1502,6 +1547,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     forceSetTodayStepDisplay,
     readProviderTodaySteps,
     sessionToken,
+    shouldTrustVerifiedDownwardCorrection,
     user?.id,
   ]);
 
@@ -1785,12 +1831,20 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             freshLocalDay: isFreshLocalDay(),
           })
         ) {
+          if (!shouldTrustVerifiedDownwardCorrection(safeReal)) {
+            stepEngineLog(
+              "WalkScreen",
+              `deferredInflationCorrection previous=${current} candidate=${safeReal} awaitingConfirmation=true`,
+            );
+            return;
+          }
           displaySteps = safeReal;
           stepEngineLog(
             "WalkScreen",
             `clearedInflatedDisplay previous=${current} hc=${safeReal} backendFloor=${backendFloor}`,
           );
         } else {
+          verifiedDownwardCandidateRef.current = null;
           displaySteps = Math.max(safeReal, current);
         }
       } else if (fromWatch) {
@@ -1835,7 +1889,14 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       );
       syncDeltaToBackend().catch(() => {});
     },
-    [checkMilestone, persistDailySteps, reconcileLegacyProviderSteps, syncDeltaToBackend, user?.id],
+    [
+      checkMilestone,
+      persistDailySteps,
+      reconcileLegacyProviderSteps,
+      shouldTrustVerifiedDownwardCorrection,
+      syncDeltaToBackend,
+      user?.id,
+    ],
   );
 
   const resolveLiveDisplaySteps = useCallback(
@@ -1964,13 +2025,21 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       `sourceRefreshMs=${Date.now() - resumeStartedAt} renderedImmediately=${display > todayStepsRef.current}`,
     );
 
-    if (
-      (freshDay && display === 0) ||
-      (verifiedActive &&
-        display > 0 &&
-        isInflatedProvisionalVsVerified(display, todayStepsRef.current))
-    ) {
+    const displayIsDownwardCorrection =
+      verifiedActive &&
+      display > 0 &&
+      isInflatedProvisionalVsVerified(display, todayStepsRef.current);
+    if (freshDay && display === 0) {
       await forceSetTodayStepDisplay(display);
+    } else if (displayIsDownwardCorrection) {
+      if (shouldTrustVerifiedDownwardCorrection(display)) {
+        await forceSetTodayStepDisplay(display);
+      } else {
+        stepEngineLog(
+          "Resume",
+          `deferredInflationCorrection previous=${todayStepsRef.current} candidate=${display} awaitingConfirmation=true`,
+        );
+      }
     } else if (display > todayStepsRef.current) {
       await applyTodayStepCount(display, false);
     }
@@ -2010,12 +2079,11 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             })
           : Math.max(display, todayStepsRef.current, reduxToday);
 
-    if (
-      (freshDay && finalSteps === 0) ||
-      (verifiedActive &&
-        finalSteps > 0 &&
-        isInflatedProvisionalVsVerified(finalSteps, todayStepsRef.current))
-    ) {
+    const finalIsDownwardCorrection =
+      verifiedActive &&
+      finalSteps > 0 &&
+      isInflatedProvisionalVsVerified(finalSteps, todayStepsRef.current);
+    if (freshDay && finalSteps === 0) {
       await forceSetTodayStepDisplay(finalSteps);
       store.dispatch(walkActions.setTodaySteps(finalSteps));
       store.dispatch(
@@ -2024,6 +2092,22 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           updatedAt: new Date().toISOString(),
         }),
       );
+    } else if (finalIsDownwardCorrection) {
+      if (shouldTrustVerifiedDownwardCorrection(finalSteps)) {
+        await forceSetTodayStepDisplay(finalSteps);
+        store.dispatch(walkActions.setTodaySteps(finalSteps));
+        store.dispatch(
+          raceProgressActions.resetDailyStepsForNewDay({
+            todaySteps: finalSteps,
+            updatedAt: new Date().toISOString(),
+          }),
+        );
+      } else {
+        stepEngineLog(
+          "Resume",
+          `deferredInflationCorrection previous=${todayStepsRef.current} candidate=${finalSteps} awaitingConfirmation=true`,
+        );
+      }
     } else if (finalSteps > todayStepsRef.current) {
       await applyTodayStepCount(finalSteps, false);
     }

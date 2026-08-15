@@ -163,6 +163,13 @@ export default function StepHistoryScreen() {
   );
 
   const todayStr = getLocalDateStr();
+  // Kept in a ref (not a fetchHistory dependency) — todaySteps ticks live while
+  // walking, and including it in fetchHistory's deps was recreating the
+  // callback on every step update, which re-fired the mount-load effect and
+  // the focus-refetch effect below in a loop, making the screen look like it
+  // never finished loading while an active walk/race was updating steps.
+  const todayStepsRef = useRef(todaySteps);
+  todayStepsRef.current = todaySteps;
 
   // allDays is always rawDays with the live pedometer value overlaid on today.
   // Recomputes instantly whenever either the server data OR todaySteps changes —
@@ -245,7 +252,7 @@ export default function StepHistoryScreen() {
       setLifetime(body.lifetime ?? null);
       // Select today's bar using the live-overlaid version so the panel shows
       // the correct step count immediately (not the stale DB value).
-      const overlaid = applyLiveOverlay(loaded, todayStr, todaySteps);
+      const overlaid = applyLiveOverlay(loaded, todayStr, todayStepsRef.current);
       const todayBar = overlaid.find((d) => d.date === todayStr) ?? overlaid[overlaid.length - 1] ?? null;
       setSelected(todayBar);
       // Clear error/auth-error on success
@@ -255,7 +262,7 @@ export default function StepHistoryScreen() {
       // Network/parse errors: show generic error, NOT session expired
       setError(true);
     }
-  }, [todayStr, todaySteps]);
+  }, [todayStr]);
 
   // ── Initial load ─────────────────────────────────────────────────────────────
   useEffect(() => {

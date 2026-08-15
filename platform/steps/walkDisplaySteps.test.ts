@@ -46,16 +46,8 @@ assert.equal(
   120,
 );
 
-// Midnight: HC=0 + leftover race/yesterday thousands → 0, never the +250 cap
-assert.equal(
-  resolveWalkNotificationSteps({
-    verifiedTodaySteps: 0,
-    provisionalSensorTodaySteps: 3122,
-    todaySteps: 3122,
-    raceActive: true,
-  }),
-  0,
-);
+// No active race: HC=0 + a big stored/provisional total is unexplained — treat
+// as yesterday's leftover and show 0, never the +250 cap.
 assert.equal(
   resolveWalkNotificationSteps({
     verifiedTodaySteps: 0,
@@ -63,6 +55,18 @@ assert.equal(
     todaySteps: 9953,
   }),
   0,
+);
+// A live race actively holding the sensor is real justification for a big jump
+// while HC just hasn't synced yet today — trust the (already ingest-vetted)
+// provisional total instead of blanking the Walk tab to 0.
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 0,
+    provisionalSensorTodaySteps: 3122,
+    todaySteps: 3122,
+    raceActive: true,
+  }),
+  3122,
 );
 
 // During a live race with no HC today, leftover thousands stay off Daily Walk.

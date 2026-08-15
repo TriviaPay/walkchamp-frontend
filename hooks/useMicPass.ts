@@ -71,6 +71,13 @@ export interface UseMicPassReturn {
   isRemoteLocallyMuted: (userId: string) => boolean;
 }
 
+/**
+ * Module-level (not component-ref) so it survives Live Race screen remounts —
+ * leaving and re-entering the same race must not re-trigger the auto
+ * listen-only connect every time. Per-raceId, cleared only on app restart.
+ */
+const autoListenConnectedRaceIds = new Set<string>();
+
 export function useMicPass(raceId?: string): UseMicPassReturn {
   const [hasMicPass, setHasMicPass]                = useState(false);
   const [loadingEntitlement, setLoadingEntitlement] = useState(true);
@@ -250,6 +257,11 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
     if (!ENABLE_RACE_VOICE_CHAT || !ENABLE_VOICE_SDK) return;
     if (!voiceService.isVoiceSupportedRuntime()) return;
     if (autoConnectAttemptedRef.current) return;
+    // Only auto-join as a listener once per race — re-entering the Live Race
+    // screen (remount) must not silently reconnect the mic/voice session again.
+    // The mic icon (handleMicTap) still works normally for the user to join
+    // manually at any time.
+    if (autoListenConnectedRaceIds.has(raceId)) return;
     if (micStateRef.current !== "idle") return;
 
     autoConnectAttemptedRef.current = true;
@@ -296,6 +308,7 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
     ).then((ok) => {
       if (!mountedRef.current) return;
       if (ok) {
+        autoListenConnectedRaceIds.add(raceId);
         setMicState("listening");
         setAudioRoute("speaker");
         if (__DEV__) console.log("[Voice] auto-connected as listener");

@@ -1249,8 +1249,10 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
       ? filterUnlimitedParticipantsForDisplay(participants)
       : filterRaceParticipantsForDisplay(participants);
     const hostId = String(race.creatorId ?? "").trim();
+    // Sponsored rooms are attributed to a borrowed real account (no system user), so that
+    // account can end up as an actual participant — never badge/pin them as "Host" there.
     const marked = eligible.map((p) => {
-      const isHost = !!(p.isHost || (hostId && p.userId === hostId));
+      const isHost = !isSponsored && !!(p.isHost || (hostId && p.userId === hostId));
       return { ...p, isHost };
     });
 
@@ -1297,7 +1299,7 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
       topperRows: withStepRank.slice(0, topperCap),
       pinHost: false,
     };
-  }, [participants, isUnlimited, race.maxPlayers, race.creatorId]);
+  }, [participants, isUnlimited, race.maxPlayers, race.creatorId, isSponsored]);
 
   // Dev-only roster diagnostics — never shipped/logged in production builds.
   // Verifies the full participant pipeline (backend → normalized → merged →
@@ -3422,7 +3424,9 @@ function LiveRaceDetailScreenContent() {
         (!!user?.username && p.username.toLowerCase() === user.username.toLowerCase());
       const effectiveSteps = resolveParticipantRaceSteps(p, isMe);
       const displaySteps = getDisplaySteps(p.userId, effectiveSteps);
-      const isHost = p.isHost || (!!hostId && p.userId === hostId);
+      // Sponsored rooms are created by a system account, not a real host — never
+      // badge/pin anyone as "Host" there.
+      const isHost = !isSponsored && (p.isHost || (!!hostId && p.userId === hostId));
       return { p, isMe, effectiveSteps: displaySteps, isHost };
     });
     // True step standings (for rank number) vs display order (host pinned on top).
@@ -3433,10 +3437,15 @@ function LiveRaceDetailScreenContent() {
     const stepRankByUserId = new Map(
       byStepsOnly.map((row, i) => [row.p.userId, i + 1] as const),
     );
-    const sorted = [...withEffective].sort((a, b) => {
-      if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
-      return b.effectiveSteps - a.effectiveSteps;
-    });
+    // Sponsored events have no real "host" (they're system-created) — always rank
+    // purely by steps there, same as the Live Board. Only classic/coins/cash races
+    // (which have a genuine host) pin the host to the top of Track Position.
+    const sorted = isSponsored
+      ? byStepsOnly
+      : [...withEffective].sort((a, b) => {
+          if (a.isHost !== b.isHost) return a.isHost ? -1 : 1;
+          return b.effectiveSteps - a.effectiveSteps;
+        });
     return sorted.map<Player>(({ p, isMe, effectiveSteps, isHost }) => {
       const stepRank = stepRankByUserId.get(p.userId) ?? 0;
       const rank =
@@ -3476,7 +3485,7 @@ function LiveRaceDetailScreenContent() {
         avatarVersion: p.avatarVersion ?? null,
       };
     });
-  }, [participants, user?.id, user?.username, isActive, liveRaceSteps, canonicalRank, getDisplaySteps, resolveParticipantRaceSteps, race?.creatorId, isUnlimitedHeader]);
+  }, [participants, user?.id, user?.username, isActive, liveRaceSteps, canonicalRank, getDisplaySteps, resolveParticipantRaceSteps, race?.creatorId, isUnlimitedHeader, isSponsored]);
 
   /** Drop monotonic step memory when the signed-in user changes (logout → other account). */
   useEffect(() => {
@@ -3904,9 +3913,15 @@ function LiveRaceDetailScreenContent() {
         liveRaceData.currentPlayers ?? parts.length,
         new Date(liveRaceData.startedAt ?? Date.now()),
         preservedSteps,
-        liveRaceData.type === "sponsored" && liveRaceData.startedAt
-          ? new Date(new Date(liveRaceData.startedAt).getTime() + 3 * 60 * 60 * 1000)
-          : null,
+        // Reuse the same challengeEndAt resolved above (real API value first, only
+        // falling back to the +3h guess when the API doesn't provide one) — this used
+        // to recompute a second, always-3h end time here, so any sponsored event
+        // actually running longer than 3h had its native step polling permanently
+        // freeze itself at the 3h mark (getRaceSteps stops advancing once
+        // Date.now() >= raceEndAt) while the event was still genuinely live. Steps
+        // only looked "fixed" after a full app restart because that re-hydrates a
+        // one-time snapshot from the server, not because live tracking resumed.
+        challengeEndAt ? new Date(challengeEndAt) : null,
       );
     }
     // Always raise the floor on re-hydrate (close/open or late server steps).
@@ -6035,7 +6050,7 @@ function LiveRaceDetailScreenContent() {
                       avatarColor: p.avatarColor ?? null,
                       avatarUrl: p.avatarUrl ?? null,
                       avatarVersion: p.avatarVersion ?? 0,
-                      isHost: p.isHost,
+                      isHost: !isSponsored && !!p.isHost,
                       isCurrentUser: p.userId === currentUserId,
                       activeTitle: null,
                       friendStatus: "none",
@@ -6137,7 +6152,7 @@ function LiveRaceDetailScreenContent() {
                 avatarColor: p.avatarColor ?? null,
                 avatarUrl: p.avatarUrl ?? null,
                 avatarVersion: p.avatarVersion ?? 0,
-                isHost: p.isHost,
+                isHost: !isSponsored && !!p.isHost,
                 isCurrentUser: p.userId === currentUserId,
                 activeTitle: null,
                 friendStatus: "none",

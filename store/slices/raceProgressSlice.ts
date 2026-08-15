@@ -46,6 +46,15 @@ export interface RaceProgressState {
   /** Health Connect / HealthKit verified daily total (backend sync authority). */
   verifiedTodaySteps: number;
   verifiedTodayStepsAt: string | null;
+  /**
+   * A verified read reporting a big drop vs. the currently confirmed total
+   * (e.g. HC now says 125 after 5,000 was already shown) is held here pending
+   * a second, corroborating read before being trusted — a single HC/HK
+   * aggregate query can legitimately come back lower mid-day (record sync lag
+   * across data sources), and that must not be confused with the original
+   * "stale sensor baseline" case this drop-detection exists for.
+   */
+  pendingVerifiedDownward: { value: number; at: string } | null;
   /** TYPE_STEP_COUNTER / CMPedometer estimate for responsive UI + tray only. */
   provisionalSensorTodaySteps: number | null;
   provisionalSensorTodayStepsAt: string | null;
@@ -153,6 +162,7 @@ const initialState: RaceProgressState = {
   todayStepsLastUpdatedAt: null,
   verifiedTodaySteps: 0,
   verifiedTodayStepsAt: null,
+  pendingVerifiedDownward: null,
   provisionalSensorTodaySteps: null,
   provisionalSensorTodayStepsAt: null,
   dailyDisplaySource: "health_connect",
@@ -449,11 +459,41 @@ const raceProgressSlice = createSlice({
             // already showed the real count.
             const SANE_DAILY_STEP_CEILING = 100_000;
             const implausible = next > SANE_DAILY_STEP_CEILING;
+            // Older/OEM Android (pre-14) throttles the TYPE_STEP_COUNTER listener
+            // in the background (Doze / no strong FGS guarantee) far more than
+            // Android 14+, so the sensor often delivers one big batched delta
+            // instead of a steady trickle. A flat "+250 / +500 in one tick" cutoff
+            // treats that legitimate catch-up as corruption and rejects it — and
+            // because a rejection never advances `prev`, every later tick is an
+            // even bigger (still-rejected) jump, permanently freezing the Walk
+            // screen while the native notification (reads the sensor directly,
+            // bypassing this reducer) keeps counting correctly. Use elapsed real
+            // time since the last accepted reading to tell a plausible catch-up
+            // apart from a genuine bad-baseline glitch (which shows up instantly,
+            // with ~0 elapsed time).
+            const prevAtMs = isFirstProvisionalReading
+              ? null
+              : state.provisionalSensorTodayStepsAt
+                ? Date.parse(state.provisionalSensorTodayStepsAt)
+                : null;
+            const tsMs = Date.parse(ts);
+            const elapsedSec =
+              prevAtMs != null && !Number.isNaN(prevAtMs) && !Number.isNaN(tsMs)
+                ? Math.max(0, (tsMs - prevAtMs) / 1000)
+                : 0;
+            const MAX_STEPS_PER_SEC = 5; // generous sustained running cadence
+            const STALL_WATCHDOG_SEC = 90; // never stay frozen longer than this
+            const plausibleByElapsed =
+              elapsedSec > 0 && next - prev <= elapsedSec * MAX_STEPS_PER_SEC;
+            const staleTooLong = elapsedSec >= STALL_WATCHDOG_SEC;
+            const catchUpAllowed = plausibleByElapsed || staleTooLong;
             const hugeJumpFromVerified =
               !isFirstProvisionalReading &&
               next > verified + 250 &&
-              prev <= verified + 50;
-            const spikeFromPrev = !isFirstProvisionalReading && next > prev + 500;
+              prev <= verified + 50 &&
+              !catchUpAllowed;
+            const spikeFromPrev =
+              !isFirstProvisionalReading && next > prev + 500 && !catchUpAllowed;
             if (implausible || hugeJumpFromVerified || spikeFromPrev) {
               if (__DEV__) {
                 console.log(
@@ -469,20 +509,54 @@ const raceProgressSlice = createSlice({
           } else if (treatVerified) {
             // HC/HK is daily authority — always accept (incl. 0 after midnight) and
             // re-anchor any inflated provisional TYPE_STEP_COUNTER absolute.
-            state.verifiedTodaySteps = next;
-            state.verifiedTodayStepsAt = ts;
-            state.todayStepsLastUpdatedAt = ts;
-            if (stepSource && !treatStepSourceAsProvisionalOnly(stepSource)) {
-              state.stepSource = stepSource;
+            //
+            // Exception: a big drop vs. the already-confirmed total (e.g. HC now
+            // reports 125 right after 5,000 was shown) can be a transient
+            // lagging/partial HC aggregate, not proof the previous total was a
+            // stale sensor baseline — require the same low reading to repeat
+            // before trusting it, so one bad read never instantly wipes real
+            // progress. Genuine 0 (midnight) is a fresh day, not a "drop", and
+            // stays instant via the `next === 0` carve-out below.
+            const prevVerified = Math.max(0, state.verifiedTodaySteps);
+            const looksLikeBigDrop =
+              next > 0 && prevVerified >= 1000 && next < prevVerified - 1000;
+            let deferred = false;
+            if (looksLikeBigDrop) {
+              const pending = state.pendingVerifiedDownward;
+              const corroborated =
+                pending != null &&
+                Math.abs(pending.value - next) <= 50 &&
+                Date.parse(ts) - Date.parse(pending.at) < 5 * 60 * 1000;
+              if (corroborated) {
+                state.pendingVerifiedDownward = null;
+              } else {
+                state.pendingVerifiedDownward = { value: next, at: ts };
+                deferred = true;
+                if (__DEV__) {
+                  console.log(
+                    `[StepStore] deferredVerifiedDrop prev=${prevVerified} candidate=${next} awaitingConfirmation=true`,
+                  );
+                }
+              }
+            } else {
+              state.pendingVerifiedDownward = null;
             }
-            if (
-              state.provisionalSensorTodaySteps != null &&
-              state.provisionalSensorTodaySteps > next + 250
-            ) {
-              state.provisionalSensorTodaySteps = next > 0 ? next : null;
-              state.provisionalSensorTodayStepsAt = next > 0 ? ts : null;
+            if (!deferred) {
+              state.verifiedTodaySteps = next;
+              state.verifiedTodayStepsAt = ts;
+              state.todayStepsLastUpdatedAt = ts;
+              if (stepSource && !treatStepSourceAsProvisionalOnly(stepSource)) {
+                state.stepSource = stepSource;
+              }
+              if (
+                state.provisionalSensorTodaySteps != null &&
+                state.provisionalSensorTodaySteps > next + 250
+              ) {
+                state.provisionalSensorTodaySteps = next > 0 ? next : null;
+                state.provisionalSensorTodayStepsAt = next > 0 ? ts : null;
+              }
+              recomputeDisplayToday(state);
             }
-            recomputeDisplayToday(state);
           } else if (next >= state.todaySteps) {
             // Legacy / unknown — display only; never promote into verified lane.
             state.todaySteps = next;
@@ -717,6 +791,7 @@ const raceProgressSlice = createSlice({
       state.verifiedTodayStepsAt = ts;
       state.provisionalSensorTodaySteps = null;
       state.provisionalSensorTodayStepsAt = null;
+      state.pendingVerifiedDownward = null;
       state.todaySteps = next;
       state.todayStepsLastUpdatedAt = ts;
       state.dailyDisplaySource =
@@ -755,6 +830,7 @@ const raceProgressSlice = createSlice({
         state.verifiedTodayStepsAt = new Date().toISOString();
         state.provisionalSensorTodaySteps = null;
         state.provisionalSensorTodayStepsAt = null;
+        state.pendingVerifiedDownward = null;
         state.todaySteps = boot;
       } else if (boot === 0 && state.verifiedTodaySteps > 250) {
         // Fresh HC/API day boot — drop a leftover sensor absolute in verified lane.

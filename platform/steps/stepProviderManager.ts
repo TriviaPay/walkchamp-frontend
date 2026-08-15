@@ -12,7 +12,10 @@ import { AppState, Platform } from "react-native";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { isExpoGo } from "./androidHealthConnectService";
 import { androidHealthConnectProvider } from "./providers/androidHealthConnectProvider";
-import { androidLegacySensorProvider } from "./providers/androidLegacySensorProvider";
+import {
+  androidLegacySensorProvider,
+  getLegacyRaceWatchAgeMs,
+} from "./providers/androidLegacySensorProvider";
 import { iosHealthKitProvider } from "./providers/iosHealthKitProvider";
 import { androidHCService } from "./androidHealthConnectService";
 import {
@@ -35,6 +38,13 @@ import { stepAudit } from "@/utils/stepAudit";
 import { canonicalLiveRaceStepSource } from "./liveRaceSources";
 
 export { isLegacyStepSourceId } from "./verifiedStepSources";
+
+/**
+ * How long the JS live-race watch (android_legacy_sensor) can go without a
+ * proof-of-life callback before it's considered a zombie subscription and the
+ * native FGS reading is allowed through as a fallback instead of freezing.
+ */
+const LIVE_RACE_WATCH_STALE_MS = 45_000;
 
 const PROVIDER_LABELS: Record<StepProviderId, string> = {
   ios_healthkit: "HealthKit",
@@ -177,6 +187,18 @@ async function trySelectAndroidProvider(
           `Health Connect not usable: availability=${init.availability} blocked=${hcBlocked}`,
         );
         if (liveRaceSensorEnabled()) {
+          // Health Connect itself is unusable on this device (not installed /
+          // needs update / blocked — common on Android versions that don't
+          // bundle Health Connect the way Android 14+ does). Hybrid mode
+          // still prefers HC when it CAN exist, but a device where it
+          // fundamentally can't must not be left with zero daily step
+          // tracking — fall back to the legacy sensor, same as non-hybrid.
+          if (legacyAvailable) {
+            devLog(
+              "HC unusable on this device — falling back to android_legacy_sensor for daily",
+            );
+            return androidLegacySensorProvider;
+          }
           return null;
         }
       }
@@ -471,6 +493,24 @@ export const stepProviderManager = {
   },
 
   /**
+   * True when the JS live-race watch is not just "started" but has actual
+   * recent proof of life. expo-sensors' Pedometer.watchStepCount can silently
+   * stop delivering callbacks on some Android devices/OEMs while the
+   * subscription handle itself stays non-null — leaving raceSteps frozen in
+   * the UI even though the native foreground-service notification (a fully
+   * separate sensor read) keeps counting correctly. Callers use this instead
+   * of `isLiveRaceWatchActive()` to decide whether it is safe to fall back to
+   * the native reading rather than trusting a possibly-zombie JS watch.
+   */
+  isLiveRaceWatchHealthy(): boolean {
+    if (_liveRaceWatchStop == null) return false;
+    if (_liveRaceProvider?.providerId !== "android_legacy_sensor") return true;
+    const age = getLegacyRaceWatchAgeMs();
+    if (age == null) return true;
+    return age < LIVE_RACE_WATCH_STALE_MS;
+  },
+
+  /**
    * Ensure a race step baseline exists for the live-race sensor provider.
    */
   async ensureRaceBaseline(
@@ -562,18 +602,39 @@ export const stepProviderManager = {
       if (!hcBlocked) {
         try {
           const init = await androidHCService.initialize();
-          if (init.availability === "needs_update") {
+          if (
+            init.availability === "needs_update" ||
+            init.availability === "not_installed"
+          ) {
+            // Health Connect fundamentally can't run here (common on Android
+            // versions that don't bundle it the way 14+ does, or it was never
+            // installed). Hybrid mode still prefers HC when available, but a
+            // device where it can't exist must not be left with zero daily
+            // step tracking — fall back to the legacy sensor, same as the
+            // non-hybrid path already does.
+            if (liveRaceSensorEnabled() && legacyAvail) {
+              const activityGranted = await ensureActivityRecognitionPermission();
+              if (activityGranted) {
+                const legacyResult =
+                  await androidLegacySensorProvider.requestPermission();
+                if (legacyResult.status === "granted") {
+                  _activeProvider = androidLegacySensorProvider;
+                  _liveRaceProvider = androidLegacySensorProvider;
+                  return {
+                    ...legacyResult,
+                    message:
+                      "Step tracking is ready using Android Steps (Health Connect isn't available on this device).",
+                  };
+                }
+              }
+            }
             return {
               status: "unavailable",
               providerId: null,
-              message: "Update Health Connect from the Play Store to continue.",
-            };
-          }
-          if (init.availability === "not_installed") {
-            return {
-              status: "unavailable",
-              providerId: null,
-              message: "Install Health Connect to track verified steps.",
+              message:
+                init.availability === "needs_update"
+                  ? "Update Health Connect from the Play Store to continue."
+                  : "Install Health Connect to track verified steps.",
             };
           }
           const hcUsable =

@@ -272,6 +272,45 @@ class WalkChampRaceProgressModule : Module() {
       )
     }
 
+    /**
+     * Many OEMs (Xiaomi/MIUI, OPPO/ColorOS, Vivo, Samsung "Sleeping apps", etc.) kill the
+     * whole app process — not just background the FGS — during a long walk unless the
+     * user has explicitly whitelisted WalkChamp from battery optimization. This is the
+     * single most common cause of "the app just closes by itself while I'm walking".
+     */
+    AsyncFunction("isIgnoringBatteryOptimizations") {
+      val ctx = appContext.reactContext ?: return@AsyncFunction true
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return@AsyncFunction true
+      val pm = ctx.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+      pm?.isIgnoringBatteryOptimizations(ctx.packageName) ?: true
+    }
+
+    AsyncFunction("requestIgnoreBatteryOptimizations") {
+      val ctx = appContext.reactContext ?: return@AsyncFunction false
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return@AsyncFunction true
+      try {
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+          data = android.net.Uri.parse("package:${ctx.packageName}")
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        ctx.startActivity(intent)
+        true
+      } catch (_: Exception) {
+        try {
+          // Some OEMs (esp. MIUI) reject the direct-whitelist intent — fall back to the
+          // general battery optimization list so the user can find WalkChamp manually.
+          ctx.startActivity(
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+              addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+          )
+          true
+        } catch (_: Exception) {
+          false
+        }
+      }
+    }
+
     AsyncFunction("getLauncherIconName") {
       val ctx = appContext.reactContext ?: return@AsyncFunction null
       getEnabledLauncherIconName(ctx)

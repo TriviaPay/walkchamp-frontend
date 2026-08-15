@@ -1,10 +1,17 @@
 /**
  * Hybrid Android live daily display.
  *
- * Health Connect stays the verified daily source, but Samsung/HC often returns
- * records=0 for long stretches. TYPE_STEP_COUNTER (Pedometer) advances the Walk
- * UI + Redux display the same way the ongoing FGS notification does — without
- * replacing the HC provider or claiming sensor as verified backend truth.
+ * Health Connect stays the verified daily source, but on many devices/OEMs HC
+ * simply never receives step records (healthConnectSourceCount=0 forever) even
+ * though the phone is clearly walking — the same hardware TYPE_STEP_COUNTER the
+ * ongoing race/FGS notification already reads correctly still advances.
+ *
+ * Rather than opening a second, independent expo-sensors Pedometer subscription
+ * (which competed with — and on some devices never received callbacks alongside
+ * — the one `androidLegacySensorProvider` already owns for live race tracking),
+ * this simply polls that same already-proven-working provider's `getTodaySteps()`
+ * and mirrors it into the Redux provisional lane. It never replaces the HC
+ * provider or claims sensor data as verified backend truth.
  */
 
 import { Platform } from "react-native";
@@ -13,124 +20,34 @@ import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { updateStepProgressFromRealSource } from "@/services/stepProgressCoordinator";
 import { hasActivityRecognitionPermission } from "@/services/permissions/activityRecognitionPermissionService";
+import { androidLegacySensorProvider } from "./providers/androidLegacySensorProvider";
 
-type PedometerSub = { remove: () => void };
-type PedometerAPI = {
-  isAvailableAsync: () => Promise<boolean>;
-  getPermissionsAsync: () => Promise<{ status: string }>;
-  watchStepCount: (cb: (r: { steps: number }) => void) => PedometerSub;
-};
+/** Frequent enough to feel live, cheap enough to run alongside HC polling. */
+const POLL_MS = 4_000;
 
-let _sub: PedometerSub | null = null;
-let _startedAt = 0;
-let _sessionFloor = 0;
-let _anchorToday = 0;
-let _floored = false;
+let _pollTimer: ReturnType<typeof setInterval> | null = null;
+let _polling = false;
 
-function loadPedometer(): PedometerAPI | null {
+async function pollOnce(): Promise<void> {
+  if (_polling) return; // avoid overlapping reads if one tick runs long
+  _polling = true;
   try {
-    const m = require("expo-sensors") as { Pedometer?: PedometerAPI };
-    return m.Pedometer ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function mapHcSource(): "health_connect" | "healthkit" {
-  return stepProviderManager.getActiveProviderId() === "ios_healthkit"
-    ? "healthkit"
-    : "health_connect";
-}
-void mapHcSource;
-
-/**
- * Start Pedometer-backed live daily display for hybrid HC mode.
- * Safe to call repeatedly — restarts the watch with a fresh anchor.
- */
-export async function startHybridLiveDailyDisplay(): Promise<boolean> {
-  if (Platform.OS !== "android") return false;
-  if (!FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR) return false;
-  if (!stepProviderManager.usesVerifiedStepSource()) return false;
-
-  const arOk = await hasActivityRecognitionPermission();
-  if (!arOk) {
-    if (__DEV__) {
-      console.log("[HybridLive] skip — ACTIVITY_RECOGNITION not granted");
-    }
-    return false;
-  }
-
-  const ped = loadPedometer();
-  if (!ped) return false;
-  try {
-    const available = await ped.isAvailableAsync();
-    if (!available) return false;
-    const { status } = await ped.getPermissionsAsync();
-    if (status !== "granted") {
-      if (__DEV__) console.log("[HybridLive] skip — pedometer permission not granted");
-      return false;
-    }
-  } catch {
-    return false;
-  }
-
-  stopHybridLiveDailyDisplay();
-
-  // Anchor ONLY from verified HC/HK — never from display todaySteps (FGS/sensor
-  // absolutes like yesterday's 9953 must not become the live floor).
-  _anchorToday = Math.max(
-    0,
-    Math.floor(store.getState().raceProgress.verifiedTodaySteps ?? 0),
-  );
-  _sessionFloor = 0;
-  _floored = false;
-  _startedAt = Date.now();
-
-  _sub = ped.watchStepCount((result) => {
     if (!stepProviderManager.usesVerifiedStepSource()) return;
-    // Never advance provisional for a stale / missing Redux user (post-logout leak).
     if (!store.getState().raceProgress.userId) return;
 
-    const raw = Math.max(0, Math.floor(result.steps));
-    const since = Date.now() - _startedAt;
+    const { steps } = await androidLegacySensorProvider.getTodaySteps();
+    const raw = Math.max(0, Math.floor(steps));
     const verified = Math.max(
       0,
       Math.floor(store.getState().raceProgress.verifiedTodaySteps ?? 0),
     );
-
-    // Discard the first subscribe burst (classic Android phantom).
-    if (!_floored && since < 4_000) {
-      if (raw <= 0) return;
-      _sessionFloor = raw;
-      _floored = true;
-      _anchorToday = verified;
-      return;
-    }
-    if (!_floored) {
-      _sessionFloor = raw;
-      _floored = true;
-    }
-
-    // Re-anchor only from verified HC growth — not from inflated display totals.
-    if (verified > _anchorToday) {
-      _anchorToday = verified;
-      _sessionFloor = raw;
-    }
-
-    const delta = Math.max(0, raw - _sessionFloor);
-    // Single-tick spike (sensor glitch / bad absolute) — re-floor and skip.
-    if (delta > 500) {
-      _sessionFloor = raw;
-      _anchorToday = Math.max(_anchorToday, verified);
-      return;
-    }
-    const next = _anchorToday + delta;
+    const next = Math.max(raw, verified);
     if (next <= verified) return;
 
     updateStepProgressFromRealSource({
       todaySteps: next,
       // Provisional daily display only — never label as Health Connect verified.
-      // Session deltas may lead HC so the ongoing notification keeps updating.
+      // Session totals may lead HC so the Walk tab + ongoing notification keep updating.
       stepSource: "android_step_counter",
       dailyLane: "provisional",
       updatedAt: new Date().toISOString(),
@@ -161,29 +78,58 @@ export async function startHybridLiveDailyDisplay(): Promise<boolean> {
     } catch {
       /* optional */
     }
-  });
+  } catch (e) {
+    if (__DEV__) console.log("[HybridLive] poll error", e);
+  } finally {
+    _polling = false;
+  }
+}
+
+/**
+ * Start polling the legacy sensor provider for hybrid HC mode.
+ * Safe to call repeatedly — restarts the poll loop fresh.
+ */
+export async function startHybridLiveDailyDisplay(): Promise<boolean> {
+  if (Platform.OS !== "android") return false;
+  if (!FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR) return false;
+  if (!stepProviderManager.usesVerifiedStepSource()) return false;
+
+  const arOk = await hasActivityRecognitionPermission();
+  if (!arOk) {
+    if (__DEV__) {
+      console.log("[HybridLive] skip — ACTIVITY_RECOGNITION not granted");
+    }
+    return false;
+  }
+
+  const available = await androidLegacySensorProvider.isAvailable();
+  if (!available) {
+    if (__DEV__) console.log("[HybridLive] skip — legacy sensor unavailable");
+    return false;
+  }
+
+  stopHybridLiveDailyDisplay();
+
+  void pollOnce();
+  _pollTimer = setInterval(() => {
+    void pollOnce();
+  }, POLL_MS);
 
   if (__DEV__) {
     console.log(
-      `[HybridLive] started anchor=${_anchorToday} (HC verified + sensor display)`,
+      "[HybridLive] started — polling androidLegacySensorProvider (same source as race baseline)",
     );
   }
   return true;
 }
 
 export function stopHybridLiveDailyDisplay(): void {
-  if (_sub) {
-    try {
-      _sub.remove();
-    } catch {
-      /* ignore */
-    }
-    _sub = null;
+  if (_pollTimer) {
+    clearInterval(_pollTimer);
+    _pollTimer = null;
   }
-  _floored = false;
-  _sessionFloor = 0;
 }
 
 export function isHybridLiveDailyDisplayActive(): boolean {
-  return _sub != null;
+  return _pollTimer != null;
 }

@@ -400,6 +400,11 @@ class RaceProgressNotificationService {
         if (__DEV__) {
           console.log(`[RaceNotification] startForeground raceId=${payload.raceId}`);
         }
+        // Fire-and-forget, one-time-per-install nudge — OEM battery savers otherwise
+        // kill the whole app mid-walk even with a healthy foreground service running.
+        void import("@/services/permissions/batteryOptimization")
+          .then((m) => m.maybePromptIgnoreBatteryOptimizations())
+          .catch(() => undefined);
       }
 
       if (Platform.OS === "ios") {

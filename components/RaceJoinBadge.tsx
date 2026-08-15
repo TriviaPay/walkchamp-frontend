@@ -24,6 +24,9 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
   const isActiveJoined  = status === "user_joined_active";
   const isWaitingHost   = status === "user_hosting_waiting";
   const isWaitingJoined = status === "user_joined_waiting";
+  const occupied = isJoinable || isWaitingHost || isWaitingJoined || isActiveHost || isActiveJoined;
+  const displayJoined = occupied ? Math.max(1, Math.floor(joinedCount || 0)) : Math.max(0, Math.floor(joinedCount || 0));
+  const displayMax = Math.max(displayJoined, Math.floor(maxPlayers || 10));
   const isForfeited     = status === "forfeited";
   const isFinished      = status === "finished";
   const isWaiting       = isWaitingHost || isWaitingJoined;
@@ -68,7 +71,7 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
     return (
       <Animated.View
         style={{ transform: [{ scale: pulseAnim }] }}
-        accessibilityLabel={`Join room, ${joinedCount} of ${maxPlayers} players joined`}
+        accessibilityLabel={`Join room, ${displayJoined} of ${displayMax} players joined`}
       >
         <LinearGradient
           colors={["#00E676", "#00C853"]}
@@ -79,7 +82,7 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
           <Animated.View style={[bjStyles.joinDot, { opacity: glowAnim }]} />
           <Text style={bjStyles.joinText}>Join</Text>
           <View style={bjStyles.joinCountBox}>
-            <Text style={bjStyles.joinCountText}>{joinedCount}/{maxPlayers}</Text>
+            <Text style={bjStyles.joinCountText}>{displayJoined}/{displayMax}</Text>
           </View>
         </LinearGradient>
       </Animated.View>
@@ -91,7 +94,7 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
     if (isWaitingHost) {
       // Solid amber gradient — matches the prominence of the "Join" badge
       return (
-        <View accessibilityLabel={`Hosting, ${joinedCount} of ${maxPlayers} players joined`}>
+        <View accessibilityLabel={`Hosting, ${displayJoined} of ${displayMax} players joined`}>
           <LinearGradient
             colors={["#F59E0B", "#D97706"]}
             start={{ x: 0, y: 0 }}
@@ -101,7 +104,7 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
             <Animated.View style={[bjStyles.hostingDot, { opacity: blinkAnim }]} />
             <Text style={bjStyles.hostingLabel}>Hosting</Text>
             <View style={bjStyles.hostingCountBox}>
-              <Text style={bjStyles.hostingCountText}>{joinedCount}/{maxPlayers}</Text>
+              <Text style={bjStyles.hostingCountText}>{displayJoined}/{displayMax}</Text>
             </View>
           </LinearGradient>
         </View>
@@ -109,7 +112,7 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
     }
     // Waiting (joined, not host) — green gradient (same family as Join), count inline (no separate box).
     return (
-      <View accessibilityLabel={`Waiting, ${joinedCount} of ${maxPlayers} players joined`}>
+      <View accessibilityLabel={`Waiting, ${displayJoined} of ${displayMax} players joined`}>
         <LinearGradient
           colors={["#00E676", "#00C853"]}
           start={{ x: 0, y: 0 }}
@@ -118,7 +121,7 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
         >
           <Animated.View style={[bjStyles.waitingDot, { opacity: blinkAnim }]} />
           <Text style={bjStyles.waitingLabel}>Waiting</Text>
-          <Text style={bjStyles.waitingCountText}>{joinedCount}/{maxPlayers}</Text>
+          <Text style={bjStyles.waitingCountText}>{displayJoined}/{displayMax}</Text>
         </LinearGradient>
       </View>
     );

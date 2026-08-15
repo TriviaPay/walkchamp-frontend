@@ -1228,15 +1228,22 @@ function initNativeStepEventListener(): void {
         ) {
           if (
             isJsAuthoritativeStepSession() &&
-            stepProviderManager.isLiveRaceWatchActive()
+            stepProviderManager.isLiveRaceWatchHealthy()
           ) {
-            // JS live watch is primary; FGS still updates the race notification natively.
+            // JS live watch is primary (and has a recent proof-of-life tick);
+            // FGS still updates the race notification natively.
             logger.debug(
               "StepStore",
               "ignored native race sensor — JS live race watch owns Redux",
             );
             return;
           }
+          // JS watch missing or stale (zombie Pedometer subscription — a known
+          // Android issue where watchStepCount silently stops delivering
+          // callbacks while the handle stays non-null) — fall through and let
+          // the native FGS reading (a separate, still-working sensor read)
+          // update Redux instead of leaving Live Race steps frozen until the
+          // whole app is killed and relaunched.
           feedRaceStepsToStore({
             raceSteps: state.raceSteps,
             stepSource: "android_step_counter",
@@ -1826,6 +1833,18 @@ export function setActiveRaceProgress(params: {
   ) {
     resolvedSponsored = true;
   }
+  // Avoid flashing a hard-coded "1 participant" placeholder in the ongoing
+  // notification while the real roster count is still loading. When this is
+  // the same race resuming (app relaunch, screen remount), the last known
+  // count is almost always still accurate and far better than "1"; the very
+  // next backend/roster update (onLocalRaceStepsUpdated / updateRankFromBackend)
+  // corrects it either way, so this only smooths the brief startup flash.
+  const resolvedTotalParticipants =
+    params.totalParticipants ??
+    (prevActiveId === params.raceId && (prev.totalParticipants ?? 0) > 1
+      ? prev.totalParticipants
+      : undefined) ??
+    1;
   const prevCompanionSnapshot =
     params.preserveAsCompanion &&
     prevActiveId &&
@@ -1879,7 +1898,7 @@ export function setActiveRaceProgress(params: {
       username: params.username,
       raceSteps: boot,
       rank: 1,
-      totalParticipants: params.totalParticipants ?? 1,
+      totalParticipants: resolvedTotalParticipants,
       goalSteps: resolvedGoal,
       timeLeftSeconds: 0,
       isSponsored: resolvedSponsored,

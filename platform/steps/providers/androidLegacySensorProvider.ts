@@ -58,6 +58,17 @@ let _watchCallback: ((result: StepReadResult) => void) | null = null;
 let _rawAtSubscription = 0;
 let _userId: string | null = null;
 let _watchStartedAtMs = 0;
+/**
+ * Timestamp of the most recent raw watchStepCount callback invocation (even if
+ * the delta was ultimately filtered as a phantom) — proof the OS is still
+ * delivering events to this subscription. expo-sensors' Pedometer.watchStepCount
+ * can silently stop delivering callbacks on some devices/OS versions (Doze,
+ * background throttling) while `_sub` itself is still a live, non-null handle,
+ * so `_sub != null` alone is not sufficient evidence the live-race watch is
+ * actually working. Consumers use this to detect a "zombie" subscription and
+ * fall back to the native FGS sensor reading instead of freezing forever.
+ */
+let _lastWatchEventAtMs = 0;
 let _ignoredInitialPhantom = false;
 /** Pedometer session steps already discarded as subscribe phantom (cumulative offset). */
 let _watchSessionFloor = 0;
@@ -126,6 +137,19 @@ function rollLocalDayIfNeeded(watchFloorHint?: number): boolean {
 
 export function isAndroidLegacySensorUserBound(): boolean {
   return _userId != null;
+}
+
+/**
+ * Age (ms) since the watch subscription last actually received a callback
+ * from the OS, or `null` if there is no active subscription at all.
+ * A young subscription with no ticks yet is measured from subscribe time
+ * (grace period) rather than reported as instantly stale.
+ */
+export function getLegacyRaceWatchAgeMs(): number | null {
+  if (!_sub) return null;
+  const since = _lastWatchEventAtMs || _watchStartedAtMs;
+  if (!since) return null;
+  return Date.now() - since;
 }
 
 /** Remove polluted pre-login storage from earlier sessions. */
@@ -261,10 +285,12 @@ function ensureSubscription(): boolean {
 
   alignDailyBaselineForWatch();
   _watchStartedAtMs = Date.now();
+  _lastWatchEventAtMs = 0;
   _ignoredInitialPhantom = false;
   _watchSessionFloor = 0;
 
   _sub = ped.watchStepCount((result) => {
+    _lastWatchEventAtMs = Date.now();
     if (!requireBoundUser()) return;
     const rawDelta = Math.max(0, Math.floor(result.steps));
     if (rawDelta <= 0) return;

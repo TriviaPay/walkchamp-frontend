@@ -27,27 +27,33 @@ export function resolveWalkNotificationSteps(params: {
       : Math.max(0, Math.floor(params.provisionalSensorTodaySteps));
   const fallback = Math.max(0, Math.floor(params.todaySteps ?? 0));
 
-  if (isStaleSensorAbsolute(verified, provisional)) {
-    return verified;
+  if (!params.raceActive) {
+    // No active race to justify a big jump — a large provisional/fallback while
+    // HC still shows 0 is almost always yesterday's leftover, not live walking.
+    if (isStaleSensorAbsolute(verified, provisional)) return verified;
+    if (isStaleSensorAbsolute(verified, fallback)) return verified;
+    return Math.max(verified, provisional, fallback);
   }
+
+  // Race active: `provisional` already passed the ingest-time plausibility gate
+  // in the Redux reducer (raceProgressSlice) before ever reaching here, and an
+  // active race holding the sensor is strong evidence a jump is genuine live
+  // walking — not stale leftover. Re-applying the blunt "candidate > 1000 is
+  // stale" rule to it here (as before) wrongly zeroed out real live-session
+  // steps whenever Health Connect simply hadn't synced yet today (verified
+  // stuck at 0, which is routine mid-race), showing "Total Steps: 0" on the
+  // Walk tab while the race tray (unaffected by this function) kept counting
+  // correctly from the same sensor. `fallback` may still come from an
+  // untrusted/raw cache, so it keeps the stale check.
   if (isStaleSensorAbsolute(verified, fallback)) {
-    return verified;
+    return Math.max(verified, provisional);
   }
-
   const live = Math.max(provisional, fallback);
-
-  if (params.raceActive) {
-    // Thousands of leftover race/yesterday steps stay off Daily Walk.
-    // Small stored daily totals (including a backend row) must not flicker 0↔N.
-    if (verified <= 0) {
-      return live >= 1000 ? 0 : live;
-    }
-    const raceLiveCap = 80;
-    if (live > verified + raceLiveCap) return verified;
-    return Math.max(verified, live);
-  }
-
-  return Math.max(verified, provisional, fallback);
+  // Small stored daily totals (including a backend row) must not flicker 0↔N.
+  if (verified <= 0) return live;
+  const raceLiveCap = 80;
+  if (live > verified + raceLiveCap) return verified;
+  return Math.max(verified, live);
 }
 
 /**
