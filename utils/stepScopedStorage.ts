@@ -154,6 +154,7 @@ export async function clearScopedStepStateForUser(
       `:totalSteps`,
       `:streak`,
       `:currentLocalDate`,
+      `:outbox`,
     ];
     keysToDelete = keysToDelete.filter((key) => {
       if (key.startsWith(`steps:${userId}:`)) return false;

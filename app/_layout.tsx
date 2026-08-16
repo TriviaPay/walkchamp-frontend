@@ -23,6 +23,7 @@ import { Provider as ReduxProvider } from "react-redux";
 import { store } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AlertHost } from "@/components/AppAlert";
+import { BatteryOptimizationHost } from "@/components/BatteryOptimizationModal";
 import { PhysicalActivityPermissionHost } from "@/components/PhysicalActivityPermissionModal";
 import { OfflineBanner } from "@/components/OfflineBanner";
 import { AuthProvider } from "@/context/AuthContext";
@@ -595,6 +596,7 @@ export default function RootLayout() {
                                 <OfflineBanner />
                                 <AlertHost />
                                 <PhysicalActivityPermissionHost />
+                                <BatteryOptimizationHost />
                                 <CoinBalanceBootstrap />
                                 <CoinRealtimeSync />
                                 <CoinRewardToast />

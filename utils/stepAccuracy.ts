@@ -258,13 +258,24 @@ export function hydrateStepDisplayFromSources(params: {
   const verified =
     params.verifiedSource ?? stepProviderManager.usesVerifiedStepSource();
 
-  // HC/HK already answered 0 for today — never revive yesterday from cache.
+  // Midnight: HC/HK 0 + backend 0 means a new day — do not revive yesterday.
+  // Mid-day empty HC polls (and walk POST paused during a live race) must not
+  // wipe a same-day local total on logout/login.
   if (verified && provider === 0 && backend === 0) {
-    stepEngineLog(
-      "StepEngine",
-      `hydrate verifiedZero keepZero=true ignoredLocal=${local}`,
-    );
-    return 0;
+    if (isFreshLocalDay()) {
+      stepEngineLog(
+        "StepEngine",
+        `hydrate verifiedZero keepZero=true ignoredLocal=${local}`,
+      );
+      return 0;
+    }
+    if (local > 0) {
+      stepEngineLog(
+        "StepEngine",
+        `hydrate verified pendingHc keepLocal=${local}`,
+      );
+      return local;
+    }
   }
 
   if (verified && provider === 0) {
@@ -288,7 +299,7 @@ export function hydrateStepDisplayFromSources(params: {
   }
 
   if (provider === 0 && backend === 0 && local > 0) {
-    if (isFreshLocalDay() || verified) {
+    if (isFreshLocalDay()) {
       stepEngineLog(
         "StepEngine",
         `hydrate dropLocalCache=${local} verified=${verified}`,

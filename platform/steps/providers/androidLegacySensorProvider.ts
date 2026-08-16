@@ -289,7 +289,8 @@ function ensureSubscription(): boolean {
   _ignoredInitialPhantom = false;
   _watchSessionFloor = 0;
 
-  _sub = ped.watchStepCount((result) => {
+  try {
+    _sub = ped.watchStepCount((result) => {
     _lastWatchEventAtMs = Date.now();
     if (!requireBoundUser()) return;
     const rawDelta = Math.max(0, Math.floor(result.steps));
@@ -380,6 +381,11 @@ function ensureSubscription(): boolean {
       _watchCallback(buildResult(todayTotal, now, now));
     }
   });
+  } catch {
+    _sub = null;
+    _watchStartedAtMs = 0;
+    return false;
+  }
   return true;
 }
 
@@ -463,11 +469,9 @@ export const androidLegacySensorProvider: StepProvider = {
       return buildResult(0, from, to);
     }
     await loadDailyState();
-    let steps = _todaySteps;
-    if (!_sub && steps === 0) {
-      ensureSubscription();
-    }
-    return buildResult(steps, from, to);
+    // Do not start Pedometer.watchStepCount from a read/poll — that races the
+    // native FGS on first launch and crashes some devices.
+    return buildResult(_todaySteps, from, to);
   },
 
   async getStepsForRange(start: Date, end: Date): Promise<StepReadResult> {

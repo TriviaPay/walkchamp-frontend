@@ -197,10 +197,13 @@ class NativeStepSensorEngine(
       return
     }
     if (!hasActivityRecognitionPermission()) {
-      Log.w(TAG, "[StepFGS] ACTIVITY_RECOGNITION not granted — sensor may not deliver events")
-    } else {
-      Log.d(TAG, "[StepFGS] sensor available type=TYPE_STEP_COUNTER")
+      Log.w(
+        TAG,
+        "[StepFGS] ACTIVITY_RECOGNITION not granted — skip sensor register (avoids OEM process kill)",
+      )
+      return
     }
+    Log.d(TAG, "[StepFGS] sensor available type=TYPE_STEP_COUNTER")
     ensureSensorHandler()
     try {
       // SENSOR_DELAY_FASTEST + maxReportLatencyUs=0: ask OEMs not to batch while FGS holds

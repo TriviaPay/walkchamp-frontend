@@ -22,11 +22,16 @@ import {
 import {
   resolveHealthConnectVerificationStatus,
   describeHealthConnectVerificationStatus,
+  isVerifiedHealthAuthoritative,
   type HealthConnectVerificationStatus,
 } from "@/services/steps/healthConnectVerificationStateLogic";
 
 export type { HealthConnectVerificationStatus };
-export { describeHealthConnectVerificationStatus, resolveHealthConnectVerificationStatus };
+export {
+  describeHealthConnectVerificationStatus,
+  isVerifiedHealthAuthoritative,
+  resolveHealthConnectVerificationStatus,
+};
 
 export type HealthConnectVerificationState = {
   healthConnectAvailable: boolean;
@@ -34,6 +39,8 @@ export type HealthConnectVerificationState = {
   setupCompleted: boolean;
 
   writerEvidenceDetected: boolean;
+  /** Preferred writer app is installed (Samsung Health / Google Fit), even if HC has no records yet. */
+  writerInstalled: boolean;
   currentDayRecordsFound: boolean;
   currentDayVerifiedSteps: number;
 
@@ -45,6 +52,7 @@ const UNSUPPORTED_STATE: HealthConnectVerificationState = {
   readStepsPermissionGranted: false,
   setupCompleted: false,
   writerEvidenceDetected: false,
+  writerInstalled: false,
   currentDayRecordsFound: false,
   currentDayVerifiedSteps: 0,
   status: "unsupported",
@@ -83,6 +91,7 @@ export async function getHealthConnectVerificationState(): Promise<HealthConnect
           readStepsPermissionGranted: false,
           setupCompleted: false,
           writerEvidenceDetected: false,
+          writerInstalled: false,
           currentDayRecordsFound: false,
           currentDayVerifiedSteps: 0,
           status: "permission_required",
@@ -101,11 +110,18 @@ export async function getHealthConnectVerificationState(): Promise<HealthConnect
         currentDayRecordsFound,
       });
 
+      const writerInstalled =
+        feed.status === "writer_detected" ||
+        feed.status === "installed_but_not_connected" ||
+        feed.status === "waiting_for_sync" ||
+        writerEvidenceDetected;
+
       return {
         healthConnectAvailable,
         readStepsPermissionGranted,
         setupCompleted,
         writerEvidenceDetected,
+        writerInstalled,
         currentDayRecordsFound,
         currentDayVerifiedSteps: Math.max(0, feed.todaySteps),
         status,
@@ -126,6 +142,7 @@ export async function getHealthConnectVerificationState(): Promise<HealthConnect
           readStepsPermissionGranted: false,
           setupCompleted: false,
           writerEvidenceDetected: false,
+          writerInstalled: false,
           currentDayRecordsFound: false,
           currentDayVerifiedSteps: 0,
           status: "permission_required",
@@ -143,6 +160,7 @@ export async function getHealthConnectVerificationState(): Promise<HealthConnect
         readStepsPermissionGranted: true,
         setupCompleted: true,
         writerEvidenceDetected: true,
+        writerInstalled: true,
         currentDayRecordsFound: steps > 0,
         currentDayVerifiedSteps: steps,
         status: steps > 0 ? "ready" : "records_zero",

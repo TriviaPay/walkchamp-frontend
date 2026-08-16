@@ -70,11 +70,20 @@ import { useWalkContext, TrackingStatus } from "@/context/WalkContext";
 import { useWalkTodaySteps } from "@/services/walkTodayStepsStore";
 import { useStepSourceGuard } from "@/hooks/useStepSourceGuard";
 import {
+  isVerifiedHealthAuthoritative,
+} from "@/services/steps/healthConnectVerificationStateLogic";
+import {
+  getHealthConnectVerificationState,
+  type HealthConnectVerificationState,
+} from "@/services/steps/healthConnectVerificationState";
+import {
   ENABLE_CASH_CHALLENGES,
   ENABLE_LEGACY_CASH_RACE_CARDS,
+  cashEligibilityForUser,
   isUnlimitedGoalFrontendEnabled,
   isWalkTrendingChallengesPreviewEnabled,
 } from "@/config/featureFlags";
+import { cashUnavailableMessage } from "@/utils/cashEligibility";
 import {
   UNLIMITED_GOAL_CHALLENGE_TYPE,
   UNLIMITED_GOAL_DEFAULT_DAILY_STEPS,
@@ -153,6 +162,7 @@ import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import MyTitlesModal, { type ActiveTitle, difficultyColor } from "@/components/MyTitlesModal";
 import { TitleBadge } from "@/components/TitleBadge";
 import WearableSetupModal from "@/components/WearableSetupModal";
+import VerifiedStepsStatusBanner from "@/components/VerifiedStepsStatusBanner";
 import { usePresence, usePresenceCounts } from "@/context/PresenceContext";
 import { getStoredSession } from "@/services/authService";
 import { authFetch } from "@/utils/authFetch";
@@ -215,6 +225,11 @@ import { TermsAndConditionsDocument } from "@/components/TermsAndConditionsDocum
 import { clampDailyProgress } from "@/utils/stepProgress";
 import CoinsBattleModal from "@/components/CoinsBattleModal";
 import { screenCache } from "@/utils/screenCache";
+import {
+  DELETE_ACCOUNT_WARNING,
+  deleteAccountBalanceBlockMessage,
+  messageForDeleteAccountResponse,
+} from "@/utils/accountDeletion";
 import { warmLiveRaceDetailNavigation, prefetchLiveRaceDetailRoster } from "@/utils/warmLiveRaceDetail";
 import { buildMatchmakingParams, readWaitingRoomCacheSync } from "@/utils/waitingRoomSeed";
 import { resolveRacePlayerCount } from "@/utils/waitingRoomTiming";
@@ -1108,7 +1123,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
   const { refreshUserProfile, updateUser } = useAuth();
   const { beginLocalAvatarPick, applyAvatarUploadSuccess, applyAvatarRemoved } = useAvatarCache();
   const { requestStepPermission, completeStepSetup } = useWalkContext();
-  const { refreshWallet } = useApp();
+  const { refreshWallet, walletBalance, pendingBalance } = useApp();
   const ac = user?.avatarColor ?? colors.primary;
 
   // Avatar + server stats
@@ -1378,8 +1393,16 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
     setShowAvatarPicker(true); };
 
   const handleDeleteAccount = useCallback(() => {
+    const balanceBlock = deleteAccountBalanceBlockMessage({
+      walletBalance,
+      pendingBalance,
+    });
+    if (balanceBlock) {
+      AppAlert.alert("Withdraw first", balanceBlock);
+      return;
+    }
     setShowDeleteConfirm(true);
-  }, []);
+  }, [pendingBalance, walletBalance]);
 
   const dismissDeleteConfirm = useCallback((confirmed: boolean) => {
     Animated.timing(deleteConfirmOpacity, { toValue: 0, duration: 130, useNativeDriver: true }).start(() => {
@@ -1393,8 +1416,8 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
             onClose();
             await logout();
           } else {
-            const j = await res.json().catch(() => ({})) as { error?: string };
-            AppAlert.alert("Error", j.error ?? "Failed to delete account. Please contact support.");
+            const j = await res.json().catch(() => ({})) as { error?: string; code?: string };
+            AppAlert.alert("Cannot delete", messageForDeleteAccountResponse(res.status, j));
           }
         } catch {
           AppAlert.alert("Error", "Network error. Please try again.");
@@ -1837,7 +1860,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
               <View style={soStyles.body}>
                 <Text style={[soStyles.title, { color: colors.foreground }]}>Delete Account</Text>
                 <Text style={[soStyles.message, { color: colors.mutedForeground }]}>
-                  This permanently erases your profile, steps, coins, races, and achievements. There is no recovery option.
+                  {DELETE_ACCOUNT_WARNING}
                 </Text>
               </View>
               <View style={[soStyles.divider, { backgroundColor: colors.border }]} />
@@ -2008,9 +2031,17 @@ function WalkScreenContent() {
     stepsSourceReady,
     authReady,
   } = useWalkContext();
+  const [hcVerification, setHcVerification] =
+    useState<HealthConnectVerificationState | null>(null);
+  const hcAuthoritative =
+    hcVerification == null ||
+    (typeof isVerifiedHealthAuthoritative === "function"
+      ? isVerifiedHealthAuthoritative(hcVerification.status)
+      : true);
   const contextTodaySteps = useWalkTodaySteps();
   const { userRank, walletBalance, totalEarned, walletCurrency, refreshWallet } = useApp();
   const { user, logout, loading: authLoading, sessionToken } = useAuth();
+  const cashUiAllowed = cashEligibilityForUser(user).allowed;
   /** Set before navigating to Waiting Room while a Walk pageSheet is still covering. */
   const pendingDismissRaceCoverModalsRef = useRef(false);
   /** After Waiting Room return — bypass rooms TTL so My Race / Free Challenge gate stay in sync. */
@@ -2090,6 +2121,7 @@ function WalkScreenContent() {
           provisionalSensorTodaySteps,
           todaySteps: Math.max(canonicalTodaySteps, contextTodaySteps),
           raceActive: walkRaceActive,
+          verifiedAuthoritative: hcAuthoritative,
         })
       : resolveDisplayTodaySteps(contextTodaySteps, canonicalTodaySteps);
   // Unlimited FGS raceSteps are the same daily HC total as the streak tray.
@@ -2641,6 +2673,21 @@ function WalkScreenContent() {
     const pollInterval = setInterval(loadChallengeStatuses, STEP_SYNC_CONFIG.WALK_CHALLENGE_POLL_MS);
     return () => clearInterval(pollInterval);
   }, [raceReady, loadChallengeStatuses]));
+
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void getHealthConnectVerificationState()
+        .then((s) => {
+          if (!cancelled) setHcVerification(s);
+        })
+        .catch(() => {});
+    }, 800);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, []));
 
   // Single focus owner — one coalesced /api/walk/today (no rank+db+rehydrate storm).
   const refreshTodayOnFocus = useCallback(async () => {
@@ -4666,12 +4713,12 @@ function WalkScreenContent() {
     const entryKey = feeToEntryType(setupModal.fee);
     const status = challengeStatuses[entryKey];
 
-    if (isPaidCashFee(setupModal.fee) && !ENABLE_CASH_CHALLENGES) {
-      AppAlert.alert(
-        "Cash challenges unavailable",
-        "Paid cash challenges are disabled in this app build. Set EXPO_PUBLIC_ENABLE_CASH_CHALLENGES=true and rebuild.",
-      );
-      return;
+    if (isPaidCashFee(setupModal.fee)) {
+      const cashEl = cashEligibilityForUser(user);
+      if (!cashEl.allowed) {
+        AppAlert.alert("Cash challenges unavailable", cashUnavailableMessage(cashEl.reason));
+        return;
+      }
     }
 
     if (setupModal.fee !== 0 && !canAfford) {
@@ -5033,10 +5080,11 @@ function WalkScreenContent() {
       const isScheduled = scheduledStartAt !== null;
 
       if (meta.isUsd) {
-        if (!ENABLE_CASH_CHALLENGES) {
+        const cashEl = cashEligibilityForUser(user);
+        if (!cashEl.allowed) {
           AppAlert.alert(
             "Cash challenges unavailable",
-            "Paid cash challenges are disabled in this app build. Set EXPO_PUBLIC_ENABLE_CASH_CHALLENGES=true and rebuild.",
+            cashUnavailableMessage(cashEl.reason),
           );
           setChallengeCreating(false);
           return;
@@ -5494,10 +5542,14 @@ function WalkScreenContent() {
                       Auto Tracking <Text style={{ color: colors.primary, fontWeight: "700" }}>ON</Text>
                     </Text>
                     <Text style={[styles.trackingSub, { color: colors.mutedForeground }]}>
-                      {verificationLevel === "verified"
+                      {hcAuthoritative && verificationLevel === "verified"
                         ? "Verified Tracking — eligible for rewards and races"
-                        : "Steps count automatically when you walk"}
+                        : "Live steps on this phone. Prize challenges need verified Health Connect data."}
                     </Text>
+                    <VerifiedStepsStatusBanner
+                      state={hcVerification}
+                      onSetup={() => requestHomeStepSetup()}
+                    />
                   </>
                 ) : (
                   <>
@@ -5989,7 +6041,7 @@ function WalkScreenContent() {
         })}
 
         {/* Cash Prize Challenge — directly under Coins Battle */}
-          {ENABLE_THREE_DOLLAR_CHALLENGE && (() => {
+          {ENABLE_THREE_DOLLAR_CHALLENGE && cashUiAllowed && (() => {
             const premOpt = RACE_OPTIONS.find((o) => o.fee === 3)!;
             // Modern cash rooms use paid_usd; fall back to legacy paid_3
             const cashPriority = [

@@ -13,6 +13,11 @@ import {
   isRazorpayKeyTest,
   isStripePublishableKeyTest,
 } from "@/config/env";
+import {
+  resolveCashEligibility,
+  cashUnavailableMessage,
+  type CashEligibility,
+} from "@/utils/cashEligibility";
 
 export const FEATURE_FLAGS = {
   REAL_STEP_TRACKING_ENABLED: true,
@@ -198,6 +203,38 @@ export function isCashClientEnabled(): boolean {
 /** Prefer for deposit / withdrawal / paid-challenge actions. */
 export function canStartCashPaymentFlow(): boolean {
   return isCashClientEnabled();
+}
+
+type CashUserLike = {
+  countryCode?: string | null;
+  country?: string | null;
+  dateOfBirth?: string | null;
+  isAdult?: boolean | null;
+} | null;
+
+/**
+ * Build flags plus client age (18+) and territory allowlist (default US, IN).
+ * Server still enforces cash / real-money flags.
+ */
+export function cashEligibilityForUser(user?: CashUserLike): CashEligibility {
+  return resolveCashEligibility({
+    buildEnabled: isCashClientEnabled(),
+    countryCode: user?.countryCode,
+    country: user?.country,
+    dateOfBirth: user?.dateOfBirth,
+    isAdult: user?.isAdult,
+  });
+}
+
+/** Create / join cash contests and deposits — not withdrawals of existing funds. */
+export function canStartCashPaymentFlowForUser(user?: CashUserLike): boolean {
+  return cashEligibilityForUser(user).allowed;
+}
+
+export function cashJoinBlockMessage(user?: CashUserLike): string | null {
+  const eligibility = cashEligibilityForUser(user);
+  if (eligibility.allowed) return null;
+  return cashUnavailableMessage(eligibility.reason);
 }
 
 export function cashGatingDebugSummary(): string {

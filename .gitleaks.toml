@@ -1,0 +1,21 @@
+title = "WalkChamp frontend"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Publishable payment keys and env placeholders — not secrets"
+paths = [
+  '''(^|/)eas\.json$''',
+  '''(^|/)\.env\.example$''',
+  '''(^|/)node_modules/''',
+  '''(^|/)android/''',
+  '''(^|/)\.expo/''',
+  '''(^|/)ios/''',
+]
+regexes = [
+  '''EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY''',
+  '''EXPO_PUBLIC_RAZORPAY_KEY_ID''',
+  '''pk_(test|live)_[A-Za-z0-9]+''',
+  '''rzp_(test|live)_[A-Za-z0-9]+''',
+]

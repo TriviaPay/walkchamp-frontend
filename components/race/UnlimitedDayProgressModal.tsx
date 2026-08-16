@@ -19,6 +19,7 @@ import { BlueShoe } from "@/components/BlueShoe";
 import type { UnlimitedViewerSchedule } from "@/utils/unlimitedViewerSchedule";
 import {
   buildUnlimitedDayRows,
+  isUnlimitedDayCellPassed,
   mergeUnlimitedHistoryWithSchedule,
   remainingDaysAfterDisplayDay,
   resolveUnlimitedDisplayDayIndex,
@@ -99,7 +100,7 @@ function DayCell({
         ? todaySteps
         : null;
   const failed = row.status === "failed";
-  const passed = row.status === "passed";
+  const passed = isUnlimitedDayCellPassed(row, { isCurrent, todaySteps });
   const upcoming = row.status === "upcoming";
   const validating = row.status === "validation_pending";
   const inProgress = isCurrent && !passed && !failed;

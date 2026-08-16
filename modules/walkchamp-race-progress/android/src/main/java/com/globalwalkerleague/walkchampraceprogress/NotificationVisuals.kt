@@ -201,6 +201,15 @@ object NotificationVisuals {
     return (goal - steps).coerceAtLeast(0)
   }
 
+  /**
+   * Ongoing Daily Walk tray art only. In progress → goal-completed PNG.
+   * Goal met → winner trophy. Does not change OneSignal type mapping.
+   */
+  fun ongoingWalkVisualType(steps: Int, goal: Int): NotificationVisualType {
+    return if (goal > 0 && steps >= goal) NotificationVisualType.WINNER
+    else NotificationVisualType.GOAL_COMPLETED
+  }
+
   fun formatSteps(value: Int): String {
     return String.format(java.util.Locale.US, "%,d", value.coerceAtLeast(0))
   }

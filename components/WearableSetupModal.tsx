@@ -28,6 +28,17 @@ import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { androidLegacySensorProvider } from "@/services/steps/providers/androidLegacySensorProvider";
 import { useWalkContext } from "@/context/WalkContext";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
+import {
+  getHealthConnectVerificationState,
+  isVerifiedHealthAuthoritative,
+} from "@/services/steps/healthConnectVerificationState";
+import {
+  openStepWriterApp,
+  openStepWriterInstallPage,
+  resolvePreferredStepWriterAsync,
+  isStepWriterInstalled,
+  type AndroidStepWriterApp,
+} from "@/services/steps/androidStepWriterApps";
 
 const isIOS = Platform.OS === "ios";
 const TOTAL_IOS = 5;
@@ -75,8 +86,18 @@ export default function WearableSetupModal({
   const [limitedLoading, setLimitedLoading] = useState(false);
   /** Shown when user taps Next on Enable Step Tracking without granting yet. */
   const [enableTrackingHint, setEnableTrackingHint] = useState(false);
+  const [writerChecking, setWriterChecking] = useState(false);
+  const [writerReady, setWriterReady] = useState(false);
+  const [writerInstalled, setWriterInstalled] = useState(false);
+  const [writerHint, setWriterHint] = useState("");
+  const [preferredWriter, setPreferredWriter] = useState<AndroidStepWriterApp | null>(null);
   /** True after Enable Step Tracking succeeded this open — survives stale HC "unknown" cache. */
   const stepsGrantedThisSessionRef = useRef(false);
+  /** Recheck (or return-from-install) this session — Next stays dim until then. */
+  const [writerRecheckedThisSession, setWriterRecheckedThisSession] = useState(false);
+  const androidPhaseRef = useRef(androidPhase);
+  androidPhaseRef.current = androidPhase;
+  const awaitingWriterReturnRef = useRef(false);
   const useOnboardingAccent = accent === "onboarding";
   const actionIconColor = useOnboardingAccent ? "#FFF" : "#000";
   const actionTextColor = useOnboardingAccent ? "#FFF" : "#000";
@@ -137,7 +158,10 @@ export default function WearableSetupModal({
       setAndroidPhase("expo_go");
       return;
     }
-    setAndroidPhase("checking");
+    const stayingInSetup = androidPhaseRef.current === "setup";
+    if (!stayingInSetup) {
+      setAndroidPhase("checking");
+    }
     try {
       const legacyOk = await androidLegacySensorProvider.isAvailable();
       const result = await androidHCService.initialize();
@@ -153,7 +177,6 @@ export default function WearableSetupModal({
       // Android Steps solely because Steps permission is not granted yet.
       if (hcUsable) {
         setAndroidPhase("setup");
-        setStep(0);
         setPermStatus(
           result.permission === "granted"
             ? "granted"
@@ -202,6 +225,11 @@ export default function WearableSetupModal({
       setPermLoading(false);
       setInstallLoading(false);
       setEnableTrackingHint(false);
+      setWriterReady(false);
+      setWriterInstalled(false);
+      setWriterHint("");
+      setWriterRecheckedThisSession(false);
+      awaitingWriterReturnRef.current = false;
       stepsGrantedThisSessionRef.current = false;
       if (isIOS) {
         void checkPerm();
@@ -212,15 +240,57 @@ export default function WearableSetupModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
+  const probeWriter = useCallback(async (): Promise<{
+    installed: boolean;
+    ready: boolean;
+  }> => {
+    if (isIOS) {
+      setWriterReady(true);
+      setWriterInstalled(true);
+      return { installed: true, ready: true };
+    }
+    setWriterChecking(true);
+    try {
+      const writer = await resolvePreferredStepWriterAsync();
+      setPreferredWriter(writer);
+      const installed = await isStepWriterInstalled(writer);
+      const vs = await getHealthConnectVerificationState();
+      const ok =
+        isVerifiedHealthAuthoritative(vs.status) || vs.writerInstalled === true;
+      const installedOk = installed || vs.writerInstalled === true;
+      setWriterInstalled(installedOk);
+      setWriterReady(ok || installedOk);
+      setWriterRecheckedThisSession(true);
+      setWriterHint(
+        ok || installedOk
+          ? installedOk && !ok
+            ? `${writer.label} is installed. Open Health Connect so it can write Steps, then Recheck.`
+            : "Verified step data is available from Health Connect."
+          : writer.syncHint,
+      );
+      return { installed: installedOk, ready: ok || installedOk };
+    } catch {
+      setWriterReady(false);
+      setWriterInstalled(false);
+      return { installed: false, ready: false };
+    } finally {
+      setWriterChecking(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!visible || isIOS || isExpoGo()) return;
     const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active" && androidPhase === "install") {
-        void checkHCAvailability();
+      if (state === "active" && (androidPhase === "install" || step === 2)) {
+        if (androidPhase === "install") void checkHCAvailability();
+        if (step === 2 && awaitingWriterReturnRef.current) {
+          awaitingWriterReturnRef.current = false;
+          void probeWriter();
+        }
       }
     });
     return () => sub.remove();
-  }, [visible, androidPhase, checkHCAvailability]);
+  }, [visible, androidPhase, checkHCAvailability, probeWriter, step]);
 
   const checkPerm = useCallback(async () => {
     try {
@@ -341,6 +411,11 @@ export default function WearableSetupModal({
       // If Enable already succeeded this session, finish as connected even when
       // HC/provider caches still briefly report "unknown".
       if (stepsGrantedThisSessionRef.current || permStatus === "granted") {
+        const vs = !isIOS
+          ? await getHealthConnectVerificationState().catch(() => null)
+          : null;
+        const verifiedOk =
+          isIOS || (vs != null && isVerifiedHealthAuthoritative(vs.status));
         const resolvedStatus = "connected";
         try {
           await authFetch("/api/me/step-source", {
@@ -349,7 +424,7 @@ export default function WearableSetupModal({
               platform,
               permission_status: resolvedStatus,
               source_name: healthName,
-              setup_completed: true,
+              setup_completed: verifiedOk,
             }),
           });
         } catch { /* ignore network — still update local UI */ }
@@ -407,6 +482,12 @@ export default function WearableSetupModal({
         return;
       }
 
+      const vs = !isIOS
+        ? await getHealthConnectVerificationState().catch(() => null)
+        : null;
+      const verifiedOk =
+        isIOS || (vs != null && isVerifiedHealthAuthoritative(vs.status));
+
       const resolvedStatus = live === "granted" ? "connected" : "denied";
       try {
         await authFetch("/api/me/step-source", {
@@ -415,7 +496,7 @@ export default function WearableSetupModal({
             platform,
             permission_status: resolvedStatus,
             source_name: healthName,
-            setup_completed: true,
+            setup_completed: verifiedOk,
           }),
         });
       } catch { /* ignore network — still update local UI */ }
@@ -437,6 +518,14 @@ export default function WearableSetupModal({
       const granted =
         live === "granted" || stepsGrantedThisSessionRef.current;
       if (!granted) {
+        setEnableTrackingHint(true);
+        return;
+      }
+      setEnableTrackingHint(false);
+    }
+    const writerStepIndex = 2;
+    if (!isIOS && step === writerStepIndex) {
+      if (!writerRecheckedThisSession || (!writerInstalled && !writerReady)) {
         setEnableTrackingHint(true);
         return;
       }
@@ -695,13 +784,60 @@ export default function WearableSetupModal({
     AllowStepsScreen,
     () => (
       <View style={ws.content}>
-        <View style={[ws.iconCircle, { backgroundColor: "#4285F418" }]}>
-          <Feather name="database" size={36} color="#4285F4" />
+        <View style={[ws.iconCircle, { backgroundColor: writerReady ? "#00E67618" : "#F59E0B18" }]}>
+          <Feather name={writerReady ? "check-circle" : "link"} size={36} color={writerReady ? "#00E676" : "#F59E0B"} />
         </View>
-        <Text style={[ws.title, { color: colors.foreground }]}>Sync Your Wearable</Text>
-        <Text style={[ws.desc, { color: colors.mutedForeground }]}>
-          Ensure Samsung Health, Google Fit, or your wearable app writes Steps to Health Connect.
+        <Text style={[ws.title, { color: colors.foreground }]}>
+          {writerReady || writerInstalled ? "Health data connected" : "Connect a health app"}
         </Text>
+        <Text style={[ws.desc, { color: colors.mutedForeground }]}>
+          {writerReady
+            ? "WalkChamp can read verified steps from Health Connect."
+            : `Install ${preferredWriter?.label ?? "Samsung Health or Google Fit"}, allow it to write Steps in Health Connect, then recheck. Permission alone is not enough.`}
+        </Text>
+        {writerHint ? (
+          <View style={[ws.infoCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[ws.infoText, { color: colors.mutedForeground }]}>{writerHint}</Text>
+          </View>
+        ) : null}
+        {!(writerReady || writerInstalled) ? (
+          <>
+            <PrimaryAction
+              onPress={() => {
+                void (async () => {
+                  awaitingWriterReturnRef.current = true;
+                  const writer =
+                    preferredWriter ?? (await resolvePreferredStepWriterAsync());
+                  setPreferredWriter(writer);
+                  const opened = await openStepWriterApp(writer);
+                  if (!opened) await openStepWriterInstallPage(writer);
+                })();
+              }}
+              icon="download"
+              label={`Install ${preferredWriter?.label ?? "health app"}`}
+            />
+            <View style={{ marginTop: 8 }}>
+              <PrimaryAction
+                onPress={() => {
+                  awaitingWriterReturnRef.current = true;
+                  void androidHCService.openSettings();
+                }}
+                icon="external-link"
+                label="Open Health Connect"
+              />
+            </View>
+          </>
+        ) : null}
+        <TouchableOpacity
+          style={[ws.actionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, marginTop: 8 }]}
+          onPress={() => void probeWriter()}
+          disabled={writerChecking}
+        >
+          {writerChecking
+            ? <ActivityIndicator size="small" color={colors.foreground} />
+            : <Feather name="refresh-cw" size={16} color={colors.foreground} />}
+          <Text style={[ws.actionBtnText, { color: colors.foreground }]}>Recheck</Text>
+        </TouchableOpacity>
       </View>
     ),
     DoneScreen,
@@ -735,8 +871,14 @@ export default function WearableSetupModal({
 
   const trackingGranted =
     permStatus === "granted" || stepsGrantedThisSessionRef.current;
+  const writerStepComplete =
+    (writerInstalled || writerReady) && writerRecheckedThisSession;
   const nextBlocked =
-    !isAndroidPreCheck && step === 1 && !trackingGranted && !isLast;
+    !isAndroidPreCheck &&
+    !isLast &&
+    ((step === 1 && !trackingGranted) ||
+      (!isIOS && step === 2 && !writerStepComplete));
+  const footerLocked = saving || nextBlocked;
 
   const footerAction = isAndroidPreCheck
     ? onClose
@@ -787,28 +929,33 @@ export default function WearableSetupModal({
 
         {showFooter && (
           <View style={[ws.footer, { paddingBottom: safeBottom + 16, borderTopColor: colors.border }]}>
-            {enableTrackingHint && step === 1 && !isAndroidPreCheck ? (
-              <Text style={[ws.enableHint, { color: "#F87171" }]}>
-                Enable tracking and then go for next
-              </Text>
-            ) : null}
+            <View style={ws.hintSlot}>
+              {enableTrackingHint && !isAndroidPreCheck && (step === 1 || step === 2) ? (
+                <Text style={[ws.enableHint, { color: "#F87171" }]}>
+                  {step === 2
+                    ? "Install a health app and tap Recheck before continuing"
+                    : "Enable tracking and then go for next"}
+                </Text>
+              ) : null}
+            </View>
             <TouchableOpacity
               style={[
                 ws.nextBtn,
-                !useOnboardingAccent && {
-                  backgroundColor: nextBlocked ? "#2A3144" : "#00E676",
-                  paddingVertical: 16,
+                {
+                  backgroundColor: footerLocked
+                    ? "#2A3144"
+                    : useOnboardingAccent
+                      ? "transparent"
+                      : "#00E676",
+                  opacity: footerLocked ? 0.45 : 1,
                 },
-                useOnboardingAccent && nextBlocked && {
-                  backgroundColor: "#2A3144",
-                },
-                { opacity: saving ? 0.6 : 1 },
               ]}
-              onPress={footerAction}
+              onPress={footerLocked ? () => setEnableTrackingHint(true) : footerAction}
               disabled={saving}
-              activeOpacity={0.88}
+              activeOpacity={footerLocked ? 1 : 0.88}
+              accessibilityState={{ disabled: footerLocked }}
             >
-              {useOnboardingAccent && !nextBlocked ? (
+              {useOnboardingAccent && !footerLocked ? (
                 <LinearGradient
                   colors={[...ONBOARDING_BTN]}
                   start={{ x: 0, y: 0 }}
@@ -819,18 +966,21 @@ export default function WearableSetupModal({
                     ? <ActivityIndicator color="#FFF" />
                     : <Text style={[ws.nextBtnText, { color: "#FFF" }]}>{footerLabel}</Text>}
                 </LinearGradient>
-              ) : saving
-                ? <ActivityIndicator color={nextBlocked ? "#94A3B8" : "#000"} />
-                : (
-                  <Text style={[
-                    ws.nextBtnText,
-                    nextBlocked && { color: "#94A3B8" },
-                    useOnboardingAccent && nextBlocked && { paddingVertical: 16 },
-                  ]}
-                  >
-                    {footerLabel}
-                  </Text>
-                )}
+              ) : (
+                <View style={ws.nextBtnGrad}>
+                  {saving
+                    ? <ActivityIndicator color={footerLocked ? "#94A3B8" : "#000"} />
+                    : (
+                      <Text style={[
+                        ws.nextBtnText,
+                        footerLocked && { color: "#94A3B8" },
+                      ]}
+                      >
+                        {footerLabel}
+                      </Text>
+                    )}
+                </View>
+              )}
             </TouchableOpacity>
           </View>
         )}
@@ -883,7 +1033,11 @@ const ws = StyleSheet.create({
     fontSize: rf(12),
     fontWeight: "600",
     textAlign: "center",
+  },
+  hintSlot: {
+    minHeight: rs(22),
     marginBottom: 8,
+    justifyContent: "center",
   },
   nextBtn: { borderRadius: 16, alignItems: "center", overflow: "hidden", minHeight: 54 },
   nextBtnGrad: {

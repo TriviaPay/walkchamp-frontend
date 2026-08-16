@@ -17,6 +17,8 @@ import { getValidSession } from "@/services/authService";
 import { getApiBase } from "@/utils/apiUrl";
 import { AppAlert } from "@/components/AppAlert";
 import { rf } from "@/utils/responsive";
+import { useAuth } from "@/context/AuthContext";
+import { cashJoinBlockMessage } from "@/config/featureFlags";
 
 const CASH_RULES_VERSION = "2026-06";
 
@@ -87,6 +89,7 @@ export default function JoinWithCodeModal({
   onCodeVerified,
 }: Props) {
   const colors = useColors();
+  const { user } = useAuth();
   const [step, setStep] = useState<Step>("enter");
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
@@ -152,6 +155,11 @@ export default function JoinWithCodeModal({
 
       // If it's a cash challenge, show consent step
       if (room.entryAmountCents > 0) {
+        const blocked = cashJoinBlockMessage(user);
+        if (blocked) {
+          setError(blocked);
+          return;
+        }
         setRoomPreview(room);
         setStep("consent");
       } else {
@@ -175,6 +183,11 @@ export default function JoinWithCodeModal({
 
       const body: Record<string, unknown> = { code: roomCode };
       if (withConsent) {
+        const blocked = cashJoinBlockMessage(user);
+        if (blocked) {
+          setError(blocked);
+          return;
+        }
         body.acceptedCashChallengeConsent = true;
         body.acceptedRulesVersion = CASH_RULES_VERSION;
       }

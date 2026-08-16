@@ -96,6 +96,16 @@ assert.equal(
   5,
 );
 
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 0,
+    provisionalSensorTodaySteps: 1592,
+    todaySteps: 1592,
+    verifiedAuthoritative: false,
+  }),
+  1592,
+);
+
 assert.equal(isInflatedProvisionalVsVerified(433, 1592), true);
 assert.equal(isInflatedProvisionalVsVerified(433, 450), false);
 assert.equal(isStaleSensorAbsolute(0, 1592), true);

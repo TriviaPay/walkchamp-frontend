@@ -71,6 +71,20 @@ export function remainingDaysAfterDisplayDay(
   return Math.max(0, Math.floor(durationDays) - Math.floor(displayDayIndex));
 }
 
+/** True when the day cell should show a green tick (passed, or today's goal already met). */
+export function isUnlimitedDayCellPassed(
+  row: UnlimitedDayRow,
+  opts: { isCurrent: boolean; todaySteps: number },
+): boolean {
+  if (row.status === "passed") return true;
+  if (row.status === "failed") return false;
+  const goal = row.dailyGoalSteps;
+  if (!(opts.isCurrent && goal > 0)) return false;
+  const steps =
+    typeof row.verifiedSteps === "number" ? row.verifiedSteps : opts.todaySteps;
+  return steps >= goal;
+}
+
 export function buildUnlimitedDayRows(schedule: UnlimitedViewerSchedule, todaySteps?: number): UnlimitedDayRow[] {
   const rows: UnlimitedDayRow[] = [];
   const disqualified = schedule.viewerStatus === "failed";

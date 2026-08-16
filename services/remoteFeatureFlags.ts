@@ -5,7 +5,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getApiBase } from "@/utils/apiUrl";
-import { ENABLE_CASH_CHALLENGES, FEATURE_FLAGS } from "@/config/featureFlags";
+import { FEATURE_FLAGS, isCashClientEnabled } from "@/config/featureFlags";
 import { ADS_ENABLED } from "@/config/adsConfig";
 
 const CACHE_KEY = "walkchamp_remote_feature_flags_v1";
@@ -25,7 +25,7 @@ export type RemoteFeatureFlags = {
 };
 
 const DEFAULTS: RemoteFeatureFlags = {
-  cashFeatures: ENABLE_CASH_CHALLENGES,
+  cashFeatures: isCashClientEnabled(),
   ads: ADS_ENABLED,
   healthConnectFallback: FEATURE_FLAGS.FALLBACK_ANDROID_PEDOMETER,
   stripe: true,

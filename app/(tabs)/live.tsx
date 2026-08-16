@@ -43,6 +43,8 @@ import { useTheme } from "@/context/ThemeContext";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
 import { usePresenceCounts } from "@/context/PresenceContext";
 import { useAuth } from "@/context/AuthContext";
+import { cashEligibilityForUser } from "@/config/featureFlags";
+import { filterOutCashDiscovery } from "@/utils/cashEligibility";
 import { authFetch } from "@/utils/authFetch";
 import { connectPusher, subscribeToChannel, CHANNELS, EVENTS } from "@/services/realtimeService";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
@@ -313,15 +315,26 @@ function applyChipFilter(races: LiveRace[], filter: FilterType): LiveRace[] {
 }
 
 /** Display-time tab isolation — never let Unlimited leak into other chips. */
-function racesVisibleOnTab(races: LiveRace[], filter: FilterType): LiveRace[] {
-  if (filter === "Streak Challenges") return races.filter(isUnlimitedChallengeRace);
-  if (filter === "All" || filter === "My Races") return races;
-  if (filter === "Cash Challenges") return races.filter(isCashChallengeRace);
-  if (filter === "Sponsored Events") {
-    return races.filter((r) => r.type === "sponsored" && !isUnlimitedChallengeRace(r));
+function racesVisibleOnTab(
+  races: LiveRace[],
+  filter: FilterType,
+  cashUiAllowed = true,
+): LiveRace[] {
+  let visible: LiveRace[];
+  if (filter === "Streak Challenges") visible = races.filter(isUnlimitedChallengeRace);
+  else if (filter === "All" || filter === "My Races") visible = races;
+  else if (filter === "Cash Challenges") visible = races.filter(isCashChallengeRace);
+  else if (filter === "Sponsored Events") {
+    visible = races.filter((r) => r.type === "sponsored" && !isUnlimitedChallengeRace(r));
+  } else {
+    // Free / Coins / any other classic tab — strip Unlimited.
+    visible = races.filter((r) => !isUnlimitedChallengeRace(r));
   }
-  // Free / Coins / any other classic tab — strip Unlimited.
-  return races.filter((r) => !isUnlimitedChallengeRace(r));
+  return filterOutCashDiscovery(visible, {
+    cashUiAllowed,
+    keepAll: filter === "My Races",
+    isCash: isCashChallengeRace,
+  });
 }
 
 function shouldMergeUnlimitedLive(filter: FilterType): boolean {
@@ -1629,20 +1642,35 @@ export default function LiveTab() {
   const { safeTop } = useSafeLayout();
   const { counts, formatCount } = usePresenceCounts();
   const { user } = useAuth();
+  const cashUiAllowed = cashEligibilityForUser(user).allowed;
+  const visibleFilters = useMemo(
+    () => (cashUiAllowed ? FILTERS : FILTERS.filter((f) => f !== "Cash Challenges")),
+    [cashUiAllowed],
+  );
+  const visibleOnTab = useCallback(
+    (races: LiveRace[], filter: FilterType) =>
+      racesVisibleOnTab(races, filter, cashUiAllowed),
+    [cashUiAllowed],
+  );
   const tabBarHeight = useTabBarHeight();
   const [activeFilter, setActiveFilter] = useState<FilterType>("All");
+  useEffect(() => {
+    if (!cashUiAllowed && activeFilter === "Cash Challenges") {
+      setActiveFilter("All");
+    }
+  }, [activeFilter, cashUiAllowed]);
   // Sync mem seed — first paint can show cards before load() effect runs.
   const [liveChallenges, setLiveChallenges] = useState<LiveRace[]>(() => {
     const cached = screenCache.getSync<{ live: LiveRace[]; finished: LiveRace[] }>(
       `${LIVE_SCREEN_CACHE_PREFIX}All`,
     );
-    return cached ? racesVisibleOnTab(cached.live, "All") : [];
+    return cached ? visibleOnTab(cached.live, "All") : [];
   });
   const [finishedChallenges, setFinishedChallenges] = useState<LiveRace[]>(() => {
     const cached = screenCache.getSync<{ live: LiveRace[]; finished: LiveRace[] }>(
       `${LIVE_SCREEN_CACHE_PREFIX}All`,
     );
-    return cached ? racesVisibleOnTab(cached.finished, "All") : [];
+    return cached ? visibleOnTab(cached.finished, "All") : [];
   });
   const [loading, setLoading] = useState(() => {
     const cached = screenCache.getSync(`${LIVE_SCREEN_CACHE_PREFIX}All`);
@@ -1721,8 +1749,8 @@ export default function LiveTab() {
       }
 
       const paintCached = (data: { live: LiveRace[]; finished: LiveRace[] }) => {
-        const livePaint = racesVisibleOnTab(data.live, activeFilter);
-        const finishedPaint = racesVisibleOnTab(data.finished, activeFilter);
+        const livePaint = visibleOnTab(data.live, activeFilter);
+        const finishedPaint = visibleOnTab(data.finished, activeFilter);
         setLiveChallenges(livePaint);
         setFinishedChallenges(finishedPaint);
         setFinishedOffset(FINISHED_PAGE_SIZE);
@@ -1738,7 +1766,7 @@ export default function LiveTab() {
         paintCached(cached);
       } else {
         // Clear wrong-tab cards only when we have nothing valid for this filter.
-        const sameTabVisible = racesVisibleOnTab(liveChallengesRef.current, activeFilter);
+        const sameTabVisible = visibleOnTab(liveChallengesRef.current, activeFilter);
         if (sameTabVisible.length === 0) {
           setLiveChallenges([]);
           setFinishedChallenges([]);
@@ -1820,8 +1848,8 @@ export default function LiveTab() {
           ) {
             return;
           }
-          const livePaint = racesVisibleOnTab(classic.live, activeFilter);
-          const finishedPaint = racesVisibleOnTab(classic.finished, activeFilter);
+          const livePaint = visibleOnTab(classic.live, activeFilter);
+          const finishedPaint = visibleOnTab(classic.finished, activeFilter);
           if (livePaint.length === 0 && finishedPaint.length === 0) return;
           setLiveChallenges(livePaint);
           setFinishedChallenges(finishedPaint);
@@ -1908,11 +1936,11 @@ export default function LiveTab() {
       let visibleLive =
         activeFilter === "My Races"
           ? buildMyRacesLiveList(liveForMine, myRaceResult.all, participation)
-          : racesVisibleOnTab(live, activeFilter);
+          : visibleOnTab(live, activeFilter);
       let visibleFinished =
         activeFilter === "My Races"
           ? filterMyRaces(finished, participation)
-          : racesVisibleOnTab(finished, activeFilter);
+          : visibleOnTab(finished, activeFilter);
 
       // If a flaky Unlimited fetch dropped LIVE rows, keep only still-live ones.
       // Never re-inject finished/cancelled Unlimited that the new filter removed.
@@ -1947,7 +1975,7 @@ export default function LiveTab() {
 
       const freshIsEmpty = visibleLive.length === 0 && visibleFinished.length === 0;
       // Only treat "had visible" as same-tab cards (not leftovers from another chip).
-      const sameTabVisible = racesVisibleOnTab(liveChallengesRef.current, activeFilter);
+      const sameTabVisible = visibleOnTab(liveChallengesRef.current, activeFilter);
       const hadVisible =
         sameTabVisible.length > 0 ||
         (cached?.live?.length ?? 0) > 0 ||
@@ -2070,8 +2098,8 @@ export default function LiveTab() {
     const cacheKey = `${LIVE_SCREEN_CACHE_PREFIX}${activeFilter}`;
     const cached = screenCache.getSync<{ live: LiveRace[]; finished: LiveRace[] }>(cacheKey);
     if (cached) {
-      setLiveChallenges(racesVisibleOnTab(cached.live, activeFilter));
-      setFinishedChallenges(racesVisibleOnTab(cached.finished, activeFilter));
+      setLiveChallenges(visibleOnTab(cached.live, activeFilter));
+      setFinishedChallenges(visibleOnTab(cached.finished, activeFilter));
       setLoading(false);
     }
     void loadRef.current();
@@ -2110,7 +2138,7 @@ export default function LiveTab() {
       screenCache.getSync(`${LIVE_SCREEN_CACHE_PREFIX}${activeFilter}`) !== null ||
       (activeFilter === "Streak Challenges" &&
         screenCache.getSync(`${LIVE_SCREEN_CACHE_PREFIX}All`) !== null);
-    const sameTabVisible = racesVisibleOnTab(liveChallengesRef.current, activeFilter);
+    const sameTabVisible = visibleOnTab(liveChallengesRef.current, activeFilter);
     if (!hasMem && sameTabVisible.length === 0) {
       setLoading(true);
     } else {
@@ -2361,7 +2389,7 @@ export default function LiveTab() {
         style={[st.filterRow, st.mainTabBar, { backgroundColor: colors.card, borderColor: colors.border }]}
         contentContainerStyle={st.mainTabContent}
       >
-        {FILTERS.map((f) => {
+        {visibleFilters.map((f) => {
           const active = activeFilter === f;
           const textColor = active ? colors.primaryForeground : colors.mutedForeground;
           return (
@@ -2382,8 +2410,8 @@ export default function LiveTab() {
       {/* ── Content ─────────────────────────────────────────────────────── */}
       {activeFilter === "Sponsored Events" ? (
         (() => {
-          const sponsoredLive = racesVisibleOnTab(liveChallenges, "Sponsored Events");
-          const sponsoredFinished = racesVisibleOnTab(finishedChallenges, "Sponsored Events");
+          const sponsoredLive = visibleOnTab(liveChallenges, "Sponsored Events");
+          const sponsoredFinished = visibleOnTab(finishedChallenges, "Sponsored Events");
           // Upcoming scheduled sponsored events are intentionally hidden on Live —
           // only in-progress and finished sponsored races appear here.
           const empty = sponsoredLive.length === 0 && sponsoredFinished.length === 0;

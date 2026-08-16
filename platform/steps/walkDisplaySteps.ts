@@ -19,6 +19,11 @@ export function resolveWalkNotificationSteps(params: {
    * Race deltas belong on the race tray — not Walk "total steps".
    */
   raceActive?: boolean;
+  /**
+   * When HC/HK is not verified authority (no writer / unsupported), show the
+   * live sensor total. Never treat that as prize-eligible verified data.
+   */
+  verifiedAuthoritative?: boolean;
 }): number {
   const verified = Math.max(0, Math.floor(params.verifiedTodaySteps ?? 0));
   const provisional =
@@ -26,6 +31,10 @@ export function resolveWalkNotificationSteps(params: {
       ? 0
       : Math.max(0, Math.floor(params.provisionalSensorTodaySteps));
   const fallback = Math.max(0, Math.floor(params.todaySteps ?? 0));
+
+  if (params.verifiedAuthoritative === false) {
+    return Math.max(verified, provisional, fallback);
+  }
 
   if (!params.raceActive) {
     // No active race to justify a big jump — a large provisional/fallback while

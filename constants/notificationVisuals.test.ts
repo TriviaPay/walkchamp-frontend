@@ -4,6 +4,7 @@
  */
 import {
   notificationVisualDrawableName,
+  ongoingWalkNotificationVisual,
   resolveNotificationVisualType,
 } from "./notificationVisuals";
 
@@ -24,6 +25,24 @@ assert(
 assert(
   notificationVisualDrawableName("default") === "notification_default",
   "default drawable",
+);
+assert(
+  ongoingWalkNotificationVisual(210, 10_000) === "goal_completed",
+  "ongoing daily walk uses goal-completed art",
+);
+assert(
+  ongoingWalkNotificationVisual(10_000, 10_000) === "winner",
+  "ongoing goal complete uses trophy art",
+);
+assert(
+  notificationVisualDrawableName(ongoingWalkNotificationVisual(50, 100)) ===
+    "notification_goal_completed",
+  "ongoing daily walk drawable",
+);
+assert(
+  notificationVisualDrawableName(ongoingWalkNotificationVisual(100, 100)) ===
+    "notification_winner_trophy",
+  "ongoing goal complete drawable",
 );
 
 console.log("notificationVisuals.test.ts: all passed");

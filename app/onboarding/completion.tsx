@@ -8,6 +8,7 @@ import {
   OnboardingSecondaryButton,
 } from "@/components/onboarding/OnboardingUI";
 import { ONBOARDING_ASSETS, ONBOARDING_COLORS, ONBOARDING_ROUTES } from "@/constants/onboarding";
+import { isCashClientEnabled } from "@/config/featureFlags";
 import { markOnboardingCompleted } from "@/utils/onboardingStorage";
 import { useAuth } from "@/context/AuthContext";
 import { markPermissionEducationShown } from "@/services/permissions/permissionCoordinator";
@@ -48,7 +49,9 @@ export default function CompletionOnboardingScreen() {
       <Text style={styles.subtitle}>Join your first challenge and start walking.</Text>
       <View style={styles.cards}>
         {[
-          "Free, Coins, and Cash Challenges",
+          isCashClientEnabled()
+            ? "Free, Coins, and Cash Challenges"
+            : "Free and Coins Challenges",
           "Live Races and Leaderboards",
           "Groups, Achievements, and Rewards",
         ].map((label) => (
@@ -59,9 +62,11 @@ export default function CompletionOnboardingScreen() {
           </View>
         ))}
       </View>
-      <Text style={styles.note}>
-        Cash features are available only in supported regions for eligible users.
-      </Text>
+      {isCashClientEnabled() ? (
+        <Text style={styles.note}>
+          Cash features are available only in supported regions for eligible users.
+        </Text>
+      ) : null}
     </OnboardingLayout>
   );
 }

@@ -172,20 +172,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       refresh: null as string | null,
     }));
 
+    try {
+      const { setWalkBackendSyncPaused } = require(
+        "@/services/walkSyncCoordinator",
+      ) as typeof import("@/services/walkSyncCoordinator");
+      setWalkBackendSyncPaused(false);
+    } catch {
+      /* ignore */
+    }
+    if (userId) {
+      try {
+        const { flushDailyWalkBeforeLogout } = require(
+          "@/services/walkLogoutFlush",
+        ) as typeof import("@/services/walkLogoutFlush");
+        await Promise.race([
+          flushDailyWalkBeforeLogout(userId),
+          new Promise<void>((resolve) => setTimeout(resolve, 8000)),
+        ]);
+      } catch {
+        /* best-effort */
+      }
+    }
+
     // Stop authenticated API traffic as the old user immediately.
     try {
       const { invalidateMemorySession } = require(
         "@/services/authService",
       ) as typeof import("@/services/authService");
       invalidateMemorySession();
-    } catch {
-      /* ignore */
-    }
-    try {
-      const { setWalkBackendSyncPaused } = require(
-        "@/services/walkSyncCoordinator",
-      ) as typeof import("@/services/walkSyncCoordinator");
-      setWalkBackendSyncPaused(false);
     } catch {
       /* ignore */
     }

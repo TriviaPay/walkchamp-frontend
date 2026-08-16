@@ -815,10 +815,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         const localCachedBoot = await readDailyStepsForUserDate(user.id, today);
         let displaySteps = rolled
           ? 0
-          : stepProviderManager.usesVerifiedStepSource()
-            ? // Don't flash yesterday's AsyncStorage absolute before HC hydrate.
-              reduxBoot
-            : Math.max(localCachedBoot, reduxBoot);
+          : Math.max(localCachedBoot, reduxBoot);
         if (rolled) {
           markFreshLocalDay(90_000);
           setTodaySteps(0);
@@ -896,11 +893,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             // With HC/HK, never floor from a stale local absolute when the
             // provider already answered 0 for today (yesterday revival).
             const localForFloor =
-              rolled ||
-              isFreshLocalDay() ||
-              (verifiedActive &&
-                providerSteps === 0 &&
-                backendTodayStepsRef.current === 0)
+              rolled || isFreshLocalDay()
                 ? 0
                 : localCached;
             const floor = Math.max(
@@ -968,11 +961,21 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
                   backendSteps: backendTodayStepsRef.current,
                 });
               }
-              if (rolled || isFreshLocalDay() || verifiedActive) {
+              if (rolled || isFreshLocalDay()) {
                 displaySteps = Math.min(
                   displaySteps,
                   Math.max(providerSteps, backendTodayStepsRef.current),
                 );
+              } else if (verifiedActive && providerSteps > 0) {
+                const hcFloor = Math.max(
+                  providerSteps,
+                  backendTodayStepsRef.current,
+                );
+                if (displaySteps > hcFloor + 250) {
+                  displaySteps = hcFloor;
+                } else {
+                  displaySteps = Math.max(displaySteps, hcFloor);
+                }
               }
             }
             lastProviderPollRef.current = displaySteps;
@@ -1047,7 +1050,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         // Persist 0 when HC/HK says today is empty so AsyncStorage cannot revive yesterday.
         const forceVerifiedZero =
           stepProviderManager.usesVerifiedStepSource() &&
-          displaySteps === 0;
+          displaySteps === 0 &&
+          (rolled || isFreshLocalDay());
         if (displaySteps > 0 || rolled || forceVerifiedZero) {
           await writeDailyStepsForUserDate(
             user.id,
@@ -1386,21 +1390,18 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       const backendSteps = parsed?.todaySteps ?? backendTodayStepsRef.current;
       const verifiedActive = stepProviderManager.usesVerifiedStepSource();
       if (parsed && parsed.todaySteps === 0 && localCached > 0) {
-        if (isFreshLocalDay() || verifiedActive) {
+        if (isFreshLocalDay()) {
           stepEngineLog("Sync", `trustBackendZero=true ignoredLocal=${localCached}`);
         } else {
           stepEngineLog("Sync", `skippedStaleBackendZero=true backend=0 local=${localCached}`);
         }
       }
       backendTodayStepsRef.current =
-        (isFreshLocalDay() || verifiedActive) && parsed?.todaySteps === 0
+        isFreshLocalDay() && parsed?.todaySteps === 0
           ? 0
           : backendSteps;
       const effectiveLocal =
-        isFreshLocalDay() ||
-        (verifiedActive &&
-          providerSteps === 0 &&
-          backendTodayStepsRef.current === 0)
+        isFreshLocalDay()
           ? 0
           : localCached;
       // Account-switch isolation is only ever seeded once (mount hydrate above);
@@ -1417,7 +1418,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         verifiedSource: verifiedActive,
       });
       const displaySteps =
-        isFreshLocalDay() || verifiedActive
+        isFreshLocalDay()
           ? mergedDisplay
           : Math.max(mergedDisplay, todayStepsRef.current, localCached);
       if (displaySteps >= lastProviderPollRef.current) {
@@ -1430,10 +1431,9 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       await storageSet(keys.lastSyncedStepsCount, lastSyncedStepsRef.current);
       await storageSet(keys.currentLocalDate, todayKey);
       const hydratedDisplay =
-        isFreshLocalDay() || verifiedActive
+        isFreshLocalDay()
           ? clampHydratedDisplaySteps(
               displaySteps,
-              // Don't let an inflated Walk UI floor block HC=0.
               verifiedActive && displaySteps === 0 ? 0 : todayStepsRef.current,
               backendTodayStepsRef.current,
             )
@@ -1451,6 +1451,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         (isFreshLocalDay() ||
           hydratedDisplay > todayStepsRef.current ||
           (verifiedActive &&
+            isFreshLocalDay() &&
             hydratedDisplay === 0 &&
             todayStepsRef.current > 250) ||
           (verifiedActive &&
@@ -1460,7 +1461,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             )))
       ) {
         const isDownwardCorrection =
-          (isFreshLocalDay() || verifiedActive) &&
+          isFreshLocalDay() &&
           (hydratedDisplay === 0 ||
             isInflatedProvisionalVsVerified(
               hydratedDisplay,
@@ -2353,8 +2354,26 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
           );
           if (__DEV__) {
             console.log(
-              "[WalkContext] hybrid cold start — waiting for Health Connect (sensor is live-race only)",
+              "[WalkContext] hybrid — Health Connect unverified; provisional sensor UI only",
             );
+          }
+          try {
+            const { waitForAppStartupReady } = await import(
+              "@/services/appStartup"
+            );
+            await waitForAppStartupReady();
+            if (!mounted) return;
+            const { startHybridLiveDailyDisplay } = await import(
+              "@/services/steps/hybridLiveDailyDisplay"
+            );
+            const started = await startHybridLiveDailyDisplay();
+            if (started) {
+              setUsingRealTracking(true);
+              usingRealRef.current = true;
+              setTrackingStatusState("walking");
+            }
+          } catch {
+            /* sensor unavailable */
           }
           return;
         }

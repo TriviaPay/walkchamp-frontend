@@ -12,6 +12,7 @@ import {
 import { formatWalkOngoingNotificationBody } from "@/services/permissions/androidNotificationAccess";
 import { hasOngoingNotificationAccess } from "@/services/permissions/notificationGate";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import { ongoingWalkNotificationVisual } from "@/constants/notificationVisuals";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -147,8 +148,8 @@ async function logOngoingDiagnostics(phase: string): Promise<void> {
   const steps = Math.max(0, Math.floor(payload.todaySteps));
   const pct = Math.min(100, Math.round((steps / goal) * 100));
   const session = await getValidSession();
-  // Ongoing tray stays Daily Walk after the goal. Reserve goal_completed for one-shot pushes.
-  const visualType = "daily_walk";
+  // Tray copy stays Daily Walk. Art: goal-completed PNG, trophy once the goal is met.
+  const visualType = ongoingWalkNotificationVisual(steps, goal);
   let provisional = false;
   try {
     const { store } = require("@/store") as typeof import("@/store");
@@ -206,6 +207,7 @@ let pendingStart: {
   opts?: { forceRestart?: boolean };
 } | null = null;
 let pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let startInFlight: Promise<boolean> | null = null;
 
 function clearPendingRetryTimer(): void {
   if (pendingRetryTimer) {
@@ -262,6 +264,19 @@ class StepTrackingNotificationService {
   }
 
   async start(
+    payload: WalkStepNotificationPayload,
+    opts?: { forceRestart?: boolean },
+  ): Promise<boolean> {
+    if (startInFlight) {
+      return startInFlight;
+    }
+    startInFlight = this.startUnlocked(payload, opts).finally(() => {
+      startInFlight = null;
+    });
+    return startInFlight;
+  }
+
+  private async startUnlocked(
     payload: WalkStepNotificationPayload,
     opts?: { forceRestart?: boolean },
   ): Promise<boolean> {

@@ -39,7 +39,8 @@ import {
 import { PremiumStepSlider } from "@/components/PremiumStepSlider";
 import { fetchCashChallengePaymentQuote, type CashChallengePaymentQuote } from "@/services/cashChallengeApi";
 import { previewUnlimitedGoalPaymentQuote, type UnlimitedGoalPaymentQuote } from "@/services/unlimitedGoalApi";
-import { ENABLE_CASH_CHALLENGES, isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
+import { canStartCashPaymentFlowForUser, isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
+import { useAuth } from "@/context/AuthContext";
 import { trackEvent } from "@/services/analytics";
 import { useOwnedTrackLayouts } from "@/hooks/useOwnedTrackLayouts";
 import { getDeviceTimezone } from "@/utils/timezone";
@@ -197,6 +198,8 @@ export function CreateChallengeFlow({
   onClose,
   onCreate,
 }: Props) {
+  const { user } = useAuth();
+  const cashUiAllowed = canStartCashPaymentFlowForUser(user);
   const { width: winW } = useWindowDimensions();
   const narrow = winW < 360;
   const [step, setStep] = useState<CreateStep>(1);
@@ -314,7 +317,7 @@ export function CreateChallengeFlow({
   }, []);
 
   useEffect(() => {
-    if (draft.entryType !== "usd" || isUnlimited || !ENABLE_CASH_CHALLENGES) {
+    if (draft.entryType !== "usd" || isUnlimited || !cashUiAllowed) {
       setCashQuote(null);
       setCashQuoteLoading(false);
       return;
@@ -341,7 +344,12 @@ export function CreateChallengeFlow({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [draft.entryType, draft.fixed.usdAmountDollars, draft.fixed.maxPlayers, isUnlimited]);
+  }, [draft.entryType, draft.fixed.usdAmountDollars, draft.fixed.maxPlayers, isUnlimited, cashUiAllowed]);
+
+  useEffect(() => {
+    if (cashUiAllowed) return;
+    setDraft((prev) => (prev.entryType === "usd" ? { ...prev, entryType: "coins" } : prev));
+  }, [cashUiAllowed]);
 
   useEffect(() => {
     if (!isUnlimited || !unlimitedEnabled) {
@@ -660,7 +668,7 @@ export function CreateChallengeFlow({
   };
   const entryOptions: EntryOption[] = (
     [
-      { mode: "usd", label: "USD", badge: "Cash entry", icon: "dollar-sign", enabled: ENABLE_CASH_CHALLENGES },
+      { mode: "usd", label: "USD", badge: "Cash entry", icon: "dollar-sign", enabled: cashUiAllowed },
       { mode: "coins", label: "Coins", badge: "Coin entry", coin: true, enabled: true },
       { mode: "free", label: "Free", badge: "No entry fee", icon: "gift", enabled: true },
     ] satisfies EntryOption[]

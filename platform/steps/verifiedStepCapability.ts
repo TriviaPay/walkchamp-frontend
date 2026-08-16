@@ -13,6 +13,7 @@ export type VerifiedStepProviderStatus =
   | "permission_required"
   | "permission_denied"
   | "connected"
+  | "provider_required"
   | "unsupported"
   | "temporarily_unavailable"
   | "error";
@@ -126,6 +127,32 @@ export async function resolveVerifiedStepProvider(): Promise<VerifiedStepProvide
       }
 
       if (status.permission === "granted" && id === "android_health_connect") {
+        try {
+          const {
+            getHealthConnectVerificationState,
+            isVerifiedHealthAuthoritative,
+          } = await import("@/services/steps/healthConnectVerificationState");
+          const vs = await getHealthConnectVerificationState();
+          if (!isVerifiedHealthAuthoritative(vs.status)) {
+            return {
+              provider:
+                vs.status === "unsupported" ? "none" : "health_connect",
+              status:
+                vs.status === "unsupported"
+                  ? "unsupported"
+                  : vs.status === "permission_required"
+                    ? "permission_required"
+                    : "provider_required",
+              isSupported: vs.status !== "unsupported",
+              isInstalled: true,
+              hasPermission: true,
+              canTrackSteps: false,
+              reasonCode: vs.status,
+            };
+          }
+        } catch {
+          /* fall through to connected */
+        }
         return {
           provider: "health_connect",
           status: "connected",

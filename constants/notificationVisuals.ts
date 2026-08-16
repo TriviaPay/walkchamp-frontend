@@ -137,3 +137,14 @@ export function notificationVisualDrawableName(
   const file = notificationVisualAssetName(visual);
   return file.replace(/\.png$/i, "");
 }
+
+/**
+ * Ongoing Daily Walk tray art only (not in-app, not OneSignal type mapping).
+ * In progress → goal-completed PNG. Goal met → winner trophy PNG.
+ */
+export function ongoingWalkNotificationVisual(
+  steps: number,
+  goal: number,
+): NotificationVisualType {
+  return goal > 0 && steps >= goal ? "winner" : "goal_completed";
+}

@@ -61,25 +61,26 @@ export async function requestIgnoreBatteryOptimizations(): Promise<boolean> {
 export async function maybePromptIgnoreBatteryOptimizations(): Promise<void> {
   if (Platform.OS !== "android") return;
   try {
+    const { isHomeStepSetupShellReady } = await import(
+      "@/services/permissions/homePermissionFlow"
+    );
+    if (!isHomeStepSetupShellReady()) return;
     const alreadyIgnoring = await isIgnoringBatteryOptimizations();
     if (alreadyIgnoring) return;
     const alreadyPrompted = await storageGet<boolean>(PROMPTED_KEY);
     if (alreadyPrompted) return;
+    // After login the home shell is still settling (setup / race restore).
+    // Showing a modal immediately can close the activity on some OEMs.
+    await new Promise((r) => setTimeout(r, 1600));
+    if (!isHomeStepSetupShellReady()) return;
     await storageSet(PROMPTED_KEY, true);
-    const { Alert } = await import("react-native");
-    Alert.alert(
-      "Keep step tracking running",
-      "Your phone's battery saver may close WalkChamp while you're walking, cutting off step tracking. Allow WalkChamp to run in the background for accurate steps and race results.",
-      [
-        { text: "Not now", style: "cancel" },
-        {
-          text: "Allow",
-          onPress: () => {
-            void requestIgnoreBatteryOptimizations();
-          },
-        },
-      ],
+    const { presentBatteryOptimizationPrompt } = await import(
+      "@/components/BatteryOptimizationModal"
     );
+    const choice = await presentBatteryOptimizationPrompt();
+    if (choice === "allow") {
+      void requestIgnoreBatteryOptimizations();
+    }
   } catch {
     /* non-fatal — never block walk/race start over this */
   }

@@ -60,6 +60,11 @@ import {
   deleteProfileAvatar,
   uploadProfileAvatar,
 } from "@/services/mediaApi";
+import {
+  DELETE_ACCOUNT_WARNING,
+  deleteAccountBalanceBlockMessage,
+  messageForDeleteAccountResponse,
+} from "@/utils/accountDeletion";
 import { screenCache } from "@/utils/screenCache";
 
 // iOS can report HEIC as the mimeType even when quality<1 converts data to JPEG.
@@ -397,7 +402,7 @@ function ProfileScreenContent() {
     : searchParams.openTitles;
   const { user, logout, refreshUserProfile, updateUser } = useAuth();
   const { allTimeSteps, currentStreak, weeklySteps, requestStepPermission, completeStepSetup } = useWalk();
-  const { userRank, totalEarned, walletCurrency, refreshWallet } = useApp();
+  const { userRank, totalEarned, walletCurrency, walletBalance, pendingBalance, refreshWallet } = useApp();
 
   // Profile view state — seed from cache for instant paint
   const cachedProfile = screenCache.getSync<ProfileMeResponse>(PROFILE_ME_CACHE_KEY);
@@ -842,9 +847,17 @@ function ProfileScreenContent() {
     ]); };
 
   const handleDeleteAccount = useCallback(() => {
+    const balanceBlock = deleteAccountBalanceBlockMessage({
+      walletBalance,
+      pendingBalance,
+    });
+    if (balanceBlock) {
+      AppAlert.alert("Withdraw first", balanceBlock);
+      return;
+    }
     AppAlert.alert(
       "Delete Account",
-      "This will permanently delete your WalkChamp account and all associated data. This action cannot be undone.",
+      DELETE_ACCOUNT_WARNING,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -853,7 +866,7 @@ function ProfileScreenContent() {
           onPress: () => {
             AppAlert.alert(
               "Final Confirmation",
-              "All coins, history, and data will be permanently erased.",
+              "This closes your account and signs you out. It cannot be undone.",
               [
                 { text: "Cancel", style: "cancel" },
                 {
@@ -866,8 +879,8 @@ function ProfileScreenContent() {
                       if (res.ok) {
                         await logout();
                       } else {
-                        const j = await res.json().catch(() => ({})) as { error?: string };
-                        AppAlert.alert("Error", j.error ?? "Failed to delete account. Please contact support.");
+                        const j = await res.json().catch(() => ({})) as { error?: string; code?: string };
+                        AppAlert.alert("Cannot delete", messageForDeleteAccountResponse(res.status, j));
                       }
                     } catch {
                       AppAlert.alert("Error", "Network error. Please try again.");
@@ -882,7 +895,7 @@ function ProfileScreenContent() {
         },
       ],
     );
-  }, [logout]);
+  }, [logout, pendingBalance, walletBalance]);
 
   // ── Edit panel translation ──────────────────────────────────────────────────
   const editTranslateY = editAnim.interpolate({ inputRange: [0, 1], outputRange: [-20, 0] });

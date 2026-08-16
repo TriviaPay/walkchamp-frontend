@@ -52,8 +52,8 @@ object WalkChampNotificationViews {
     val stepsLine =
       "${NotificationVisuals.formatSteps(safeSteps)} / ${NotificationVisuals.formatSteps(safeGoal)} steps"
     val remainingLine = "${NotificationVisuals.formatSteps(remaining)} steps remaining"
-    // Ongoing tray is always Daily Walk. Goal-complete art is for one-shot pushes only.
-    val visual = NotificationVisualType.DAILY_WALK
+    // Tray label stays Daily Walk. Art: goal-completed PNG, trophy once the goal is met.
+    val visual = NotificationVisuals.ongoingWalkVisualType(safeSteps, safeGoal)
     val typeIcon = NotificationVisuals.resolveDrawable(visual)
     val statusLine = "Daily Walk"
 

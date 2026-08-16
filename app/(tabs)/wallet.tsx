@@ -31,7 +31,8 @@ import { useTabBarHeight } from "@/hooks/useTabBarHeight";
 import { useApp } from "@/context/AppContext";
 import { useAuth } from "@/context/AuthContext";
 import { useNetwork } from "@/context/NetworkContext";
-import { canStartCashPaymentFlow } from "@/config/featureFlags";
+import { canStartCashPaymentFlow, cashEligibilityForUser } from "@/config/featureFlags";
+import { cashUnavailableMessage } from "@/utils/cashEligibility";
 import { isPaymentsLiveMode } from "@/config/env";
 import { formatCurrency, formatWalletAmount } from "@/utils/format";
 import { InrHint } from "@/components/InrHint";
@@ -78,6 +79,7 @@ const EARN_CARDS = [
     color: "#00E676",
     fullWidth: false,
     glow: "bottomLeft" as const,
+    requiresCash: true,
   },
   {
     icon: "gift" as const,
@@ -87,6 +89,7 @@ const EARN_CARDS = [
     color: "#FF6B35",
     fullWidth: false,
     glow: "bottomRight" as const,
+    requiresCash: false,
   },
   {
     icon: "users" as const,
@@ -97,6 +100,7 @@ const EARN_CARDS = [
     fullWidth: true,
     glow: "center" as const,
     showArt: true,
+    requiresCash: true,
   },
 ];
 
@@ -279,14 +283,23 @@ function WalletScreenContent() {
   const appliedPaymentResultRef = useRef<string | null>(null);
   const paymentResultDismissedRef = useRef(false);
 
+  const cashEligibility = cashEligibilityForUser(user);
+  const earnCards = cashEligibility.allowed
+    ? EARN_CARDS
+    : EARN_CARDS.filter((card) => !card.requiresCash);
+
   // Deep-link / alert CTA: open deposit sheet when navigated with openDeposit=1
   useEffect(() => {
     const flag = Array.isArray(params.openDeposit) ? params.openDeposit[0] : params.openDeposit;
     if (flag === "1" || flag === "true") {
-      setShowDeposit(true);
       router.setParams({ openDeposit: undefined });
+      if (!cashEligibility.allowed) {
+        AppAlert.alert("Deposits unavailable", cashUnavailableMessage(cashEligibility.reason));
+        return;
+      }
+      setShowDeposit(true);
     }
-  }, [params.openDeposit, router]);
+  }, [params.openDeposit, router, cashEligibility.allowed, cashEligibility.reason]);
 
   // ── Payment result modal state ─────────────────────────────────────────────
   const [paymentResult, setPaymentResult] = useState<PaymentResultState>("hidden");
@@ -447,6 +460,10 @@ function WalletScreenContent() {
           ? "Deposits are disabled until live payment keys are configured for this build."
           : "Deposits are disabled. Set EXPO_PUBLIC_ENABLE_CASH_CHALLENGES=true and ensure the API has cash features enabled (sandbox keys OK when PAYMENTS_LIVE_MODE=false).",
       );
+      return;
+    }
+    if (!cashEligibility.allowed) {
+      setDepositError(cashUnavailableMessage(cashEligibility.reason));
       return;
     }
 
@@ -708,7 +725,13 @@ function WalletScreenContent() {
             {/* Deposit button */}
             <TouchableOpacity
               style={[styles.actionBtn, { backgroundColor: colors.success + "18", borderColor: colors.success + "40", borderWidth: 1 }]}
-              onPress={() => setShowDeposit(true)}
+              onPress={() => {
+                if (!cashEligibility.allowed) {
+                  AppAlert.alert("Deposits unavailable", cashUnavailableMessage(cashEligibility.reason));
+                  return;
+                }
+                setShowDeposit(true);
+              }}
             >
               <Feather name="arrow-down-left" size={16} color={colors.success} />
               <Text style={[styles.actionBtnText, { color: colors.success }]}>Deposit</Text>
@@ -768,12 +791,13 @@ function WalletScreenContent() {
           )}
         </LinearGradient>
 
-        {/* How to Earn */}
+        {earnCards.length > 0 ? (
+        <>
         <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
-          How to Earn Cash
+          {cashEligibility.allowed ? "How to Earn Cash" : "How to Earn"}
         </Text>
         <View style={styles.earnGrid}>
-          {EARN_CARDS.map((card) => {
+          {earnCards.map((card) => {
             const glowColors =
               card.glow === "bottomLeft"
                 ? [card.color + "00", card.color + "00", card.color + "55"]
@@ -868,6 +892,8 @@ function WalletScreenContent() {
             );
           })}
         </View>
+        </>
+        ) : null}
 
         {/* Withdrawal info */}
         <View

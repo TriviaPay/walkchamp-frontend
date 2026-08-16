@@ -7,6 +7,7 @@ import {
   buildUnlimitedDaySummary,
   buildUnlimitedDayWeekSections,
   dayRowsFromDailyHistory,
+  isUnlimitedDayCellPassed,
   mergeUnlimitedHistoryWithSchedule,
   remainingDaysAfterDisplayDay,
   resolveUnlimitedDisplayDayIndex,
@@ -216,6 +217,20 @@ for (const durationDays of [7, 10, 30, 60, 90]) {
   assert.equal(merged[0]!.status, "passed");
   assert.equal(merged[5]!.status, "passed");
   assert.equal(merged[6]!.status, "in_progress");
+}
+
+// Current day with goal already met still stays in_progress in data, but the
+// Challenge Progress cell shows a tick (not a live ring).
+{
+  const schedule = scheduleFor({ durationDays: 7, currentDayIndex: 1, completedDays: 0 });
+  const rows = buildUnlimitedDayRows(schedule, 210);
+  assert.equal(rows[0]!.status, "in_progress");
+  assert.equal(rows[0]!.verifiedSteps, 210);
+  rows[0]!.dailyGoalSteps = 100;
+  assert.equal(isUnlimitedDayCellPassed(rows[0]!, { isCurrent: true, todaySteps: 210 }), true);
+  assert.equal(isUnlimitedDayCellPassed(rows[1]!, { isCurrent: false, todaySteps: 210 }), false);
+  const failedRow = { ...rows[0]!, status: "failed" as const, verifiedSteps: 40 };
+  assert.equal(isUnlimitedDayCellPassed(failedRow, { isCurrent: true, todaySteps: 40 }), false);
 }
 
 console.log("unlimitedDayProgress.test.ts: ok");

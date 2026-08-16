@@ -3,7 +3,7 @@
  * Run: npx tsx services/steps/healthConnectVerificationState.test.ts
  */
 import assert from "node:assert/strict";
-import { resolveHealthConnectVerificationStatus } from "./healthConnectVerificationStateLogic";
+import { resolveHealthConnectVerificationStatus, isVerifiedHealthAuthoritative } from "./healthConnectVerificationStateLogic";
 
 // Permission not granted → permission_required, regardless of writer evidence.
 assert.equal(
@@ -67,5 +67,12 @@ assert.equal(
   }),
   "error",
 );
+
+assert.equal(isVerifiedHealthAuthoritative("ready"), true);
+assert.equal(isVerifiedHealthAuthoritative("records_zero"), true);
+assert.equal(isVerifiedHealthAuthoritative("sync_delayed"), true);
+assert.equal(isVerifiedHealthAuthoritative("provider_required"), false);
+assert.equal(isVerifiedHealthAuthoritative("unsupported"), false);
+assert.equal(isVerifiedHealthAuthoritative("permission_required"), false);
 
 console.log("healthConnectVerificationState.test.ts: ok");

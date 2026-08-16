@@ -26,6 +26,8 @@ import { ChannelAdapter, subscribeToChannel, unsubscribeFromChannel } from "@/se
 import { rf, rs } from "@/utils/responsive";
 import { useRace } from "@/context/RaceContext";
 import { useAuth } from "@/context/AuthContext";
+import { cashEligibilityForUser, cashJoinBlockMessage } from "@/config/featureFlags";
+import { filterOutCashDiscovery, isPaidCashClientRoom } from "@/utils/cashEligibility";
 import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { AppAlert } from "@/components/AppAlert";
@@ -1804,6 +1806,7 @@ function AvailableRoomsScreenContent() {
   const { safeBottom, safeTop } = useSafeLayout();
   const { setActiveRace, joinRace } = useRace();
   const { user } = useAuth();
+  const cashUiAllowed = cashEligibilityForUser(user).allowed;
   const params = useLocalSearchParams<{ confirmRoomId?: string | string[] }>();
   const confirmRoomHandledRef = useRef<string | null>(null);
 
@@ -1990,13 +1993,30 @@ function AvailableRoomsScreenContent() {
     await Promise.all([fetchRooms(true), fetchUpcomingRooms(true)]);
   }, [fetchRooms, fetchUpcomingRooms]);
 
-  const groupedUpcomingRooms = useMemo(
-    () => groupByLocalDate(upcomingRooms),
-    [upcomingRooms],
+  const visibleRooms = useMemo(
+    () =>
+      filterOutCashDiscovery(rooms, {
+        cashUiAllowed,
+        isCash: isPaidCashClientRoom,
+      }),
+    [rooms, cashUiAllowed],
+  );
+  const visibleUpcoming = useMemo(
+    () =>
+      filterOutCashDiscovery(upcomingRooms, {
+        cashUiAllowed,
+        isCash: (r) => isPaidCashClientRoom(r) && !r.current_user_registered,
+      }),
+    [upcomingRooms, cashUiAllowed],
   );
 
-  const scheduledRoomCount = upcomingRooms.length;
-  const displayActiveCount = activeRoomCount > 0 ? activeRoomCount : rooms.length;
+  const groupedUpcomingRooms = useMemo(
+    () => groupByLocalDate(visibleUpcoming),
+    [visibleUpcoming],
+  );
+
+  const scheduledRoomCount = visibleUpcoming.length;
+  const displayActiveCount = visibleRooms.length;
 
   const headerSubtitle = useMemo(() => {
     if (loading || upcomingLoading) return "Loading rooms…";
@@ -2463,6 +2483,13 @@ function AvailableRoomsScreenContent() {
   // ── Join public room ───────────────────────────────────────────────────────
   const doJoin = useCallback(async (room: Room) => {
     if (joiningRoomId) return;
+    if (isPaidCashClientRoom(room)) {
+      const blocked = cashJoinBlockMessage(user);
+      if (blocked) {
+        AppAlert.alert("Cash challenges unavailable", blocked);
+        return;
+      }
+    }
     setJoiningRoomId(room.room_id);
     try {
       const isUnlimitedJoin =
@@ -2557,13 +2584,20 @@ function AvailableRoomsScreenContent() {
   }, [joiningRoomId, setActiveRace, joinRace, fetchRooms, user]);
 
   const handleJoin = useCallback((room: Room) => {
+    if (isPaidCashClientRoom(room)) {
+      const blocked = cashJoinBlockMessage(user);
+      if (blocked) {
+        AppAlert.alert("Cash challenges unavailable", blocked);
+        return;
+      }
+    }
     if (room.entry_fee > 0) {
       setConsentChecks([false, false, false, false]);
       setConsentRoom(room);
     } else {
       void doJoin(room);
     }
-  }, [doJoin]);
+  }, [doJoin, user]);
 
   // ── Join with Code success ─────────────────────────────────────────────────
   const handleJoinWithCodeSuccess = useCallback((result: JoinWithCodeResult) => {
@@ -2890,9 +2924,9 @@ function AvailableRoomsScreenContent() {
           </TouchableOpacity>
 
           {/* Current Rooms — only when at least one active room exists */}
-          {rooms.length > 0 && (
+          {visibleRooms.length > 0 && (
             <CurrentRoomsSection
-              rooms={rooms}
+              rooms={visibleRooms}
               error={error}
               joiningRoomId={joiningRoomId}
               onJoin={handleJoin}
@@ -2981,7 +3015,7 @@ function AvailableRoomsScreenContent() {
             </TouchableOpacity>
           </View>
           <FlatList
-            data={rooms}
+            data={visibleRooms}
             keyExtractor={(item) => item.room_id}
             contentContainerStyle={[s.viewAllModalList, { paddingBottom: safeBottom + 20 }]}
             showsVerticalScrollIndicator={false}

@@ -292,22 +292,27 @@ export async function resolveAuthoritativeTodaySteps(
       }
     }
     const verifiedLane = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
-    // HC is authority. lastSyncedStepsCount is only a local watermark — it can
-    // itself be yesterday's absolute written under today's key, so never let it
-    // outrun Health Connect.
+    // HC is authority when it actually returns today's total. An empty mid-day
+    // poll must not discard same-day cache / lastSynced (logout → login).
     let accepted = Math.max(providerSteps, verifiedLane);
+    const emptyMidDayPoll =
+      providerReadOk && providerSteps === 0 && !isFreshLocalDay();
     if (
       backendSynced > 0 &&
-      backendSynced <= providerSteps + 250
+      (emptyMidDayPoll || backendSynced <= providerSteps + 250)
     ) {
       accepted = Math.max(accepted, backendSynced);
     }
     if (
       localCached > 0 &&
-      localCached <= Math.max(providerSteps, accepted) + 250
+      (emptyMidDayPoll ||
+        localCached <= Math.max(providerSteps, accepted) + 250)
     ) {
       accepted = Math.max(accepted, localCached);
-    } else if (localCached > Math.max(providerSteps, accepted) + 250) {
+    } else if (
+      localCached > Math.max(providerSteps, accepted) + 250 &&
+      (providerSteps > 0 || isFreshLocalDay())
+    ) {
       stepEngineLog(
         "StepEngine",
         `canonical dropInflatedLocal=${localCached} provider=${providerSteps} lastSynced=${backendSynced}`,
@@ -2666,9 +2671,11 @@ export async function bindStepSessionToUser(userId: string): Promise<boolean> {
       mergeNative: false,
       ignoreProvider: false,
     }).catch(() => 0);
-    // Stale FGS/local/synced absolute under today's date (e.g. yesterday 9953).
+    // Only drop a huge local absolute after midnight — never on a same-day
+    // re-login when Health Connect briefly returns 0.
     if (
       bootSteps === 0 &&
+      isFreshLocalDay() &&
       (cachedBoot > 250 || lastSynced > 250)
     ) {
       await writeDailyStepsForUserDate(userId, today, 0, {

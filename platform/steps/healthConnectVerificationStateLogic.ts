@@ -39,6 +39,22 @@ export function resolveHealthConnectVerificationStatus(args: {
   return "records_zero";
 }
 
+/**
+ * True when Health Connect / HealthKit is the verified daily authority.
+ * Writer present (including today=0 / sync delay) stays verified.
+ * Missing writer, missing permission, or unsupported HC must not be treated
+ * as a verified empty day.
+ */
+export function isVerifiedHealthAuthoritative(
+  status: HealthConnectVerificationStatus,
+): boolean {
+  return (
+    status === "ready" ||
+    status === "records_zero" ||
+    status === "sync_delayed"
+  );
+}
+
 /** User-facing copy for a verification status — smallest existing status treatment. */
 export function describeHealthConnectVerificationStatus(
   status: HealthConnectVerificationStatus,
@@ -54,7 +70,7 @@ export function describeHealthConnectVerificationStatus(
     case "permission_required":
       return "Grant step access to Health Connect to enable verified tracking.";
     case "unsupported":
-      return "Verified step tracking is not supported on this device.";
+      return "This device currently cannot provide verified step data required for prize challenges.";
     case "error":
     default:
       return "Verification setup required.";

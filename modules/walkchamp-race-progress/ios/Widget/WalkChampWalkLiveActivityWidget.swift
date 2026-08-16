@@ -90,6 +90,9 @@ struct WalkChampWalkLiveActivityWidget: Widget {
   }
 
   private func walkVisualName(percent: Int) -> String {
-    "notification_daily_walk"
+    if percent >= 100 {
+      return "notification_winner_trophy"
+    }
+    return "notification_goal_completed"
   }
 }

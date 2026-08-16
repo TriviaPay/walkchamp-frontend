@@ -17,7 +17,6 @@
 import { Platform } from "react-native";
 import { store } from "@/store";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
-import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { updateStepProgressFromRealSource } from "@/services/stepProgressCoordinator";
 import { hasActivityRecognitionPermission } from "@/services/permissions/activityRecognitionPermissionService";
 import { androidLegacySensorProvider } from "./providers/androidLegacySensorProvider";
@@ -32,7 +31,6 @@ async function pollOnce(): Promise<void> {
   if (_polling) return; // avoid overlapping reads if one tick runs long
   _polling = true;
   try {
-    if (!stepProviderManager.usesVerifiedStepSource()) return;
     if (!store.getState().raceProgress.userId) return;
 
     const { steps } = await androidLegacySensorProvider.getTodaySteps();
@@ -92,7 +90,6 @@ async function pollOnce(): Promise<void> {
 export async function startHybridLiveDailyDisplay(): Promise<boolean> {
   if (Platform.OS !== "android") return false;
   if (!FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR) return false;
-  if (!stepProviderManager.usesVerifiedStepSource()) return false;
 
   const arOk = await hasActivityRecognitionPermission();
   if (!arOk) {

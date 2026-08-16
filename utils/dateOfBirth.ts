@@ -84,6 +84,15 @@ export function parseDateOfBirth(
   };
 }
 
+/** Age in full years from ISO `YYYY-MM-DD`, or null if unusable. */
+export function ageFromIsoDate(iso: string | null | undefined, today = new Date()): number | null {
+  const raw = (iso ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const [year, month, day] = raw.split("-").map((n) => Number(n));
+  if (!year || !month || !day) return null;
+  return calcAgeFromParts(day, month, year, today);
+}
+
 export function formatDateOfBirthPayload(day: number, month: number, year: number): string {
   return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }

@@ -2,6 +2,7 @@
  * Lightweight tests for date-of-birth helpers (no jest — run via npx tsx).
  */
 import {
+  ageFromIsoDate,
   normalizeDayInput,
   normalizeMonthInput,
   parseDateOfBirth,
@@ -51,5 +52,9 @@ assert(under.valid === false, "underage");
 
 const ok = validateDateOfBirth("8", "5", "1993");
 assert(ok.valid === true && ok.iso === "1993-05-08", "validate 5/8/1993");
+
+assert(ageFromIsoDate("1993-05-08") !== null && (ageFromIsoDate("1993-05-08") as number) >= 18, "age from iso");
+assert(ageFromIsoDate("not-a-date") === null, "bad iso");
+assert(ageFromIsoDate("") === null, "empty iso");
 
 console.log("dateOfBirth tests passed");

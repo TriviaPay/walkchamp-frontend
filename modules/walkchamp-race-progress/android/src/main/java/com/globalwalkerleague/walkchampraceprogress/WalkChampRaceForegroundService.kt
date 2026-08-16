@@ -1482,7 +1482,7 @@ class WalkChampRaceForegroundService : Service() {
       percentage = NotificationVisuals.clampPercent(safeSteps, goal),
       remainingSteps = NotificationVisuals.remainingSteps(safeSteps, goal),
       isTracking = true,
-      visualType = NotificationVisualType.DAILY_WALK,
+      visualType = NotificationVisuals.ongoingWalkVisualType(safeSteps, goal),
     )
     if (display == lastWalkDisplayState && lastWalkNotification != null) {
       Log.d(TAG, "[WalkChampFGS] skip notify — walk display state unchanged steps=$safeSteps")
@@ -1939,7 +1939,7 @@ class WalkChampRaceForegroundService : Service() {
       percentage = pct,
       remainingSteps = NotificationVisuals.remainingSteps(steps, goal),
       isTracking = true,
-      visualType = NotificationVisualType.DAILY_WALK,
+      visualType = NotificationVisuals.ongoingWalkVisualType(steps, goal),
     )
     walkRunning = true
     Log.d(TAG, "[NotificationMode] switch -> daily_steps todaySteps=$steps incoming=${todaySteps.coerceAtLeast(0)}")
@@ -2435,7 +2435,7 @@ class WalkChampRaceForegroundService : Service() {
           percentage = NotificationVisuals.clampPercent(safeSteps, goal),
           remainingSteps = NotificationVisuals.remainingSteps(safeSteps, goal),
           isTracking = true,
-          visualType = NotificationVisualType.DAILY_WALK,
+          visualType = NotificationVisuals.ongoingWalkVisualType(safeSteps, goal),
         )
         if (
           action == ACTION_UPDATE_WALK &&
