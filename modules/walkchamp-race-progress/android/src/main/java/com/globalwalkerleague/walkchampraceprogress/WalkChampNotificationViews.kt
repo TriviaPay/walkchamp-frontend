@@ -52,13 +52,10 @@ object WalkChampNotificationViews {
     val stepsLine =
       "${NotificationVisuals.formatSteps(safeSteps)} / ${NotificationVisuals.formatSteps(safeGoal)} steps"
     val remainingLine = "${NotificationVisuals.formatSteps(remaining)} steps remaining"
-    val visual = if (pct >= 100) {
-      NotificationVisualType.GOAL_COMPLETED
-    } else {
-      NotificationVisualType.DAILY_WALK
-    }
+    // Ongoing tray is always Daily Walk. Goal-complete art is for one-shot pushes only.
+    val visual = NotificationVisualType.DAILY_WALK
     val typeIcon = NotificationVisuals.resolveDrawable(visual)
-    val statusLine = if (pct >= 100) "Goal Complete" else "Daily Walk"
+    val statusLine = "Daily Walk"
 
     return try {
       // Full progress in the tray view; same RemoteViews for content + big → no expand.

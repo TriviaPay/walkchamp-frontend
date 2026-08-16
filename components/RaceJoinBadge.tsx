@@ -128,20 +128,9 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
   }
 
   // ── Active race ────────────────────────────────────────────────────────────
-  if (isActiveHost) {
-    return (
-      <LinearGradient
-        colors={["#F59E0B", "#D97706"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 0 }}
-        style={bjStyles.activeHostPill}
-      >
-        <View style={[bjStyles.dot, { backgroundColor: "#FFF" }]} />
-        <Text style={bjStyles.activeHostText}>HOSTING</Text>
-      </LinearGradient>
-    );
-  }
-  if (isActiveJoined) {
+  // Once the race is in_progress, host and participant are both racing.
+  // Reserve amber "Hosting" for the waiting room only.
+  if (isActiveHost || isActiveJoined) {
     return (
       <LinearGradient
         colors={["#00E676", "#00C853"]}

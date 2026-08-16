@@ -1482,11 +1482,7 @@ class WalkChampRaceForegroundService : Service() {
       percentage = NotificationVisuals.clampPercent(safeSteps, goal),
       remainingSteps = NotificationVisuals.remainingSteps(safeSteps, goal),
       isTracking = true,
-      visualType = if (NotificationVisuals.clampPercent(safeSteps, goal) >= 100) {
-        NotificationVisualType.GOAL_COMPLETED
-      } else {
-        NotificationVisualType.DAILY_WALK
-      },
+      visualType = NotificationVisualType.DAILY_WALK,
     )
     if (display == lastWalkDisplayState && lastWalkNotification != null) {
       Log.d(TAG, "[WalkChampFGS] skip notify — walk display state unchanged steps=$safeSteps")
@@ -1943,11 +1939,7 @@ class WalkChampRaceForegroundService : Service() {
       percentage = pct,
       remainingSteps = NotificationVisuals.remainingSteps(steps, goal),
       isTracking = true,
-      visualType = if (pct >= 100) {
-        NotificationVisualType.GOAL_COMPLETED
-      } else {
-        NotificationVisualType.DAILY_WALK
-      },
+      visualType = NotificationVisualType.DAILY_WALK,
     )
     walkRunning = true
     Log.d(TAG, "[NotificationMode] switch -> daily_steps todaySteps=$steps incoming=${todaySteps.coerceAtLeast(0)}")
@@ -2341,42 +2333,43 @@ class WalkChampRaceForegroundService : Service() {
           syncBackoffIndex = 0
           lastBackendSyncMs = 0L
           lastSyncedRaceSteps = -1
-          val prev = raceState
-          var next = incoming.withComputedTimeLeft()
-          // JS rejoin often omits challengeEndAt — keep end anchors for countdown.
-          // Title type is NOT sticky from an unrelated prior race: prefer explicit next.isSponsored.
-          if (prev != null && prev.raceId == next.raceId) {
-            next = next.copy(
-              isSponsored = next.isSponsored || prev.isSponsored,
-              challengeEndAtMs = when {
-                next.challengeEndAtMs > 0L -> next.challengeEndAtMs
-                next.isSponsored -> prev.challengeEndAtMs
-                else -> 0L
-              },
-              raceStartTimeMs = when {
-                next.raceStartTimeMs > 0L -> next.raceStartTimeMs
-                else -> prev.raceStartTimeMs
-              },
-              goalSteps = if (next.goalSteps > 0) next.goalSteps else prev.goalSteps,
-            )
-          }
-          raceState = next
+        }
+        val prev = raceState
+        var next = incoming.withComputedTimeLeft()
+        // JS rejoin often omits challengeEndAt — keep end anchors for countdown.
+        // Title type is NOT sticky from an unrelated prior race: prefer explicit next.isSponsored.
+        if (prev != null && prev.raceId == next.raceId) {
+          next = next.copy(
+            isSponsored = next.isSponsored || prev.isSponsored,
+            challengeEndAtMs = when {
+              next.challengeEndAtMs > 0L -> next.challengeEndAtMs
+              next.isSponsored -> prev.challengeEndAtMs
+              else -> 0L
+            },
+            raceStartTimeMs = when {
+              next.raceStartTimeMs > 0L -> next.raceStartTimeMs
+              else -> prev.raceStartTimeMs
+            },
+            goalSteps = if (next.goalSteps > 0) next.goalSteps else prev.goalSteps,
+          )
+        }
+        raceState = next
+        if (action == ACTION_START) {
           // Cancel+repost clears sticky chronometer UI left by older builds.
           notificationManager().cancel(NOTIFICATION_ID_RACE)
-          val notification = buildRaceNotification(this, raceState!!)
-          // startForeground(race) replaces the previous FGS tray (often Daily Walk).
-          promoteRaceForegroundNow(notification)
-          postOngoingNotification(NOTIFICATION_ID_RACE, notification)
-          lastRaceDisplayState = raceDisplayState(raceState!!)
-          // Immediately restore Daily Walk as companion notify (same as before).
-          ensureWalkNotificationVisible()
         }
+        val notification = buildRaceNotification(this, raceState!!)
+        // startForeground MUST run on this thread. startForegroundService(UPDATE)
+        // crashes the process if we wait for the worker (sensor polls can block it).
+        promoteRaceForegroundNow(notification)
+        postOngoingNotification(NOTIFICATION_ID_RACE, notification)
+        lastRaceDisplayState = raceDisplayState(raceState!!)
+        // Immediately restore Daily Walk as companion notify (same as before).
+        ensureWalkNotificationVisible()
         ensureWorker()
         workerHandler?.post {
-          // Use merged `next` when START so sponsored/end anchors aren't wiped by raw incoming.
-          val toApply =
-            if (action == ACTION_START) (raceState ?: incoming) else incoming
-          applyRaceState(toApply, allowReset)
+          // Use merged `next` so sponsored/end anchors aren't wiped by raw incoming.
+          applyRaceState(raceState ?: incoming, allowReset)
           startRaceLoops()
           // Belt-and-suspenders: walk companion after race loops arm.
           ensureWalkNotificationVisible()
@@ -2442,11 +2435,7 @@ class WalkChampRaceForegroundService : Service() {
           percentage = NotificationVisuals.clampPercent(safeSteps, goal),
           remainingSteps = NotificationVisuals.remainingSteps(safeSteps, goal),
           isTracking = true,
-          visualType = if (NotificationVisuals.clampPercent(safeSteps, goal) >= 100) {
-            NotificationVisualType.GOAL_COMPLETED
-          } else {
-            NotificationVisualType.DAILY_WALK
-          },
+          visualType = NotificationVisualType.DAILY_WALK,
         )
         if (
           action == ACTION_UPDATE_WALK &&
@@ -2454,6 +2443,16 @@ class WalkChampRaceForegroundService : Service() {
           lastWalkNotification != null
         ) {
           Log.d(TAG, "[WalkChampFGS] skip UPDATE_WALK notify — display unchanged steps=$safeSteps")
+          // startForegroundService(UPDATE_WALK) still requires startForeground
+          // even when the tray content is unchanged.
+          if (raceState != null && isActiveRace(raceState!!)) {
+            promoteRaceForegroundNow(buildRaceNotification(this, raceState!!))
+          } else if (foregroundWalkPromoted) {
+            promoteWalkForegroundNow(lastWalkNotification!!)
+          } else {
+            val ok = safeStartForeground(NOTIFICATION_ID_WALK, lastWalkNotification!!)
+            foregroundWalkPromoted = ok
+          }
           // Still re-arm sensor/loops so background/closed tracking stays alive.
           walkRunning = true
           ensureWorker()
@@ -2487,6 +2486,11 @@ class WalkChampRaceForegroundService : Service() {
           nm.cancel(NOTIFICATION_ID_WALK)
         }
         if (raceState != null && isActiveRace(raceState!!)) {
+          // startForegroundService(UPDATE_WALK) still requires startForeground
+          // within the OS deadline. Re-promote the race FGS; walk stays companion.
+          val raceNotification = buildRaceNotification(this, raceState!!)
+          promoteRaceForegroundNow(raceNotification)
+          postOngoingNotification(NOTIFICATION_ID_RACE, raceNotification)
           nm.notify(NOTIFICATION_ID_WALK, notification)
         } else if (action == ACTION_START_WALK) {
           promoteWalkForegroundNow(notification)

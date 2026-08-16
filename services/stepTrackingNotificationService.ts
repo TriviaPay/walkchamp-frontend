@@ -147,7 +147,8 @@ async function logOngoingDiagnostics(phase: string): Promise<void> {
   const steps = Math.max(0, Math.floor(payload.todaySteps));
   const pct = Math.min(100, Math.round((steps / goal) * 100));
   const session = await getValidSession();
-  const visualType = pct >= 100 ? "goal_completed" : "daily_walk";
+  // Ongoing tray stays Daily Walk after the goal. Reserve goal_completed for one-shot pushes.
+  const visualType = "daily_walk";
   let provisional = false;
   try {
     const { store } = require("@/store") as typeof import("@/store");
