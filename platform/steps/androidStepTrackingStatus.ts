@@ -92,16 +92,20 @@ export async function getAndroidStepTrackingStatus(
       typeof Platform.Version === "number" ? Platform.Version : 0;
     const sdkStatus = await androidHCService.getSdkStatusRaw();
     const init = await androidHCService.initialize();
+    let permission = init.permission;
+    if (init.initialized && init.availability === "available") {
+      permission = await androidHCService.getPermissionStatus();
+    }
 
     const status = mapSdkStatusToTrackingStatus(
       sdkStatus,
-      init.permission,
+      permission,
       apiLevel,
     );
 
     if (__DEV__) {
       console.log(
-        `[AndroidHC] status=${status} sdk=${sdkStatus} api=${apiLevel} perm=${init.permission}`,
+        `[AndroidHC] status=${status} sdk=${sdkStatus} api=${apiLevel} perm=${permission}`,
       );
     }
 
@@ -109,7 +113,7 @@ export async function getAndroidStepTrackingStatus(
       status,
       uiState: trackingStatusToUiState(status),
       sdkStatus: sdkStatus >= 0 ? sdkStatus : null,
-      permission: init.permission,
+      permission,
       initialized: init.initialized,
     };
     _cachedStatus = result;

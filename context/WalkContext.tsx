@@ -75,6 +75,7 @@ import {
   startWalkBackgroundStepPoll,
   stopWalkBackgroundStepPoll,
   tickWalkBackgroundStepPoll,
+  scrubStaleNativeDailyBeforeEnable,
 } from "@/services/stepProgressCoordinator";
 import { activateStepTracking, type StepTrackingEnableResult } from "@/services/stepTrackingStartup";
 import { mergeWalkStepsWithNative } from "@/services/stepDisplayMerge";
@@ -82,7 +83,9 @@ import { waitForAppStartupReady } from "@/services/appStartup";
 import { subscribeMidnightRollover } from "@/services/walkMidnightEvents";
 import { isWalkBackendSyncPaused } from "@/services/walkSyncCoordinator";
 import {
+  accountVerifiedFloor,
   isInflatedProvisionalVsVerified,
+  looksLikeSinceBootCounter,
   resolveWalkNotificationSteps,
   shouldAcceptVerifiedZero,
 } from "@/services/steps/walkDisplaySteps";
@@ -195,7 +198,7 @@ interface WalkContextType {
   requestStepPermission: () => Promise<void>;
   /** Activate tracking after wearable setup when permission may already be granted.
    *  allowAll: first HC setup — request notifications + activity (then Profile toggle later). */
-  completeStepSetup: (opts?: { allowAll?: boolean }) => Promise<void>;
+  completeStepSetup: (opts?: { allowAll?: boolean; assumeGranted?: boolean }) => Promise<void>;
   /** Enable limited device sensor tracking (TYPE_STEP_COUNTER). Sets verificationLevel = limited. */
   enableLimitedSensorTracking: () => Promise<boolean>;
   /** Re-fetch today's rank + active minutes from the backend. Safe to call at any time. */
@@ -405,6 +408,10 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
   const lastMilestoneRef = useRef<number>(0);
   const startupSyncFiredRef = useRef(false);
   const permissionRequestInFlightRef = useRef(false);
+  const pendingCompleteSetupRef = useRef(false);
+  const pendingCompleteSetupOptsRef = useRef<
+    { allowAll?: boolean; assumeGranted?: boolean } | undefined
+  >(undefined);
   const syncDeltaInFlightRef = useRef(false);
   const syncDeltaQueuedForceRef = useRef(false);
   const savedDailyStepsRef = useRef<number>(0);
@@ -829,12 +836,19 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         // first cold read can take a while. Seed the Walk UI from it now so the
         // screen never sits at 0 for a minute+ while the notification already
         // shows the real count (same-day only; never adopt a stale native total).
+        // Fresh reinstall has no local/redux cache — native since-boot (~22k) must
+        // not fill the gap before GET /api/walk/today returns.
         if (!rolled && Platform.OS === "android" && stepProviderManager.usesVerifiedStepSource()) {
           try {
             const native = await stepTrackingNotificationService.getNativeStepState(user.id);
             if (native && native.localDate === today) {
               const nativeToday = Math.max(0, Math.floor(native.todaySteps ?? 0));
-              if (nativeToday > displaySteps) {
+              const freshInstallNoCache = localCachedBoot === 0 && reduxBoot === 0;
+              if (
+                nativeToday > displaySteps &&
+                !freshInstallNoCache &&
+                !isInflatedProvisionalVsVerified(displaySteps, nativeToday)
+              ) {
                 displaySteps = nativeToday;
               }
             }
@@ -896,13 +910,15 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
               rolled || isFreshLocalDay()
                 ? 0
                 : localCached;
-            const floor = Math.max(
-              localForFloor,
-              backendTodayStepsRef.current,
-              verifiedActive && providerSteps === 0
-                ? 0
-                : todayStepsRef.current,
-            );
+            // Verified path: account DB + live HC only. Never floor from a
+            // since-boot native/local absolute (reinstall 22k).
+            const floor = verifiedActive
+              ? accountVerifiedFloor(providerSteps, backendTodayStepsRef.current)
+              : Math.max(
+                  localForFloor,
+                  backendTodayStepsRef.current,
+                  todayStepsRef.current,
+                );
             let usedAccountIsolation = false;
             if (verifiedActive) {
               let isolatedDisplay: number | null = null;
@@ -979,14 +995,42 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
               }
             }
             lastProviderPollRef.current = displaySteps;
-            // Prefer backend total as lastSynced — never mark provider-only steps as synced.
-            lastSyncedStepsRef.current = Math.min(
-              Math.max(0, parsed?.todaySteps ?? 0),
-              displaySteps,
-            );
+            // Account DB total is lastSynced even if UI is still catching up
+            // (reinstall: display 0 until verified lane is seeded).
+            lastSyncedStepsRef.current = Math.max(0, parsed?.todaySteps ?? 0);
             await storageSet(keys.lastSyncedStepsCount, lastSyncedStepsRef.current);
             await storageSet(keys.currentLocalDate, today);
             setStepsSourceReady(true);
+            if (
+              verifiedActive &&
+              backendTodayStepsRef.current > 0 &&
+              providerSteps <= 0
+            ) {
+              updateStepProgressFromRealSource({
+                todaySteps: backendTodayStepsRef.current,
+                stepSource: "backend",
+                dailyLane: "verified",
+                updatedAt: new Date().toISOString(),
+              });
+              if (Platform.OS === "android" && user.id) {
+                try {
+                  await stepTrackingNotificationService.handOffToNativeBackground({
+                    userId: user.id,
+                    todaySteps: backendTodayStepsRef.current,
+                    dailyGoal:
+                      todayDailyGoalRef.current > 0
+                        ? todayDailyGoalRef.current
+                        : 10_000,
+                  });
+                } catch {
+                  /* non-fatal */
+                }
+              }
+              stepEngineLog(
+                "StepEngine",
+                `init seededAccountDbFloor=${backendTodayStepsRef.current} userId=${user.id}`,
+              );
+            }
             stepEngineLog(
               "StepEngine",
               `init userId=${user.id} localDate=${today} finalTodaySteps=${displaySteps} backendTodaySteps=${backendTodayStepsRef.current} healthTodaySteps=${providerSteps} rolled=${rolled}`,
@@ -1417,25 +1461,43 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         previousProviderSteps: providerStepsAtBindRef.current || effectiveLocal,
         verifiedSource: verifiedActive,
       });
+      // Never Math.max back a since-boot local/UI floor when HC is empty.
+      // Keep GET /api/walk/today as the account floor — that is not poison.
+      const accountFloor = accountVerifiedFloor(
+        providerSteps,
+        backendTodayStepsRef.current,
+      );
+      const poisonedFloor =
+        verifiedActive &&
+        (isInflatedProvisionalVsVerified(accountFloor, todayStepsRef.current) ||
+          isInflatedProvisionalVsVerified(accountFloor, localCached));
+      if (poisonedFloor) {
+        stepEngineLog(
+          "WalkScreen",
+          `hydrate dropPoisonedFloor local=${localCached} ui=${todayStepsRef.current} keepAccount=${accountFloor} backend=${backendSteps} provider=${providerSteps}`,
+        );
+      }
       const displaySteps =
-        isFreshLocalDay()
+        isFreshLocalDay() || poisonedFloor
           ? mergedDisplay
           : Math.max(mergedDisplay, todayStepsRef.current, localCached);
       if (displaySteps >= lastProviderPollRef.current) {
         lastProviderPollRef.current = displaySteps;
       }
-      lastSyncedStepsRef.current = Math.min(
-        Math.max(0, backendTodayStepsRef.current),
-        displaySteps,
+      lastSyncedStepsRef.current = Math.max(
+        0,
+        backendTodayStepsRef.current,
       );
       await storageSet(keys.lastSyncedStepsCount, lastSyncedStepsRef.current);
       await storageSet(keys.currentLocalDate, todayKey);
       const hydratedDisplay =
-        isFreshLocalDay()
+        isFreshLocalDay() || poisonedFloor
           ? clampHydratedDisplaySteps(
-              displaySteps,
-              verifiedActive && displaySteps === 0 ? 0 : todayStepsRef.current,
-              backendTodayStepsRef.current,
+              Math.max(displaySteps, accountFloor),
+              verifiedActive && displaySteps === 0 && accountFloor <= 0
+                ? 0
+                : todayStepsRef.current,
+              accountFloor,
             )
           : Math.max(
               clampHydratedDisplaySteps(
@@ -1448,7 +1510,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             );
       if (
         applyDisplay &&
-        (isFreshLocalDay() ||
+        (poisonedFloor ||
+          isFreshLocalDay() ||
           hydratedDisplay > todayStepsRef.current ||
           (verifiedActive &&
             isFreshLocalDay() &&
@@ -1461,20 +1524,37 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             )))
       ) {
         const isDownwardCorrection =
-          isFreshLocalDay() &&
-          (hydratedDisplay === 0 ||
-            isInflatedProvisionalVsVerified(
-              hydratedDisplay,
-              todayStepsRef.current,
-            ));
-        if (isDownwardCorrection) {
-          if (shouldTrustVerifiedDownwardCorrection(hydratedDisplay)) {
-            await forceSetTodayStepDisplay(hydratedDisplay);
-          } else {
-            stepEngineLog(
-              "WalkScreen",
-              `deferredInflationCorrection previous=${todayStepsRef.current} candidate=${hydratedDisplay} awaitingConfirmation=true`,
+          poisonedFloor ||
+          (isFreshLocalDay() &&
+            (hydratedDisplay === 0 ||
+              isInflatedProvisionalVsVerified(
+                hydratedDisplay,
+                todayStepsRef.current,
+              )));
+        if (isDownwardCorrection || poisonedFloor) {
+          await forceSetTodayStepDisplay(hydratedDisplay);
+          if (poisonedFloor) {
+            store.dispatch(
+              raceProgressActions.resetDailyStepsForNewDay({
+                todaySteps: hydratedDisplay,
+                updatedAt: new Date().toISOString(),
+              }),
             );
+            try {
+              await stepTrackingNotificationService.resetDailyStepsForNewDay();
+              if (user?.id) {
+                await stepTrackingNotificationService.handOffToNativeBackground({
+                  userId: user.id,
+                  todaySteps: hydratedDisplay,
+                  dailyGoal:
+                    todayDailyGoalRef.current > 0
+                      ? todayDailyGoalRef.current
+                      : 10_000,
+                });
+              }
+            } catch {
+              /* non-fatal */
+            }
           }
         } else if (hydratedDisplay > todayStepsRef.current) {
           await forceSetTodayStepDisplay(hydratedDisplay);
@@ -1758,6 +1838,9 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         if (user?.id) {
           await storageSet(stepScopedKeys(user.id, today).currentLocalDate, today);
         }
+        // Incoming `real` was captured before the day reset (often yesterday's
+        // sensor absolute). Do not apply it onto the new day.
+        return;
       }
 
       const current = todayStepsRef.current;
@@ -1999,7 +2082,21 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       const data = await stepProviderManager.getTodaySteps();
       const providerSteps = Math.max(0, data?.steps ?? 0);
       display = resolveLiveDisplaySteps(providerSteps);
-      if (!verifiedActive) {
+      if (freshDay && Platform.OS === "android") {
+        try {
+          const native = await stepTrackingNotificationService.getNativeStepState(
+            user.id,
+          );
+          if (native?.userId === user.id && native.localDate === getTodayKey()) {
+            display = Math.max(
+              display,
+              Math.max(0, Math.floor(native.todaySteps ?? 0)),
+            );
+          }
+        } catch {
+          /* optional */
+        }
+      } else if (!verifiedActive && !freshDay) {
         // Legacy only — verified HC/HK must not Math.max with yesterday's UI/FGS.
         display = Math.max(
           display,
@@ -2065,7 +2162,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       rp.userId === user.id ? Math.max(0, Math.floor(rp.todaySteps)) : 0;
     const verifiedLane = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
     const finalSteps = freshDay
-      ? Math.max(display, verifiedActive ? 0 : todayStepsRef.current)
+      ? display
       : mergeNative
         ? await resolveAuthoritativeTodaySteps(user.id, {
             mergeNative: !verifiedActive,
@@ -2236,6 +2333,12 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         // activateStepTracking / setup — do not re-prompt on every Walk activation.
         await hydrateTodayStepsFromBackend();
         await refreshRealSteps({ rehydrateBackend: false });
+        if (user?.id && Platform.OS === "android") {
+          await scrubStaleNativeDailyBeforeEnable(
+            user.id,
+            todayStepsRef.current,
+          );
+        }
         await startProviderWatching();
         startRealPollInterval();
         if (!backendSyncRef.current) {
@@ -2260,11 +2363,31 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         if (ongoingNotificationEnabled && user?.id) {
           try {
             setStepProgressUser(user.id, user.username ?? null);
-            const started = await stepTrackingNotificationService.start({
-              userId: user.id,
-              todaySteps: todayStepsRef.current,
-              dailyGoal: todayDailyGoalRef.current,
-            });
+            let traySteps = Math.max(0, Math.floor(todayStepsRef.current));
+            try {
+              const native = await stepTrackingNotificationService.getNativeStepState(user.id);
+              if (
+                looksLikeSinceBootCounter({
+                  todaySteps: traySteps,
+                  sensorTotal: native?.sensorTotal,
+                  dailyBaseline: native?.dailyBaseline,
+                })
+              ) {
+                traySteps = 0;
+                todayStepsRef.current = 0;
+                setTodaySteps(0);
+              }
+            } catch {
+              /* keep JS total */
+            }
+            const started = await stepTrackingNotificationService.start(
+              {
+                userId: user.id,
+                todaySteps: traySteps,
+                dailyGoal: todayDailyGoalRef.current,
+              },
+              { forceRestart: true },
+            );
             if (!started) {
               if (__DEV__) {
                 console.log("[OngoingNotification] direct start returned false");
@@ -2333,11 +2456,24 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         );
         void pushWalkNotificationFromCanonicalStore(true);
       } else if (Platform.OS === "android") {
-        const tracking = await getAndroidStepTrackingStatus();
+        try {
+          const { androidHCService } = await import(
+            "@/services/steps/androidHealthConnectService"
+          );
+          const { invalidateAndroidStepTrackingStatusCache } = await import(
+            "@/services/steps/androidStepTrackingStatus"
+          );
+          androidHCService.invalidatePermissionCache();
+          stepProviderManager.invalidateStatusCache();
+          invalidateAndroidStepTrackingStatusCache();
+        } catch {
+          /* continue with live init */
+        }
+        const tracking = await getAndroidStepTrackingStatus(true);
         if (!mounted) return;
         setHcAvailability(toHcAvailability(tracking.status));
 
-        const providerStatus = await stepProviderManager.initialize();
+        const providerStatus = await stepProviderManager.initialize(true);
         if (!mounted) return;
 
         // Hybrid: daily Walk is Health Connect only — never activate sensor as todaySteps.
@@ -2410,11 +2546,32 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         // Show ongoing notification immediately with current steps (no artificial delay).
         if (!mounted) return;
         try {
-          const started = await stepTrackingNotificationService.start({
-            userId: user.id,
-            todaySteps: todayStepsRef.current,
-            dailyGoal: todayDailyGoalRef.current,
-          });
+          await scrubStaleNativeDailyBeforeEnable(user.id, 0);
+          let traySteps = Math.max(0, Math.floor(todayStepsRef.current));
+          try {
+            const native = await stepTrackingNotificationService.getNativeStepState(user.id);
+            if (
+              looksLikeSinceBootCounter({
+                todaySteps: traySteps,
+                sensorTotal: native?.sensorTotal,
+                dailyBaseline: native?.dailyBaseline,
+              })
+            ) {
+              traySteps = 0;
+              todayStepsRef.current = 0;
+              setTodaySteps(0);
+            }
+          } catch {
+            /* keep JS total */
+          }
+          const started = await stepTrackingNotificationService.start(
+            {
+              userId: user.id,
+              todaySteps: traySteps,
+              dailyGoal: todayDailyGoalRef.current,
+            },
+            { forceRestart: true },
+          );
           if (!started && __DEV__) {
             console.log("[OngoingNotification] direct start returned false");
           }
@@ -2741,16 +2898,28 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
     handleStepActivationResult,
   ]);
 
-  const completeStepSetup = useCallback(async (opts?: { allowAll?: boolean }) => {
+  const completeStepSetup = useCallback(async (opts?: { allowAll?: boolean; assumeGranted?: boolean }) => {
     if (!user?.id) return;
-    if (permissionRequestInFlightRef.current) return;
+    if (permissionRequestInFlightRef.current) {
+      pendingCompleteSetupRef.current = true;
+      pendingCompleteSetupOptsRef.current = opts;
+      return;
+    }
 
     const allowAll = opts?.allowAll !== false;
 
     permissionRequestInFlightRef.current = true;
     try {
+      stepProviderManager.invalidateStatusCache();
       await stepProviderManager.initialize(true);
-      const providerStatus = await stepProviderManager.refreshStatus();
+      let providerStatus = await stepProviderManager.refreshStatus();
+
+      if (providerStatus.permission !== "granted") {
+        await new Promise((r) => setTimeout(r, 400));
+        stepProviderManager.invalidateStatusCache();
+        await stepProviderManager.initialize(true);
+        providerStatus = await stepProviderManager.refreshStatus();
+      }
 
       if (providerStatus.permission !== "granted") {
         permissionRequestInFlightRef.current = false;
@@ -2780,6 +2949,12 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       await requestStepPermission();
     } finally {
       permissionRequestInFlightRef.current = false;
+      if (pendingCompleteSetupRef.current) {
+        pendingCompleteSetupRef.current = false;
+        const nextOpts = pendingCompleteSetupOptsRef.current;
+        pendingCompleteSetupOptsRef.current = undefined;
+        void completeStepSetup(nextOpts);
+      }
     }
   }, [user?.id, user?.username, handleStepActivationResult, requestStepPermission]);
 

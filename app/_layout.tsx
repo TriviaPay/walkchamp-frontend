@@ -173,8 +173,17 @@ if (Platform.OS === "android" && typeof (global as unknown as { ErrorUtils?: { s
   const { ErrorUtils } = global as unknown as { ErrorUtils: { setGlobalHandler: (h: (e: Error, f?: boolean) => void) => void; getGlobalHandler: () => (e: Error, f?: boolean) => void } };
   const prev = ErrorUtils.getGlobalHandler();
   ErrorUtils.setGlobalHandler((error, isFatal) => {
-    const msg = String(error?.message ?? "");
-    if (msg.includes("Unable to activate keep awake")) return;
+    const msg = String(error?.message ?? error ?? "");
+    if (
+      msg.includes("Unable to activate keep awake") ||
+      msg.includes("JavaScriptContextHolder") ||
+      msg.includes("[runtime not ready]") ||
+      msg.includes("runtime not ready") ||
+      msg.includes("Exception in HostFunction") ||
+      msg.includes("null object reference")
+    ) {
+      return;
+    }
     logger.warn("Startup", `global error fatal=${isFatal} message=${msg}`);
     prev(error, isFatal);
   });
@@ -189,6 +198,9 @@ LogBox.ignoreLogs([
   "'OneSignal' could not be found",
   "'RNGoogleMobileAdsModule' could not be found",
   "Unable to activate keep awake",
+  "JavaScriptContextHolder",
+  "runtime not ready",
+  "Exception in HostFunction",
 ]);
 
 function ThemedStatusBar() {

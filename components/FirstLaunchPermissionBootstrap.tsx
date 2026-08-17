@@ -3,17 +3,21 @@
  * Push remains owned by PushPermissionPrompt — this only sequences step tracking.
  *
  * Must not run while signed out, on splash/login, or before the main tabs are visible.
+ * After the first Maybe Later, re-asks when the device snooze expires (not per account).
  */
 
 import { useEffect, useRef } from "react";
+import { AppState } from "react-native";
 import { useSegments } from "expo-router";
 import { useAuth } from "@/context/AuthContext";
 import { useAppSelector } from "@/store/hooks";
 import { runFirstLaunchPermissionFlow } from "@/services/permissions/firstLaunchPermissionOrchestrator";
 import {
   isHomeStepSetupShellReady,
+  subscribeHomeStepSetupDone,
 } from "@/services/permissions/homePermissionFlow";
 import { waitForAppStartupReady } from "@/services/appStartup";
+import { getDeviceStepSetupRecord } from "@/services/permissions/permissionCoordinator";
 
 function isMainAppSegment(segments: string[]): boolean {
   return segments.some((s) => s === "(tabs)");
@@ -30,10 +34,15 @@ export function FirstLaunchPermissionBootstrap() {
   const isAuthenticated = useAppSelector((s) => s.auth.isAuthenticated);
   const segments = useSegments();
   const handledUserRef = useRef<string | null>(null);
+  const snoozeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!user?.id) {
       handledUserRef.current = null;
+      if (snoozeTimerRef.current) {
+        clearTimeout(snoozeTimerRef.current);
+        snoozeTimerRef.current = null;
+      }
       return;
     }
     if (loading || !isAuthenticated || !sessionToken) return;
@@ -42,10 +51,41 @@ export function FirstLaunchPermissionBootstrap() {
     // Stay off splash/login/onboarding — only after home tabs.
     if (isAuthOrOnboardingSegment(segments as string[])) return;
     if (!isMainAppSegment(segments as string[])) return;
-    if (handledUserRef.current === user.id) return;
 
     let cancelled = false;
-    void (async () => {
+
+    const clearSnoozeTimer = () => {
+      if (snoozeTimerRef.current) {
+        clearTimeout(snoozeTimerRef.current);
+        snoozeTimerRef.current = null;
+      }
+    };
+
+    const scheduleSnoozeReask = async () => {
+      clearSnoozeTimer();
+      const rec = await getDeviceStepSetupRecord();
+      if (cancelled || rec.completed || rec.laterCount !== 1) return;
+      const waitMs = rec.snoozeUntilMs - Date.now();
+      if (waitMs <= 0) return;
+      snoozeTimerRef.current = setTimeout(() => {
+        if (cancelled) return;
+        void runFirstLaunchPermissionFlow({
+          userId: user.id,
+          username: user.username ?? null,
+        });
+      }, waitMs);
+    };
+
+    const runFlow = async () => {
+      await runFirstLaunchPermissionFlow({
+        userId: user.id,
+        username: user.username ?? null,
+      });
+      if (cancelled) return;
+      await scheduleSnoozeReask();
+    };
+
+    const startIfNeeded = async () => {
       await waitForAppStartupReady();
       if (cancelled) return;
       // Wait until splash has marked the shell ready. Do NOT proceed on timeout —
@@ -64,14 +104,34 @@ export function FirstLaunchPermissionBootstrap() {
       if (!isHomeStepSetupShellReady()) return;
       if (handledUserRef.current === user.id) return;
       handledUserRef.current = user.id;
-      await runFirstLaunchPermissionFlow({
-        userId: user.id,
-        username: user.username ?? null,
-      });
-    })();
+      await runFlow();
+    };
+
+    void startIfNeeded();
+
+    const unsubSetupDone = subscribeHomeStepSetupDone(() => {
+      void scheduleSnoozeReask();
+    });
+
+    const appSub = AppState.addEventListener("change", (state) => {
+      if (state !== "active" || cancelled || !user.id) return;
+      void (async () => {
+        const rec = await getDeviceStepSetupRecord();
+        if (cancelled) return;
+        if (rec.completed || rec.laterCount !== 1) return;
+        if (Date.now() < rec.snoozeUntilMs) return;
+        await runFirstLaunchPermissionFlow({
+          userId: user.id,
+          username: user.username ?? null,
+        });
+      })();
+    });
 
     return () => {
       cancelled = true;
+      unsubSetupDone();
+      appSub.remove();
+      clearSnoozeTimer();
     };
   }, [
     user?.id,

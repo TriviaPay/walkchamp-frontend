@@ -23,6 +23,7 @@ import { isJsAuthoritativeStepSession } from "@/services/steps/jsStepOwnership";
 import {
   resolveWalkNotificationSteps,
   isInflatedProvisionalVsVerified,
+  looksLikeSinceBootCounter,
 } from "@/services/steps/walkDisplaySteps";
 import { AppState, type AppStateStatus, Platform } from "react-native";
 import { waitForAppStartupReady, isAppStartupReady } from "@/services/appStartup";
@@ -200,6 +201,36 @@ function scheduleWalkNotificationUpdate(force = false): void {
 }
 
 let lastNativeRebaselineMs = 0;
+
+/** Drop since-boot / prior-session FGS absolutes before enabling Daily Walk. */
+export async function scrubStaleNativeDailyBeforeEnable(
+  userId: string,
+  knownTodaySteps: number,
+): Promise<void> {
+  if (!userId || Platform.OS !== "android") return;
+  const known = Math.max(0, Math.floor(knownTodaySteps));
+  try {
+    const native = await stepTrackingNotificationService.getNativeStepState(userId);
+    if (!native) return;
+    const today = getLocalDateStr();
+    const nativeToday = Math.max(0, Math.floor(native.todaySteps ?? 0));
+    const userMismatch = !!native.userId && native.userId !== userId;
+    const staleDay = !!native.localDate && native.localDate !== today;
+    const sinceBoot = looksLikeSinceBootCounter({
+      todaySteps: nativeToday,
+      sensorTotal: native.sensorTotal,
+      dailyBaseline: native.dailyBaseline,
+    });
+    if (!userMismatch && !staleDay && !sinceBoot) return;
+    await stepTrackingNotificationService.resetDailyStepsForNewDay();
+    stepEngineLog(
+      "StepEngine",
+      `scrubNativeDaily userId=${userId} nativeToday=${nativeToday} known=${known} userMismatch=${userMismatch} staleDay=${staleDay} sinceBoot=${sinceBoot}`,
+    );
+  } catch {
+    /* non-fatal */
+  }
+}
 
 /** Reset poisoned FGS today absolute and restart tray from verified HC total. */
 async function rebaselineInflatedNativeDaily(
@@ -502,6 +533,9 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   }
   const scopedKeys = stepScopedKeys(activeUserId, today);
   const trackingDate = await storageGet<string>(scopedKeys.currentLocalDate);
+  const lastMidnightResetDate = await storageGet<string>(
+    scopedKeys.lastMidnightResetDate,
+  );
   const syncedCount = await storageGet<number>(scopedKeys.lastSyncedStepsCount);
 
   let native: Awaited<ReturnType<typeof stepTrackingNotificationService.getNativeStepState>> = null;
@@ -541,6 +575,7 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
     );
 
   const needsRollover =
+    lastMidnightResetDate !== today ||
     (trackingDate != null && trackingDate !== today) ||
     (nativeDate != null && nativeDate !== today) ||
     (lastKnownTrackingDate != null && lastKnownTrackingDate !== today) ||
@@ -559,6 +594,9 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   if (!needsRollover) {
     if (trackingDate == null) {
       await storageSet(scopedKeys.currentLocalDate, today);
+    }
+    if (lastMidnightResetDate !== today) {
+      await storageSet(scopedKeys.lastMidnightResetDate, today);
     }
     lastKnownTrackingDate = today;
     const yesterday = shiftLocalDateKey(today, -1);
@@ -590,7 +628,12 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   );
 
   if (Platform.OS === "android") {
-    await stepTrackingNotificationService.resetDailyStepsForNewDay();
+    const nativeAlreadyRolled =
+      nativeDate === today && !nativeStaleByTimestamp;
+    // If native FGS already re-baselined at midnight, do not wipe morning steps.
+    if (!nativeAlreadyRolled) {
+      await stepTrackingNotificationService.resetDailyStepsForNewDay();
+    }
     try {
       const { androidHCService } = await import(
         "@/services/steps/androidHealthConnectService"
@@ -609,13 +652,18 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
     }
   }
 
+  const nativeSeed =
+    nativeDate === today && !nativeStaleByTimestamp
+      ? Math.max(0, Math.floor(nativeSteps))
+      : 0;
+
   store.dispatch(
     raceProgressActions.resetDailyStepsForNewDay({
-      todaySteps: 0,
+      todaySteps: nativeSeed,
       updatedAt: new Date().toISOString(),
     }),
   );
-  store.dispatch(walkActions.setTodaySteps(0));
+  store.dispatch(walkActions.setTodaySteps(nativeSeed));
 
   lastWalkNotificationSteps = -1;
   markFreshLocalDay(90_000);
@@ -631,6 +679,7 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   await writeDailyStepsForUserDate(activeUserId, today, 0, { forceZero: true });
   await storageSet(stepScopedKeys(activeUserId, today).lastSyncedStepsCount, 0);
   await storageSet(stepScopedKeys(activeUserId, today).currentLocalDate, today);
+  await storageSet(stepScopedKeys(activeUserId, today).lastMidnightResetDate, today);
   await deleteLegacyUnscopedStepKeys();
 
   // Drop cached API rows for the new local day so hydrate doesn't merge stale totals.
@@ -1090,6 +1139,18 @@ export async function tickWalkBackgroundStepPoll(
           updatedAt: new Date().toISOString(),
           fromWatch: false,
         });
+      } else if (isInflatedProvisionalVsVerified(
+        Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0)),
+        current,
+      )) {
+        // HC empty but Redux/native still hold a since-boot absolute — rebaseline
+        // to the account verified floor (GET /api/walk/today), not hard 0.
+        const accountFloor = Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0));
+        stepEngineLog(
+          "StepEngine",
+          `backgroundPoll dropPoisonedDaily current=${current} hc=0 keepAccount=${accountFloor}`,
+        );
+        await rebaselineInflatedNativeDaily(s.userId, accountFloor);
       }
       // Lane 2: FGS sensor → provisional display only
       const native = await stepTrackingNotificationService.getNativeStepState(
@@ -1108,7 +1169,15 @@ export async function tickWalkBackgroundStepPoll(
           native?.updatedAt ?? native?.lastUpdatedAt,
           nativeToday,
         );
-      if (nativeOk && nativeToday > 0) {
+      if (
+        nativeOk &&
+        nativeToday > 0 &&
+        !looksLikeSinceBootCounter({
+          todaySteps: nativeToday,
+          sensorTotal: native?.sensorTotal,
+          dailyBaseline: native?.dailyBaseline,
+        })
+      ) {
         updateStepProgressFromRealSource({
           todaySteps: nativeToday,
           stepSource: "android_step_counter",
@@ -1288,7 +1357,38 @@ function initNativeStepEventListener(): void {
 
       const currentToday = s.todaySteps;
       const incomingToday = Math.max(0, Math.floor(state.todaySteps ?? 0));
+      if (incomingToday < currentToday) {
+        // Native re-baselined at local midnight — do not keep yesterday's floor.
+        const nativeDay = state.localDate ?? today;
+        if (nativeDay === today && currentToday - incomingToday > 50) {
+          store.dispatch(
+            raceProgressActions.resetDailyStepsForNewDay({
+              todaySteps: incomingToday,
+              updatedAt,
+            }),
+          );
+          store.dispatch(walkActions.setTodaySteps(incomingToday));
+        }
+        return;
+      }
       if (incomingToday <= currentToday) return;
+
+      const sinceBoot = looksLikeSinceBootCounter({
+        todaySteps: incomingToday,
+        sensorTotal: state.sensorTotal,
+        dailyBaseline: state.dailyBaseline,
+      });
+      if (sinceBoot) {
+        const floor = stepProviderManager.usesVerifiedStepSource()
+          ? Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0))
+          : 0;
+        logger.debug(
+          "StepStore",
+          `rebaseline native since-boot incoming=${incomingToday} sensorTotal=${state.sensorTotal ?? "n/a"} floor=${floor}`,
+        );
+        void rebaselineInflatedNativeDaily(s.userId, floor);
+        return;
+      }
 
       if (stepProviderManager.usesVerifiedStepSource()) {
         const verified = Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0));
@@ -1374,6 +1474,25 @@ async function hydrateFromNativeStepState(): Promise<void> {
     !!current.activeRaceId &&
     (!native.activeRaceId || native.activeRaceId === current.activeRaceId);
 
+  const nativeToday = Math.max(0, Math.floor(native.todaySteps ?? 0));
+  if (
+    looksLikeSinceBootCounter({
+      todaySteps: nativeToday,
+      sensorTotal: native.sensorTotal,
+      dailyBaseline: native.dailyBaseline,
+    })
+  ) {
+    logger.debug(
+      "AppResume",
+      `skip native hydrate — since-boot todaySteps=${nativeToday} sensorTotal=${native.sensorTotal ?? "n/a"}`,
+    );
+    const floor = stepProviderManager.usesVerifiedStepSource()
+      ? Math.max(0, Math.floor(current.verifiedTodaySteps ?? 0))
+      : 0;
+    void rebaselineInflatedNativeDaily(current.userId, floor);
+    return;
+  }
+
   // HC / HealthKit remain the verified sync source, but FGS TYPE_STEP_COUNTER
   // advances live display while HC lags (Samsung often returns records=0).
   // This value is still the on-device sensor's count, not an HC-confirmed read —
@@ -1381,8 +1500,11 @@ async function hydrateFromNativeStepState(): Promise<void> {
   // total (which would otherwise let a stale/phantom sensor tick permanently
   // inflate the number that gets synced to the backend as "real" steps).
   if (stepProviderManager.usesVerifiedStepSource()) {
-    const nativeToday = Math.max(0, Math.floor(native.todaySteps ?? 0));
-    if (nativeToday > current.todaySteps) {
+    const verified = Math.max(0, Math.floor(current.verifiedTodaySteps ?? 0));
+    if (
+      nativeToday > current.todaySteps &&
+      !isInflatedProvisionalVsVerified(verified, nativeToday)
+    ) {
       const updatedAt = new Date(
         native.updatedAt ?? native.lastUpdatedAt ?? Date.now(),
       ).toISOString();
@@ -1404,7 +1526,7 @@ async function hydrateFromNativeStepState(): Promise<void> {
     } else {
       logger.debug(
         "AppResume",
-        "skip native hydrate inflate — native not ahead of Redux",
+        "skip native hydrate inflate — since-boot absolute rejected",
       );
     }
     return;
@@ -1446,7 +1568,6 @@ async function hydrateFromNativeStepState(): Promise<void> {
     logger.debug("AppResume", `merged state source=native_service raceSteps=${native.raceSteps}`);
   }
 
-  const nativeToday = Math.max(0, Math.floor(native.todaySteps ?? 0));
   const sanitizedToday = sanitizeLegacyProviderSteps(
     nativeToday,
     current.todaySteps,
@@ -2599,6 +2720,26 @@ export async function bindStepSessionToUser(userId: string): Promise<boolean> {
   if (switched) {
     logger.debug("AuthSwitch", `oldUserId=${lastUserId} newUserId=${userId}`);
     await clearUserSessionStepState(lastUserId, "account_switch");
+    if (Platform.OS === "android") {
+      try {
+        const { androidHCService } = await import(
+          "@/services/steps/androidHealthConnectService"
+        );
+        const { invalidateAndroidStepTrackingStatusCache } = await import(
+          "@/services/steps/androidStepTrackingStatus"
+        );
+        androidHCService.invalidatePermissionCache();
+        stepProviderManager.invalidateStatusCache();
+        invalidateAndroidStepTrackingStatusCache();
+      } catch {
+        /* non-fatal */
+      }
+      try {
+        await scrubStaleNativeDailyBeforeEnable(userId, 0);
+      } catch {
+        /* non-fatal */
+      }
+    }
   } else if (!lastUserId && Platform.OS === "android") {
     // Fresh bind after a session gap — drop untagged native totals so Account B
     // cannot inherit Account A's FGS daily count.
@@ -2609,6 +2750,8 @@ export async function bindStepSessionToUser(userId: string): Promise<boolean> {
           native.userId || "unknown",
         );
         await stepTrackingNotificationService.stop();
+      } else if (native) {
+        await scrubStaleNativeDailyBeforeEnable(userId, 0);
       }
     } catch {
       /* non-fatal */

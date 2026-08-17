@@ -51,6 +51,7 @@ import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { rf, rs } from "@/utils/responsive";
 import MyTitlesModal, { type ActiveTitle, difficultyColor } from "@/components/MyTitlesModal";
 import WearableSetupModal from "@/components/WearableSetupModal";
+import { markDeviceStepSetupCompleted } from "@/services/permissions/permissionCoordinator";
 import { useTitleUnlock } from "@/context/TitleUnlockContext";
 import { useAvatarCache, PROFILE_ME_CACHE_KEY } from "@/hooks/useAvatarCache";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
@@ -1356,6 +1357,7 @@ function ProfileScreenContent() {
             }
           })();
           if (permissionStatus === "connected") {
+            void markDeviceStepSetupCompleted();
             void completeStepSetup({ allowAll: true });
           }
         }}

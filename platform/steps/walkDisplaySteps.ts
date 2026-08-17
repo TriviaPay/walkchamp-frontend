@@ -24,6 +24,9 @@ export function resolveWalkNotificationSteps(params: {
    * live sensor total. Never treat that as prize-eligible verified data.
    */
   verifiedAuthoritative?: boolean;
+  /** TYPE_STEP_COUNTER since-boot total — used to reject raw counter as "today". */
+  sensorTotal?: number | null;
+  dailyBaseline?: number | null;
 }): number {
   const verified = Math.max(0, Math.floor(params.verifiedTodaySteps ?? 0));
   const provisional =
@@ -33,7 +36,27 @@ export function resolveWalkNotificationSteps(params: {
   const fallback = Math.max(0, Math.floor(params.todaySteps ?? 0));
 
   if (params.verifiedAuthoritative === false) {
-    return Math.max(verified, provisional, fallback);
+    const live = Math.max(provisional, fallback);
+    // Phone-sensor daily is allowed on unsupported devices, but never the
+    // raw since-boot counter (same hardware number after reinstall / cold start).
+    if (
+      looksLikeSinceBootCounter({
+        todaySteps: live,
+        sensorTotal: params.sensorTotal,
+        dailyBaseline: params.dailyBaseline,
+      })
+    ) {
+      return verified;
+    }
+    // Unsupported / no HC: show sensor, but still drop since-boot style
+    // leftovers when we already have a smaller trusted total.
+    if (verified > 0 && isStaleSensorAbsolute(verified, provisional)) {
+      return Math.max(verified, fallback > 0 && !isStaleSensorAbsolute(verified, fallback) ? fallback : verified);
+    }
+    if (verified > 0 && isStaleSensorAbsolute(verified, fallback)) {
+      return Math.max(verified, provisional);
+    }
+    return Math.max(verified, live);
   }
 
   if (!params.raceActive) {
@@ -90,6 +113,57 @@ export function isInflatedProvisionalVsVerified(
   maxAhead: number = MAX_PROVISIONAL_AHEAD_OF_VERIFIED,
 ): boolean {
   return isStaleSensorAbsolute(verified, provisional, maxAhead);
+}
+
+/**
+ * True when a large daily absolute is almost certainly TYPE_STEP_COUNTER since-boot
+ * (or a poisoned cache), not a real Health Connect / HealthKit day total.
+ * Used when the verified provider currently reports 0 / empty.
+ */
+export function isPoisonedSensorDailyAbsolute(
+  providerSteps: number,
+  candidate: number,
+): boolean {
+  const provider = Math.max(0, Math.floor(providerSteps));
+  const candidateSteps = Math.max(0, Math.floor(candidate));
+  if (provider > 0) return false;
+  return isStaleSensorAbsolute(0, candidateSteps);
+}
+
+/**
+ * True when `todaySteps` is the raw TYPE_STEP_COUNTER since-boot value, not a
+ * local-day total. A real daily session has today = sensorTotal - dailyBaseline.
+ */
+export function looksLikeSinceBootCounter(opts: {
+  todaySteps: number;
+  sensorTotal?: number | null;
+  dailyBaseline?: number | null;
+}): boolean {
+  const today = Math.max(0, Math.floor(opts.todaySteps));
+  if (today < 1000) return false;
+  const sensor =
+    opts.sensorTotal == null || !Number.isFinite(opts.sensorTotal)
+      ? null
+      : opts.sensorTotal;
+  if (sensor != null && sensor >= 0) {
+    return Math.abs(today - sensor) <= 2;
+  }
+  return false;
+}
+
+/**
+ * Last known verified total for this account today: live HC/HK, else GET /api/walk/today.
+ * Never treat a real account DB row as since-boot poison.
+ */
+export function accountVerifiedFloor(
+  healthConnectSteps: number,
+  accountDbSteps: number,
+): number {
+  return Math.max(
+    0,
+    Math.floor(healthConnectSteps),
+    Math.floor(accountDbSteps),
+  );
 }
 
 /**

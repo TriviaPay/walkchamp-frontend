@@ -688,12 +688,24 @@ class WalkChampRaceForegroundService : Service() {
     // still seed the daily baseline so walk tray + parallel races keep advancing.
     val mode = if (raceActive) "race_live" else "daily_steps"
     engine.updateMetadata(userId, mode, stepSource)
-    if (isStart) {
-      engine.setPendingKnownTodaySteps(parsedSteps.coerceAtLeast(0))
-      engine.seedDailyBaselineFromKnownSteps(parsedSteps.coerceAtLeast(0), stepSource = stepSource)
+    val known = parsedSteps.coerceAtLeast(0)
+    val engineToday = engine.currentState().todaySteps
+    val engineLooksSinceBoot =
+      NativeStepState.looksLikeSinceBootCounter(
+        engineToday,
+        engine.currentState().sensorTotal,
+        engine.currentState().dailyBaseline,
+      )
+    val mustReseed =
+      isStart ||
+        engineLooksSinceBoot ||
+        (engineToday >= 1000 && engineToday > known + 250)
+    if (mustReseed) {
+      engine.setPendingKnownTodaySteps(known)
+      engine.seedDailyBaselineFromKnownSteps(known, stepSource = stepSource)
     } else {
       // UPDATE while already tracking: raise floor only — never full re-seed.
-      engine.ensureDailyFloor(parsedSteps.coerceAtLeast(0), stepSource)
+      engine.ensureDailyFloor(known, stepSource)
     }
     startSensorTrackingIfNeeded()
     startWalkLoopsIfNeeded()
@@ -1404,6 +1416,23 @@ class WalkChampRaceForegroundService : Service() {
       Log.w(TAG, "[UnsupportedDevice] step sensor unavailable â€” keeping last known value")
       return
     }
+    if (
+      NativeStepState.looksLikeSinceBootCounter(
+        state.todaySteps,
+        state.sensorTotal,
+        state.dailyBaseline,
+      )
+    ) {
+      Log.d(
+        TAG,
+        "[WalkChampFGS] drop since-boot tray today=${state.todaySteps} sensor=${state.sensorTotal}",
+      )
+      sensorEngine?.resetDailyToKnown(0, state.stepSource)
+      lastWalkDisplayState = null
+      updateWalkNotificationToSteps(0, state.stepSource, provisional = true, forceDayReset = true)
+      sensorEngine?.currentState()?.let { syncNativeStepState(it) }
+      return
+    }
     // Native sensor tray updates are provisional estimates until HC verifies.
     updateWalkNotificationToSteps(state.todaySteps, state.stepSource, provisional = true)
     Log.d(
@@ -1431,19 +1460,31 @@ class WalkChampRaceForegroundService : Service() {
     // Force the engine to roll its day before trusting its todaySteps as a floor —
     // it may still be holding yesterday's total if no sensor tick has fired yet today.
     sensorEngine?.checkAndRollDailyDay()
-    val fromEngine =
+    val fromEngineRaw =
       sensorEngine?.currentState()?.takeIf { it.localDate == today }?.todaySteps ?: 0
+    val sensorNow =
+      sensorEngine?.currentState()?.sensorTotal
+        ?: NativeStepState.load(this)?.sensorTotal
+        ?: 0f
+    val baselineNow =
+      sensorEngine?.currentState()?.dailyBaseline
+        ?: NativeStepState.load(this)?.dailyBaseline
+    val fromEngine =
+      if (NativeStepState.looksLikeSinceBootCounter(fromEngineRaw, sensorNow, baselineNow)) 0
+      else fromEngineRaw
     val safeIncoming = incoming.coerceAtLeast(0)
     // New calendar day (device local time): ignore yesterday's walk_body floor.
     if (walkDate == null || walkDate != today) {
       return maxOf(safeIncoming, fromEngine)
     }
-    val fromPrefs = parseStepsFromWalkBody(prefs().getString("walk_body", "") ?: "")
+    val fromPrefsRaw = parseStepsFromWalkBody(prefs().getString("walk_body", "") ?: "")
+    val fromPrefs =
+      if (NativeStepState.looksLikeSinceBootCounter(fromPrefsRaw, sensorNow, baselineNow)) 0
+      else fromPrefsRaw
     val high = maxOf(fromPrefs, fromEngine)
     if (
-      allowInflationCorrection &&
-      high >= 1000 &&
-      high > safeIncoming + 250
+      (allowInflationCorrection && high >= 1000 && high > safeIncoming + 250) ||
+      NativeStepState.looksLikeSinceBootCounter(high, sensorNow, baselineNow)
     ) {
       Log.d(
         TAG,
@@ -1532,6 +1573,7 @@ class WalkChampRaceForegroundService : Service() {
             updatedAt = System.currentTimeMillis(),
           ),
         )
+        NativeStepState.markDailyResetComplete(this, today)
         rolled = true
       }
     }
@@ -1641,47 +1683,9 @@ class WalkChampRaceForegroundService : Service() {
    * and the app is backgrounded.  Runs every [WALK_BACKEND_SYNC_MS] on the worker thread.
    */
   private fun tickWalkBackendSync() {
-    val p = prefs()
-    val userId = p.getString("walk_user_id", null)
-    val apiBaseUrl = p.getString("walk_api_base_url", null)
-    val authToken = p.getString("walk_auth_token", null)
-    if (userId.isNullOrBlank() || apiBaseUrl.isNullOrBlank() || authToken.isNullOrBlank()) return
-
-    val nativeState = sensorEngine?.currentState() ?: NativeStepState.load(this)
-    val todaySteps = nativeState?.todaySteps
-      ?: parseStepsFromWalkBody(p.getString("walk_body", "") ?: "")
-    val stepSource = nativeState?.stepSource
-      ?: p.getString("walk_step_source", "health_connect")
-      ?: "health_connect"
-
-    if (stepSource == "unsupported" || (nativeState != null && !nativeState.sensorSupported)) return
-
-    // Verified daily only — never POST TYPE_STEP_COUNTER display as Health Connect.
-    if (!RaceNotificationState.isVerifiedStepSource(stepSource) || usesDeviceSensor(stepSource)) {
-      Log.d(TAG, "[StepFGS] backendSync walk skipped provisional source=$stepSource")
-      return
-    }
-
-    val now = System.currentTimeMillis()
-    if (now - lastWalkBackendSyncMs < WALK_BACKEND_SYNC_MS - 1_000L) return
-    lastWalkBackendSyncMs = now
-
-    val localDate = WalkStepBackgroundSync.localDateString()
-    Log.d(TAG, "[StepFGS] backendSync walk attempt todaySteps=$todaySteps date=$localDate source=$stepSource")
-    val result = WalkStepBackgroundSync.syncDailySteps(
-      userId = userId,
-      todaySteps = todaySteps,
-      stepSource = stepSource,
-      apiBaseUrl = apiBaseUrl,
-      authToken = authToken,
-      localDate = localDate,
-    )
-    if (result.ok && nativeState != null) {
-      NativeStepState.save(
-        this,
-        nativeState.copy(lastBackendSyncedAt = now),
-      )
-    }
+    // Native FGS todaySteps is TYPE_STEP_COUNTER display. JS owns verified
+    // GET/POST /api/walk/steps (Health Connect / HealthKit only).
+    Log.d(TAG, "[StepFGS] backendSync walk skipped — JS owns verified daily")
   }
 
   /**
@@ -1701,13 +1705,35 @@ class WalkChampRaceForegroundService : Service() {
 
     val storedBody = p.getString("walk_body", null)
     val stepsFromPrefs = p.getInt("walk_steps_at_baseline", -1)
-    val stepsFromBody = storedBody?.let { parseStepsFromWalkBody(it) } ?: -1
-    val stepsFromNative = NativeStepState.load(this)?.todaySteps ?: -1
-    val steps = maxOf(stepsFromPrefs, stepsFromBody, stepsFromNative, 0)
+    val nativeState = NativeStepState.load(this)
+    val stepsFromNativeRaw = nativeState?.todaySteps ?: -1
+    val stepsFromNative =
+      if (
+        nativeState != null &&
+        NativeStepState.looksLikeSinceBootCounter(
+          nativeState.todaySteps,
+          nativeState.sensorTotal,
+          nativeState.dailyBaseline,
+        )
+      ) 0
+      else stepsFromNativeRaw
+    val stepsFromBodyRaw = storedBody?.let { parseStepsFromWalkBody(it) } ?: -1
+    val stepsFromBody =
+      if (
+        nativeState != null &&
+        stepsFromBodyRaw >= 0 &&
+        NativeStepState.looksLikeSinceBootCounter(
+          stepsFromBodyRaw,
+          nativeState.sensorTotal,
+          nativeState.dailyBaseline,
+        )
+      ) 0
+      else stepsFromBodyRaw
+    val steps = maxOf(stepsFromPrefs.coerceAtLeast(0), stepsFromBody.coerceAtLeast(0), stepsFromNative.coerceAtLeast(0), 0)
     val goal = p.getInt("walk_daily_goal", 10_000).coerceAtLeast(1)
     val deepLink = p.getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
     val title = p.getString("walk_title", "WalkChamp") ?: "WalkChamp"
-    val body = storedBody ?: formatWalkNotificationBody(steps)
+    val body = formatWalkNotificationBody(steps)
 
     // Prefer a freshly built companion tray so RemoteViews match current theme/assets
     // after race stole the FGS notification id.
@@ -2220,9 +2246,17 @@ class WalkChampRaceForegroundService : Service() {
       }
       ACTION_MIDNIGHT_RESET -> {
         ensureWorker()
+        val forceSameDay = intent.getBooleanExtra("forceSameDay", false)
+        val knownToday = intent.getIntExtra(EXTRA_TODAY_STEPS, 0).coerceAtLeast(0)
         workerHandler?.post {
-          Log.d(TAG, "[StepFGS] midnight reset requested from JS")
-          checkMidnightRollover()
+          Log.d(TAG, "[StepFGS] midnight reset requested from JS forceSameDay=$forceSameDay known=$knownToday")
+          if (forceSameDay) {
+            ensureSensorEngine().resetDailyToKnown(knownToday)
+            lastWalkDisplayState = null
+            updateWalkNotificationToSteps(knownToday, forceDayReset = true)
+          } else {
+            checkMidnightRollover()
+          }
         }
         return START_STICKY
       }

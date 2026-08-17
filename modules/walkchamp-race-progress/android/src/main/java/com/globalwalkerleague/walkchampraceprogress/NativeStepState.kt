@@ -62,6 +62,8 @@ data class NativeStepState(
     "notificationMode" to notificationMode,
     "updatedAt" to updatedAt,
     "sensorTotal" to sensorTotal.toDouble(),
+    "dailyBaseline" to dailyBaseline?.toDouble(),
+    "localDate" to localDate,
     "sensorSupported" to sensorSupported,
     "rank" to rank,
     "totalParticipants" to totalParticipants,
@@ -73,6 +75,7 @@ data class NativeStepState(
     private const val PREFS = "walkchamp_native_step_state"
     private const val KEY_JSON = "state_json"
     private const val KEY_CURRENT_USER = "current_user_id"
+    private const val KEY_DAILY_RESET_DATE = "daily_reset_date"
 
     private fun stateKey(userId: String) = "$KEY_JSON:$userId"
 
@@ -89,6 +92,34 @@ data class NativeStepState(
         editor.putString(KEY_CURRENT_USER, userId)
       }
       editor.apply()
+    }
+
+    /** True when native daily totals have not been re-baselined for this local calendar day. */
+    fun needsDailyReset(ctx: Context, today: String = localDateString()): Boolean {
+      val marked = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .getString(KEY_DAILY_RESET_DATE, null)
+      return marked != today
+    }
+
+    fun markDailyResetComplete(ctx: Context, today: String = localDateString()) {
+      ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(KEY_DAILY_RESET_DATE, today)
+        .apply()
+    }
+
+    /**
+     * True when [todaySteps] is the raw TYPE_STEP_COUNTER since-boot value,
+     * not a local-day total (today ≈ sensorTotal, no real daily baseline).
+     */
+    fun looksLikeSinceBootCounter(
+      todaySteps: Int,
+      sensorTotal: Float,
+      dailyBaseline: Float?,
+    ): Boolean {
+      if (todaySteps < 1000) return false
+      if (sensorTotal <= 0f) return false
+      return kotlin.math.abs(todaySteps.toFloat() - sensorTotal) <= 2f
     }
 
     fun localDateString(): String {
@@ -155,6 +186,7 @@ data class NativeStepState(
             updatedAt = System.currentTimeMillis(),
           )
           save(ctx, migrated)
+          markDailyResetComplete(ctx, today)
           return migrated
         }
         state

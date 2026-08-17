@@ -269,6 +269,14 @@ export function hydrateStepDisplayFromSources(params: {
       );
       return 0;
     }
+    // Drop since-boot / poisoned AsyncStorage floors when HC and account DB are empty.
+    if (local >= 1000) {
+      stepEngineLog(
+        "StepEngine",
+        `hydrate verified dropPoisonedLocal=${local}`,
+      );
+      return 0;
+    }
     if (local > 0) {
       stepEngineLog(
         "StepEngine",

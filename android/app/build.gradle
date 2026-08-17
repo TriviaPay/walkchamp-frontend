@@ -142,6 +142,13 @@ android {
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
+    // Custom jni CMakeLists sets CMAKE_OBJECT_PATH_MAX before project()
+    // so Windows ninja does not Stat() 260+ character object paths.
+    externalNativeBuild {
+        cmake {
+            path "src/main/jni/CMakeLists.txt"
+        }
+    }
 }
 
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
@@ -222,6 +229,22 @@ afterEvaluate {
 
     tasks.matching { it.name.startsWith("configureCMake") }.configureEach { cmakeTask ->
         cmakeTask.dependsOn(codegenTasks)
+        cmakeTask.doFirst {
+            def autoCmake = file("${project.buildDir}/generated/autolinking/src/main/jni/Android-autolinking.cmake")
+            if (!autoCmake.exists()) return
+            def nm = file("${rootDir}/../node_modules").absolutePath.replace('\\', '/')
+            def map = [
+                "${nm}/react-native-keyboard-controller/android/src/main/jni": "C:/m/kc",
+                "${nm}/react-native-screens/android/src/main/jni": "C:/m/s",
+                "${nm}/react-native-svg/android/src/main/jni": "C:/m/v",
+                "${nm}/react-native-safe-area-context/android/src/main/jni": "C:/m/a",
+            ]
+            def text = autoCmake.getText("UTF-8")
+            map.each { from, to ->
+                text = text.replace(from, to)
+            }
+            autoCmake.write(text, "UTF-8")
+        }
     }
 
     def cmakeArgs = android.defaultConfig.externalNativeBuild.cmake.arguments

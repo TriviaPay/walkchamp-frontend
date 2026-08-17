@@ -10,6 +10,8 @@ import {
   isInflatedProvisionalVsVerified,
   isStaleSensorAbsolute,
   shouldAcceptVerifiedZero,
+  accountVerifiedFloor,
+  looksLikeSinceBootCounter,
 } from "./walkDisplaySteps";
 
 // Real HC 433 vs bad sensor 1592 → show 433
@@ -106,6 +108,17 @@ assert.equal(
   1592,
 );
 
+// HC readable but writer sync pending — do not show since-boot sensor absolute.
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 3563,
+    provisionalSensorTodaySteps: 22380,
+    todaySteps: 22380,
+    verifiedAuthoritative: false,
+  }),
+  3563,
+);
+
 assert.equal(isInflatedProvisionalVsVerified(433, 1592), true);
 assert.equal(isInflatedProvisionalVsVerified(433, 450), false);
 assert.equal(isStaleSensorAbsolute(0, 1592), true);
@@ -147,6 +160,76 @@ assert.equal(
 assert.equal(
   shouldAcceptVerifiedZero({ incomingSteps: 433, previousSteps: 1592, freshLocalDay: false }),
   true,
+);
+
+assert.equal(
+  accountVerifiedFloor(0, 18496),
+  18496,
+  "reinstall: keep GET /api/walk/today while HC is still empty",
+);
+assert.equal(accountVerifiedFloor(3563, 18496), 18496);
+assert.equal(accountVerifiedFloor(19000, 18496), 19000);
+assert.equal(accountVerifiedFloor(0, 0), 0);
+
+assert.equal(
+  looksLikeSinceBootCounter({ todaySteps: 22380, sensorTotal: 22380 }),
+  true,
+  "today == sensorTotal is since-boot",
+);
+assert.equal(
+  looksLikeSinceBootCounter({ todaySteps: 500, sensorTotal: 22380, dailyBaseline: 21880 }),
+  false,
+  "real daily session today << sensorTotal",
+);
+assert.equal(
+  looksLikeSinceBootCounter({ todaySteps: 18496, sensorTotal: 22380, dailyBaseline: 3884 }),
+  false,
+  "real day total is not since-boot",
+);
+
+// Reinstall supported: account DB floor wins over since-boot sensor.
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 18496,
+    provisionalSensorTodaySteps: 22380,
+    todaySteps: 22380,
+  }),
+  18496,
+);
+
+// Midnight: HC 0 + leftover thousands → 0
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 0,
+    provisionalSensorTodaySteps: 9953,
+    todaySteps: 9953,
+  }),
+  0,
+);
+
+// Unsupported: since-boot hardware number must not become today's total.
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 0,
+    provisionalSensorTodaySteps: 22380,
+    todaySteps: 22380,
+    verifiedAuthoritative: false,
+    sensorTotal: 22380,
+  }),
+  0,
+);
+
+// Unsupported: real live session (today << sensor) still shows.
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 0,
+    provisionalSensorTodaySteps: 420,
+    todaySteps: 420,
+    verifiedAuthoritative: false,
+    sensorTotal: 22380,
+    dailyBaseline: 21960,
+  }),
+  420,
 );
 
 console.log("walkDisplaySteps.test.ts: ok");

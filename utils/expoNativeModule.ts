@@ -15,7 +15,9 @@ function isJsRuntimeError(error: unknown): boolean {
   return (
     msg.includes("JavaScriptContextHolder") ||
     msg.includes("runtime not ready") ||
-    msg.includes("NullPointerException")
+    msg.includes("Exception in HostFunction") ||
+    msg.includes("NullPointerException") ||
+    msg.includes("null object reference")
   );
 }
 

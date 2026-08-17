@@ -55,6 +55,56 @@ export function isVerifiedHealthAuthoritative(
   );
 }
 
+/**
+ * When the user already has Health Connect / HealthKit, only the OS grant
+ * sheet is needed. Full wearable wizard is for install, update, or writer setup.
+ */
+export type StepAccessAction = "grant_permission" | "full_setup";
+
+export function resolveStepAccessAction(args: {
+  hcAvailability?: string | null;
+  verificationStatus?: string | null;
+  healthConnectAvailable?: boolean;
+  readStepsPermissionGranted?: boolean;
+}): StepAccessAction {
+  const status = args.verificationStatus ?? "";
+  if (
+    args.hcAvailability === "not_installed" ||
+    args.hcAvailability === "needs_update" ||
+    args.hcAvailability === "not_supported" ||
+    status === "not_installed" ||
+    status === "unsupported" ||
+    status === "provider_required"
+  ) {
+    return "full_setup";
+  }
+  if (
+    status === "permission_required" ||
+    status === "permission_denied" ||
+    args.readStepsPermissionGranted === false ||
+    (args.healthConnectAvailable === true && args.readStepsPermissionGranted !== true)
+  ) {
+    return "grant_permission";
+  }
+  if (args.healthConnectAvailable === true) return "grant_permission";
+  return "full_setup";
+}
+
+/**
+ * Cache only a confirmed READ_STEPS grant. A cached "denied" / "unknown"
+ * must not hide a later re-grant (user enabled WalkChamp in Health Connect again).
+ */
+export function shouldReuseHealthConnectPermCache(args: {
+  cacheStatus: "granted" | "denied" | "unknown" | "unavailable" | null;
+  cacheAgeMs: number;
+  ttlMs: number;
+  backoffActive: boolean;
+}): boolean {
+  if (args.cacheStatus == null) return false;
+  if (args.backoffActive) return true;
+  return args.cacheStatus === "granted" && args.cacheAgeMs >= 0 && args.cacheAgeMs < args.ttlMs;
+}
+
 /** User-facing copy for a verification status — smallest existing status treatment. */
 export function describeHealthConnectVerificationStatus(
   status: HealthConnectVerificationStatus,
@@ -66,7 +116,7 @@ export function describeHealthConnectVerificationStatus(
     case "sync_delayed":
       return "Health Connect is connected, but no verified steps have been recorded today.";
     case "provider_required":
-      return "Connect a compatible health app so your daily steps can be verified.";
+      return "Health Connect is available, but your health app is not connected to it yet. Open Health Connect and connect Samsung Health or Google Fit so daily steps can be verified.";
     case "permission_required":
       return "Grant step access to Health Connect to enable verified tracking.";
     case "unsupported":

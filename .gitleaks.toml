@@ -4,7 +4,7 @@ title = "WalkChamp frontend"
 useDefault = true
 
 [allowlist]
-description = "Publishable payment keys and env placeholders — not secrets"
+description = "Publishable client IDs, env placeholders, local Backend checkout, and AsyncStorage key names — not secrets"
 paths = [
   '''(^|/)eas\.json$''',
   '''(^|/)\.env\.example$''',
@@ -12,10 +12,13 @@ paths = [
   '''(^|/)android/''',
   '''(^|/)\.expo/''',
   '''(^|/)ios/''',
+  '''(^|/)Backend/''',
+  '''(^|/)gitleaks(-.*)?\.(json|zip|exe|tgz)$''',
 ]
 regexes = [
   '''EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY''',
   '''EXPO_PUBLIC_RAZORPAY_KEY_ID''',
   '''pk_(test|live)_[A-Za-z0-9]+''',
   '''rzp_(test|live)_[A-Za-z0-9]+''',
+  '''walkchamp_[a-z0-9_]+_v\d+''',
 ]

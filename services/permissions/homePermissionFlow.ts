@@ -10,9 +10,12 @@
  * is ready (splash dismissed + user on authenticated home).
  */
 
+import { resolveStepAccessAction } from "@/services/steps/healthConnectVerificationStateLogic";
+
 type StepSetupOpener = () => void;
 type StepSetupCloser = () => void;
 type PushReadyListener = () => void;
+type StepGrantHandler = () => void;
 
 let _openStepSetup: StepSetupOpener | null = null;
 let _closeStepSetup: StepSetupCloser | null = null;
@@ -23,6 +26,10 @@ let _stepSetupInProgress = false;
 /** Splash dismissed + main shell visible — never open HC over splash/login. */
 let _shellReady = false;
 let _pushReadyListeners: PushReadyListener[] = [];
+let _setupDoneListeners: PushReadyListener[] = [];
+let _grantPermissionOnly: StepGrantHandler | null = null;
+
+let _wizardCountsAsLater = false;
 
 function flushPendingOpen(): void {
   if (!_pendingOpenStepSetup || !_shellReady || !_openStepSetup) return;
@@ -63,16 +70,94 @@ export function isHomeStepSetupShellReady(): boolean {
   return _shellReady;
 }
 
-/** Ask root host to open WearableSetupModal once (after shell is ready). */
-export function requestHomeStepSetup(): void {
+function openHomeStepSetupWizard(countsAsLater: boolean): void {
+  _wizardCountsAsLater = countsAsLater;
   setHomeStepSetupInProgress(true);
-  // Requesting setup means the home HC phase is active again (e.g. HC update needed).
   _stepPhaseDone = false;
   if (!_shellReady || !_openStepSetup) {
     _pendingOpenStepSetup = true;
     return;
   }
   _openStepSetup();
+}
+
+export function homeStepSetupCountsAsLater(): boolean {
+  return _wizardCountsAsLater;
+}
+
+/** Ask root host to open WearableSetupModal once (after shell is ready). */
+export function requestHomeStepSetup(): void {
+  void (async () => {
+    try {
+      const { osStepAccessGranted } = await import(
+        "@/services/permissions/permissionCoordinator"
+      );
+      if (await osStepAccessGranted()) {
+        markHomeStepSetupPhaseDone();
+        _grantPermissionOnly?.();
+        return;
+      }
+    } catch {
+      /* still open wizard if the OS check fails */
+    }
+    openHomeStepSetupWizard(true);
+  })();
+}
+
+/** Walk / match gates: OS grant sheet only when that is all that is missing. */
+export function registerHomeStepGrantHandler(fn: StepGrantHandler | null): void {
+  _grantPermissionOnly = fn;
+}
+
+export type HomeStepAccessHint = {
+  hcAvailability?: string | null;
+  verificationStatus?: string | null;
+  healthConnectAvailable?: boolean;
+  readStepsPermissionGranted?: boolean;
+};
+
+/**
+ * Grant Health Connect / HealthKit access in place when the health app is
+ * already installed. Opens the full wizard only for install / update / writer.
+ */
+export function requestHomeStepAccess(hint?: HomeStepAccessHint): void {
+  const run = (action: "grant_permission" | "full_setup") => {
+    if (action === "grant_permission" && _grantPermissionOnly) {
+      _grantPermissionOnly();
+      return;
+    }
+    openHomeStepSetupWizard(false);
+  };
+
+  const hinted =
+    hint &&
+    (hint.verificationStatus ||
+      hint.hcAvailability ||
+      hint.healthConnectAvailable === true ||
+      hint.readStepsPermissionGranted === false);
+
+  if (hinted) {
+    run(resolveStepAccessAction(hint));
+    return;
+  }
+
+  void (async () => {
+    try {
+      const { getHealthConnectVerificationState } = await import(
+        "@/services/steps/healthConnectVerificationState"
+      );
+      const vs = await getHealthConnectVerificationState();
+      run(
+        resolveStepAccessAction({
+          verificationStatus: vs.status,
+          healthConnectAvailable: vs.healthConnectAvailable,
+          readStepsPermissionGranted: vs.readStepsPermissionGranted,
+        }),
+      );
+    } catch {
+      openHomeStepSetupWizard(false);
+    }
+  })();
 }
 
 /** Close the home HC sheet without waiting for user Done. */
@@ -94,6 +179,14 @@ export function isHomeStepSetupInProgress(): boolean {
 /** Call when WearableSetup completes or user taps Maybe Later / Close. */
 export function markHomeStepSetupPhaseDone(): void {
   _stepSetupInProgress = false;
+  const setupListeners = _setupDoneListeners.slice();
+  for (const fn of setupListeners) {
+    try {
+      fn();
+    } catch {
+      /* ignore */
+    }
+  }
   if (_stepPhaseDone) return;
   _stepPhaseDone = true;
   _pendingOpenStepSetup = false;
@@ -105,6 +198,14 @@ export function markHomeStepSetupPhaseDone(): void {
       /* ignore */
     }
   }
+}
+
+/** Walk tab refreshes Health Connect status after the setup sheet closes. */
+export function subscribeHomeStepSetupDone(fn: PushReadyListener): () => void {
+  _setupDoneListeners.push(fn);
+  return () => {
+    _setupDoneListeners = _setupDoneListeners.filter((x) => x !== fn);
+  };
 }
 
 export function isHomeStepSetupPhaseDone(): boolean {
@@ -145,4 +246,7 @@ export function resetHomePermissionFlowForTests(): void {
   _openStepSetup = null;
   _closeStepSetup = null;
   _shellReady = false;
+  _grantPermissionOnly = null;
+  _setupDoneListeners = [];
+  _wizardCountsAsLater = false;
 }

@@ -7,6 +7,10 @@ import {
   classifyWriterDetection,
   isWriterFeedSufficientlyConfigured,
 } from "./healthConnectWriterDetectionLogic";
+import {
+  normalizeHealthConnectOrigins,
+  originsIncludeWriterPackage,
+} from "./healthConnectOrigins";
 
 function midnightToday(): Date {
   const d = new Date();
@@ -137,6 +141,85 @@ function midnightToday(): Date {
       todaySteps: 0,
       writerInstalled: true,
     }),
+    false,
+  );
+}
+
+{
+  assert.equal(
+    classifyWriterDetection({
+      readable: true,
+      todaySteps: 3563,
+      hasHistoricalStepRecords: true,
+      dataOrigins: ["android"],
+      writerInstalled: true,
+      requiredWriterPackageId: "com.sec.android.app.shealth",
+    }),
+    "installed_but_not_connected",
+  );
+  assert.equal(
+    classifyWriterDetection({
+      readable: true,
+      todaySteps: 18496,
+      hasHistoricalStepRecords: true,
+      dataOrigins: ["com.sec.android.app.shealth"],
+      writerInstalled: true,
+      requiredWriterPackageId: "com.sec.android.app.shealth",
+    }),
+    "writer_detected",
+  );
+  assert.equal(
+    isWriterFeedSufficientlyConfigured({
+      readable: true,
+      status: "installed_but_not_connected",
+      hasHistoricalStepRecords: true,
+      todaySteps: 3563,
+      dataOrigins: ["android"],
+      writerInstalled: true,
+      requiredWriterPackageId: "com.sec.android.app.shealth",
+    }),
+    false,
+  );
+  assert.equal(
+    isWriterFeedSufficientlyConfigured({
+      readable: true,
+      status: "writer_detected",
+      hasHistoricalStepRecords: true,
+      todaySteps: 18496,
+      dataOrigins: ["com.sec.android.app.shealth"],
+      writerInstalled: true,
+      requiredWriterPackageId: "com.sec.android.app.shealth",
+    }),
+    true,
+  );
+}
+
+{
+  assert.deepEqual(
+    normalizeHealthConnectOrigins([
+      "com.sec.android.app.shealth",
+      { packageName: "android" },
+      { metadata: { dataOrigin: { packageName: "com.google.android.gms" } } },
+    ]),
+    [
+      "com.sec.android.app.shealth",
+      "android",
+      "com.google.android.gms",
+    ],
+  );
+  assert.equal(
+    originsIncludeWriterPackage(
+      ["android", "com.sec.android.app.shealth"],
+      "com.sec.android.app.shealth",
+    ),
+    true,
+  );
+  assert.equal(
+    originsIncludeWriterPackage(["shealth"], "com.sec.android.app.shealth"),
+    true,
+  );
+  assert.equal(
+    originsIncludeWriterPackage(["android"], "com.sec.android.app.shealth"),
     false,
   );
 }

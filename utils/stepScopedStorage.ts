@@ -38,6 +38,7 @@ export function stepScopedKeys(userId: string, localDate = getTodayKey()) {
     lastSyncedStepsCount: `stepProgress:${userId}:${localDate}:lastSyncedStepsCount`,
     outbox: `stepProgress:${userId}:${localDate}:outbox`,
     currentLocalDate: `stepProgress:${userId}:currentLocalDate`,
+    lastMidnightResetDate: `stepProgress:${userId}:lastMidnightResetDate`,
     totalSteps: `stepProgress:${userId}:totalSteps`,
     streak: `stepProgress:${userId}:streak`,
   };

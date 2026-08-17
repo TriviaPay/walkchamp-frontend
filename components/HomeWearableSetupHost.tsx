@@ -3,23 +3,40 @@
  * Lives outside the Walk tab so setup still opens if that tab mounts late.
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import WearableSetupModal from "@/components/WearableSetupModal";
 import { useAuth } from "@/context/AuthContext";
 import { useWalk } from "@/context/WalkContext";
 import {
+  homeStepSetupCountsAsLater,
   isHomeStepSetupShellReady,
   markHomeStepSetupPhaseDone,
   registerHomeStepSetupCloser,
   registerHomeStepSetupOpener,
+  registerHomeStepGrantHandler,
   setHomeStepSetupInProgress,
 } from "@/services/permissions/homePermissionFlow";
-import { markPermissionEducationShown } from "@/services/permissions/permissionCoordinator";
+import {
+  markPermissionEducationShown,
+  markDeviceStepSetupCompleted,
+  recordDeviceSetupLater,
+} from "@/services/permissions/permissionCoordinator";
 
 export function HomeWearableSetupHost() {
   const { user } = useAuth();
-  const { completeStepSetup } = useWalk();
+  const { completeStepSetup, requestStepPermission } = useWalk();
   const [visible, setVisible] = useState(false);
+  const [countsAsLater, setCountsAsLater] = useState(false);
+  const completedRef = useRef(false);
+
+  useEffect(() => {
+    registerHomeStepGrantHandler(() => {
+      void requestStepPermission();
+    });
+    return () => {
+      registerHomeStepGrantHandler(null);
+    };
+  }, [requestStepPermission]);
 
   useEffect(() => {
     registerHomeStepSetupOpener(() => {
@@ -28,6 +45,8 @@ export function HomeWearableSetupHost() {
       if (!user?.id) return;
       // Extra guard: modal must not mount while splash overlay could still be up.
       setHomeStepSetupInProgress(true);
+      completedRef.current = false;
+      setCountsAsLater(homeStepSetupCountsAsLater());
       // Defer one frame so splash unmount paint commits first.
       requestAnimationFrame(() => {
         if (!isHomeStepSetupShellReady() || !user?.id) return;
@@ -61,16 +80,23 @@ export function HomeWearableSetupHost() {
     <WearableSetupModal
       visible={visible}
       accent="onboarding"
+      countsAsLater={countsAsLater}
       onClose={() => {
         setVisible(false);
         finishPhase();
+        if (!completedRef.current && homeStepSetupCountsAsLater()) {
+          void recordDeviceSetupLater();
+        }
+        completedRef.current = false;
       }}
       onComplete={(_platform, permissionStatus) => {
+        completedRef.current = true;
         setVisible(false);
         finishPhase();
         if (permissionStatus === "connected") {
+          void markDeviceStepSetupCompleted();
           // First setup: enable HC steps + notifications + activity together.
-          void completeStepSetup({ allowAll: true });
+          void completeStepSetup({ allowAll: true, assumeGranted: true });
         }
       }}
     />

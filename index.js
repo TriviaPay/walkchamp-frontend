@@ -8,6 +8,7 @@ LogBox.ignoreLogs([
   "Unable to activate keep awake",
   "JavaScriptContextHolder",
   "runtime not ready",
+  "Exception in HostFunction",
   "Uncaught (in promise",
   // Dev-only: Fast Refresh / remount can briefly stack expo-router linking handlers.
   "configured linking in multiple places",
@@ -26,6 +27,8 @@ function isBenignStartupError(msg) {
     msg.includes("JavaScriptContextHolder") ||
     msg.includes("[runtime not ready]") ||
     msg.includes("runtime not ready") ||
+    msg.includes("Exception in HostFunction") ||
+    msg.includes("null object reference") ||
     // Hermes: livekit leave/abort before Event polyfill (see voiceService)
     msg.includes("Property 'Event' doesn't exist") ||
     // Dev remount / duplicate alias deep-links (manifest fix is the real cure)

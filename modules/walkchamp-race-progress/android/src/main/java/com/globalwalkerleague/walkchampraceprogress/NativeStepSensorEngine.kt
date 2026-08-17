@@ -275,6 +275,43 @@ class NativeStepSensorEngine(
   }
 
   /**
+   * Same-day re-anchor (new account / since-boot poison). Midnight rollover
+   * only runs when the date changes, so JS resetDailyStepsForNewDay must
+   * call this while the FGS is already alive.
+   */
+  fun resetDailyToKnown(knownTodaySteps: Int, stepSource: String? = null) {
+    val known = knownTodaySteps.coerceAtLeast(0)
+    pendingKnownTodaySteps = known
+    detectorBridgeSteps = 0
+    val today = NativeStepState.localDateString()
+    val source = stepSource ?: state.stepSource
+    val total = lastSensorTotal.takeIf { it >= 0f } ?: state.sensorTotal.takeIf { it > 0f }
+    if (total != null && total >= 0f) {
+      lastSensorTotal = total
+      state = state.copy(
+        todaySteps = known,
+        dailyBaseline = (total - known).coerceAtLeast(0f),
+        sensorTotal = total,
+        localDate = today,
+        stepSource = source,
+        sensorSupported = true,
+        updatedAt = System.currentTimeMillis(),
+      )
+      persistAndEmit(state, force = true)
+    } else {
+      state = state.copy(
+        todaySteps = known,
+        dailyBaseline = null,
+        localDate = today,
+        stepSource = source,
+        updatedAt = System.currentTimeMillis(),
+      )
+      NativeStepState.save(context, state)
+    }
+    Log.d(TAG, "[StepFGS] resetDailyToKnown todaySteps=$known sensorTotal=$total")
+  }
+
+  /**
    * Raise the daily floor from JS/notification-known steps. Never decreases an
    * already-tracked native total (restore / UPDATE_WALK must not freeze progress).
    */
@@ -292,10 +329,20 @@ class NativeStepSensorEngine(
     val source = stepSource ?: state.stepSource
     val verified = !isDeviceSensorSource(source)
     val incoming = knownTodaySteps.coerceAtLeast(0)
-    // Verified HC/HK may correct a poisoned sensor absolute (e.g. 3122 vs HC 800).
+    val sensorNow = total ?: lastSensorTotal.takeIf { it >= 0f } ?: state.sensorTotal
+    val persistedLooksLikeSinceBoot =
+      NativeStepState.looksLikeSinceBootCounter(
+        state.todaySteps,
+        sensorNow,
+        state.dailyBaseline,
+      )
+    // HC/HK or a JS seed of 0 may correct a poisoned since-boot absolute.
     // Modest live lead over a lagging HC read is kept so the tray still moves.
     val known =
-      if (verified && state.todaySteps >= 1000 && state.todaySteps > incoming + 250) {
+      if (
+        persistedLooksLikeSinceBoot ||
+        (verified && state.todaySteps >= 1000 && state.todaySteps > incoming + 250)
+      ) {
         incoming
       } else {
         maxOf(incoming, state.todaySteps)
@@ -611,9 +658,15 @@ class NativeStepSensorEngine(
     var dailyBaseline = state.dailyBaseline
     if (dailyBaseline == null) {
       val known = pendingKnownTodaySteps
+      val persistedLooksLikeSinceBoot =
+        NativeStepState.looksLikeSinceBootCounter(
+          state.todaySteps,
+          sensorTotal,
+          state.dailyBaseline,
+        )
       dailyBaseline = if (known != null) {
         (sensorTotal - known).coerceAtLeast(0f)
-      } else if (state.todaySteps > 0) {
+      } else if (state.todaySteps > 0 && !persistedLooksLikeSinceBoot) {
         (sensorTotal - state.todaySteps).coerceAtLeast(0f)
       } else {
         sensorTotal
@@ -625,10 +678,10 @@ class NativeStepSensorEngine(
         "[StepFGS] dailyBaseline=$dailyBaseline todaySteps=${(sensorTotal - dailyBaseline).toInt().coerceAtLeast(0)} verifiedDaily=$verifiedDaily",
       )
     }
-    val todaySteps = maxOf(
-      (sensorTotal - dailyBaseline).toInt().coerceAtLeast(0) + bridgeSteps.coerceAtLeast(0),
-      state.todaySteps,
-    )
+    // Hardware baseline is today's truth. Never floor with yesterday's todaySteps
+    // (that kept Walk/Live at leftover totals after local midnight).
+    val todaySteps =
+      (sensorTotal - dailyBaseline).toInt().coerceAtLeast(0) + bridgeSteps.coerceAtLeast(0)
 
     val raceSteps = if (!state.activeRaceId.isNullOrBlank()) {
       var raceBaseline = state.raceBaseline
@@ -677,8 +730,23 @@ class NativeStepSensorEngine(
 
   private fun ensureCurrentDay(): Boolean {
     val today = NativeStepState.localDateString()
-    if (state.localDate == today) return false
-    Log.d(TAG, "[StepFGS] new day detected — resetting daily baseline")
+    val startOfTodayMs = java.util.Calendar.getInstance().apply {
+      set(java.util.Calendar.HOUR_OF_DAY, 0)
+      set(java.util.Calendar.MINUTE, 0)
+      set(java.util.Calendar.SECOND, 0)
+      set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val staleByTimestamp =
+      state.todaySteps > 0 && state.updatedAt > 0L && state.updatedAt < startOfTodayMs
+    val needsReset =
+      state.localDate != today ||
+        NativeStepState.needsDailyReset(context, today) ||
+        staleByTimestamp
+    if (!needsReset) return false
+    Log.d(
+      TAG,
+      "[StepFGS] new day detected — resetting daily baseline localDate=${state.localDate} today=$today staleTs=$staleByTimestamp",
+    )
     detectorBridgeSteps = 0
     lastCounterAdvanceMs = System.currentTimeMillis()
     val total = lastSensorTotal.takeIf { it >= 0f } ?: state.sensorTotal
@@ -688,6 +756,7 @@ class NativeStepSensorEngine(
       todaySteps = 0,
       updatedAt = System.currentTimeMillis(),
     )
+    NativeStepState.markDailyResetComplete(context, today)
     persistAndEmit(state, force = true)
     return true
   }
