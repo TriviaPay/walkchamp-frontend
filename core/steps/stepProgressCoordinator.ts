@@ -502,6 +502,9 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   }
   const scopedKeys = stepScopedKeys(activeUserId, today);
   const trackingDate = await storageGet<string>(scopedKeys.currentLocalDate);
+  const lastMidnightResetDate = await storageGet<string>(
+    scopedKeys.lastMidnightResetDate,
+  );
   const syncedCount = await storageGet<number>(scopedKeys.lastSyncedStepsCount);
 
   let native: Awaited<ReturnType<typeof stepTrackingNotificationService.getNativeStepState>> = null;
@@ -541,6 +544,7 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
     );
 
   const needsRollover =
+    lastMidnightResetDate !== today ||
     (trackingDate != null && trackingDate !== today) ||
     (nativeDate != null && nativeDate !== today) ||
     (lastKnownTrackingDate != null && lastKnownTrackingDate !== today) ||
@@ -559,6 +563,9 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   if (!needsRollover) {
     if (trackingDate == null) {
       await storageSet(scopedKeys.currentLocalDate, today);
+    }
+    if (lastMidnightResetDate !== today) {
+      await storageSet(scopedKeys.lastMidnightResetDate, today);
     }
     lastKnownTrackingDate = today;
     const yesterday = shiftLocalDateKey(today, -1);
@@ -590,7 +597,12 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   );
 
   if (Platform.OS === "android") {
-    await stepTrackingNotificationService.resetDailyStepsForNewDay();
+    const nativeAlreadyRolled =
+      nativeDate === today && !nativeStaleByTimestamp;
+    // If native FGS already re-baselined at midnight, do not wipe morning steps.
+    if (!nativeAlreadyRolled) {
+      await stepTrackingNotificationService.resetDailyStepsForNewDay();
+    }
     try {
       const { androidHCService } = await import(
         "@/services/steps/androidHealthConnectService"
@@ -609,13 +621,18 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
     }
   }
 
+  const nativeSeed =
+    nativeDate === today && !nativeStaleByTimestamp
+      ? Math.max(0, Math.floor(nativeSteps))
+      : 0;
+
   store.dispatch(
     raceProgressActions.resetDailyStepsForNewDay({
-      todaySteps: 0,
+      todaySteps: nativeSeed,
       updatedAt: new Date().toISOString(),
     }),
   );
-  store.dispatch(walkActions.setTodaySteps(0));
+  store.dispatch(walkActions.setTodaySteps(nativeSeed));
 
   lastWalkNotificationSteps = -1;
   markFreshLocalDay(90_000);
@@ -631,6 +648,7 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
   await writeDailyStepsForUserDate(activeUserId, today, 0, { forceZero: true });
   await storageSet(stepScopedKeys(activeUserId, today).lastSyncedStepsCount, 0);
   await storageSet(stepScopedKeys(activeUserId, today).currentLocalDate, today);
+  await storageSet(stepScopedKeys(activeUserId, today).lastMidnightResetDate, today);
   await deleteLegacyUnscopedStepKeys();
 
   // Drop cached API rows for the new local day so hydrate doesn't merge stale totals.
@@ -1090,6 +1108,13 @@ export async function tickWalkBackgroundStepPoll(
           updatedAt: new Date().toISOString(),
           fromWatch: false,
         });
+      } else if (isInflatedProvisionalVsVerified(0, current)) {
+        // HC empty but Redux/native still hold a since-boot absolute — wipe it.
+        stepEngineLog(
+          "StepEngine",
+          `backgroundPoll dropPoisonedDaily current=${current} hc=0`,
+        );
+        await rebaselineInflatedNativeDaily(s.userId, 0);
       }
       // Lane 2: FGS sensor → provisional display only
       const native = await stepTrackingNotificationService.getNativeStepState(
@@ -1288,6 +1313,20 @@ function initNativeStepEventListener(): void {
 
       const currentToday = s.todaySteps;
       const incomingToday = Math.max(0, Math.floor(state.todaySteps ?? 0));
+      if (incomingToday < currentToday) {
+        // Native re-baselined at local midnight — do not keep yesterday's floor.
+        const nativeDay = state.localDate ?? today;
+        if (nativeDay === today && currentToday - incomingToday > 50) {
+          store.dispatch(
+            raceProgressActions.resetDailyStepsForNewDay({
+              todaySteps: incomingToday,
+              updatedAt,
+            }),
+          );
+          store.dispatch(walkActions.setTodaySteps(incomingToday));
+        }
+        return;
+      }
       if (incomingToday <= currentToday) return;
 
       if (stepProviderManager.usesVerifiedStepSource()) {

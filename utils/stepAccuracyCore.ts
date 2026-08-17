@@ -103,6 +103,10 @@ export function resolveTodayDisplayStepsCore(params: {
         backend,
         Math.max(0, Math.floor(params.previousProviderSteps ?? 0)),
       );
+      // Since-boot / poisoned cache (e.g. 22380) must not fill an empty HC day.
+      if (floor >= 1000) {
+        return 0;
+      }
       return floor;
     }
     return provider;
@@ -142,7 +146,8 @@ export function capWalkStepsForSyncCore(
     const backend = Math.max(0, Math.floor(backendSteps ?? 0));
     if (provider <= 0) {
       // HC/HK empty — never upload sensor/provisional UI as verified daily.
-      // Keep last backend floor so Samsung lag cannot zero the account.
+      // Also drop poisoned since-boot backend floors (e.g. 22380).
+      if (backend >= 1000) return 0;
       return backend;
     }
     return Math.min(ui, provider);

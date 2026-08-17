@@ -33,6 +33,14 @@ export function resolveWalkNotificationSteps(params: {
   const fallback = Math.max(0, Math.floor(params.todaySteps ?? 0));
 
   if (params.verifiedAuthoritative === false) {
+    // Unsupported / no HC: show sensor, but still drop since-boot style
+    // leftovers when we already have a smaller trusted total.
+    if (verified > 0 && isStaleSensorAbsolute(verified, provisional)) {
+      return Math.max(verified, fallback > 0 && !isStaleSensorAbsolute(verified, fallback) ? fallback : verified);
+    }
+    if (verified > 0 && isStaleSensorAbsolute(verified, fallback)) {
+      return Math.max(verified, provisional);
+    }
     return Math.max(verified, provisional, fallback);
   }
 
@@ -90,6 +98,21 @@ export function isInflatedProvisionalVsVerified(
   maxAhead: number = MAX_PROVISIONAL_AHEAD_OF_VERIFIED,
 ): boolean {
   return isStaleSensorAbsolute(verified, provisional, maxAhead);
+}
+
+/**
+ * True when a large daily absolute is almost certainly TYPE_STEP_COUNTER since-boot
+ * (or a poisoned cache), not a real Health Connect / HealthKit day total.
+ * Used when the verified provider currently reports 0 / empty.
+ */
+export function isPoisonedSensorDailyAbsolute(
+  providerSteps: number,
+  candidate: number,
+): boolean {
+  const provider = Math.max(0, Math.floor(providerSteps));
+  const candidateSteps = Math.max(0, Math.floor(candidate));
+  if (provider > 0) return false;
+  return isStaleSensorAbsolute(0, candidateSteps);
 }
 
 /**

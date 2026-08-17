@@ -176,6 +176,7 @@ class WalkChampRaceProgressModule : Module() {
             updatedAt = System.currentTimeMillis(),
           ),
         )
+        NativeStepState.markDailyResetComplete(ctx, today)
       }
       val intent = Intent(ctx, WalkChampRaceForegroundService::class.java).apply {
         action = WalkChampRaceForegroundService.ACTION_MIDNIGHT_RESET

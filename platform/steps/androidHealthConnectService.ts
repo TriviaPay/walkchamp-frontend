@@ -28,6 +28,7 @@ import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { storageGet, storageSet } from "@/utils/storage";
 import { stepAudit } from "@/utils/stepAudit";
 import { logger } from "@/utils/logger";
+import { normalizeHealthConnectOrigins } from "./healthConnectOrigins";
 
 const HC_MANIFEST_BLOCKED_KEY = "hc_manifest_read_steps_blocked" as never;
 
@@ -79,6 +80,7 @@ interface HCStepRecord {
   count: number;
   startTime: string;
   endTime: string;
+  metadata?: { dataOrigin?: unknown };
 }
 
 interface HCPerm {
@@ -94,7 +96,7 @@ const READ_STEPS_PERMISSION: Permission = {
 
 interface HCAggregateStepsResult {
   COUNT_TOTAL?: number;
-  dataOrigins?: string[];
+  dataOrigins?: unknown;
 }
 
 interface HCModule {
@@ -178,6 +180,7 @@ let _permissionRequestWaiters: Array<() => void> = [];
 /** In-memory cache — last confirmed today total. Updated on every successful HC read. */
 let _cachedTodaySteps = 0;
 let _cachedTodayDate = "";
+let _cachedTodayOrigins: string[] = [];
 let _lastInitResult: HCInitResult | null = null;
 let _permCache: { status: HCPermStatus; at: number } | null = null;
 let _permBackoffUntil = 0;
@@ -203,13 +206,19 @@ function localDateKey(d = new Date()): string {
   );
 }
 
-function rememberTodaySteps(steps: number): void {
+function rememberTodaySteps(steps: number, origins?: string[]): void {
   const today = localDateKey();
   if (_cachedTodayDate !== today) {
     _cachedTodayDate = today;
     _cachedTodaySteps = 0;
+    _cachedTodayOrigins = [];
   }
   if (steps > 0) _cachedTodaySteps = Math.max(_cachedTodaySteps, steps);
+  if (origins) _cachedTodayOrigins = origins;
+}
+
+function cachedTodayOrigins(): string[] {
+  return _cachedTodayDate === localDateKey() ? [..._cachedTodayOrigins] : [];
 }
 
 function cachedTodayIfSameDay(): number {
@@ -631,7 +640,7 @@ export const androidHCService = {
       let steps = 0;
       let readMethod: "aggregate" | "readRecords" = "readRecords";
       let recordCount = 0;
-      let dataOrigins: string[] | undefined;
+      let dataOrigins: string[] = [];
       let aggregateEmpty = false;
 
       if (typeof hc.aggregateRecord === "function") {
@@ -641,10 +650,10 @@ export const androidHCService = {
             timeRangeFilter,
           });
           steps = Math.max(0, agg?.COUNT_TOTAL ?? 0);
-          dataOrigins = agg?.dataOrigins;
+          dataOrigins = normalizeHealthConnectOrigins(agg?.dataOrigins);
           readMethod = "aggregate";
           aggregateEmpty =
-            steps === 0 && (!dataOrigins || dataOrigins.length === 0);
+            steps === 0 && dataOrigins.length === 0;
         } catch (aggErr) {
           hcLog("aggregateRecord failed — falling back to readRecords", aggErr);
         }
@@ -652,7 +661,9 @@ export const androidHCService = {
 
       // Samsung/HC often returns aggregate COUNT_TOTAL=0 with no origins while
       // steps still exist — fall back to readRecords before treating as zero.
-      if (readMethod !== "aggregate" || aggregateEmpty) {
+      // Also read records when aggregate has a count but no origins so we can
+      // tell Samsung Health from phone-only Health Connect steps.
+      if (readMethod !== "aggregate" || aggregateEmpty || dataOrigins.length === 0) {
         try {
           const res = await hc.readRecords("Steps", { timeRangeFilter });
           recordCount = res.records?.length ?? 0;
@@ -660,18 +671,13 @@ export const androidHCService = {
             (sum, r) => sum + (r.count ?? 0),
             0,
           );
+          const recordOrigins = normalizeHealthConnectOrigins(res.records ?? []);
+          if (recordOrigins.length > 0) {
+            dataOrigins = [...new Set([...dataOrigins, ...recordOrigins])];
+          }
           if (total > 0 || recordCount > 0) {
             steps = Math.max(0, total);
             readMethod = "readRecords";
-            dataOrigins = dataOrigins?.length
-              ? dataOrigins
-              : Array.from(
-                  new Set(
-                    (res.records ?? [])
-                      .map((r) => (r as { metadata?: { dataOrigin?: string } }).metadata?.dataOrigin)
-                      .filter((o): o is string => !!o),
-                  ),
-                );
           }
         } catch (recErr) {
           if (readMethod !== "aggregate") {
@@ -681,7 +687,7 @@ export const androidHCService = {
       }
 
       const emptyRead =
-        steps === 0 && recordCount === 0 && (!dataOrigins || dataOrigins.length === 0);
+        steps === 0 && recordCount === 0 && dataOrigins.length === 0;
       if (emptyRead && isLocalTodayRange(start)) {
         const cached = cachedTodayIfSameDay();
         if (cached > 0) {
@@ -701,15 +707,15 @@ export const androidHCService = {
           method: readMethod,
           steps,
           recordCount,
-          dataOrigins: dataOrigins ?? null,
+          dataOrigins: dataOrigins.length ? dataOrigins : null,
           eventOrigin: "poll",
         });
       } catch {
         /* audit optional */
       }
 
-      if (isLocalTodayRange(start) && steps > 0) {
-        rememberTodaySteps(steps);
+      if (isLocalTodayRange(start)) {
+        rememberTodaySteps(steps, dataOrigins);
       }
 
       return {
@@ -824,6 +830,7 @@ export const androidHCService = {
   resetTodayStepCache(): void {
     _cachedTodaySteps = 0;
     _cachedTodayDate = "";
+    _cachedTodayOrigins = [];
     hcLog("today cache reset for user/date scope change");
   },
 
@@ -855,18 +862,23 @@ export const androidHCService = {
     try {
       const today = await this.readTodaySteps();
       const steps = Math.max(0, today?.steps ?? this.getCachedTodaySteps());
+      const todayOrigins = cachedTodayOrigins();
+      const recentOrigins = await this.readRecentStepOrigins(14);
+      const dataOrigins = [...new Set([...todayOrigins, ...recentOrigins])];
       const readable = (await this.getPermissionStatus()) === "granted";
       return {
         readable,
         steps,
         recordHint: readable
-          ? steps > 0
-            ? `Receiving steps (${steps.toLocaleString()} today)`
-            : "Health Connect readable"
+          ? dataOrigins.some((o) => o.toLowerCase().includes("shealth"))
+            ? `Samsung Health is writing steps (${steps.toLocaleString()} today)`
+            : steps > 0
+              ? `Receiving steps (${steps.toLocaleString()} today)`
+              : "Health Connect readable"
           : "Allow WalkChamp Read Steps",
-        recordCount: steps > 0 ? 1 : 0,
-        dataOrigins: [],
-        hasHistoricalStepRecords: steps > 0,
+        recordCount: dataOrigins.length,
+        dataOrigins,
+        hasHistoricalStepRecords: steps > 0 || dataOrigins.length > 0,
       };
     } catch {
       return {
@@ -880,11 +892,37 @@ export const androidHCService = {
     }
   },
 
+  /**
+   * Origins from recent Step records (not only today). Used to detect that
+   * Samsung Health is connected even before today's sync lands.
+   */
+  async readRecentStepOrigins(days = 14): Promise<string[]> {
+    const hc = loadHCModule();
+    if (!hc || days <= 0) return [];
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - Math.min(days, 30));
+    start.setHours(0, 0, 0, 0);
+    try {
+      const res = await hc.readRecords("Steps", {
+        timeRangeFilter: {
+          operator: "between" as const,
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
+        },
+      });
+      return normalizeHealthConnectOrigins(res.records ?? []);
+    } catch {
+      return [];
+    }
+  },
+
   reset(): void {
     _initialized = false;
     _permissionRequested = false;
     _cachedTodaySteps = 0;
     _cachedTodayDate = "";
+    _cachedTodayOrigins = [];
     _availability = "not_supported";
   },
 };

@@ -15,18 +15,45 @@ type Props = {
   onSetup: () => void;
 };
 
-function actionLabel(status: HealthConnectVerificationState["status"]): string {
-  switch (status) {
+function actionLabel(state: HealthConnectVerificationState): string {
+  switch (state.status) {
     case "permission_required":
       return "Grant permissions";
     case "provider_required":
-      return Platform.OS === "ios" ? "Open Apple Health" : "Set up health app";
+      if (Platform.OS === "ios") return "Open Apple Health";
+      if (state.writerInstalled) return "Open app";
+      return "Set up health app";
     case "unsupported":
     case "error":
       return "Try again";
     default:
       return "Set up";
   }
+}
+
+function bannerTitle(state: HealthConnectVerificationState): string {
+  if (state.status === "unsupported") return "Verified Steps Unavailable";
+  if (state.status === "permission_required") return "Step access needed";
+  if (
+    state.status === "provider_required" &&
+    state.writerInstalled &&
+    !state.writerConnectedToHealthConnect
+  ) {
+    return "Waiting for step sync";
+  }
+  return "Health app needed";
+}
+
+function bannerBody(state: HealthConnectVerificationState): string {
+  if (
+    state.status === "provider_required" &&
+    state.writerInstalled &&
+    !state.writerConnectedToHealthConnect
+  ) {
+    const label = state.preferredWriterLabel ?? "your health app";
+    return `${label} is set up with Health Connect. Open ${label} once and walk a bit — verified steps usually appear after it syncs.`;
+  }
+  return describeHealthConnectVerificationStatus(state.status);
 }
 
 export default function VerifiedStepsStatusBanner({ state, onSetup }: Props) {
@@ -38,20 +65,20 @@ export default function VerifiedStepsStatusBanner({ state, onSetup }: Props) {
   ) {
     return null;
   }
-  if (state.status === "permission_required") {
-    /* keep banner */
-  } else if (state.status === "unsupported" || state.status === "error") {
-    /* keep banner */
-  } else if (state.writerInstalled === true || state.setupCompleted === true) {
+  if (state.writerConnectedToHealthConnect === true) {
+    return null;
+  }
+  // Setup can finish before Samsung writes Step rows. Do not keep alarming
+  // "Health app needed" when HC is readable and the writer app is installed.
+  if (
+    state.healthConnectAvailable &&
+    state.readStepsPermissionGranted &&
+    state.writerInstalled
+  ) {
     return null;
   }
 
-  const title =
-    state.status === "unsupported"
-      ? "Verified Steps Unavailable"
-      : state.status === "permission_required"
-        ? "Step access needed"
-        : "Health app needed";
+  const title = bannerTitle(state);
 
   return (
     <View
@@ -64,7 +91,7 @@ export default function VerifiedStepsStatusBanner({ state, onSetup }: Props) {
       <View style={{ flex: 1 }}>
         <Text style={[styles.title, { color: colors.foreground }]}>{title}</Text>
         <Text style={[styles.body, { color: colors.mutedForeground }]}>
-          {describeHealthConnectVerificationStatus(state.status)}
+          {bannerBody(state)}
         </Text>
       </View>
       <TouchableOpacity
@@ -72,7 +99,7 @@ export default function VerifiedStepsStatusBanner({ state, onSetup }: Props) {
         style={[styles.btn, { borderColor: colors.warning + "60" }]}
       >
         <Text style={[styles.btnText, { color: colors.warning }]}>
-          {actionLabel(state.status)}
+          {actionLabel(state)}
         </Text>
       </TouchableOpacity>
     </View>

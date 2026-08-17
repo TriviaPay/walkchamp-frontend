@@ -69,6 +69,23 @@ assert.equal(
 );
 
 assert.equal(
+  resolveTodayDisplayStepsCore({
+    providerSteps: 0,
+    backendSteps: 22380,
+    previousProviderSteps: 22380,
+    verifiedSource: true,
+  }),
+  0,
+  "verified empty HC drops since-boot poisoned floor",
+);
+
+assert.equal(
+  capWalkStepsForSyncCore(22380, 0, true, 22380),
+  0,
+  "verified empty HC never re-uploads poisoned backend floor",
+);
+
+assert.equal(
   capWalkStepsForSyncCore(250, 0, true, 197),
   197,
   "verified empty HC syncs backend only — never provisional UI",

@@ -625,10 +625,10 @@ class NativeStepSensorEngine(
         "[StepFGS] dailyBaseline=$dailyBaseline todaySteps=${(sensorTotal - dailyBaseline).toInt().coerceAtLeast(0)} verifiedDaily=$verifiedDaily",
       )
     }
-    val todaySteps = maxOf(
-      (sensorTotal - dailyBaseline).toInt().coerceAtLeast(0) + bridgeSteps.coerceAtLeast(0),
-      state.todaySteps,
-    )
+    // Hardware baseline is today's truth. Never floor with yesterday's todaySteps
+    // (that kept Walk/Live at leftover totals after local midnight).
+    val todaySteps =
+      (sensorTotal - dailyBaseline).toInt().coerceAtLeast(0) + bridgeSteps.coerceAtLeast(0)
 
     val raceSteps = if (!state.activeRaceId.isNullOrBlank()) {
       var raceBaseline = state.raceBaseline
@@ -677,8 +677,23 @@ class NativeStepSensorEngine(
 
   private fun ensureCurrentDay(): Boolean {
     val today = NativeStepState.localDateString()
-    if (state.localDate == today) return false
-    Log.d(TAG, "[StepFGS] new day detected — resetting daily baseline")
+    val startOfTodayMs = java.util.Calendar.getInstance().apply {
+      set(java.util.Calendar.HOUR_OF_DAY, 0)
+      set(java.util.Calendar.MINUTE, 0)
+      set(java.util.Calendar.SECOND, 0)
+      set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val staleByTimestamp =
+      state.todaySteps > 0 && state.updatedAt > 0L && state.updatedAt < startOfTodayMs
+    val needsReset =
+      state.localDate != today ||
+        NativeStepState.needsDailyReset(context, today) ||
+        staleByTimestamp
+    if (!needsReset) return false
+    Log.d(
+      TAG,
+      "[StepFGS] new day detected — resetting daily baseline localDate=${state.localDate} today=$today staleTs=$staleByTimestamp",
+    )
     detectorBridgeSteps = 0
     lastCounterAdvanceMs = System.currentTimeMillis()
     val total = lastSensorTotal.takeIf { it >= 0f } ?: state.sensorTotal
@@ -688,6 +703,7 @@ class NativeStepSensorEngine(
       todaySteps = 0,
       updatedAt = System.currentTimeMillis(),
     )
+    NativeStepState.markDailyResetComplete(context, today)
     persistAndEmit(state, force = true)
     return true
   }

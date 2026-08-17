@@ -1532,6 +1532,7 @@ class WalkChampRaceForegroundService : Service() {
             updatedAt = System.currentTimeMillis(),
           ),
         )
+        NativeStepState.markDailyResetComplete(this, today)
         rolled = true
       }
     }

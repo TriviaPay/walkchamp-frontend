@@ -269,6 +269,14 @@ export function hydrateStepDisplayFromSources(params: {
       );
       return 0;
     }
+    // Drop since-boot / poisoned AsyncStorage floors when HC is empty.
+    if (local >= 1000) {
+      stepEngineLog(
+        "StepEngine",
+        `hydrate verified dropPoisonedLocal=${local}`,
+      );
+      return 0;
+    }
     if (local > 0) {
       stepEngineLog(
         "StepEngine",
@@ -286,7 +294,14 @@ export function hydrateStepDisplayFromSources(params: {
         "StepEngine",
         `hydrate verified dropInflatedLocal=${local} backend=${backend}`,
       );
-      return backend;
+      return backend >= 1000 && provider === 0 ? 0 : backend;
+    }
+    if (backend >= 1000) {
+      stepEngineLog(
+        "StepEngine",
+        `hydrate verified dropPoisonedBackend=${backend} provider=0`,
+      );
+      return 0;
     }
     const fallback = Math.max(backend, local);
     if (fallback > 0) {

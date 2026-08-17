@@ -28,8 +28,8 @@ export function parseCashAllowedCountries(raw?: string | null): string[] {
   if (!src) return [...DEFAULT_CASH_ALLOWED_COUNTRIES];
   const codes = src
     .split(",")
-    .map((s) => s.trim())
-    .filter((s) => /^[A-Z]{2}$/.test(s));
+    .map((s: string) => s.trim())
+    .filter((s: string) => /^[A-Z]{2}$/.test(s));
   return codes.length > 0 ? codes : [...DEFAULT_CASH_ALLOWED_COUNTRIES];
 }
 

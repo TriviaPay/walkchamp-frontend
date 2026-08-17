@@ -66,7 +66,7 @@ export function describeHealthConnectVerificationStatus(
     case "sync_delayed":
       return "Health Connect is connected, but no verified steps have been recorded today.";
     case "provider_required":
-      return "Connect a compatible health app so your daily steps can be verified.";
+      return "Health Connect is available, but your health app is not connected to it yet. Open Health Connect and connect Samsung Health or Google Fit so daily steps can be verified.";
     case "permission_required":
       return "Grant step access to Health Connect to enable verified tracking.";
     case "unsupported":

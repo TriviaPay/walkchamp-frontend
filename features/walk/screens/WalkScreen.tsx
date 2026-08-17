@@ -2033,11 +2033,16 @@ function WalkScreenContent() {
   } = useWalkContext();
   const [hcVerification, setHcVerification] =
     useState<HealthConnectVerificationState | null>(null);
+  // When HC is readable, never treat display as "sensor-only" — that path
+  // Math.max's with TYPE_STEP_COUNTER since-boot leftovers (e.g. 20k+).
+  // Writer sync can lag after setup; still prefer HC + stale-sensor rejection.
   const hcAuthoritative =
     hcVerification == null ||
     (typeof isVerifiedHealthAuthoritative === "function"
       ? isVerifiedHealthAuthoritative(hcVerification.status)
-      : true);
+      : true) ||
+    (hcVerification.healthConnectAvailable === true &&
+      hcVerification.readStepsPermissionGranted === true);
   const contextTodaySteps = useWalkTodaySteps();
   const { userRank, walletBalance, totalEarned, walletCurrency, refreshWallet } = useApp();
   const { user, logout, loading: authLoading, sessionToken } = useAuth();
@@ -2114,16 +2119,19 @@ function WalkScreenContent() {
   });
   // Prefer the same resolution as the ongoing notification so Walk cannot show a
   // poisoned sensor absolute while Profile / backend already show HC/HK.
-  const liveTodayStepsBase =
-    stepsSourceReady && verificationLevel === "verified"
-      ? resolveWalkNotificationSteps({
-          verifiedTodaySteps,
-          provisionalSensorTodaySteps,
-          todaySteps: Math.max(canonicalTodaySteps, contextTodaySteps),
-          raceActive: walkRaceActive,
-          verifiedAuthoritative: hcAuthoritative,
-        })
-      : resolveDisplayTodaySteps(contextTodaySteps, canonicalTodaySteps);
+  const preferHcDailyDisplay =
+    hcVerification == null ||
+    hcVerification.healthConnectAvailable === true ||
+    verificationLevel === "verified";
+  const liveTodayStepsBase = preferHcDailyDisplay
+    ? resolveWalkNotificationSteps({
+        verifiedTodaySteps,
+        provisionalSensorTodaySteps,
+        todaySteps: Math.max(canonicalTodaySteps, contextTodaySteps),
+        raceActive: walkRaceActive,
+        verifiedAuthoritative: hcAuthoritative,
+      })
+    : resolveDisplayTodaySteps(contextTodaySteps, canonicalTodaySteps);
   // Unlimited FGS raceSteps are the same daily HC total as the streak tray.
   // Don't leave Walk / Daily Walk at 0 while that tray shows thousands.
   const liveTodaySteps =
@@ -2363,6 +2371,16 @@ function WalkScreenContent() {
   const walkStepsHoldKey = `${user?.id ?? ""}:${getTodayKey()}`;
   if (walkStepsHoldRef.current.key !== walkStepsHoldKey) {
     walkStepsHoldRef.current = { key: walkStepsHoldKey, steps: 0 };
+  }
+  // Drop a held since-boot absolute once HC / resolved display is sane.
+  if (
+    walkStepsHoldRef.current.steps > 0 &&
+    isInflatedProvisionalVsVerified(
+      Math.max(verifiedTodaySteps, rawConfirmedWalkSteps),
+      walkStepsHoldRef.current.steps,
+    )
+  ) {
+    walkStepsHoldRef.current.steps = Math.max(verifiedTodaySteps, rawConfirmedWalkSteps);
   }
   if (rawConfirmedWalkSteps > 0) {
     walkStepsHoldRef.current.steps = rawConfirmedWalkSteps;
@@ -2678,16 +2696,76 @@ function WalkScreenContent() {
     let cancelled = false;
     const timer = setTimeout(() => {
       void getHealthConnectVerificationState()
-        .then((s) => {
-          if (!cancelled) setHcVerification(s);
+        .then(async (s) => {
+          if (cancelled) return;
+          setHcVerification(s);
+          const verified = Math.max(0, Math.floor(s.currentDayVerifiedSteps ?? 0));
+          const { store } = await import("@/store");
+          const rp = store.getState().raceProgress;
+          const display = Math.max(
+            0,
+            Math.floor(rp.todaySteps ?? 0),
+            Math.floor(rp.provisionalSensorTodaySteps ?? 0),
+            Math.floor(rp.verifiedTodaySteps ?? 0),
+          );
+          // HC empty (0) + huge Redux absolute = since-boot poison, even if
+          // verifiedTodaySteps was also corrupted to the same value.
+          const poisoned =
+            s.healthConnectAvailable &&
+            s.readStepsPermissionGranted &&
+            isInflatedProvisionalVsVerified(verified, display);
+          if (poisoned) {
+            const { updateStepProgressFromRealSource } = await import(
+              "@/services/stepProgressCoordinator"
+            );
+            const { stepTrackingNotificationService } = await import(
+              "@/services/stepTrackingNotificationService"
+            );
+            const { raceProgressActions } = await import(
+              "@/store/slices/raceProgressSlice"
+            );
+            const { walkActions } = await import("@/store/slices/walkSlice");
+            try {
+              await stepTrackingNotificationService.resetDailyStepsForNewDay();
+            } catch {
+              /* non-fatal */
+            }
+            store.dispatch(
+              raceProgressActions.resetDailyStepsForNewDay({
+                todaySteps: verified,
+                updatedAt: new Date().toISOString(),
+              }),
+            );
+            store.dispatch(walkActions.setTodaySteps(verified));
+            updateStepProgressFromRealSource({
+              todaySteps: verified,
+              stepSource: "health_connect",
+              dailyLane: "verified",
+              updatedAt: new Date().toISOString(),
+            });
+            if (user?.id) {
+              try {
+                await stepTrackingNotificationService.handOffToNativeBackground({
+                  userId: user.id,
+                  todaySteps: verified,
+                  dailyGoal:
+                    store.getState().raceProgress.dailyGoal > 0
+                      ? store.getState().raceProgress.dailyGoal
+                      : 10_000,
+                });
+              } catch {
+                /* non-fatal */
+              }
+            }
+          }
         })
         .catch(() => {});
-    }, 800);
+    }, 400);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, []));
+  }, [user?.id]));
 
   // Single focus owner — one coalesced /api/walk/today (no rank+db+rehydrate storm).
   const refreshTodayOnFocus = useCallback(async () => {

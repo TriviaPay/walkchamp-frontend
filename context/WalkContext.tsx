@@ -1417,8 +1417,22 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         previousProviderSteps: providerStepsAtBindRef.current || effectiveLocal,
         verifiedSource: verifiedActive,
       });
+      // Never Math.max back a since-boot local/UI floor when HC is empty.
+      const poisonedFloor =
+        verifiedActive &&
+        providerSteps <= 0 &&
+        (isInflatedProvisionalVsVerified(0, todayStepsRef.current) ||
+          isInflatedProvisionalVsVerified(0, localCached) ||
+          isInflatedProvisionalVsVerified(0, backendTodayStepsRef.current));
+      if (poisonedFloor) {
+        backendTodayStepsRef.current = 0;
+        stepEngineLog(
+          "WalkScreen",
+          `hydrate dropPoisonedFloor local=${localCached} ui=${todayStepsRef.current} backend=${backendSteps} provider=0`,
+        );
+      }
       const displaySteps =
-        isFreshLocalDay()
+        isFreshLocalDay() || poisonedFloor
           ? mergedDisplay
           : Math.max(mergedDisplay, todayStepsRef.current, localCached);
       if (displaySteps >= lastProviderPollRef.current) {
@@ -1431,11 +1445,11 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       await storageSet(keys.lastSyncedStepsCount, lastSyncedStepsRef.current);
       await storageSet(keys.currentLocalDate, todayKey);
       const hydratedDisplay =
-        isFreshLocalDay()
+        isFreshLocalDay() || poisonedFloor
           ? clampHydratedDisplaySteps(
               displaySteps,
               verifiedActive && displaySteps === 0 ? 0 : todayStepsRef.current,
-              backendTodayStepsRef.current,
+              poisonedFloor ? 0 : backendTodayStepsRef.current,
             )
           : Math.max(
               clampHydratedDisplaySteps(
@@ -1448,7 +1462,8 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             );
       if (
         applyDisplay &&
-        (isFreshLocalDay() ||
+        (poisonedFloor ||
+          isFreshLocalDay() ||
           hydratedDisplay > todayStepsRef.current ||
           (verifiedActive &&
             isFreshLocalDay() &&
@@ -1461,20 +1476,37 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
             )))
       ) {
         const isDownwardCorrection =
-          isFreshLocalDay() &&
-          (hydratedDisplay === 0 ||
-            isInflatedProvisionalVsVerified(
-              hydratedDisplay,
-              todayStepsRef.current,
-            ));
-        if (isDownwardCorrection) {
-          if (shouldTrustVerifiedDownwardCorrection(hydratedDisplay)) {
-            await forceSetTodayStepDisplay(hydratedDisplay);
-          } else {
-            stepEngineLog(
-              "WalkScreen",
-              `deferredInflationCorrection previous=${todayStepsRef.current} candidate=${hydratedDisplay} awaitingConfirmation=true`,
+          poisonedFloor ||
+          (isFreshLocalDay() &&
+            (hydratedDisplay === 0 ||
+              isInflatedProvisionalVsVerified(
+                hydratedDisplay,
+                todayStepsRef.current,
+              )));
+        if (isDownwardCorrection || poisonedFloor) {
+          await forceSetTodayStepDisplay(hydratedDisplay);
+          if (poisonedFloor) {
+            store.dispatch(
+              raceProgressActions.resetDailyStepsForNewDay({
+                todaySteps: hydratedDisplay,
+                updatedAt: new Date().toISOString(),
+              }),
             );
+            try {
+              await stepTrackingNotificationService.resetDailyStepsForNewDay();
+              if (user?.id) {
+                await stepTrackingNotificationService.handOffToNativeBackground({
+                  userId: user.id,
+                  todaySteps: hydratedDisplay,
+                  dailyGoal:
+                    todayDailyGoalRef.current > 0
+                      ? todayDailyGoalRef.current
+                      : 10_000,
+                });
+              }
+            } catch {
+              /* non-fatal */
+            }
           }
         } else if (hydratedDisplay > todayStepsRef.current) {
           await forceSetTodayStepDisplay(hydratedDisplay);
@@ -1758,6 +1790,9 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         if (user?.id) {
           await storageSet(stepScopedKeys(user.id, today).currentLocalDate, today);
         }
+        // Incoming `real` was captured before the day reset (often yesterday's
+        // sensor absolute). Do not apply it onto the new day.
+        return;
       }
 
       const current = todayStepsRef.current;
@@ -1999,7 +2034,21 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       const data = await stepProviderManager.getTodaySteps();
       const providerSteps = Math.max(0, data?.steps ?? 0);
       display = resolveLiveDisplaySteps(providerSteps);
-      if (!verifiedActive) {
+      if (freshDay && Platform.OS === "android") {
+        try {
+          const native = await stepTrackingNotificationService.getNativeStepState(
+            user.id,
+          );
+          if (native?.userId === user.id && native.localDate === getTodayKey()) {
+            display = Math.max(
+              display,
+              Math.max(0, Math.floor(native.todaySteps ?? 0)),
+            );
+          }
+        } catch {
+          /* optional */
+        }
+      } else if (!verifiedActive && !freshDay) {
         // Legacy only — verified HC/HK must not Math.max with yesterday's UI/FGS.
         display = Math.max(
           display,
@@ -2065,7 +2114,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       rp.userId === user.id ? Math.max(0, Math.floor(rp.todaySteps)) : 0;
     const verifiedLane = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
     const finalSteps = freshDay
-      ? Math.max(display, verifiedActive ? 0 : todayStepsRef.current)
+      ? display
       : mergeNative
         ? await resolveAuthoritativeTodaySteps(user.id, {
             mergeNative: !verifiedActive,

@@ -106,6 +106,17 @@ assert.equal(
   1592,
 );
 
+// HC readable but writer sync pending — do not show since-boot sensor absolute.
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 3563,
+    provisionalSensorTodaySteps: 22380,
+    todaySteps: 22380,
+    verifiedAuthoritative: false,
+  }),
+  3563,
+);
+
 assert.equal(isInflatedProvisionalVsVerified(433, 1592), true);
 assert.equal(isInflatedProvisionalVsVerified(433, 450), false);
 assert.equal(isStaleSensorAbsolute(0, 1592), true);

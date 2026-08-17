@@ -73,6 +73,7 @@ data class NativeStepState(
     private const val PREFS = "walkchamp_native_step_state"
     private const val KEY_JSON = "state_json"
     private const val KEY_CURRENT_USER = "current_user_id"
+    private const val KEY_DAILY_RESET_DATE = "daily_reset_date"
 
     private fun stateKey(userId: String) = "$KEY_JSON:$userId"
 
@@ -89,6 +90,20 @@ data class NativeStepState(
         editor.putString(KEY_CURRENT_USER, userId)
       }
       editor.apply()
+    }
+
+    /** True when native daily totals have not been re-baselined for this local calendar day. */
+    fun needsDailyReset(ctx: Context, today: String = localDateString()): Boolean {
+      val marked = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .getString(KEY_DAILY_RESET_DATE, null)
+      return marked != today
+    }
+
+    fun markDailyResetComplete(ctx: Context, today: String = localDateString()) {
+      ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(KEY_DAILY_RESET_DATE, today)
+        .apply()
     }
 
     fun localDateString(): String {
@@ -155,6 +170,7 @@ data class NativeStepState(
             updatedAt = System.currentTimeMillis(),
           )
           save(ctx, migrated)
+          markDailyResetComplete(ctx, today)
           return migrated
         }
         state

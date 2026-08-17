@@ -68,6 +68,15 @@ assert.equal(
   "error",
 );
 
+// Writer app installed but not writing into Health Connect → provider_required.
+assert.equal(
+  resolveHealthConnectVerificationStatus({
+    writerStatus: "installed_but_not_connected",
+    writerEvidenceDetected: false,
+    currentDayRecordsFound: false,
+  }),
+  "provider_required",
+);
 assert.equal(isVerifiedHealthAuthoritative("ready"), true);
 assert.equal(isVerifiedHealthAuthoritative("records_zero"), true);
 assert.equal(isVerifiedHealthAuthoritative("sync_delayed"), true);

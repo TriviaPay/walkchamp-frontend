@@ -1,4 +1,5 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
+import { isStaleSensorAbsolute } from "@/platform/steps/walkDisplaySteps";
 
 export type RaceProgressStatus =
   | "idle"
@@ -494,10 +495,15 @@ const raceProgressSlice = createSlice({
               !catchUpAllowed;
             const spikeFromPrev =
               !isFirstProvisionalReading && next > prev + 500 && !catchUpAllowed;
-            if (implausible || hugeJumpFromVerified || spikeFromPrev) {
+            // First provisional tick must still reject since-boot TYPE_STEP_COUNTER
+            // absolutes (e.g. 22k) when HC is still 0 — otherwise recomputeDisplayToday
+            // locks Daily Walk to Math.max(verified, 22000). Honest first ticks under
+            // 1000 (or within +1k of HC) still pass isStaleSensorAbsolute.
+            const looksLikeSinceBoot = isStaleSensorAbsolute(verified, next);
+            if (implausible || hugeJumpFromVerified || spikeFromPrev || looksLikeSinceBoot) {
               if (__DEV__) {
                 console.log(
-                  `[StepStore] rejected inflated provisional next=${next} verified=${verified} prev=${prev}`,
+                  `[StepStore] rejected inflated provisional next=${next} verified=${verified} prev=${prev} sinceBoot=${looksLikeSinceBoot}`,
                 );
               }
             } else if (next >= prev || next >= verified) {

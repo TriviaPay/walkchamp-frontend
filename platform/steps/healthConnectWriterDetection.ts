@@ -8,6 +8,7 @@ import {
   isStepWriterInstalled,
   resolvePreferredStepWriterAsync,
 } from "@/services/steps/androidStepWriterApps";
+import { originsIncludeWriterPackage } from "./healthConnectOrigins";
 import {
   classifyWriterDetection,
   isWriterFeedSufficientlyConfigured as isSufficientPure,
@@ -31,6 +32,13 @@ export type HealthConnectWriterDetectionResult = {
   recordHint: string;
   readable: boolean;
   hasWriterEvidence: boolean;
+  /** Writer APK is on the device (Samsung Health / Google Fit). */
+  writerInstalled: boolean;
+  /**
+   * When Samsung Health is installed, origins must include that package.
+   * Phone-only Health Connect steps do not count as Samsung connected.
+   */
+  requiredWriterPackageId?: string;
   diagnostic?: HealthConnectReadDiagnostic;
 };
 
@@ -47,6 +55,10 @@ export async function detectHealthConnectWriterFeed(opts?: {
     const installed =
       (await isStepWriterInstalled(writer)) || !!opts?.writerConfirmedByUser;
     const feed = await androidHCService.probeTodayStepFeed();
+    const requiredWriterPackageId =
+      writer.kind === "samsung_health" && installed
+        ? writer.packageId
+        : undefined;
 
     const status = classifyWriterDetection({
       readable: feed.readable,
@@ -54,23 +66,20 @@ export async function detectHealthConnectWriterFeed(opts?: {
       hasHistoricalStepRecords: feed.hasHistoricalStepRecords,
       dataOrigins: feed.dataOrigins,
       writerInstalled: installed,
+      requiredWriterPackageId,
     });
 
-    // Soft "waiting" when installed, readable, but empty today and no history yet.
-    const resolvedStatus: HealthConnectWriterDetectionStatus =
-      status === "installed_but_not_connected" && feed.readable
-        ? "waiting_for_sync"
-        : status;
-
-    const hasWriterEvidence = hasHealthConnectWriterEvidence({
-      resolvedSteps: feed.steps,
-      recordCount: feed.recordCount,
-      dataOrigins: feed.dataOrigins,
-      hasHistoricalStepRecords: feed.hasHistoricalStepRecords,
-    });
+    const hasWriterEvidence = requiredWriterPackageId
+      ? originsIncludeWriterPackage(feed.dataOrigins, requiredWriterPackageId)
+      : hasHealthConnectWriterEvidence({
+          resolvedSteps: feed.steps,
+          recordCount: feed.recordCount,
+          dataOrigins: feed.dataOrigins,
+          hasHistoricalStepRecords: feed.hasHistoricalStepRecords,
+        });
 
     return {
-      status: resolvedStatus,
+      status,
       selectedWriterId: writer.kind,
       selectedWriterLabel: writer.label,
       detectedOrigins: feed.dataOrigins,
@@ -82,6 +91,8 @@ export async function detectHealthConnectWriterFeed(opts?: {
       recordHint: feed.recordHint,
       readable: feed.readable,
       hasWriterEvidence,
+      writerInstalled: installed,
+      requiredWriterPackageId,
       diagnostic: undefined,
     };
   } catch {
@@ -95,6 +106,7 @@ export async function detectHealthConnectWriterFeed(opts?: {
       recordHint: "Could not verify Health Connect yet",
       readable: false,
       hasWriterEvidence: false,
+      writerInstalled: false,
     };
   }
 }
@@ -111,6 +123,7 @@ export function isWriterFeedSufficientlyConfigured(
     todaySteps: result.todaySteps,
     dataOrigins: result.detectedOrigins,
     recordCount: result.recordCount,
-    writerInstalled: !!result.selectedWriterId,
+    writerInstalled: result.writerInstalled,
+    requiredWriterPackageId: result.requiredWriterPackageId,
   });
 }

@@ -230,22 +230,20 @@ async function resolveAndroidCapability(
       todaySteps: feed.todaySteps,
       dataOrigins: feed.detectedOrigins,
       recordCount: feed.recordCount,
-      writerInstalled:
-        feed.status === "installed_but_not_connected" ||
-        feed.status === "waiting_for_sync" ||
-        feed.status === "writer_detected",
+      writerInstalled: feed.writerInstalled,
+      requiredWriterPackageId: feed.requiredWriterPackageId,
     });
     const recordsAvailable =
-      feed.todaySteps > 0 ||
-      feed.detectedOrigins.length > 0 ||
-      feed.hasHistoricalStepRecords ||
-      feed.hasWriterEvidence;
+      feed.hasWriterEvidence &&
+      (feed.todaySteps > 0 ||
+        feed.detectedOrigins.length > 0 ||
+        feed.hasHistoricalStepRecords);
 
     if (writerOk || recordsAvailable) {
       const syncDelayed =
         feed.todaySteps <= 0 &&
         provisionalTrackingAvailable &&
-        (feed.status === "waiting_for_sync" || !feed.hasWriterEvidence);
+        feed.hasWriterEvidence;
       return {
         platform: "android",
         provisionalTrackingAvailable,
@@ -263,9 +261,9 @@ async function resolveAndroidCapability(
       };
     }
 
-    const writerInstalled =
-      feed.status === "installed_but_not_connected" ||
-      feed.status === "waiting_for_sync";
+    const writerInstalledNotConnected =
+      feed.status === "installed_but_not_connected";
+    const writerLabel = feed.selectedWriterLabel ?? "your health app";
 
     return {
       platform: "android",
@@ -276,12 +274,10 @@ async function resolveAndroidCapability(
       verifiedRecordsAvailable: false,
       nativeOnDeviceHealthStepsSupported: false,
       externalWriterRequired: true,
-      compatibleWriterDetected: writerInstalled,
-      verificationStatus: writerInstalled
-        ? "temporarily_unavailable"
-        : "provider_required",
-      userMessage: writerInstalled
-        ? "Your live steps are updating. Verified steps are still syncing."
+      compatibleWriterDetected: false,
+      verificationStatus: "provider_required",
+      userMessage: writerInstalledNotConnected
+        ? `${writerLabel} is installed but not connected to Health Connect. Open Health Connect, tap + next to ${writerLabel}, and allow Write Steps.`
         : "Connect a compatible health app so your steps can be verified.",
     };
   } catch {

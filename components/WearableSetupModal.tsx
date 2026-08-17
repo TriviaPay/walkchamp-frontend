@@ -95,9 +95,16 @@ export default function WearableSetupModal({
   const stepsGrantedThisSessionRef = useRef(false);
   /** Recheck (or return-from-install) this session — Next stays dim until then. */
   const [writerRecheckedThisSession, setWriterRecheckedThisSession] = useState(false);
+  /**
+   * Setup may proceed after the user opened Health Connect this session and
+   * Rechecked, even if Samsung has not written Step rows yet. Verified daily
+   * authority still requires writer evidence later.
+   */
+  const [writerSetupReady, setWriterSetupReady] = useState(false);
   const androidPhaseRef = useRef(androidPhase);
   androidPhaseRef.current = androidPhase;
   const awaitingWriterReturnRef = useRef(false);
+  const visitedHcWriterSettingsRef = useRef(false);
   const useOnboardingAccent = accent === "onboarding";
   const actionIconColor = useOnboardingAccent ? "#FFF" : "#000";
   const actionTextColor = useOnboardingAccent ? "#FFF" : "#000";
@@ -227,9 +234,11 @@ export default function WearableSetupModal({
       setEnableTrackingHint(false);
       setWriterReady(false);
       setWriterInstalled(false);
+      setWriterSetupReady(false);
       setWriterHint("");
       setWriterRecheckedThisSession(false);
       awaitingWriterReturnRef.current = false;
+      visitedHcWriterSettingsRef.current = false;
       stepsGrantedThisSessionRef.current = false;
       if (isIOS) {
         void checkPerm();
@@ -251,27 +260,58 @@ export default function WearableSetupModal({
     }
     setWriterChecking(true);
     try {
+      try {
+        androidHCService.resetTodayStepCache();
+      } catch {
+        /* ignore */
+      }
       const writer = await resolvePreferredStepWriterAsync();
       setPreferredWriter(writer);
       const installed = await isStepWriterInstalled(writer);
       const vs = await getHealthConnectVerificationState();
-      const ok =
-        isVerifiedHealthAuthoritative(vs.status) || vs.writerInstalled === true;
-      const installedOk = installed || vs.writerInstalled === true;
-      setWriterInstalled(installedOk);
-      setWriterReady(ok || installedOk);
+      let connected =
+        vs.writerConnectedToHealthConnect === true ||
+        vs.writerEvidenceDetected === true;
+      let latestVs = vs;
+      if (!connected && installed) {
+        await new Promise((r) => setTimeout(r, 1200));
+        const vsRetry = await getHealthConnectVerificationState();
+        latestVs = vsRetry;
+        connected =
+          vsRetry.writerConnectedToHealthConnect === true ||
+          vsRetry.writerEvidenceDetected === true;
+      }
+      // App permissions can show Samsung Health as Allowed before any Step
+      // records appear. After Open Health Connect + Recheck, allow setup Next.
+      const setupReady =
+        connected ||
+        (installed === true &&
+          latestVs.readStepsPermissionGranted === true &&
+          visitedHcWriterSettingsRef.current === true);
+      setWriterInstalled(installed);
+      setWriterReady(connected);
+      setWriterSetupReady(setupReady);
       setWriterRecheckedThisSession(true);
       setWriterHint(
-        ok || installedOk
-          ? installedOk && !ok
-            ? `${writer.label} is installed. Open Health Connect so it can write Steps, then Recheck.`
-            : "Verified step data is available from Health Connect."
-          : writer.syncHint,
+        connected
+          ? "Verified step data is available from Health Connect."
+          : setupReady
+            ? `${writer.label} is allowed in Health Connect. Step sync can take a few minutes — you can continue. Open ${writer.label} once if totals stay low.`
+            : installed
+              ? `In Health Connect → App permissions, ${writer.label} must be under Allowed access with Write Steps on. Tap Open Health Connect, confirm that, then Recheck.`
+              : writer.syncHint,
       );
-      return { installed: installedOk, ready: ok || installedOk };
+      if (setupReady) {
+        setEnableTrackingHint(false);
+      }
+      if (connected) {
+        setStep((s) => Math.min(s + 1, TOTAL_ANDROID - 1));
+      }
+      return { installed, ready: setupReady };
     } catch {
       setWriterReady(false);
       setWriterInstalled(false);
+      setWriterSetupReady(false);
       return { installed: false, ready: false };
     } finally {
       setWriterChecking(false);
@@ -291,6 +331,11 @@ export default function WearableSetupModal({
     });
     return () => sub.remove();
   }, [visible, androidPhase, checkHCAvailability, probeWriter, step]);
+
+  useEffect(() => {
+    if (!visible || isIOS || androidPhase !== "setup") return;
+    if (step === 2) void probeWriter();
+  }, [visible, step, androidPhase, probeWriter]);
 
   const checkPerm = useCallback(async () => {
     try {
@@ -416,6 +461,14 @@ export default function WearableSetupModal({
           : null;
         const verifiedOk =
           isIOS || (vs != null && isVerifiedHealthAuthoritative(vs.status));
+        // Writer may be Allowed in HC before Step records sync — still mark
+        // setup complete so Walk does not re-prompt "Health app needed".
+        const setupCompleted =
+          verifiedOk ||
+          (!!vs &&
+            vs.healthConnectAvailable &&
+            vs.readStepsPermissionGranted &&
+            vs.writerInstalled);
         const resolvedStatus = "connected";
         try {
           await authFetch("/api/me/step-source", {
@@ -424,7 +477,7 @@ export default function WearableSetupModal({
               platform,
               permission_status: resolvedStatus,
               source_name: healthName,
-              setup_completed: verifiedOk,
+              setup_completed: setupCompleted,
             }),
           });
         } catch { /* ignore network — still update local UI */ }
@@ -487,6 +540,12 @@ export default function WearableSetupModal({
         : null;
       const verifiedOk =
         isIOS || (vs != null && isVerifiedHealthAuthoritative(vs.status));
+      const setupCompleted =
+        verifiedOk ||
+        (!!vs &&
+          vs.healthConnectAvailable &&
+          vs.readStepsPermissionGranted &&
+          vs.writerInstalled);
 
       const resolvedStatus = live === "granted" ? "connected" : "denied";
       try {
@@ -496,7 +555,7 @@ export default function WearableSetupModal({
             platform,
             permission_status: resolvedStatus,
             source_name: healthName,
-            setup_completed: verifiedOk,
+            setup_completed: setupCompleted,
           }),
         });
       } catch { /* ignore network — still update local UI */ }
@@ -525,7 +584,7 @@ export default function WearableSetupModal({
     }
     const writerStepIndex = 2;
     if (!isIOS && step === writerStepIndex) {
-      if (!writerRecheckedThisSession || (!writerInstalled && !writerReady)) {
+      if (!writerRecheckedThisSession || !writerSetupReady) {
         setEnableTrackingHint(true);
         return;
       }
@@ -784,42 +843,56 @@ export default function WearableSetupModal({
     AllowStepsScreen,
     () => (
       <View style={ws.content}>
-        <View style={[ws.iconCircle, { backgroundColor: writerReady ? "#00E67618" : "#F59E0B18" }]}>
-          <Feather name={writerReady ? "check-circle" : "link"} size={36} color={writerReady ? "#00E676" : "#F59E0B"} />
+        <View style={[ws.iconCircle, { backgroundColor: writerSetupReady ? "#00E67618" : "#F59E0B18" }]}>
+          <Feather name={writerSetupReady ? "check-circle" : "link"} size={36} color={writerSetupReady ? "#00E676" : "#F59E0B"} />
         </View>
         <Text style={[ws.title, { color: colors.foreground }]}>
-          {writerReady || writerInstalled ? "Health data connected" : "Connect a health app"}
+          {writerReady
+            ? "Health data connected"
+            : writerSetupReady
+              ? "Samsung Health allowed"
+              : writerInstalled
+                ? `Connect ${preferredWriter?.label ?? "Samsung Health"}`
+                : "Connect a health app"}
         </Text>
         <Text style={[ws.desc, { color: colors.mutedForeground }]}>
           {writerReady
             ? "WalkChamp can read verified steps from Health Connect."
-            : `Install ${preferredWriter?.label ?? "Samsung Health or Google Fit"}, allow it to write Steps in Health Connect, then recheck. Permission alone is not enough.`}
+            : writerSetupReady
+              ? `${preferredWriter?.label ?? "Samsung Health"} is connected in Health Connect. You can continue — verified steps may take a few minutes to sync.`
+              : writerInstalled
+                ? `Open Health Connect → App permissions and confirm ${preferredWriter?.label ?? "Samsung Health"} is under Allowed access with Write Steps. Then return here and Recheck.`
+                : `Install ${preferredWriter?.label ?? "Samsung Health or Google Fit"}, allow it to write Steps in Health Connect, then recheck. Permission alone is not enough.`}
         </Text>
         {writerHint ? (
           <View style={[ws.infoCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Text style={[ws.infoText, { color: colors.mutedForeground }]}>{writerHint}</Text>
           </View>
         ) : null}
-        {!(writerReady || writerInstalled) ? (
+        {!writerSetupReady ? (
           <>
-            <PrimaryAction
-              onPress={() => {
-                void (async () => {
-                  awaitingWriterReturnRef.current = true;
-                  const writer =
-                    preferredWriter ?? (await resolvePreferredStepWriterAsync());
-                  setPreferredWriter(writer);
-                  const opened = await openStepWriterApp(writer);
-                  if (!opened) await openStepWriterInstallPage(writer);
-                })();
-              }}
-              icon="download"
-              label={`Install ${preferredWriter?.label ?? "health app"}`}
-            />
-            <View style={{ marginTop: 8 }}>
+            {!writerInstalled ? (
+              <PrimaryAction
+                onPress={() => {
+                  void (async () => {
+                    awaitingWriterReturnRef.current = true;
+                    visitedHcWriterSettingsRef.current = true;
+                    const writer =
+                      preferredWriter ?? (await resolvePreferredStepWriterAsync());
+                    setPreferredWriter(writer);
+                    const opened = await openStepWriterApp(writer);
+                    if (!opened) await openStepWriterInstallPage(writer);
+                  })();
+                }}
+                icon="download"
+                label={`Install ${preferredWriter?.label ?? "health app"}`}
+              />
+            ) : null}
+            <View style={{ marginTop: writerInstalled ? 0 : 8 }}>
               <PrimaryAction
                 onPress={() => {
                   awaitingWriterReturnRef.current = true;
+                  visitedHcWriterSettingsRef.current = true;
                   void androidHCService.openSettings();
                 }}
                 icon="external-link"
@@ -830,7 +903,11 @@ export default function WearableSetupModal({
         ) : null}
         <TouchableOpacity
           style={[ws.actionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, marginTop: 8 }]}
-          onPress={() => void probeWriter()}
+          onPress={() => {
+            // Manual Recheck = user confirmed they finished Health Connect permissions.
+            visitedHcWriterSettingsRef.current = true;
+            void probeWriter();
+          }}
           disabled={writerChecking}
         >
           {writerChecking
@@ -872,7 +949,7 @@ export default function WearableSetupModal({
   const trackingGranted =
     permStatus === "granted" || stepsGrantedThisSessionRef.current;
   const writerStepComplete =
-    (writerInstalled || writerReady) && writerRecheckedThisSession;
+    writerSetupReady && writerRecheckedThisSession;
   const nextBlocked =
     !isAndroidPreCheck &&
     !isLast &&
@@ -933,7 +1010,9 @@ export default function WearableSetupModal({
               {enableTrackingHint && !isAndroidPreCheck && (step === 1 || step === 2) ? (
                 <Text style={[ws.enableHint, { color: "#F87171" }]}>
                   {step === 2
-                    ? "Install a health app and tap Recheck before continuing"
+                    ? writerInstalled
+                      ? "Open Health Connect, confirm Samsung Health is Allowed, then Recheck"
+                      : "Install a health app and tap Recheck before continuing"
                     : "Enable tracking and then go for next"}
                 </Text>
               ) : null}
