@@ -13,6 +13,8 @@ import type { HealthConnectVerificationState } from "@/services/steps/healthConn
 type Props = {
   state: HealthConnectVerificationState | null;
   onSetup: () => void;
+  /** True when WalkContext already has Health Connect / HealthKit READ granted. */
+  stepsAccessGranted?: boolean;
 };
 
 function actionLabel(state: HealthConnectVerificationState): string {
@@ -56,12 +58,25 @@ function bannerBody(state: HealthConnectVerificationState): string {
   return describeHealthConnectVerificationStatus(state.status);
 }
 
-export default function VerifiedStepsStatusBanner({ state, onSetup }: Props) {
+export default function VerifiedStepsStatusBanner({
+  state,
+  onSetup,
+  stepsAccessGranted = false,
+}: Props) {
   const colors = useColors();
   if (!state) return null;
   if (
     typeof isVerifiedHealthAuthoritative === "function" &&
     isVerifiedHealthAuthoritative(state.status)
+  ) {
+    return null;
+  }
+  // Hide once the in-app HC wizard is done (READ granted + HC available).
+  // WalkContext can know about the grant before the HC probe cache catches up.
+  if (
+    (state.healthConnectAvailable && state.readStepsPermissionGranted) ||
+    (stepsAccessGranted &&
+      (state.status === "permission_required" || state.readStepsPermissionGranted))
   ) {
     return null;
   }

@@ -1,21 +1,18 @@
 const {
   requireOptionalNativeModule,
-  requireNativeModule,
 } = require("expo-modules-core");
 
 let cachedModule = undefined;
-let loadAttempted = false;
 
 /**
  * Lazy load — never touch the native bridge at require() time (bridgeless RN 0.81).
+ * Never call requireNativeModule: that throws JavaScriptContextHolder NPE while
+ * Metro is reloading. Retry on each access until the module is actually there.
  */
 function getWalkChampRaceProgress() {
-  if (loadAttempted) return cachedModule ?? null;
-  loadAttempted = true;
+  if (cachedModule) return cachedModule;
   try {
-    cachedModule =
-      requireOptionalNativeModule("WalkChampRaceProgress") ??
-      requireNativeModule("WalkChampRaceProgress");
+    cachedModule = requireOptionalNativeModule("WalkChampRaceProgress") ?? null;
   } catch {
     cachedModule = null;
   }
@@ -26,10 +23,15 @@ module.exports = new Proxy(
   {},
   {
     get(_target, prop) {
-      const mod = getWalkChampRaceProgress();
-      if (!mod || prop === "then") return undefined;
-      const value = mod[prop];
-      return typeof value === "function" ? value.bind(mod) : value;
+      try {
+        const mod = getWalkChampRaceProgress();
+        if (!mod || prop === "then") return undefined;
+        const value = mod[prop];
+        return typeof value === "function" ? value.bind(mod) : value;
+      } catch {
+        cachedModule = null;
+        return undefined;
+      }
     },
   },
 );

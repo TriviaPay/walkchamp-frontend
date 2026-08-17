@@ -96,18 +96,14 @@ export function resolveTodayDisplayStepsCore(params: {
   }
 
   if (verified) {
-    // Empty HC/HK read is not an authoritative zero — keep backend/previous floor
-    // so Samsung lag does not wipe Walk UI / sync to 0.
+    // Empty HC/HK read is not an authoritative zero — keep a sane backend floor
+    // so Samsung lag / reinstall does not wipe Walk UI. Drop only since-boot
+    // previousProvider floors, never a real GET /api/walk/today account total.
     if (provider <= 0) {
-      const floor = Math.max(
-        backend,
-        Math.max(0, Math.floor(params.previousProviderSteps ?? 0)),
-      );
-      // Since-boot / poisoned cache (e.g. 22380) must not fill an empty HC day.
-      if (floor >= 1000) {
-        return 0;
-      }
-      return floor;
+      const prev = Math.max(0, Math.floor(params.previousProviderSteps ?? 0));
+      const prevLooksLikeSinceBoot = prev >= 1000 && (backend <= 0 || prev > backend + 1000);
+      const safePrev = prevLooksLikeSinceBoot ? 0 : prev;
+      return Math.max(backend, safePrev);
     }
     return provider;
   }
@@ -146,8 +142,7 @@ export function capWalkStepsForSyncCore(
     const backend = Math.max(0, Math.floor(backendSteps ?? 0));
     if (provider <= 0) {
       // HC/HK empty — never upload sensor/provisional UI as verified daily.
-      // Also drop poisoned since-boot backend floors (e.g. 22380).
-      if (backend >= 1000) return 0;
+      // Keep last backend floor so a reinstall can restore today's account total.
       return backend;
     }
     return Math.min(ui, provider);

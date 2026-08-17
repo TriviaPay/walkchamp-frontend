@@ -71,18 +71,29 @@ assert.equal(
 assert.equal(
   resolveTodayDisplayStepsCore({
     providerSteps: 0,
-    backendSteps: 22380,
+    backendSteps: 18496,
+    previousProviderSteps: 22380,
+    verifiedSource: true,
+  }),
+  18496,
+  "reinstall: keep account DB total, drop since-boot previous",
+);
+
+assert.equal(
+  resolveTodayDisplayStepsCore({
+    providerSteps: 0,
+    backendSteps: 0,
     previousProviderSteps: 22380,
     verifiedSource: true,
   }),
   0,
-  "verified empty HC drops since-boot poisoned floor",
+  "verified empty HC drops since-boot previous when DB is empty",
 );
 
 assert.equal(
-  capWalkStepsForSyncCore(22380, 0, true, 22380),
-  0,
-  "verified empty HC never re-uploads poisoned backend floor",
+  capWalkStepsForSyncCore(22380, 0, true, 18496),
+  18496,
+  "verified empty HC never re-uploads sensor UI; keeps account floor",
 );
 
 assert.equal(

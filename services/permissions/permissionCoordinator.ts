@@ -9,6 +9,14 @@ import { getDeviceCapabilitySnapshot } from "@/services/permissions/deviceCapabi
 import { getNotificationPermissionStatus } from "@/services/permissions/notificationPermissionService";
 import { STORAGE_KEYS, storageGet, storageSet } from "@/utils/storage";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
+import {
+  applyDeviceSetupCompleted,
+  applyDeviceSetupLater,
+  emptyDeviceStepSetupRecord,
+  isDeviceRaceViewOnly,
+  parseDeviceStepSetupRecord,
+  type DeviceStepSetupRecord,
+} from "@/platform/steps/stepSetupPromptDecision";
 
 export type PermissionStatus =
   | "not_requested"
@@ -63,9 +71,96 @@ export async function wasPermissionEducationShown(
   return false;
 }
 
+function deviceSetupKey(installationId: string): string {
+  return `${STORAGE_KEYS.FIRST_PERMISSION_FLOW}:device:${installationId}`;
+}
+
+async function writeDeviceStepSetupRecord(
+  next: DeviceStepSetupRecord,
+): Promise<void> {
+  const installationId = await getInstallationId();
+  await storageSet(deviceSetupKey(installationId), next);
+}
+
+export async function getDeviceStepSetupRecord(): Promise<DeviceStepSetupRecord> {
+  const installationId = await getInstallationId();
+  const raw = await storageGet<unknown>(deviceSetupKey(installationId));
+  return parseDeviceStepSetupRecord(raw);
+}
+
+/** This app install already completed step setup while OS access was granted. */
+export async function wasDeviceStepSetupCompleted(): Promise<boolean> {
+  return (await getDeviceStepSetupRecord()).completed;
+}
+
+export async function markDeviceStepSetupCompleted(): Promise<void> {
+  await writeDeviceStepSetupRecord(applyDeviceSetupCompleted());
+}
+
+/** Persist wizard progress so Profile / Walk can resume the remaining steps. */
+export async function saveDeviceSetupResume(args: {
+  step: number;
+  androidPhase?: string;
+}): Promise<void> {
+  const cur = await getDeviceStepSetupRecord();
+  if (cur.completed) return;
+  await writeDeviceStepSetupRecord({
+    ...cur,
+    resumeStep: Math.max(0, Math.floor(args.step)),
+    resumeAndroidPhase: args.androidPhase ?? cur.resumeAndroidPhase,
+  });
+}
+
+/**
+ * Auto home wizard / onboarding Maybe Later on this install.
+ * First tap snoozes; second tap locks races to view-only until setup is finished.
+ */
+export async function recordDeviceSetupLater(): Promise<DeviceStepSetupRecord> {
+  const cur = await getDeviceStepSetupRecord();
+  const next = applyDeviceSetupLater(cur, Date.now());
+  await writeDeviceStepSetupRecord(next);
+  return next;
+}
+
+/** After two Maybes on this device, join/create stays blocked until they enable tracking. */
+export async function isDeviceRaceViewOnlyNow(): Promise<boolean> {
+  if (await osStepAccessGranted()) return false;
+  const rec = await getDeviceStepSetupRecord();
+  return isDeviceRaceViewOnly({
+    osStepAccessGranted: false,
+    laterCount: rec.laterCount,
+    deviceSetupCompleted: rec.completed,
+  });
+}
+
+export { emptyDeviceStepSetupRecord };
+
 export async function markPermissionEducationShown(userId: string): Promise<void> {
   const installationId = await getInstallationId();
   await storageSet(educationKey(userId, installationId), true);
+}
+
+/**
+ * True when this install already has Health Connect READ_STEPS / HealthKit.
+ * Account switches reuse this — it is not per WalkChamp user.
+ */
+export async function osStepAccessGranted(): Promise<boolean> {
+  try {
+    if (Platform.OS === "ios") {
+      await stepProviderManager.initialize();
+      return stepProviderManager.isTrackingReady();
+    }
+    if (Platform.OS !== "android") return false;
+    const { androidHCService } = await import(
+      "@/services/steps/androidHealthConnectService"
+    );
+    androidHCService.invalidatePermissionCache();
+    const init = await androidHCService.initialize();
+    if (!init.initialized || init.availability !== "available") return false;
+    return (await androidHCService.getPermissionStatus()) === "granted";
+  } catch {
+    return false;
+  }
 }
 
 function mapNotifStatus(s: string): PermissionStatus {

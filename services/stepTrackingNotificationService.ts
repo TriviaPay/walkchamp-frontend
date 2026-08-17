@@ -1,5 +1,6 @@
 import { PermissionsAndroid, Platform, AppState } from "react-native";
 import { requireOptionalExpoNativeModule } from "@/utils/expoNativeModule";
+import { isAppStartupReady } from "@/services/appStartup";
 import Constants from "expo-constants";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { STEP_TRACKING_NOTIFICATION_CONFIG } from "@/config/stepTrackingNotificationConfig";
@@ -70,18 +71,12 @@ let lastSteps = -1;
 let lastPermissionDeniedMessageAt = 0;
 
 function resolveNativeModule(): NativeModule | null {
+  if (!isAppStartupReady()) return null;
   try {
     const direct = requireOptionalExpoNativeModule<NativeModule>(
       "WalkChampRaceProgress",
     );
     if (direct) return direct;
-
-    try {
-      const fromPackage = require("walkchamp-race-progress") as NativeModule;
-      if (fromPackage) return fromPackage;
-    } catch {
-      // package entry unavailable in this runtime
-    }
 
     const expoKeys = Object.keys(
       (globalThis as { expo?: { modules?: Record<string, unknown> } }).expo?.modules ?? {},
@@ -98,6 +93,11 @@ function resolveNativeModule(): NativeModule | null {
 
 function getNativeModule(forceRefresh = false): NativeModule | null {
   if (!FEATURE_FLAGS.ENABLE_STEP_TRACKING_NOTIFICATIONS) return null;
+  if (!isAppStartupReady()) {
+    nativeModule = null;
+    nativeModuleResolved = false;
+    return null;
+  }
   if (nativeModuleResolved && !forceRefresh) return nativeModule;
   // resolveNativeModule / requireOptionalExpoNativeModule already gate on startup ready.
   // Do not cache null — otherwise a cold-start miss permanently disables FGS updates.

@@ -15,6 +15,8 @@ import { useCallback } from "react";
 import { Alert, Platform } from "react-native";
 import { useWalkContext } from "@/context/WalkContext";
 import { requireVerifiedStepTracking } from "@/services/steps/verifiedStepCapability";
+import { isDeviceRaceViewOnlyNow } from "@/services/permissions/permissionCoordinator";
+import { alertDeviceRaceViewOnly } from "@/services/permissions/matchPermissionGate";
 
 export function useStepSourceGuard(options?: {
   /** Open existing WearableSetupModal — no new modal. */
@@ -29,25 +31,31 @@ export function useStepSourceGuard(options?: {
    */
   const guardRewardAction = useCallback(
     (action: () => void) => {
-      void requireVerifiedStepTracking({
-        action: "join_or_create_race",
-        onAllowed: () => {
-          action();
-        },
-        onSetupRequired: () => {
-          if (onSetupRequired) {
-            onSetupRequired();
-            return;
-          }
-          Alert.alert(
-            "Verified Step Tracking Required",
-            Platform.OS === "ios"
-              ? "Connect Apple Health to join or create challenges."
-              : "Connect Health Connect to join or create challenges.",
-            [{ text: "OK" }],
-          );
-        },
-      });
+      void (async () => {
+        if (await isDeviceRaceViewOnlyNow()) {
+          alertDeviceRaceViewOnly();
+          return;
+        }
+        await requireVerifiedStepTracking({
+          action: "join_or_create_race",
+          onAllowed: () => {
+            action();
+          },
+          onSetupRequired: () => {
+            if (onSetupRequired) {
+              onSetupRequired();
+              return;
+            }
+            Alert.alert(
+              "Verified Step Tracking Required",
+              Platform.OS === "ios"
+                ? "Connect Apple Health to join or create challenges."
+                : "Connect Health Connect to join or create challenges.",
+              [{ text: "OK" }],
+            );
+          },
+        });
+      })();
     },
     [onSetupRequired],
   );

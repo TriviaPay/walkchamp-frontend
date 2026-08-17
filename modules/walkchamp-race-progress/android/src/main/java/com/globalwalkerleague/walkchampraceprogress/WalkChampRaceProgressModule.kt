@@ -21,13 +21,29 @@ class WalkChampRaceProgressModule : Module() {
         "[Module] WalkChampRaceProgress native module OnCreate — registered",
       )
       WalkChampStepStateEmitter.onStepStateUpdated = { payload ->
-        sendEvent("WalkChampStepStateUpdated", payload)
+        try {
+          sendEvent("WalkChampStepStateUpdated", payload)
+        } catch (t: Throwable) {
+          android.util.Log.w(
+            "WalkChampFGS",
+            "[Module] sendEvent skipped — JS runtime not ready",
+            t,
+          )
+        }
       }
       WalkChampStepStateEmitter.onWalkStepRefreshRequested = {
-        sendEvent(
-          "WalkChampWalkStepRefreshRequested",
-          mapOf("requestedAt" to System.currentTimeMillis()),
-        )
+        try {
+          sendEvent(
+            "WalkChampWalkStepRefreshRequested",
+            mapOf("requestedAt" to System.currentTimeMillis()),
+          )
+        } catch (t: Throwable) {
+          android.util.Log.w(
+            "WalkChampFGS",
+            "[Module] refresh event skipped — JS runtime not ready",
+            t,
+          )
+        }
       }
     }
 
@@ -180,6 +196,8 @@ class WalkChampRaceProgressModule : Module() {
       }
       val intent = Intent(ctx, WalkChampRaceForegroundService::class.java).apply {
         action = WalkChampRaceForegroundService.ACTION_MIDNIGHT_RESET
+        putExtra("forceSameDay", true)
+        putExtra(WalkChampRaceForegroundService.EXTRA_TODAY_STEPS, 0)
       }
       deliverToService(ctx, intent)
       true

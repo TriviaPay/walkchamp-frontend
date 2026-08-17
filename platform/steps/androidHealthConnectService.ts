@@ -29,6 +29,7 @@ import { storageGet, storageSet } from "@/utils/storage";
 import { stepAudit } from "@/utils/stepAudit";
 import { logger } from "@/utils/logger";
 import { normalizeHealthConnectOrigins } from "./healthConnectOrigins";
+import { shouldReuseHealthConnectPermCache } from "./healthConnectVerificationStateLogic";
 
 const HC_MANIFEST_BLOCKED_KEY = "hc_manifest_read_steps_blocked" as never;
 
@@ -461,11 +462,15 @@ export const androidHCService = {
     if (isExpoGo()) return "unavailable";
     if (!_initialized) return "unknown";
     const now = Date.now();
-    if (now < _permBackoffUntil && _permCache) {
-      return _permCache.status;
-    }
-    if (_permCache && now - _permCache.at < HC_PERM_CACHE_MS) {
-      return _permCache.status;
+    if (
+      shouldReuseHealthConnectPermCache({
+        cacheStatus: _permCache?.status ?? null,
+        cacheAgeMs: _permCache ? now - _permCache.at : Number.POSITIVE_INFINITY,
+        ttlMs: HC_PERM_CACHE_MS,
+        backoffActive: now < _permBackoffUntil && !!_permCache,
+      })
+    ) {
+      return _permCache!.status;
     }
     const hc = loadHCModule();
     if (!hc) return "unavailable";
@@ -838,9 +843,15 @@ export const androidHCService = {
    * Compatibility helpers used by newer setup/diagnostic modules.
    * Kept lightweight so feature/priya step core stays intact.
    */
+  /** Drop permission cache only — keep today's HC step total. */
+  invalidatePermissionCache(): void {
+    _permCache = null;
+    _permBackoffUntil = 0;
+  },
+
   invalidateCachesForForeground(): void {
     this.resetTodayStepCache();
-    _permCache = null;
+    this.invalidatePermissionCache();
   },
 
   async openHealthConnectManagement(opts?: {

@@ -13,12 +13,23 @@ import {
   requireVerifiedStepTracking,
   type VerifiedStepProviderResult,
 } from "@/services/steps/verifiedStepCapability";
+import { isDeviceRaceViewOnlyNow } from "@/services/permissions/permissionCoordinator";
 
 export type MatchPermissionGateResult = {
   allowed: boolean;
   /** True if we already showed UI and should not continue the action. */
   blocked: boolean;
 };
+
+export const DEVICE_RACE_VIEW_ONLY_TITLE = "Step tracking required";
+export const DEVICE_RACE_VIEW_ONLY_BODY =
+  "You can still browse WalkChamp. Enable step tracking from Profile or the health icon on Walk to join or create races.";
+
+export function alertDeviceRaceViewOnly(): void {
+  Alert.alert(DEVICE_RACE_VIEW_ONLY_TITLE, DEVICE_RACE_VIEW_ONLY_BODY, [
+    { text: "OK" },
+  ]);
+}
 
 function openAppSettings(): void {
   if (Platform.OS === "android") {
@@ -53,6 +64,12 @@ export async function ensureMatchStepPermissionsReady(options: {
   } = options;
 
   if (!userId?.trim()) {
+    return { allowed: false, blocked: true };
+  }
+
+  if (await isDeviceRaceViewOnlyNow()) {
+    alertDeviceRaceViewOnly();
+    if (__DEV__) console.log(`[Permission] matchGate action=${actionLabel} allowed=false reason=view_only`);
     return { allowed: false, blocked: true };
   }
 

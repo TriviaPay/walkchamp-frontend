@@ -13,7 +13,7 @@ import { setHealthOnboardingChoice } from "@/utils/onboardingStorage";
 import WearableSetupModal from "@/components/WearableSetupModal";
 import { useWalk } from "@/context/WalkContext";
 import { useAuth } from "@/context/AuthContext";
-import { markPermissionEducationShown } from "@/services/permissions/permissionCoordinator";
+import { markPermissionEducationShown, markDeviceStepSetupCompleted, recordDeviceSetupLater } from "@/services/permissions/permissionCoordinator";
 import { markHomeStepSetupPhaseDone } from "@/services/permissions/homePermissionFlow";
 import { rf } from "@/utils/responsive";
 
@@ -31,6 +31,11 @@ export default function HealthConnectOnboardingScreen() {
     // Prevent HomeWearableSetupHost from opening the same wizard again after Enter.
     if (user?.id) {
       await markPermissionEducationShown(user.id);
+    }
+    if (choice === "accepted") {
+      await markDeviceStepSetupCompleted();
+    } else if (choice === "skipped") {
+      await recordDeviceSetupLater();
     }
     markHomeStepSetupPhaseDone();
     router.push(ONBOARDING_ROUTES.notifications);

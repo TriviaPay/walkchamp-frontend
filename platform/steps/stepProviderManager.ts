@@ -403,6 +403,11 @@ export const stepProviderManager = {
     return status;
   },
 
+  /** Drop the 15s permission snapshot so a Health Connect re-grant is visible. */
+  invalidateStatusCache(): void {
+    _statusCache = null;
+  },
+
   async isTrackingReady(): Promise<boolean> {
     await this.initialize();
     if (!_activeProvider) return false;
@@ -905,6 +910,7 @@ export const stepProviderManager = {
     this.stopLiveRaceWatching();
     _activeProvider = null;
     _liveRaceProvider = null;
+    _statusCache = null;
   },
 };
 
@@ -917,6 +923,9 @@ if (Platform.OS === "android") {
       try {
         const { waitForAppStartupReady } = await import("@/services/appStartup");
         await waitForAppStartupReady();
+        // Re-grant in Health Connect settings must not keep a stale "denied".
+        androidHCService.invalidatePermissionCache();
+        stepProviderManager.invalidateStatusCache();
         await stepProviderManager.initialize(true);
       } catch (e) {
         if (__DEV__) {

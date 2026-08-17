@@ -39,6 +39,10 @@ import {
   isStepWriterInstalled,
   type AndroidStepWriterApp,
 } from "@/services/steps/androidStepWriterApps";
+import {
+  getDeviceStepSetupRecord,
+  saveDeviceSetupResume,
+} from "@/services/permissions/permissionCoordinator";
 
 const isIOS = Platform.OS === "ios";
 const TOTAL_IOS = 5;
@@ -64,10 +68,12 @@ interface Props {
   onComplete?: (platform: string, permissionStatus: string) => void;
   /** Match premium onboarding primary button (cyan → blue). Default matches onboarding. */
   accent?: "default" | "onboarding";
+  /** Auto home wizard: X / Maybe Later. Profile and Walk health icon must stay false. */
+  countsAsLater?: boolean;
 }
 
 export default function WearableSetupModal({
-  visible, onClose, onComplete, accent = "onboarding",
+  visible, onClose, onComplete, accent = "onboarding", countsAsLater = false,
 }: Props) {
   const colors = useColors();
   const { safeTop, safeBottom } = useSafeLayout();
@@ -105,6 +111,7 @@ export default function WearableSetupModal({
   androidPhaseRef.current = androidPhase;
   const awaitingWriterReturnRef = useRef(false);
   const visitedHcWriterSettingsRef = useRef(false);
+  const resumeHydratedRef = useRef(false);
   const useOnboardingAccent = accent === "onboarding";
   const actionIconColor = useOnboardingAccent ? "#FFF" : "#000";
   const actionTextColor = useOnboardingAccent ? "#FFF" : "#000";
@@ -226,28 +233,46 @@ export default function WearableSetupModal({
   }, []);
 
   useEffect(() => {
-    if (visible) {
-      setStep(0);
-      setSaving(false);
-      setPermLoading(false);
-      setInstallLoading(false);
-      setEnableTrackingHint(false);
-      setWriterReady(false);
-      setWriterInstalled(false);
-      setWriterSetupReady(false);
-      setWriterHint("");
-      setWriterRecheckedThisSession(false);
-      awaitingWriterReturnRef.current = false;
-      visitedHcWriterSettingsRef.current = false;
-      stepsGrantedThisSessionRef.current = false;
+    if (!visible) {
+      resumeHydratedRef.current = false;
+      return;
+    }
+    let cancelled = false;
+    resumeHydratedRef.current = false;
+    setSaving(false);
+    setPermLoading(false);
+    setInstallLoading(false);
+    setEnableTrackingHint(false);
+    setWriterReady(false);
+    setWriterInstalled(false);
+    setWriterSetupReady(false);
+    setWriterHint("");
+    setWriterRecheckedThisSession(false);
+    awaitingWriterReturnRef.current = false;
+    visitedHcWriterSettingsRef.current = false;
+    stepsGrantedThisSessionRef.current = false;
+    void (async () => {
+      const rec = await getDeviceStepSetupRecord();
+      if (cancelled) return;
+      const maxStep = (isIOS ? TOTAL_IOS : TOTAL_ANDROID) - 1;
+      setStep(Math.min(maxStep, rec.resumeStep));
+      resumeHydratedRef.current = true;
       if (isIOS) {
         void checkPerm();
       } else {
         void checkHCAvailability();
       }
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
+
+  useEffect(() => {
+    if (!visible || !resumeHydratedRef.current) return;
+    void saveDeviceSetupResume({ step, androidPhase });
+  }, [visible, step, androidPhase]);
 
   const probeWriter = useCallback(async (): Promise<{
     installed: boolean;
@@ -935,6 +960,13 @@ export default function WearableSetupModal({
     }
   };
 
+  const handleDismiss = () => {
+    if (resumeHydratedRef.current) {
+      void saveDeviceSetupResume({ step, androidPhase });
+    }
+    onClose();
+  };
+
   const headerTitle =
     isIOS ? "Apple Health Setup" :
     androidPhase === "checking" ? "Health Connect" :
@@ -943,7 +975,7 @@ export default function WearableSetupModal({
       : "Health Connect Setup";
 
   const footerLabel = isAndroidPreCheck
-    ? (androidPhase === "install" ? "Not Now" : "Close")
+    ? (countsAsLater ? "Maybe Later" : androidPhase === "install" ? "Not Now" : "Close")
     : isLast ? "Done" : "Next";
 
   const trackingGranted =
@@ -958,7 +990,7 @@ export default function WearableSetupModal({
   const footerLocked = saving || nextBlocked;
 
   const footerAction = isAndroidPreCheck
-    ? onClose
+    ? handleDismiss
     : isLast
       ? handleDone
       : nextBlocked
@@ -970,12 +1002,12 @@ export default function WearableSetupModal({
   const doneDot = useOnboardingAccent ? ONBOARDING_COLORS.cyan + "80" : "#00E67650";
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={handleDismiss}>
       <View style={[ws.container, { backgroundColor: colors.background }]}>
         <View style={[ws.sheet, { maxWidth: MODAL_MAX_WIDTH }]}>
         <View style={[ws.header, { paddingTop: safeTop + 16, borderBottomColor: colors.border }]}>
           <TouchableOpacity
-            onPress={showBackBtn ? goBack : onClose}
+            onPress={showBackBtn ? goBack : handleDismiss}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Feather name={showBackBtn ? "arrow-left" : "x"} size={22} color={colors.foreground} />
@@ -1061,6 +1093,17 @@ export default function WearableSetupModal({
                 </View>
               )}
             </TouchableOpacity>
+            {countsAsLater && !isAndroidPreCheck && !isLast ? (
+              <TouchableOpacity
+                onPress={handleDismiss}
+                hitSlop={{ top: 10, bottom: 10, left: 12, right: 12 }}
+                style={{ alignSelf: "center", paddingTop: 10, paddingBottom: 2 }}
+              >
+                <Text style={{ color: colors.mutedForeground, fontSize: rf(14), fontWeight: "600" }}>
+                  Maybe Later
+                </Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         )}
         </View>

@@ -62,6 +62,8 @@ data class NativeStepState(
     "notificationMode" to notificationMode,
     "updatedAt" to updatedAt,
     "sensorTotal" to sensorTotal.toDouble(),
+    "dailyBaseline" to dailyBaseline?.toDouble(),
+    "localDate" to localDate,
     "sensorSupported" to sensorSupported,
     "rank" to rank,
     "totalParticipants" to totalParticipants,
@@ -104,6 +106,20 @@ data class NativeStepState(
         .edit()
         .putString(KEY_DAILY_RESET_DATE, today)
         .apply()
+    }
+
+    /**
+     * True when [todaySteps] is the raw TYPE_STEP_COUNTER since-boot value,
+     * not a local-day total (today ≈ sensorTotal, no real daily baseline).
+     */
+    fun looksLikeSinceBootCounter(
+      todaySteps: Int,
+      sensorTotal: Float,
+      dailyBaseline: Float?,
+    ): Boolean {
+      if (todaySteps < 1000) return false
+      if (sensorTotal <= 0f) return false
+      return kotlin.math.abs(todaySteps.toFloat() - sensorTotal) <= 2f
     }
 
     fun localDateString(): String {
