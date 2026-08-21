@@ -95,10 +95,14 @@ export const androidHealthConnectProvider: StepProvider = {
         distanceMeters: data.distanceMeters,
         caloriesBurned: data.caloriesBurned,
         activeMinutes: data.activeMinutes,
+        queryStatus: data.outcome === "error" ? "error" : "ok",
       });
     } catch {
       logger.debug("StepProvider", "Health Connect getTodaySteps error");
-      return emptyStepResult("android_health_connect", "verified", from, to);
+      return {
+        ...emptyStepResult("android_health_connect", "verified", from, to),
+        queryStatus: "error",
+      };
     }
   },
 
@@ -109,10 +113,14 @@ export const androidHealthConnectProvider: StepProvider = {
         distanceMeters: data.distanceMeters,
         caloriesBurned: data.caloriesBurned,
         activeMinutes: data.activeMinutes,
+        queryStatus: data.outcome === "error" ? "error" : "ok",
       });
     } catch {
       logger.debug("StepProvider", "Health Connect getStepsForRange error");
-      return emptyStepResult("android_health_connect", "verified", start, end);
+      return {
+        ...emptyStepResult("android_health_connect", "verified", start, end),
+        queryStatus: "error",
+      };
     }
   },
 
@@ -146,11 +154,17 @@ export const androidHealthConnectProvider: StepProvider = {
     let stopped = false;
     let inFlight = false;
 
+    let lastWatchSteps = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const catchUpUntil =
+      Date.now() + STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_WINDOW_MS;
+
     const tick = async () => {
       if (stopped || inFlight) return;
       inFlight = true;
       try {
         const result = await this.getTodaySteps();
+        lastWatchSteps = Math.max(0, Math.floor(result.steps));
         if (!stopped) callback(result);
       } catch {
         logger.debug("StepProvider", "Health Connect watch tick error");
@@ -159,14 +173,25 @@ export const androidHealthConnectProvider: StepProvider = {
       }
     };
 
-    void tick();
-    const id = setInterval(() => {
-      void tick();
-    }, STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_POLL_MS);
+    const schedule = () => {
+      if (stopped) return;
+      const ms =
+        (lastWatchSteps < 50 && Date.now() < catchUpUntil)
+          ? STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_MS
+          : STEP_SYNC_CONFIG.WALK_HEALTH_VERIFICATION_MS;
+      timer = setTimeout(() => {
+        void (async () => {
+          await tick();
+          schedule();
+        })();
+      }, ms);
+    };
+
+    void tick().then(schedule);
 
     return () => {
       stopped = true;
-      clearInterval(id);
+      if (timer) clearTimeout(timer);
     };
   },
 

@@ -34,6 +34,8 @@ export interface StepReadResult {
   distanceMeters?: number;
   caloriesBurned?: number;
   activeMinutes?: number;
+  /** Present on Health Connect reads. error must not be stored as verified 0. */
+  queryStatus?: "ok" | "error";
 }
 
 export interface StepTrackingStatus {

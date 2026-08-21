@@ -31,12 +31,25 @@ export function resolveHealthConnectVerificationStatus(args: {
   writerEvidenceDetected: boolean;
   currentDayRecordsFound: boolean;
 }): HealthConnectVerificationStatus {
+  void args.writerEvidenceDetected;
   if (args.writerStatus === "permission_error") return "permission_required";
   if (args.writerStatus === "temporary_error") return "error";
-  if (!args.writerEvidenceDetected) return "provider_required";
   if (args.currentDayRecordsFound) return "ready";
   if (args.writerStatus === "waiting_for_sync") return "sync_delayed";
+  // READ_STEPS granted, aggregate still 0 — valid HC_READY_NO_DATA.
   return "records_zero";
+}
+
+/**
+ * HC read is granted but today's aggregate is still 0.
+ * This is READY_NO_DATA — not an unsupported device and not a missing-writer error.
+ */
+export function isWaitingForHealthConnectWriterData(
+  status: HealthConnectVerificationStatus,
+  writerInstalled?: boolean,
+): boolean {
+  if (status === "records_zero" || status === "sync_delayed") return true;
+  return status === "provider_required" && writerInstalled === true;
 }
 
 /**
@@ -90,6 +103,34 @@ export function resolveStepAccessAction(args: {
   return "full_setup";
 }
 
+/** How long a confirmed READ_STEPS grant sticks if HC's grant list is briefly empty. */
+export const HC_GRANT_STICKY_MS = 120_000;
+
+/**
+ * After the OS permission sheet, getGrantedPermissions() can be empty for a few
+ * seconds. Do not flip a confirmed grant to denied in that window — that re-shows
+ * "Step access needed" on Walk.
+ */
+export function resolveHcPermissionStatusAfterProbe(args: {
+  hasStepsRead: boolean;
+  permissionRequested: boolean;
+  lastGrantedAtMs: number;
+  nowMs: number;
+  stickyGrantMs?: number;
+}): "granted" | "denied" | "unknown" {
+  if (args.hasStepsRead) return "granted";
+  const sticky = args.stickyGrantMs ?? HC_GRANT_STICKY_MS;
+  if (
+    args.lastGrantedAtMs > 0 &&
+    args.nowMs - args.lastGrantedAtMs >= 0 &&
+    args.nowMs - args.lastGrantedAtMs < sticky
+  ) {
+    return "granted";
+  }
+  if (args.permissionRequested) return "denied";
+  return "unknown";
+}
+
 /**
  * Cache only a confirmed READ_STEPS grant. A cached "denied" / "unknown"
  * must not hide a later re-grant (user enabled WalkChamp in Health Connect again).
@@ -114,13 +155,13 @@ export function describeHealthConnectVerificationStatus(
       return "Health Connect is connected and verified steps are updating.";
     case "records_zero":
     case "sync_delayed":
-      return "Health Connect is connected, but no verified steps have been recorded today.";
-    case "provider_required":
-      return "Health Connect is available, but your health app is not connected to it yet. Open Health Connect and connect Samsung Health or Google Fit so daily steps can be verified.";
+      return "Health Connect is connected. Waiting for step data.";
+      case "provider_required":
+      return "System update required. Update your Android system / Google Play system components to enable verified step tracking.";
     case "permission_required":
       return "Grant step access to Health Connect to enable verified tracking.";
     case "unsupported":
-      return "This device currently cannot provide verified step data required for prize challenges.";
+      return "Verified step tracking isn't available on this device.";
     case "error":
     default:
       return "Verification setup required.";

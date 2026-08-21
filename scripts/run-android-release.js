@@ -261,6 +261,14 @@ function main() {
     "--no-configure-on-demand",
   ]);
 
+  console.log("[android:release] Building release AAB...");
+  gradle([
+    ":app:bundleRelease",
+    "-PreactNativeArchitectures=arm64-v8a",
+    "--no-daemon",
+    "--no-configure-on-demand",
+  ]);
+
   const apk = path.join(
     ANDROID,
     "app",
@@ -270,7 +278,17 @@ function main() {
     "release",
     "app-release.apk",
   );
+  const aab = path.join(
+    ANDROID,
+    "app",
+    "build",
+    "outputs",
+    "bundle",
+    "release",
+    "app-release.aab",
+  );
   console.log(`[android:release] Done: ${apk}`);
+  console.log(`[android:release] Done: ${aab}`);
 }
 
 main();

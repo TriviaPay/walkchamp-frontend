@@ -3,7 +3,7 @@
  * Run: npx tsx services/steps/healthConnectVerificationState.test.ts
  */
 import assert from "node:assert/strict";
-import { resolveHealthConnectVerificationStatus, isVerifiedHealthAuthoritative, shouldReuseHealthConnectPermCache, resolveStepAccessAction } from "./healthConnectVerificationStateLogic";
+import { resolveHealthConnectVerificationStatus, isVerifiedHealthAuthoritative, isWaitingForHealthConnectWriterData, shouldReuseHealthConnectPermCache, resolveStepAccessAction, resolveHcPermissionStatusAfterProbe } from "./healthConnectVerificationStateLogic";
 
 // Permission not granted → permission_required, regardless of writer evidence.
 assert.equal(
@@ -15,15 +15,14 @@ assert.equal(
   "permission_required",
 );
 
-// Permission granted, no writer evidence at all → provider_required.
-// (permission_status = connected must never be treated as proof records exist.)
+// Permission granted, Health Connect still empty → READY_NO_DATA, not unsupported.
 assert.equal(
   resolveHealthConnectVerificationStatus({
     writerStatus: "no_writer_detected",
     writerEvidenceDetected: false,
     currentDayRecordsFound: false,
   }),
-  "provider_required",
+  "records_zero",
 );
 
 // Writer evidence present + today's records found → ready.
@@ -68,14 +67,14 @@ assert.equal(
   "error",
 );
 
-// Writer app installed but not writing into Health Connect → provider_required.
+// Writer app installed but Health Connect still empty → READY_NO_DATA.
 assert.equal(
   resolveHealthConnectVerificationStatus({
     writerStatus: "installed_but_not_connected",
     writerEvidenceDetected: false,
     currentDayRecordsFound: false,
   }),
-  "provider_required",
+  "records_zero",
 );
 assert.equal(isVerifiedHealthAuthoritative("ready"), true);
 assert.equal(isVerifiedHealthAuthoritative("records_zero"), true);
@@ -83,6 +82,10 @@ assert.equal(isVerifiedHealthAuthoritative("sync_delayed"), true);
 assert.equal(isVerifiedHealthAuthoritative("provider_required"), false);
 assert.equal(isVerifiedHealthAuthoritative("unsupported"), false);
 assert.equal(isVerifiedHealthAuthoritative("permission_required"), false);
+assert.equal(isWaitingForHealthConnectWriterData("records_zero"), true);
+assert.equal(isWaitingForHealthConnectWriterData("provider_required", true), true);
+assert.equal(isWaitingForHealthConnectWriterData("provider_required", false), false);
+assert.equal(isWaitingForHealthConnectWriterData("ready", true), false);
 
 assert.equal(
   shouldReuseHealthConnectPermCache({
@@ -139,10 +142,23 @@ assert.equal(
   "full_setup",
 );
 assert.equal(
-  resolveStepAccessAction({
-    hcAvailability: "not_installed",
+  resolveHcPermissionStatusAfterProbe({
+    hasStepsRead: false,
+    permissionRequested: true,
+    lastGrantedAtMs: Date.now() - 5_000,
+    nowMs: Date.now(),
   }),
-  "full_setup",
+  "granted",
+  "just-granted must not flip to denied while HC grant list is empty",
+);
+assert.equal(
+  resolveHcPermissionStatusAfterProbe({
+    hasStepsRead: false,
+    permissionRequested: true,
+    lastGrantedAtMs: 0,
+    nowMs: Date.now(),
+  }),
+  "denied",
 );
 
 console.log("healthConnectVerificationState.test.ts: ok");

@@ -10,15 +10,16 @@ import {
   buildLocalUnlimitedDailyProgress,
 } from "./unlimitedHybridProgress";
 
-assert.equal(resolveUnlimitedDisplayedLiveSteps(28, 40), 40);
+assert.equal(resolveUnlimitedDisplayedLiveSteps(28, 40), 28);
 assert.equal(resolveUnlimitedDisplayedLiveSteps(40, 40), 40);
 assert.equal(resolveUnlimitedDisplayedLiveSteps(40, 28), 40);
 assert.equal(resolveUnlimitedDisplayedLiveSteps(28, null), 28);
 assert.equal(resolveUnlimitedDisplayedLiveSteps(0, 125), 125);
 assert.equal(resolveUnlimitedDisplayedLiveSteps(433, 1592), 433, "reject inflated sensor vs HC");
-assert.equal(resolveUnlimitedDisplayedLiveSteps(433, 450), 450, "allow small live lag");
+assert.equal(resolveUnlimitedDisplayedLiveSteps(52, 104), 52, "HC 52 must not display doubled sensor 104");
+assert.equal(resolveUnlimitedDisplayedLiveSteps(433, 450), 433, "Unlimited live stays on Health Connect");
 
-assert.equal(resolveUnlimitedProgressSource(28, 40), "mixed");
+assert.equal(resolveUnlimitedProgressSource(28, 40), "verified");
 assert.equal(resolveUnlimitedProgressSource(0, 40), "provisional");
 assert.equal(resolveUnlimitedProgressSource(40, 40), "verified");
 assert.equal(resolveUnlimitedProgressSource(40, 28), "verified");
@@ -55,7 +56,7 @@ assert.equal(
     verifiedTodaySteps: 28,
     provisionalTodaySteps: 40,
   }),
-  40,
+  28,
 );
 
 const built = buildLocalUnlimitedDailyProgress({
@@ -68,10 +69,10 @@ const built = buildLocalUnlimitedDailyProgress({
   verificationSource: "health_connect",
   provisionalSource: "android_step_counter",
 });
-assert.equal(built.displayedLiveSteps, 40);
+assert.equal(built.displayedLiveSteps, 28);
 assert.equal(built.verifiedTodaySteps, 28);
 assert.equal(built.provisionalTodaySteps, 40);
-assert.equal(built.progressSource, "mixed");
-assert.equal(built.verificationStatus, "syncing");
+assert.equal(built.progressSource, "verified");
+assert.equal(built.verificationStatus, "verified");
 
 console.log("unlimitedHybridProgress.test.ts: ok");

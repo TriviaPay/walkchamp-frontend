@@ -49,10 +49,10 @@ import { resolveUnlimitedDisplayedLiveSteps } from "./unlimitedHybridProgress";
 
 assert.equal(resolveUnlimitedLiveDayContext({}), null);
 
-// ── Walk pause policy ────────────────────────────────────────────────────────
+// ── Walk pause policy: daily walk / streak keep posting during a live race ──
 assert.equal(
   shouldPauseWalkBackendSync({ classicLiveRaceActive: true, unlimitedDailyModeActive: false }),
-  true,
+  false,
 );
 assert.equal(
   shouldPauseWalkBackendSync({ classicLiveRaceActive: true, unlimitedDailyModeActive: true }),

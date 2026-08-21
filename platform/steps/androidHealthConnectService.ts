@@ -5,16 +5,16 @@
  * mirroring iOS HealthKit behavior exactly:
  *
  *   iOS:     Pedometer.getStepCountAsync(midnight, now)
- *   Android: readRecords('Steps', { between: midnight, now }) → sum
+ *   Android: aggregateRecord(Steps COUNT_TOTAL, midnight → now)
  *
  * No delta baseline math. No subscription to manage.
  * Steps are authoritative and cumulative from local midnight.
  *
  * HC availability states:
  *   available     — HC installed & SDK initialized
- *   not_installed — HC app absent (need Play Store install)
- *   needs_update  — HC installed but requires update
- *   not_supported — device doesn't support HC (very old Android)
+ *   not_installed — legacy alias mapped to needs_update on Android 14+
+ *   needs_update  — SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED (system update)
+ *   not_supported — SDK_UNAVAILABLE (exceptional Android 14+ environment)
  *
  * Permission states:
  *   granted     — READ_STEPS granted
@@ -29,7 +29,8 @@ import { storageGet, storageSet } from "@/utils/storage";
 import { stepAudit } from "@/utils/stepAudit";
 import { logger } from "@/utils/logger";
 import { normalizeHealthConnectOrigins } from "./healthConnectOrigins";
-import { shouldReuseHealthConnectPermCache } from "./healthConnectVerificationStateLogic";
+import { nextCachedTodaySteps } from "./hcTodayCachePolicy";
+import { resolveHcPermissionStatusAfterProbe, shouldReuseHealthConnectPermCache } from "./healthConnectVerificationStateLogic";
 
 const HC_MANIFEST_BLOCKED_KEY = "hc_manifest_read_steps_blocked" as never;
 
@@ -50,6 +51,8 @@ export interface StepReadResult {
   startTime: string;
   endTime: string;
   timezone: string;
+  /** success includes a legitimate 0. error must not be stored as verified 0. */
+  outcome?: "success" | "error";
 }
 
 export interface HCInitResult {
@@ -186,6 +189,8 @@ let _lastInitResult: HCInitResult | null = null;
 let _permCache: { status: HCPermStatus; at: number } | null = null;
 let _permBackoffUntil = 0;
 let _lastHcErrorLogAt = 0;
+/** Survives permission-cache invalidation so a just-granted sheet is not shown as denied. */
+let _lastGrantedAt = 0;
 
 const HC_PERM_CACHE_MS = 60_000;
 const HC_PERM_BACKOFF_MS = 120_000;
@@ -209,13 +214,17 @@ function localDateKey(d = new Date()): string {
 
 function rememberTodaySteps(steps: number, origins?: string[]): void {
   const today = localDateKey();
-  if (_cachedTodayDate !== today) {
-    _cachedTodayDate = today;
-    _cachedTodaySteps = 0;
-    _cachedTodayOrigins = [];
+  const previous = _cachedTodayDate === today ? _cachedTodaySteps : 0;
+  _cachedTodayDate = today;
+  _cachedTodaySteps = nextCachedTodaySteps({
+    previousCache: previous,
+    rangeStart: getLocalMidnight(),
+    rangeEnd: new Date(),
+    steps,
+  });
+  if (origins && Math.floor(steps) >= _cachedTodaySteps) {
+    _cachedTodayOrigins = origins;
   }
-  if (steps > 0) _cachedTodaySteps = Math.max(_cachedTodaySteps, steps);
-  if (origins) _cachedTodayOrigins = origins;
 }
 
 function cachedTodayOrigins(): string[] {
@@ -313,13 +322,14 @@ function isHcRateLimitedError(detail: unknown): boolean {
   return String(detail).toLowerCase().includes("rate limited");
 }
 
-function emptyResult(start: Date, end: Date): StepReadResult {
+function emptyResult(start: Date, end: Date, outcome: "success" | "error" = "error"): StepReadResult {
   return {
     steps: 0,
     source: "android_health_connect",
     startTime: start.toISOString(),
     endTime: end.toISOString(),
     timezone: getUserTimezone(),
+    outcome,
   };
 }
 
@@ -418,7 +428,7 @@ export const androidHCService = {
       } else if (sdkStatus === HC_SDK.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED) {
         availability = "needs_update";
       } else if (sdkStatus === HC_SDK.SDK_UNAVAILABLE) {
-        availability = getAndroidApiLevel() >= 28 ? "not_installed" : "not_supported";
+        availability = "not_supported";
       } else {
         availability = "not_supported";
       }
@@ -444,7 +454,7 @@ export const androidHCService = {
     } catch (e) {
       hcWarnOnce("initialize error", e);
       _lastInitResult = {
-        availability: "not_supported",
+        availability: _availability === "needs_update" ? "needs_update" : "not_supported",
         permission: "unavailable",
         initialized: false,
       };
@@ -476,13 +486,24 @@ export const androidHCService = {
     if (!hc) return "unavailable";
     try {
       const granted = await hc.getGrantedPermissions();
+      // A successful grant-list call means the SDK is usable — clear a stale
+      // "manifest blocked" latch from an older APK that lacked READ_STEPS.
+      if (_readPermissionBlocked) {
+        _readPermissionBlocked = false;
+        void storageSet(HC_MANIFEST_BLOCKED_KEY, false);
+        hcLog("cleared stale READ_STEPS manifest block — getGrantedPermissions ok");
+      }
       const hasSteps = hasStepsRead(granted);
       hcLog(`granted permissions: ${formatPerms(granted)} — Steps read: ${hasSteps}`);
-      const status: HCPermStatus = hasSteps
-        ? "granted"
-        : _permissionRequested
-          ? "denied"
-          : "unknown";
+      const status: HCPermStatus = resolveHcPermissionStatusAfterProbe({
+        hasStepsRead: hasSteps,
+        permissionRequested: _permissionRequested,
+        lastGrantedAtMs: _lastGrantedAt,
+        nowMs: now,
+      });
+      if (status === "granted") {
+        _lastGrantedAt = hasSteps ? now : _lastGrantedAt || now;
+      }
       _permCache = { status, at: now };
       return status;
     } catch (e) {
@@ -532,9 +553,8 @@ export const androidHCService = {
     if (!_initialized) {
       const initResult = await this.initialize();
       if (!initResult.initialized) {
-        // Do not open Play Store / Health Connect — caller uses Android Steps fallback.
         hcLog(
-          `HC not initialized (${initResult.availability}) — skipping external navigation`,
+          `HC not initialized (${initResult.availability}) — skipping permission sheet`,
         );
         return "unavailable";
       }
@@ -551,6 +571,7 @@ export const androidHCService = {
         hcLog("Steps read already granted — skipping request sheet");
         _permissionRequested = true;
         _permCache = { status: "granted", at: Date.now() };
+        _lastGrantedAt = Date.now();
         _permBackoffUntil = 0;
         return "granted";
       }
@@ -584,14 +605,15 @@ export const androidHCService = {
         // Must update cache immediately — otherwise Done re-reads a stale
         // "unknown" for up to HC_PERM_CACHE_MS and bounces back to Enable.
         _permCache = { status: "granted", at: Date.now() };
+        _lastGrantedAt = Date.now();
         _permBackoffUntil = 0;
         try {
           const read = await this.readTodaySteps();
           hcLog(
-            `readRecords today (midnight→now): ${read.steps} steps, records ok`,
+            `aggregate today (midnight→now): ${read.steps} steps`,
           );
         } catch (readErr) {
-          hcLog("readRecords after grant error", readErr);
+          hcLog("aggregate after grant error", readErr);
         }
         return "granted";
       }
@@ -606,6 +628,7 @@ export const androidHCService = {
 
       _permissionRequested = true;
       _permCache = { status: "denied", at: Date.now() };
+      _lastGrantedAt = 0;
       hcLog("READ_STEPS not granted — user can retry Enable Step Tracking");
       return "denied";
     } catch (e) {
@@ -629,7 +652,6 @@ export const androidHCService = {
    */
   async readStepsForRange(start: Date, end: Date): Promise<StepReadResult> {
     const fallback = emptyResult(start, end);
-    if (_readPermissionBlocked) return fallback;
     if (!_initialized) return fallback;
 
     const hc = loadHCModule();
@@ -643,75 +665,45 @@ export const androidHCService = {
       };
 
       let steps = 0;
-      let readMethod: "aggregate" | "readRecords" = "readRecords";
-      let recordCount = 0;
+      let readMethod: "aggregate" | "unavailable" = "unavailable";
       let dataOrigins: string[] = [];
-      let aggregateEmpty = false;
+      let outcome: "success" | "error" = "error";
 
-      if (typeof hc.aggregateRecord === "function") {
+      if (typeof hc.aggregateRecord !== "function") {
+        hcLog("aggregateRecord missing — treating as read error, not verified 0");
+      } else {
         try {
           const agg = await hc.aggregateRecord({
             recordType: "Steps",
             timeRangeFilter,
           });
-          steps = Math.max(0, agg?.COUNT_TOTAL ?? 0);
+          steps = Math.max(0, Math.floor(Number(agg?.COUNT_TOTAL ?? 0)));
           dataOrigins = normalizeHealthConnectOrigins(agg?.dataOrigins);
           readMethod = "aggregate";
-          aggregateEmpty =
-            steps === 0 && dataOrigins.length === 0;
+          outcome = "success";
         } catch (aggErr) {
-          hcLog("aggregateRecord failed — falling back to readRecords", aggErr);
+          hcLog("aggregateRecord failed — not summing readRecords, not writing 0", aggErr);
+          markHcNativeError(aggErr);
         }
       }
 
-      // Samsung/HC often returns aggregate COUNT_TOTAL=0 with no origins while
-      // steps still exist — fall back to readRecords before treating as zero.
-      // Also read records when aggregate has a count but no origins so we can
-      // tell Samsung Health from phone-only Health Connect steps.
-      if (readMethod !== "aggregate" || aggregateEmpty || dataOrigins.length === 0) {
-        try {
-          const res = await hc.readRecords("Steps", { timeRangeFilter });
-          recordCount = res.records?.length ?? 0;
-          const total = (res.records ?? []).reduce(
-            (sum, r) => sum + (r.count ?? 0),
-            0,
-          );
-          const recordOrigins = normalizeHealthConnectOrigins(res.records ?? []);
-          if (recordOrigins.length > 0) {
-            dataOrigins = [...new Set([...dataOrigins, ...recordOrigins])];
-          }
-          if (total > 0 || recordCount > 0) {
-            steps = Math.max(0, total);
-            readMethod = "readRecords";
-          }
-        } catch (recErr) {
-          if (readMethod !== "aggregate") {
-            hcLog("readRecords failed", recErr);
-          }
-        }
-      }
-
-      const emptyRead =
-        steps === 0 && recordCount === 0 && dataOrigins.length === 0;
-      if (emptyRead && isLocalTodayRange(start)) {
+      if (outcome === "error" && isLocalTodayRange(start)) {
         const cached = cachedTodayIfSameDay();
         if (cached > 0) {
-          hcLog(
-            `empty HC poll — keeping cached todaySteps=${cached} (aggregate/records=0)`,
-          );
+          hcLog(`HC read error — keeping cached todaySteps=${cached}`);
           steps = cached;
         }
       }
 
       hcLog(
-        `readStepsForRange ${start.toISOString()} → ${end.toISOString()} = ${steps} method=${readMethod} records=${recordCount} origins=${dataOrigins?.length ?? 0}`,
+        `readStepsForRange ${start.toISOString()} → ${end.toISOString()} = ${steps} method=${readMethod} outcome=${outcome} origins=${dataOrigins?.length ?? 0}`,
       );
 
       try {
         stepAudit.noteHealthConnectRead({
-          method: readMethod,
+          method: readMethod === "aggregate" ? "aggregate" : "readRecords",
           steps,
-          recordCount,
+          recordCount: 0,
           dataOrigins: dataOrigins.length ? dataOrigins : null,
           eventOrigin: "poll",
         });
@@ -719,8 +711,11 @@ export const androidHCService = {
         /* audit optional */
       }
 
-      if (isLocalTodayRange(start)) {
+      if (outcome === "success" && isLocalTodayRange(start)) {
         rememberTodaySteps(steps, dataOrigins);
+        // Never emit a lagging partial (reinstall "remaining" 10) over a
+        // higher midnight→now total already confirmed this session.
+        steps = cachedTodayIfSameDay();
       }
 
       return {
@@ -732,6 +727,7 @@ export const androidHCService = {
         startTime: start.toISOString(),
         endTime: end.toISOString(),
         timezone: getUserTimezone(),
+        outcome,
       };
     } catch (e) {
       markHcNativeError(e);
@@ -811,19 +807,14 @@ export const androidHCService = {
   },
 
   /**
-   * Open Play Store page to install Health Connect.
-   * Falls back to web URL if the market:// scheme is unavailable.
+   * Open Android system settings so the user can update Play system / Health Connect.
+   * Do not send Android 14+ users through the old Health Connect APK Play Store flow.
    */
   async openInstallPage(): Promise<void> {
     try {
       const { Linking } =
         require("react-native") as typeof import("react-native");
-      const market =
-        "market://details?id=com.google.android.apps.healthdata";
-      const web =
-        "https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata";
-      const canUseMarket = await Linking.canOpenURL(market).catch(() => false);
-      await Linking.openURL(canUseMarket ? market : web);
+      await Linking.openSettings();
     } catch (e) {
       hcLog("openInstallPage error", e);
     }
@@ -881,11 +872,9 @@ export const androidHCService = {
         readable,
         steps,
         recordHint: readable
-          ? dataOrigins.some((o) => o.toLowerCase().includes("shealth"))
-            ? `Samsung Health is writing steps (${steps.toLocaleString()} today)`
-            : steps > 0
-              ? `Receiving steps (${steps.toLocaleString()} today)`
-              : "Health Connect readable"
+          ? steps > 0
+            ? `Health Connect aggregate ${steps.toLocaleString()} today`
+            : "Health Connect connected. Waiting for step data."
           : "Allow WalkChamp Read Steps",
         recordCount: dataOrigins.length,
         dataOrigins,
@@ -904,8 +893,8 @@ export const androidHCService = {
   },
 
   /**
-   * Origins from recent Step records (not only today). Used to detect that
-   * Samsung Health is connected even before today's sync lands.
+   * Origins from recent Step records (not only today). Diagnostic only —
+   * never used to sum prize totals or require a specific writer package.
    */
   async readRecentStepOrigins(days = 14): Promise<string[]> {
     const hc = loadHCModule();
@@ -931,6 +920,7 @@ export const androidHCService = {
   reset(): void {
     _initialized = false;
     _permissionRequested = false;
+    _lastGrantedAt = 0;
     _cachedTodaySteps = 0;
     _cachedTodayDate = "";
     _cachedTodayOrigins = [];

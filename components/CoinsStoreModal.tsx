@@ -89,14 +89,15 @@ function iapLogMissingProducts(missing: string[]): void {
 
 /** Fixed footer — zero props so parent Redux/state updates never remount the ad. */
 const StoreBannerFooter = memo(function StoreBannerFooter() {
+  const colors = useColors();
   return (
     <View
       style={{
         width: "100%",
         height: BANNER_SLOT_HEIGHT,
         borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: "#1E2640",
-        backgroundColor: "#0B0D1A",
+        borderTopColor: colors.border,
+        backgroundColor: colors.background,
         alignItems: "center",
         justifyContent: "center",
         overflow: "hidden",

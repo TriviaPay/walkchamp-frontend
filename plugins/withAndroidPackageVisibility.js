@@ -1,20 +1,9 @@
 const { withAndroidManifest } = require("@expo/config-plugins");
 
 const HEALTH_CONNECT_PACKAGE = "com.google.android.apps.healthdata";
-const FITNESS_PACKAGES = [
-  "com.sec.android.app.shealth",
-  "com.google.android.apps.fitness",
-  "com.fitbit.FitbitMobile",
-  "com.garmin.android.apps.connectmobile",
-];
 const SCHEMES = [
   "market",
   "healthconnect",
-  "shealth",
-  "com.google.android.apps.fitness",
-  "fitbit",
-  "garmin-connect",
-  "healthsync",
 ];
 
 function ensureArray(value) {
@@ -54,15 +43,6 @@ function withAndroidPackageVisibility(config) {
       queries.package.push({
         $: { "android:name": HEALTH_CONNECT_PACKAGE },
       });
-    }
-
-    for (const pkg of FITNESS_PACKAGES) {
-      const hasPkg = queries.package.some(
-        (entry) => entry?.$?.["android:name"] === pkg,
-      );
-      if (!hasPkg) {
-        queries.package.push({ $: { "android:name": pkg } });
-      }
     }
 
     for (const scheme of SCHEMES) {

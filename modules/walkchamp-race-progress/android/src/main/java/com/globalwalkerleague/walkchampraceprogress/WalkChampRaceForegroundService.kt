@@ -116,10 +116,6 @@ class WalkChampRaceForegroundService : Service() {
     }
 
     private fun logPostNotificationsGranted(ctx: Context) {
-      if (Build.VERSION.SDK_INT < 33) {
-        Log.d(TAG, "[WalkChampFGS] permission POST_NOTIFICATIONS granted=true (pre-33)")
-        return
-      }
       val granted =
         PermissionChecker.checkSelfPermission(
           ctx,
@@ -689,6 +685,7 @@ class WalkChampRaceForegroundService : Service() {
     val mode = if (raceActive) "race_live" else "daily_steps"
     engine.updateMetadata(userId, mode, stepSource)
     val known = parsedSteps.coerceAtLeast(0)
+    val verifiedDaily = RaceNotificationState.isVerifiedStepSource(stepSource)
     val engineToday = engine.currentState().todaySteps
     val engineLooksSinceBoot =
       NativeStepState.looksLikeSinceBootCounter(
@@ -700,7 +697,16 @@ class WalkChampRaceForegroundService : Service() {
       isStart ||
         engineLooksSinceBoot ||
         (engineToday >= 1000 && engineToday > known + 250)
-    if (mustReseed) {
+    if (verifiedDaily) {
+      engine.setPendingKnownTodaySteps(known)
+      engine.resetDailyToKnown(known, stepSource)
+      updateWalkNotificationToSteps(
+        known,
+        stepSource,
+        provisional = false,
+        forceDayReset = true,
+      )
+    } else if (mustReseed) {
       engine.setPendingKnownTodaySteps(known)
       engine.seedDailyBaselineFromKnownSteps(known, stepSource = stepSource)
     } else {
@@ -1339,11 +1345,45 @@ class WalkChampRaceForegroundService : Service() {
     lastNativeTodayStepsForDelta = state.todaySteps
     lastNativeRaceStepsForDelta = state.raceSteps.coerceAtLeast(0)
 
-    if (raceActive && state.activeRaceId == activeRace!!.raceId && state.raceSteps >= 0) {
+    if (raceActive && activeRace!!.unlimitedDailyMode) {
+      val goal = activeRace.goalSteps
+      val today = state.todaySteps.coerceAtLeast(0)
+      val live = when {
+        goal > 0 && activeRace.raceSteps >= goal -> goal
+        else -> {
+          val next = maxOf(activeRace.raceSteps, today)
+          if (goal > 0) minOf(next, goal) else next
+        }
+      }
+      val updated = activeRace.copy(
+        raceSteps = live,
+        rank = if (state.rank > 0) state.rank else activeRace.rank,
+        totalParticipants = if (state.totalParticipants > 0) state.totalParticipants else activeRace.totalParticipants,
+        goalSteps = if (activeRace.goalSteps > 0) activeRace.goalSteps else state.goalSteps,
+        timeLeftSeconds = if (state.timeLeftSeconds > 0) state.timeLeftSeconds else activeRace.timeLeftSeconds,
+        lastUpdatedAt = state.updatedAt,
+      ).withComputedTimeLeft()
+      val stepsChanged = updated.raceSteps != raceState?.raceSteps
+      val metaChanged =
+        updated.rank != raceState?.rank ||
+          updated.timeLeftSeconds != raceState?.timeLeftSeconds
+      if (stepsChanged || metaChanged) {
+        raceState = updated
+        RaceNotificationState.save(this, updated)
+        publishRaceNotification()
+        Log.d(
+          TAG,
+          "[RaceNotification] unlimited daily live=${updated.raceSteps} today=$today goal=$goal",
+        )
+      }
+    } else if (raceActive && state.activeRaceId == activeRace!!.raceId && state.raceSteps >= 0) {
+      val goal = if (activeRace.goalSteps > 0) activeRace.goalSteps else state.goalSteps
+      if (!(goal > 0 && activeRace.raceSteps >= goal)) {
       // Live race ongoing notification: sensor advances steps in open / background / closed
       // (same keep-alive path as daily walk). Monotonic max avoids HC/JS regressions.
+      val nextRace = maxOf(activeRace.raceSteps, state.raceSteps)
       val updated = activeRace.copy(
-        raceSteps = maxOf(activeRace.raceSteps, state.raceSteps),
+        raceSteps = if (goal > 0) minOf(nextRace, goal) else nextRace,
         rank = if (state.rank > 0) state.rank else activeRace.rank,
         totalParticipants = if (state.totalParticipants > 0) state.totalParticipants else activeRace.totalParticipants,
         // Keep the race room's targetSteps — never let a stale sensor/daily goal overwrite it.
@@ -1367,10 +1407,11 @@ class WalkChampRaceForegroundService : Service() {
       if (stepsChanged) {
         persistRaceNativeMode(updated)
         enqueueRaceBackendSync(force = false)
-        val goal = updated.goalSteps
-        if (goal > 0 && updated.raceSteps >= goal) {
+        val reachedGoal = updated.goalSteps
+        if (reachedGoal > 0 && updated.raceSteps >= reachedGoal) {
           enqueueRaceBackendSync(force = true)
         }
+      }
       }
     }
 
@@ -1380,17 +1421,23 @@ class WalkChampRaceForegroundService : Service() {
       advanceParallelRaceBySensorSteps(walked, state.updatedAt)
     }
 
-    // Daily walk tray must keep updating even when a live race owns startForeground.
-    if (walkRunning) {
+    // Daily walk tray is Health Connect / HealthKit only. Sensor ticks still
+    // move live-race trays (1001/1002); they must not change 91002.
+    if (walkRunning && !RaceNotificationState.isVerifiedStepSource(state.stepSource)) {
       applyWalkNotificationFromNativeState(state)
+    } else if (walkRunning) {
+      syncNativeStepState(state)
     }
   }
 
   private fun advanceParallelRaceBySensorSteps(delta: Int, updatedAt: Long) {
     val parallel = parallelRaceState ?: return
     if (!isActiveRace(parallel) || delta <= 0) return
+    val goal = parallel.goalSteps
+    if (goal > 0 && parallel.raceSteps >= goal) return
+    val next = parallel.raceSteps + delta
     val updated = parallel.copy(
-      raceSteps = parallel.raceSteps + delta,
+      raceSteps = if (goal > 0) minOf(next, goal) else next,
       lastUpdatedAt = updatedAt,
     ).withComputedTimeLeft()
     parallelRaceState = updated
@@ -1482,10 +1529,11 @@ class WalkChampRaceForegroundService : Service() {
       if (NativeStepState.looksLikeSinceBootCounter(fromPrefsRaw, sensorNow, baselineNow)) 0
       else fromPrefsRaw
     val high = maxOf(fromPrefs, fromEngine)
-    if (
-      (allowInflationCorrection && high >= 1000 && high > safeIncoming + 250) ||
-      NativeStepState.looksLikeSinceBootCounter(high, sensorNow, baselineNow)
-    ) {
+    if (allowInflationCorrection) {
+      Log.d(TAG, "[WalkChampFGS] HC tray high=$high -> hc=$safeIncoming")
+      return safeIncoming
+    }
+    if (NativeStepState.looksLikeSinceBootCounter(high, sensorNow, baselineNow)) {
       Log.d(
         TAG,
         "[WalkChampFGS] inflation correction tray high=$high -> hc=$safeIncoming",
@@ -1510,12 +1558,17 @@ class WalkChampRaceForegroundService : Service() {
         .commit()
       lastWalkDisplayState = null
     }
+    val source = stepSource ?: prefs().getString("walk_step_source", "health_connect") ?: "health_connect"
     val safeSteps =
-      if (forceDayReset) steps.coerceAtLeast(0) else monotonicWalkSteps(steps)
+      if (forceDayReset) {
+        steps.coerceAtLeast(0)
+      } else {
+        val verified = RaceNotificationState.isVerifiedStepSource(source)
+        monotonicWalkSteps(steps, allowInflationCorrection = verified)
+      }
     val body = formatWalkNotificationBody(safeSteps, provisional)
     val deepLink = prefs().getString("walk_deep_link", "walkchamp://walk") ?: "walkchamp://walk"
     val title = prefs().getString("walk_title", "WalkChamp") ?: "WalkChamp"
-    val source = stepSource ?: prefs().getString("walk_step_source", "health_connect") ?: "health_connect"
     val goal = prefs().getInt("walk_daily_goal", 10_000).coerceAtLeast(1)
     val display = WalkNotificationDisplayState(
       steps = safeSteps,
@@ -1642,6 +1695,13 @@ class WalkChampRaceForegroundService : Service() {
       val engine = ensureSensorEngine()
       // Active live race always arms TYPE_STEP_COUNTER so the race notification
       // keeps updating when the app is backgrounded or closed (HC has no native stream).
+      if (merged.unlimitedDailyMode) {
+        engine.updateMetadata(merged.userId, "daily_steps", "health_connect")
+        val today = engine.currentState().todaySteps
+        if (!engine.currentState().activeRaceId.isNullOrBlank()) {
+          engine.endRace(today)
+        }
+      } else {
       engine.updateMetadata(merged.userId, "race_live", "health_connect")
       if (isNewRace || merged.raceSteps <= 0) {
         engine.startRace(merged.raceId)
@@ -1653,6 +1713,7 @@ class WalkChampRaceForegroundService : Service() {
         )
       } else {
         engine.resumeRace(merged.raceId, merged.raceSteps)
+      }
       }
       raceState = merged.withComputedTimeLeft()
       RaceNotificationState.save(this, raceState)
@@ -1953,7 +2014,17 @@ class WalkChampRaceForegroundService : Service() {
    * already showed hundreds — overwriting walk_body froze the ongoing notification.
    */
   private fun switchToDailyStepsNotification(todaySteps: Int) {
-    val steps = monotonicWalkSteps(todaySteps.coerceAtLeast(0))
+    val walkSource =
+      prefs().getString("walk_step_source", null)
+        ?: sensorEngine?.currentState()?.stepSource
+        ?: "health_connect"
+    val engineToday = sensorEngine?.currentState()?.todaySteps ?: 0
+    val steps =
+      if (RaceNotificationState.isVerifiedStepSource(walkSource) && engineToday > 0) {
+        engineToday
+      } else {
+        monotonicWalkSteps(todaySteps.coerceAtLeast(0))
+      }
     val body = formatWalkNotificationBody(steps)
     val goal = prefs().getInt("walk_daily_goal", 10_000).coerceAtLeast(1)
     val pct = NotificationVisuals.clampPercent(steps, goal)
@@ -1972,10 +2043,6 @@ class WalkChampRaceForegroundService : Service() {
     Log.d(TAG, "[DailyStepsNotification] update todaySteps=$steps")
     safeStartForeground(NOTIFICATION_ID_WALK, notification)
     postOngoingNotification(NOTIFICATION_ID_WALK, notification)
-    val walkSource =
-      prefs().getString("walk_step_source", null)
-        ?: sensorEngine?.currentState()?.stepSource
-        ?: "health_connect"
     persistWalkState(body, "walkchamp://walk", "WalkChamp", steps, null, walkSource)
     // Raise native sensor floor so later provisional ticks cannot pin the tray at ~2.
     try {
@@ -2098,6 +2165,13 @@ class WalkChampRaceForegroundService : Service() {
       engine.updateMetadata(loaded.userId, "race_live", "health_connect")
       val engineState = engine.currentState()
       when {
+        loaded.unlimitedDailyMode -> {
+          engine.updateMetadata(loaded.userId, "daily_steps", "health_connect")
+          if (!engineState.activeRaceId.isNullOrBlank()) {
+            engine.endRace(engineState.todaySteps)
+          }
+          engine.start()
+        }
         engineState.activeRaceId == loaded.raceId && engineState.raceBaseline != null -> engine.start()
         loaded.raceSteps <= 0 -> engine.startRace(loaded.raceId)
         else -> engine.resumeRace(loaded.raceId, loaded.raceSteps)

@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict";
 import {
+  capStepsAtGoal,
   formatRaceSteps,
   resolveDisplayTodaySteps,
   resolveLiveRaceDisplaySteps,
@@ -18,6 +19,11 @@ assert.equal(formatRaceSteps(1500), "1.5k");
 assert.equal(resolveLiveRaceDisplaySteps(10, 20), 20);
 assert.equal(resolveLiveRaceDisplaySteps(30, 5), 30);
 assert.equal(resolveLiveRaceDisplaySteps(undefined, 7), 7);
+
+assert.equal(capStepsAtGoal(12_400, 10_000), 10_000);
+assert.equal(capStepsAtGoal(8_000, 10_000), 8_000);
+assert.equal(capStepsAtGoal(8_000, 0), 8_000);
+assert.equal(capStepsAtGoal(8_000, null), 8_000);
 
 assert.equal(resolveDisplayTodaySteps(100, 50), 100);
 assert.equal(resolveDisplayTodaySteps(40, 90), 90);

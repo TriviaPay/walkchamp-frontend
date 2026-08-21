@@ -24,7 +24,6 @@ import {
   Text,
   TextInput,
   TouchableWithoutFeedback,
-  useColorScheme,
   KeyboardAvoidingView,
   View} from "react-native";
 import { AppAlert } from "@/components/AppAlert";
@@ -782,7 +781,7 @@ function GlobalChatTab({ colors, insets, user, headerHeight }: {
   }, []));
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
       <UserProfileModal user={profileTarget} visible={!!profileTarget} onClose={() => setProfileTarget(null)} colors={colors} />
       <ReportModal
         msg={reportingMsg}
@@ -798,9 +797,9 @@ function GlobalChatTab({ colors, insets, user, headerHeight }: {
         <Text style={[cStyles.onlineText, { color: colors.mutedForeground }]}>{formatCount(counts.online)} online worldwide</Text>
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding" keyboardVerticalOffset={0}>
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.background }} behavior="padding" keyboardVerticalOffset={0}>
         {loading ? (
-          <View style={{ flex: 1, paddingTop: 12 }}>
+          <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: 12 }}>
             <SkeletonList count={7} variant="chat" />
           </View>
         ) : (
@@ -889,8 +888,8 @@ function GlobalChatTab({ colors, insets, user, headerHeight }: {
                 </SwipeableMessage>
               </View>
               ); }}
-            style={{ flex: 1 }}
-            contentContainerStyle={[cStyles.msgList, { flexGrow: 1 }]}
+            style={{ flex: 1, backgroundColor: colors.background }}
+            contentContainerStyle={[cStyles.msgList, { flexGrow: 1, backgroundColor: colors.background }]}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           />
@@ -940,11 +939,9 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
   unfriendedConv?: { friendId: string; conversationId: string | null } | null;
   onUnfriendHandled?: () => void;
   onUnfriend?: (friendId: string, conversationId: string | null) => void; }) {
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === "dark";
-  const DM_RECV_BG = isDark ? "#111827" : "#EEF2FF";
-  const DM_RECV_TEXT = isDark ? "#B8C8F0" : "#2D3A8C";
-  const DM_CHAT_BG = isDark ? "#070A14" : "#F6F9FF";
+  const DM_RECV_BG = colors.card;
+  const DM_RECV_TEXT = colors.foreground;
+  const DM_CHAT_BG = colors.background;
   const { getAvatarVersion } = useAvatarVersionContext();
   const [conversations, setConversations] = useState<Conversation[]>(
     () => screenCache.getSync<Conversation[]>("screen_conversations") ?? []
@@ -1283,7 +1280,7 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
 
   if (activeFriend) {
     return (
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1, backgroundColor: DM_CHAT_BG }}>
         <ReportModal
           msg={reportingMsg}
           chatType="private"
@@ -1377,8 +1374,8 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
                   </SwipeableMessage>
                 </View>
               ); }}
-            style={{ flex: 1 }}
-            contentContainerStyle={[cStyles.msgList, { flexGrow: 1 }]}
+            style={{ flex: 1, backgroundColor: DM_CHAT_BG }}
+            contentContainerStyle={[cStyles.msgList, { flexGrow: 1, backgroundColor: DM_CHAT_BG }]}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           />
@@ -1465,7 +1462,7 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
       </Modal>
 
       <ScrollView
-        style={{ flex: 1 }}
+        style={{ flex: 1, backgroundColor: colors.background }}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[cStyles.listPad, { paddingBottom: 20 }]}
         keyboardShouldPersistTaps="handled"
@@ -1870,7 +1867,7 @@ function FriendsTab({ colors, insets, onOpenPrivateChat, incomingRequests = [], 
 
   return (
     <ScrollView
-      style={{ flex: 1 }}
+      style={{ flex: 1, backgroundColor: colors.background }}
       showsVerticalScrollIndicator={false}
       contentContainerStyle={[cStyles.listPad, { paddingBottom: getSafeBottom(insets.bottom) + 20 }]}
       keyboardShouldPersistTaps="handled"
@@ -2305,7 +2302,7 @@ function ChatScreenContent() {
       {/* KAV must be the FIRST child so its frame.origin.y = 0 in parent coords,
           matching the keyboard.screenY coordinate origin and fixing the overlap math. */}
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
+        style={{ flex: 1, backgroundColor: colors.background }}
         behavior="padding"
         keyboardVerticalOffset={0}
       >
@@ -2341,7 +2338,7 @@ function ChatScreenContent() {
         </View>
 
         {/* ── Banner Ad — shown below the Chat heading / tab pills ── */}
-        <BannerAdView style={{ paddingVertical: 4 }} />
+        <BannerAdView style={{ paddingVertical: 4, backgroundColor: colors.background }} />
 
         {activeTab === "global" && <GlobalChatTab colors={colors} insets={insets} user={user} headerHeight={headerHeight} />}
         {activeTab === "private" && (

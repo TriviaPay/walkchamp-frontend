@@ -28,6 +28,20 @@ export function resolveLiveRaceDisplaySteps(
 }
 
 /**
+ * Live-race / streak display only. Walk-tab daily totals stay uncapped.
+ * Once the day's goal is complete, freeze the challenge counter.
+ */
+export function capStepsAtGoal(
+  steps: number | null | undefined,
+  goalSteps?: number | null,
+): number {
+  const s = Math.max(0, Math.floor(Number(steps) || 0));
+  const g = Math.max(0, Math.floor(Number(goalSteps) || 0));
+  if (g <= 0) return s;
+  return Math.min(s, g);
+}
+
+/**
  * Display daily walk steps = max(context, canonical raceProgress.todaySteps).
  * Documented in docs/STEP_SOURCE_OF_TRUTH.md — temporary defensive merge.
  *

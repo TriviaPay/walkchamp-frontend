@@ -15,9 +15,12 @@ const DATE_TIME_YELLOW = "#FACC15";
 export function ChallengeEndsPillLabel({
   label,
   style,
+  dateTimeColor,
 }: {
   label: string;
   style?: StyleProp<TextStyle>;
+  /** Light theme: pass black. Dark theme keeps the yellow highlight. */
+  dateTimeColor?: string;
 }) {
   const idx = label.indexOf(ENDS_ON_SEP);
   if (idx < 0) {
@@ -30,13 +33,14 @@ export function ChallengeEndsPillLabel({
 
   const prefix = label.slice(0, idx + ENDS_ON_SEP.length);
   const dateTime = label.slice(idx + ENDS_ON_SEP.length);
+  const highlight = dateTimeColor ?? DATE_TIME_YELLOW;
 
   return (
     <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", flexShrink: 1 }}>
       <Text style={style} numberOfLines={1}>
         {prefix}
       </Text>
-      <Text style={[style, { color: DATE_TIME_YELLOW, fontWeight: "800" }]} numberOfLines={1}>
+      <Text style={[style, { color: highlight, fontWeight: "800" }]} numberOfLines={1}>
         {dateTime}
       </Text>
     </View>

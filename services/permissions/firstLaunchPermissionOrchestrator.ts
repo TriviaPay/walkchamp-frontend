@@ -36,8 +36,7 @@ async function healthConnectMissingOrNeedsUpdate(): Promise<boolean> {
     );
     const status = await getAndroidStepTrackingStatus(true);
     return (
-      status.status === "provider_update_required" ||
-      status.status === "provider_not_installed"
+      status.status === "provider_update_required"
     );
   } catch {
     return false;

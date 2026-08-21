@@ -175,7 +175,8 @@ export function dayRowsFromDailyHistory(
           : "");
       let verifiedSteps =
         typeof d.verifiedSteps === "number" ? d.verifiedSteps : null;
-      // Keep live sensor total on the open day when history hasn't finalized yet.
+      // Open day: prefer the live Health Connect total from Walk when it is ahead
+      // of a lagging history row. Callers must pass HC/HK todaySteps, not sensor.
       if (
         status === "in_progress" &&
         typeof fallback?.todaySteps === "number" &&

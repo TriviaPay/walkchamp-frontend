@@ -230,6 +230,9 @@ afterEvaluate {
     tasks.matching { it.name.startsWith("configureCMake") }.configureEach { cmakeTask ->
         cmakeTask.dependsOn(codegenTasks)
         cmakeTask.doFirst {
+            // Windows MAX_PATH only. Never rewrite autolinking on EAS Linux —
+            // C:/m/kc junctions do not exist on the cloud builder.
+            if (!System.getProperty("os.name").toLowerCase().contains("windows")) return
             def autoCmake = file("${project.buildDir}/generated/autolinking/src/main/jni/Android-autolinking.cmake")
             if (!autoCmake.exists()) return
             def nm = file("${rootDir}/../node_modules").absolutePath.replace('\\', '/')

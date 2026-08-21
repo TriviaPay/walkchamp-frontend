@@ -1,10 +1,10 @@
 /**
  * Unlimited dual-lane progress helpers.
  *
- * Verified  = Health Connect / HealthKit (qualification + settlement)
- * Provisional = TYPE_STEP_COUNTER / CMPedometer (live UX only)
+ * Verified  = Health Connect / HealthKit (display + qualification + settlement)
+ * Provisional = TYPE_STEP_COUNTER / CMPedometer (live UX only while HC is still 0)
  *
- * Displayed live = max(verified, validProvisional) — never settlement authority.
+ * Displayed live = Health Connect when it has today's total. Never add sensor on top.
  */
 
 export type UnlimitedVerificationStatus =
@@ -50,11 +50,9 @@ export function resolveUnlimitedDisplayedLiveSteps(
     provisionalTodaySteps == null
       ? 0
       : Math.max(0, Math.floor(provisionalTodaySteps));
-  // Reject bad sensor baselines (e.g. 1592) when HC/HK already has today's total.
-  if (verified > 0 && provisional > verified + 250) {
-    return verified;
-  }
-  return Math.max(verified, provisional);
+  // Same source of truth as Walk: Health Connect / HealthKit when it has a total.
+  if (verified > 0) return verified;
+  return provisional;
 }
 
 export function resolveUnlimitedProgressSource(
@@ -67,10 +65,8 @@ export function resolveUnlimitedProgressSource(
       ? 0
       : Math.max(0, Math.floor(provisionalTodaySteps));
   if (verified <= 0 && provisional <= 0) return "unavailable";
-  if (provisional > verified) return verified > 0 ? "mixed" : "provisional";
-  if (provisional > 0 && provisional === verified) return "verified";
   if (verified > 0) return "verified";
-  return "unavailable";
+  return "provisional";
 }
 
 export function resolveUnlimitedVerificationStatus(params: {
@@ -87,9 +83,6 @@ export function resolveUnlimitedVerificationStatus(params: {
 
   if (params.verifiedHealthAvailable === false) return "unavailable";
   if (params.verifiedPermissionGranted === false) return "unavailable";
-  if (provisional > verified) {
-    return verified > 0 ? "syncing" : "verification_delayed";
-  }
   if (verified > 0) return "verified";
   if (provisional > 0) return "verification_delayed";
   return "syncing";
@@ -154,6 +147,9 @@ export function pickUnlimitedRealtimeDisplaySteps(data: {
   todaySteps?: number;
   steps?: number;
 }): number | null {
+  const verified =
+    typeof data.verifiedTodaySteps === "number" ? data.verifiedTodaySteps : 0;
+  if (verified > 0) return Math.floor(verified);
   const candidates = [
     data.displayedLiveSteps,
     data.currentSteps,
@@ -165,8 +161,6 @@ export function pickUnlimitedRealtimeDisplaySteps(data: {
       return Math.floor(c);
     }
   }
-  const verified =
-    typeof data.verifiedTodaySteps === "number" ? data.verifiedTodaySteps : 0;
   const provisional =
     typeof data.provisionalTodaySteps === "number"
       ? data.provisionalTodaySteps

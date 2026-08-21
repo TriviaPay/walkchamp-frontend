@@ -1,61 +1,117 @@
 /**
- * Hybrid Android live daily display.
+ * Hybrid Android live daily display for devices without Health Connect / HealthKit.
+ * Verified HC/HK phones never start this poll — daily steps come from HC only.
  *
- * Health Connect stays the verified daily source, but on many devices/OEMs HC
- * simply never receives step records (healthConnectSourceCount=0 forever) even
- * though the phone is clearly walking — the same hardware TYPE_STEP_COUNTER the
- * ongoing race/FGS notification already reads correctly still advances.
- *
- * Rather than opening a second, independent expo-sensors Pedometer subscription
- * (which competed with — and on some devices never received callbacks alongside
- * — the one `androidLegacySensorProvider` already owns for live race tracking),
- * this simply polls that same already-proven-working provider's `getTodaySteps()`
- * and mirrors it into the Redux provisional lane. It never replaces the HC
- * provider or claims sensor data as verified backend truth.
+ * Do not start a second Pedometer.watchStepCount here — that races the FGS
+ * listener. Poll native todaySteps (session = sensorTotal - dailyBaseline).
  */
 
 import { Platform } from "react-native";
 import { store } from "@/store";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { updateStepProgressFromRealSource } from "@/services/stepProgressCoordinator";
-import { hasActivityRecognitionPermission } from "@/services/permissions/activityRecognitionPermissionService";
+import {
+  ensureActivityRecognitionPermission,
+  hasActivityRecognitionPermission,
+} from "@/services/permissions/activityRecognitionPermissionService";
+import { stepTrackingNotificationService } from "@/services/stepTrackingNotificationService";
 import { androidLegacySensorProvider } from "./providers/androidLegacySensorProvider";
+import { looksLikeSinceBootCounter, shouldHoldSensorSessionUntilVerifiedRead } from "./walkDisplaySteps";
+import { getLocalDateStr } from "@/utils/timezone";
+import { getVerifiedSensorAnchor, resolveAnchoredDisplaySteps } from "./verifiedSensorAnchor";
 
-/** Frequent enough to feel live, cheap enough to run alongside HC polling. */
-const POLL_MS = 4_000;
+/** Frequent enough to feel live with the ongoing notification. */
+const POLL_MS = 1_000;
 
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
 let _polling = false;
 
+async function readLiveSessionSteps(userId: string): Promise<number> {
+  let live = 0;
+  try {
+    const { steps } = await androidLegacySensorProvider.getTodaySteps();
+    live = Math.max(live, Math.max(0, Math.floor(steps)));
+  } catch {
+    /* optional */
+  }
+  try {
+    const native = await stepTrackingNotificationService.getNativeStepState(userId);
+    const nativeToday =
+      native && typeof native.todaySteps === "number"
+        ? Math.max(0, Math.floor(native.todaySteps))
+        : 0;
+    const today = getLocalDateStr();
+    if (
+      native &&
+      nativeToday > 0 &&
+      (!native.userId || native.userId === userId) &&
+      (!native.localDate || native.localDate === today) &&
+      !looksLikeSinceBootCounter({
+        todaySteps: nativeToday,
+        sensorTotal: native.sensorTotal,
+        dailyBaseline: native.dailyBaseline,
+      })
+    ) {
+      live = Math.max(live, nativeToday);
+    }
+  } catch {
+    /* optional */
+  }
+  return live;
+}
+
 async function pollOnce(): Promise<void> {
-  if (_polling) return; // avoid overlapping reads if one tick runs long
+  if (_polling) return;
   _polling = true;
   try {
-    if (!store.getState().raceProgress.userId) return;
+    const userId = store.getState().raceProgress.userId;
+    if (!userId) return;
 
-    const { steps } = await androidLegacySensorProvider.getTodaySteps();
-    const raw = Math.max(0, Math.floor(steps));
-    const verified = Math.max(
-      0,
-      Math.floor(store.getState().raceProgress.verifiedTodaySteps ?? 0),
-    );
-    const next = Math.max(raw, verified);
+    const raw = await readLiveSessionSteps(userId);
+    const rp = store.getState().raceProgress;
+    if (
+      rp.stepSource === "health_connect" ||
+      rp.stepSource === "android_health_connect" ||
+      rp.stepSource === "healthkit" ||
+      rp.stepSource === "ios_healthkit"
+    ) {
+      return;
+    }
+    const verified = Math.max(0, Math.floor(rp.verifiedTodaySteps ?? 0));
+    if (
+      shouldHoldSensorSessionUntilVerifiedRead({
+        sessionSteps: raw,
+        verifiedSteps: verified,
+        hasVerifiedAnchor: getVerifiedSensorAnchor()?.localDate === getLocalDateStr(),
+      })
+    ) {
+      return;
+    }
+    let sensorTotal: number | null = null;
+    try {
+      const native = await stepTrackingNotificationService.getNativeStepState(userId);
+      sensorTotal =
+        native && typeof native.sensorTotal === "number" ? native.sensorTotal : null;
+    } catch {
+      sensorTotal = null;
+    }
+    const anchored = resolveAnchoredDisplaySteps({
+      verifiedSteps: verified,
+      sensorTotal,
+      sessionTodaySteps: raw,
+    });
+    const next = Math.max(verified, anchored);
     if (next <= verified) return;
 
     updateStepProgressFromRealSource({
       todaySteps: next,
-      // Provisional daily display only — never label as Health Connect verified.
-      // Session totals may lead HC so the Walk tab + ongoing notification keep updating.
       stepSource: "android_step_counter",
       dailyLane: "provisional",
       updatedAt: new Date().toISOString(),
       fromWatch: true,
     });
 
-    // Background Unlimited provisional live path (Redis) — never walk/steps verified.
     try {
-      const rpUser = store.getState().raceProgress.userId;
-      if (!rpUser) return;
       const {
         getBlockedUnlimitedChallengeIds,
         getUnlimitedLiveContext,
@@ -84,14 +140,31 @@ async function pollOnce(): Promise<void> {
 }
 
 /**
- * Start polling the legacy sensor provider for hybrid HC mode.
+ * Start polling native FGS + cached sensor session for hybrid HC mode.
  * Safe to call repeatedly — restarts the poll loop fresh.
  */
 export async function startHybridLiveDailyDisplay(): Promise<boolean> {
   if (Platform.OS !== "android") return false;
+  const dailySource = store.getState().raceProgress.stepSource;
+  if (
+    dailySource === "health_connect" ||
+    dailySource === "android_health_connect" ||
+    dailySource === "healthkit" ||
+    dailySource === "ios_healthkit"
+  ) {
+    return false;
+  }
   if (!FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR) return false;
 
-  const arOk = await hasActivityRecognitionPermission();
+  let arOk = await hasActivityRecognitionPermission();
+  if (!arOk) {
+    // HC can be fully allowed while Samsung writes nothing. Live Walk still
+    // needs Physical activity — do not silently stay at 0.
+    arOk = await ensureActivityRecognitionPermission({
+      promptIfMissing: true,
+      allowSettingsHelper: true,
+    });
+  }
   if (!arOk) {
     if (__DEV__) {
       console.log("[HybridLive] skip — ACTIVITY_RECOGNITION not granted");
@@ -101,12 +174,19 @@ export async function startHybridLiveDailyDisplay(): Promise<boolean> {
 
   const available = await androidLegacySensorProvider.isAvailable();
   if (!available) {
-    if (__DEV__) console.log("[HybridLive] skip — legacy sensor unavailable");
+    if (__DEV__) {
+      console.log("[HybridLive] skip — TYPE_STEP_COUNTER unavailable");
+    }
     return false;
   }
 
   stopHybridLiveDailyDisplay();
 
+  try {
+    await stepTrackingNotificationService.ensureNativeBackgroundTracking();
+  } catch {
+    /* FGS may already be running */
+  }
   void pollOnce();
   _pollTimer = setInterval(() => {
     void pollOnce();
@@ -114,7 +194,7 @@ export async function startHybridLiveDailyDisplay(): Promise<boolean> {
 
   if (__DEV__) {
     console.log(
-      "[HybridLive] started — polling androidLegacySensorProvider (same source as race baseline)",
+      "[HybridLive] started — native FGS session + cached sensor (HC stays verified)",
     );
   }
   return true;

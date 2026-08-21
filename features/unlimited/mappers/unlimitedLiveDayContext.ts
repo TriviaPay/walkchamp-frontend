@@ -66,13 +66,15 @@ export function resolveUnlimitedLiveDayContext(
   return null;
 }
 
-/** Walk POST must stay ON for Unlimited; classic live pauses it. */
-export function shouldPauseWalkBackendSync(params: {
+/**
+ * Walk POST /api/walk/steps must stay ON during classic live races and Unlimited.
+ * Race progress uses a separate endpoint; daily walk / streak share today's total.
+ */
+export function shouldPauseWalkBackendSync(_params: {
   classicLiveRaceActive: boolean;
   unlimitedDailyModeActive: boolean;
 }): boolean {
-  if (params.unlimitedDailyModeActive) return false;
-  return params.classicLiveRaceActive;
+  return false;
 }
 
 /** Before viewer's local midnight, paint 0 — never ambient HC "today" as challenge progress. */

@@ -4,11 +4,14 @@
  * • In a proper dev/production build: renders a real AdMob banner.
  * • In Expo Go or on web: renders a clearly-labelled placeholder so the
  *   layout is visible and the developer knows where the ad will appear.
+ *
+ * Slot chrome follows the in-app light/dark setting (not the OS scheme).
  */
 import React, { memo } from "react";
 import { Platform, Text, View } from "react-native";
 import Constants from "expo-constants";
 import { areAdsConfiguredForCurrentEnv, getBannerAdUnitId } from "@/config/adsConfig";
+import { useColors } from "@/hooks/useColors";
 import { rf } from "@/utils/responsive";
 
 type AdModule = typeof import("react-native-google-mobile-ads");
@@ -17,7 +20,6 @@ const BANNER_AD_UNIT_ID = getBannerAdUnitId();
 
 /** Standard AdMob banner height (320×50) on iOS and Android. */
 export const BANNER_SLOT_HEIGHT = 50;
-const SLOT_BG = "#0B0D1A";
 
 const isExpoGo: boolean =
   (Constants as unknown as { executionEnvironment?: string }).executionEnvironment === "storeClient";
@@ -38,12 +40,13 @@ function loadAdModule(): AdModule | null {
 const adMod = loadAdModule();
 
 function BannerAdView({ style }: { style?: object }) {
+  const colors = useColors();
   const slotStyle = {
     alignItems: "center" as const,
     justifyContent: "center" as const,
     width: "100%" as const,
     height: BANNER_SLOT_HEIGHT,
-    backgroundColor: SLOT_BG,
+    backgroundColor: colors.background,
     overflow: "hidden" as const,
   };
 
@@ -68,13 +71,13 @@ function BannerAdView({ style }: { style?: object }) {
         slotStyle,
         {
           borderWidth: 1,
-          borderColor: "#2A2D3E",
+          borderColor: colors.border,
           borderStyle: "dashed",
         },
         style,
       ]}
     >
-      <Text style={{ color: "#4B5563", fontSize: rf(10), fontWeight: "600", letterSpacing: 0.3 }}>
+      <Text style={{ color: colors.mutedForeground, fontSize: rf(10), fontWeight: "600", letterSpacing: 0.3 }}>
         Test ad · 320×50
       </Text>
     </View>

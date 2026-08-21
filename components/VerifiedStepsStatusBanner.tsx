@@ -7,24 +7,36 @@ import { rf, rs } from "@/utils/responsive";
 import {
   describeHealthConnectVerificationStatus,
   isVerifiedHealthAuthoritative,
+  isWaitingForHealthConnectWriterData,
 } from "@/services/steps/healthConnectVerificationStateLogic";
+import { isHealthConnectOnDeviceStepsAvailable } from "@/services/steps/hcOnDeviceSteps";
 import type { HealthConnectVerificationState } from "@/services/steps/healthConnectVerificationState";
 
 type Props = {
   state: HealthConnectVerificationState | null;
   onSetup: () => void;
+  /** Re-read Health Connect — used when permissions are already granted. */
+  onRecheck?: () => void;
   /** True when WalkContext already has Health Connect / HealthKit READ granted. */
   stepsAccessGranted?: boolean;
+  /** Auto Tracking is already ON — hide informational local-only / waiting cards. */
+  trackingActive?: boolean;
 };
 
+function waitingForWriter(state: HealthConnectVerificationState): boolean {
+  return isWaitingForHealthConnectWriterData(state.status, state.writerInstalled);
+}
+
 function actionLabel(state: HealthConnectVerificationState): string {
+  if (waitingForWriter(state)) {
+    return "Recheck";
+  }
   switch (state.status) {
     case "permission_required":
-      return "Grant permissions";
+      return "Allow Step Access";
     case "provider_required":
       if (Platform.OS === "ios") return "Open Apple Health";
-      if (state.writerInstalled) return "Open app";
-      return "Set up health app";
+      return "Open system update";
     case "unsupported":
     case "error":
       return "Try again";
@@ -34,26 +46,21 @@ function actionLabel(state: HealthConnectVerificationState): string {
 }
 
 function bannerTitle(state: HealthConnectVerificationState): string {
-  if (state.status === "unsupported") return "Verified Steps Unavailable";
-  if (state.status === "permission_required") return "Step access needed";
-  if (
-    state.status === "provider_required" &&
-    state.writerInstalled &&
-    !state.writerConnectedToHealthConnect
-  ) {
-    return "Waiting for step sync";
+  if (waitingForWriter(state)) {
+    return "Waiting for Health Connect data";
   }
-  return "Health app needed";
+  if (state.status === "unsupported") return "Verified Steps Unavailable";
+  if (state.status === "permission_required") return "Allow Step Access";
+  if (state.status === "provider_required") return "System update required";
+  return "Health Connect needed";
 }
 
 function bannerBody(state: HealthConnectVerificationState): string {
-  if (
-    state.status === "provider_required" &&
-    state.writerInstalled &&
-    !state.writerConnectedToHealthConnect
-  ) {
-    const label = state.preferredWriterLabel ?? "your health app";
-    return `${label} is set up with Health Connect. Open ${label} once and walk a bit — verified steps usually appear after it syncs.`;
+  if (waitingForWriter(state)) {
+    if (isHealthConnectOnDeviceStepsAvailable()) {
+      return "WalkChamp is connected to Health Connect. Verified steps will update as Health Connect records them.";
+    }
+    return "WalkChamp is connected to Health Connect. Verified steps will update as Health Connect records them. Native phone capture needs a system update; watches and other Health Connect sources still count.";
   }
   return describeHealthConnectVerificationStatus(state.status);
 }
@@ -61,31 +68,48 @@ function bannerBody(state: HealthConnectVerificationState): string {
 export default function VerifiedStepsStatusBanner({
   state,
   onSetup,
+  onRecheck,
   stepsAccessGranted = false,
+  trackingActive = false,
 }: Props) {
   const colors = useColors();
   if (!state) return null;
+
+  const waiting = waitingForWriter(state);
+
+  // After the user has already enabled tracking, empty Health Connect /
+  // local-only is not a leftover setup error. Walk's Auto Tracking line
+  // covers that — do not keep "Step tracking is active" on screen.
   if (
+    (stepsAccessGranted || trackingActive) &&
+    (waiting ||
+      (typeof isVerifiedHealthAuthoritative === "function" &&
+        isVerifiedHealthAuthoritative(state.status)))
+  ) {
+    return null;
+  }
+
+  if (
+    !waiting &&
     typeof isVerifiedHealthAuthoritative === "function" &&
     isVerifiedHealthAuthoritative(state.status)
   ) {
     return null;
   }
-  // Hide once the in-app HC wizard is done (READ granted + HC available).
-  // WalkContext can know about the grant before the HC probe cache catches up.
+  // Hide once the in-app HC wizard is done — except when HC is still empty.
   if (
-    (state.healthConnectAvailable && state.readStepsPermissionGranted) ||
-    (stepsAccessGranted &&
-      (state.status === "permission_required" || state.readStepsPermissionGranted))
+    !waiting &&
+    ((state.healthConnectAvailable && state.readStepsPermissionGranted) ||
+      (stepsAccessGranted &&
+        (state.status === "permission_required" || state.readStepsPermissionGranted)))
   ) {
     return null;
   }
-  if (state.writerConnectedToHealthConnect === true) {
+  if (!waiting && state.writerConnectedToHealthConnect === true) {
     return null;
   }
-  // Setup can finish before Samsung writes Step rows. Do not keep alarming
-  // "Health app needed" when HC is readable and the writer app is installed.
   if (
+    !waiting &&
     state.healthConnectAvailable &&
     state.readStepsPermissionGranted &&
     state.writerInstalled
@@ -94,6 +118,13 @@ export default function VerifiedStepsStatusBanner({
   }
 
   const title = bannerTitle(state);
+  const onActionPress = () => {
+    if (waiting && onRecheck) {
+      onRecheck();
+      return;
+    }
+    onSetup();
+  };
 
   return (
     <View
@@ -110,7 +141,7 @@ export default function VerifiedStepsStatusBanner({
         </Text>
       </View>
       <TouchableOpacity
-        onPress={onSetup}
+        onPress={onActionPress}
         style={[styles.btn, { borderColor: colors.warning + "60" }]}
       >
         <Text style={[styles.btnText, { color: colors.warning }]}>

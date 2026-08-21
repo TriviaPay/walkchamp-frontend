@@ -12,7 +12,7 @@ Walk Champ separates **verified daily health totals** from **provisional live mo
 > Health Connect / HealthKit are authoritative for verified totals, qualification, and prizes.
 > Phone sensors provide provisional live movement only and must never independently decide winners, qualification, or prizes.
 
-**Provisional is not verified.** A compatible Health Connect writer/provider may be required when HC has no step records — Samsung Health is recommended on Samsung devices but is **not** mandatory for every Android user. Sensor tracking continues for live UX even when verification is delayed or unavailable.
+**Provisional is not verified.** Android verified totals come only from an unfiltered Health Connect aggregate. Samsung Health is optional (wearables may write into Health Connect) and is never required for phone steps. Sensor tracking continues for live UX even when verification is delayed or unavailable. Android builds require API 34+.
 
 ## Mode matrix
 
@@ -58,7 +58,7 @@ Do **not** write sensor values into `step_daily_totals` as verified.
 
 ### Unlimited must
 
-- Keep Walk sync active while Live Detail is open
+- Keep Walk sync active from Walk tab, background, and Live Detail
 - Keep TYPE_STEP_COUNTER / CMPedometer provisional tracking for live UX
 - Upload provisional via `/api/unlimited-challenges/:id/live-progress` (Redis + realtime)
 - Merge realtime by `challengeId + participantId + challengeDayKey`
@@ -67,7 +67,8 @@ Do **not** write sensor values into `step_daily_totals` as verified.
 ### Classic must (unchanged)
 
 - Sensor baseline → provisional race delta → progress buffer → `/api/races/:id/progress`
-- Pause walk sync while racing
+- Keep walk sync on while racing (`POST /api/walk/steps` is daily; race progress is separate)
+- Freeze live-race counting at `goalSteps`; daily walk can continue past the goal
 - Reconcile with HC/HK before final prizes
 
 ## Realtime payload (Unlimited)

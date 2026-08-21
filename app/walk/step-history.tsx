@@ -110,13 +110,52 @@ function fmtGoalLabel(n: number): string {
 // Replaces today's DB entry with the live pedometer value when it is higher.
 // Called both when server data arrives AND whenever todaySteps updates, so the
 // displayed steps are always max(db, live) — no race condition possible.
-// Past days = GET /api/walk/history. Overlay today only when verified HC is higher
-// than the DB row — never replace a stored row with 0.
-function applyLiveOverlay(days: DayData[], todayStr: string, liveSteps: number): DayData[] {
+// Past days = GET /api/walk/history. Today's bar shows the live Walk total
+// (verified HC/HK, or local phone steps while Health Connect is catching up).
+// Never replace a stored row with 0.
+function formatHistoryDayLabels(todayStr: string): { dayLabel: string; dateLabel: string } {
+  const d = new Date(`${todayStr}T12:00:00`);
+  if (Number.isNaN(d.getTime())) {
+    return { dayLabel: "Today", dateLabel: todayStr };
+  }
+  return {
+    dayLabel: d.toLocaleDateString(undefined, { weekday: "short" }),
+    dateLabel: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+  };
+}
+
+function applyLiveOverlay(
+  days: DayData[],
+  todayStr: string,
+  liveSteps: number,
+  goalSteps: number,
+): DayData[] {
   if (liveSteps <= 0) return days;
-  return days.map((d): DayData => {
+  const hasToday = days.some((d) => d.date === todayStr);
+  const labels = formatHistoryDayLabels(todayStr);
+  const withToday = hasToday
+    ? days
+    : [
+        ...days,
+        {
+          date: todayStr,
+          dayLabel: labels.dayLabel,
+          dateLabel: labels.dateLabel,
+          steps: 0,
+          distanceMeters: 0,
+          distanceDisplay: "0 m",
+          caloriesBurned: 0,
+          activeMinutes: 0,
+          goalSteps,
+          goalCompleted: false,
+          progressPercent: 0,
+          status: "rest" as const,
+        },
+      ];
+  return withToday.map((d): DayData => {
     if (d.date !== todayStr || liveSteps <= d.steps) return d;
-    const progress = d.goalSteps > 0 ? Math.min(100, Math.round((liveSteps / d.goalSteps) * 100)) : 0;
+    const goal = d.goalSteps > 0 ? d.goalSteps : goalSteps;
+    const progress = goal > 0 ? Math.min(100, Math.round((liveSteps / goal) * 100)) : 0;
     return {
       ...d,
       steps: liveSteps,
@@ -124,8 +163,8 @@ function applyLiveOverlay(days: DayData[], todayStr: string, liveSteps: number):
       caloriesBurned: Math.round(liveSteps * 0.04),
       activeMinutes: Math.ceil(liveSteps / 120),
       progressPercent: progress,
-      goalCompleted: liveSteps >= d.goalSteps,
-      status: liveSteps >= d.goalSteps ? "goal" : progress >= 50 ? "above_50" : "below_50",
+      goalCompleted: liveSteps >= goal,
+      status: liveSteps >= goal ? "goal" : progress >= 50 ? "above_50" : "below_50",
     };
   });
 }
@@ -159,7 +198,12 @@ export default function StepHistoryScreen() {
   const { refreshTodayRank, currentStreak } = useWalkContext();
   const { isDark } = useTheme();
   const todaySteps = useAppSelector((s) =>
-    Math.max(0, Math.floor(s.raceProgress.verifiedTodaySteps ?? 0)),
+    Math.max(
+      0,
+      Math.floor(s.raceProgress.verifiedTodaySteps ?? 0),
+      Math.floor(s.raceProgress.todaySteps ?? 0),
+      Math.floor(s.raceProgress.provisionalSensorTodaySteps ?? 0),
+    ),
   );
 
   const todayStr = getLocalDateStr();
@@ -175,8 +219,8 @@ export default function StepHistoryScreen() {
   // Recomputes instantly whenever either the server data OR todaySteps changes —
   // no useEffect race condition possible.
   const allDays = useMemo(
-    () => applyLiveOverlay(rawDays, todayStr, todaySteps),
-    [rawDays, todayStr, todaySteps],
+    () => applyLiveOverlay(rawDays, todayStr, todaySteps, goalSteps),
+    [rawDays, todayStr, todaySteps, goalSteps],
   );
 
   const displayLifetime = useMemo(() => {
@@ -252,7 +296,7 @@ export default function StepHistoryScreen() {
       setLifetime(body.lifetime ?? null);
       // Select today's bar using the live-overlaid version so the panel shows
       // the correct step count immediately (not the stale DB value).
-      const overlaid = applyLiveOverlay(loaded, todayStr, todayStepsRef.current);
+      const overlaid = applyLiveOverlay(loaded, todayStr, todayStepsRef.current, body.goalSteps ?? 10000);
       const todayBar = overlaid.find((d) => d.date === todayStr) ?? overlaid[overlaid.length - 1] ?? null;
       setSelected(todayBar);
       // Clear error/auth-error on success

@@ -786,10 +786,24 @@ function RankCircle({ rank, colors }: { rank: number; colors: ReturnType<typeof 
 
 /** Image-2 style purple strip on Live list cards — centered on the card. */
 function ChallengeEndsPill({ label }: { label: string }) {
+  const colors = useColors();
+  const { isDark } = useTheme();
   return (
-    <View style={st.endsPill}>
-      <Feather name="calendar" size={13} color="#FFFFFF" />
-      <ChallengeEndsPillLabel label={label} style={st.endsPillText} />
+    <View
+      style={[
+        st.endsPill,
+        !isDark && {
+          backgroundColor: colors.muted,
+          borderColor: colors.border,
+        },
+      ]}
+    >
+      <Feather name="calendar" size={13} color={isDark ? "#FFFFFF" : colors.foreground} />
+      <ChallengeEndsPillLabel
+        label={label}
+        style={[st.endsPillText, !isDark && { color: colors.foreground }]}
+        dateTimeColor={isDark ? undefined : colors.foreground}
+      />
     </View>
   );
 }

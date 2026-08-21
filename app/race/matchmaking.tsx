@@ -1846,6 +1846,18 @@ function MatchmakingScreenContent() {
             const { ensureActiveRaceInStore } = require(
               "@/services/stepProgressCoordinator",
             ) as typeof import("@/services/stepProgressCoordinator");
+            const { store } = require("@/store") as typeof import("@/store");
+            const { capStepsAtGoal } = require(
+              "@/utils/liveRaceDisplay",
+            ) as typeof import("@/utils/liveRaceDisplay");
+            const rp = store.getState().raceProgress;
+            const daily = Math.max(
+              0,
+              Math.floor(
+                Math.max(rp.verifiedTodaySteps ?? 0, rp.todaySteps ?? 0),
+              ),
+            );
+            const goal = liveRoom?.targetSteps ?? 0;
             ensureActiveRaceInStore({
               raceId: backendRaceId,
               raceStartTime: new Date(
@@ -1853,9 +1865,9 @@ function MatchmakingScreenContent() {
               ).toISOString(),
               userId: user.id,
               username: user.username ?? "Runner",
-              goalSteps: liveRoom?.targetSteps ?? 0,
+              goalSteps: goal,
               totalParticipants: playerCount,
-              bootSteps: 0,
+              bootSteps: capStepsAtGoal(daily, goal),
               participantConfirmed: true,
               unlimitedDailyMode: true,
               raceType: "unlimited_goal",
@@ -2911,7 +2923,7 @@ function MatchmakingScreenContent() {
 
     // Flag-on path: leave Waiting Room into Live Race even if API still says waiting
     // (common for Unlimited after scheduled start). live-detail loads the same race id.
-    // Unlimited must NOT start classic RaceContext (that pauses walk sync).
+    // Unlimited must NOT start classic RaceContext (classic session delta, not daily).
     setStart("navigating");
     if (countdownIntervalRef.current) {
       clearInterval(countdownIntervalRef.current);

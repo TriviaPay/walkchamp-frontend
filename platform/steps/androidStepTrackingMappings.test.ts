@@ -1,5 +1,5 @@
 /**
- * Pure mapping tests — run: npx tsx services/steps/androidStepTrackingMappings.test.ts
+ * Pure mapping tests — run: npx tsx platform/steps/androidStepTrackingMappings.test.ts
  */
 import {
   HC_SDK,
@@ -36,38 +36,42 @@ assert(
 );
 assert(
   mapSdkStatusToTrackingStatus(HC_SDK.SDK_UNAVAILABLE, "unavailable") ===
-    "provider_not_installed",
-  "SDK_UNAVAILABLE on API >= 28 → provider_not_installed",
+    "unsupported",
+  "SDK_UNAVAILABLE → HC unavailable, not missing-app install",
 );
 assert(
-  mapSdkStatusToTrackingStatus(HC_SDK.SDK_UNAVAILABLE, "unavailable", 27) ===
+  mapSdkStatusToTrackingStatus(HC_SDK.SDK_UNAVAILABLE, "unavailable", 33) ===
     "unsupported",
-  "API < 28 → unsupported even if SDK would allow install",
+  "API < 34 is outside WalkChamp Android runtime",
 );
 assert(
   mapSdkStatusToTrackingStatus(
     HC_SDK.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED,
     "unavailable",
-    31,
+    34,
   ) === "provider_update_required",
-  "API 31 + SDK 2 → install flow",
+  "API 34 + SDK 2 → system update, not HC APK install",
 );
 assert(
-  isHealthConnectInstallable(
+  !isHealthConnectInstallable(
     HC_SDK.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED,
-    31,
+    34,
   ),
-  "installable on API 31 + SDK 2",
+  "Android 14+ must not use the old HC APK install flow",
 );
 assert(
-  !isHealthConnectInstallable(HC_SDK.SDK_UNAVAILABLE, 31),
-  "SDK 1 not installable",
+  !isHealthConnectInstallable(HC_SDK.SDK_UNAVAILABLE, 34),
+  "SDK_UNAVAILABLE is not installable",
+);
+assert(
+  trackingStatusToUiState("provider_update_required") === "system_update",
+  "update required → system_update UI",
 );
 assert(
   trackingStatusToUiState("unsupported") === "unsupported",
   "unsupported → unsupported UI",
 );
 assert(HC_SDK.SDK_AVAILABLE === 3, "SDK_AVAILABLE must be 3 per library");
-assert(HC_MIN_API === 28, "HC_MIN_API must be 28");
+assert(HC_MIN_API === 34, "HC_MIN_API must match minSdk 34");
 
 console.log("androidStepTrackingMappings: all tests passed");

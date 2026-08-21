@@ -32,7 +32,7 @@ function display(opts: {
   dailyBaseline?: number | null;
   raceActive?: boolean;
 }): number {
-  const verified = accountVerifiedFloor(opts.hc, opts.db);
+  const verified = opts.supported ? opts.hc : accountVerifiedFloor(opts.hc, opts.db);
   return resolveWalkNotificationSteps({
     verifiedTodaySteps: verified,
     provisionalSensorTodaySteps: opts.sensor,
@@ -52,8 +52,8 @@ assert.equal(
 );
 assert.equal(
   display({ hc: 0, db: 18496, sensor: SINCE_BOOT, supported: true, sensorTotal: SINCE_BOOT }),
-  18496,
-  "supported reinstall: keep GET /api/walk/today, drop since-boot",
+  0,
+  "supported reinstall: Daily Walk is Health Connect only — no DB fallback",
 );
 assert.equal(
   capWalkStepsForSyncCore(SINCE_BOOT, 0, true, 18496),
@@ -88,8 +88,8 @@ assert.equal(
     sensorTotal: SINCE_BOOT,
     dailyBaseline: SINCE_BOOT - 3610,
   }),
-  3610,
-  "supported resume: live sensor may lead lagging HC by a small amount",
+  3563,
+  "supported resume: Walk daily stays on Health Connect, not sensor session",
 );
 assert.equal(
   display({
@@ -115,9 +115,28 @@ assert.equal(
   "mid-day empty HC poll must not wipe a known total",
 );
 assert.equal(
-  display({ hc: 0, db: 0, sensor: 9953, supported: true }),
+  display({
+    hc: 0,
+    db: 0,
+    sensor: 9953,
+    supported: true,
+    sensorTotal: 9953,
+  }),
   0,
-  "midnight leftover thousands stay off Daily Walk / notification",
+  "midnight leftover since-boot stays off Daily Walk / notification",
+);
+assert.equal(
+  display({
+    hc: 0,
+    db: 0,
+    sensor: 3610,
+    supported: true,
+    sensorTotal: SINCE_BOOT,
+    dailyBaseline: SINCE_BOOT - 3610,
+    raceActive: false,
+  }),
+  0,
+  "after a finished race, Daily Walk stays on Health Connect (0 until HC has today's total)",
 );
 assert.equal(
   resolveTodayDisplayStepsCore({

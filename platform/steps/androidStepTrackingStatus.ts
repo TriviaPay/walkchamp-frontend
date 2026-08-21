@@ -154,18 +154,7 @@ export async function enableAndroidStepTracking(): Promise<AndroidStepTrackingSt
 
   const withTimeout = async (): Promise<AndroidStepTrackingStatusResult> => {
     const before = await getAndroidStepTrackingStatus();
-    if (
-      before.status === "provider_update_required" ||
-      before.status === "provider_not_installed"
-    ) {
-      const legacy = await stepProviderManager.requestStepPermission().catch(() => ({
-        status: "unavailable" as const,
-        providerId: null,
-      }));
-      invalidateAndroidStepTrackingStatusCache();
-      if (legacy.status === "granted") {
-        return getAndroidStepTrackingStatus(true);
-      }
+    if (before.status === "provider_update_required") {
       await androidHCService.openInstallPage().catch(() => {});
       return before;
     }
