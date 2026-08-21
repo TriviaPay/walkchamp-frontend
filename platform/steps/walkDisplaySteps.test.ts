@@ -9,37 +9,62 @@ import {
   resolveWalkNotificationSteps,
   isInflatedProvisionalVsVerified,
   isStaleSensorAbsolute,
+  isUnconfirmedSensorLeftover,
   shouldAcceptVerifiedZero,
   accountVerifiedFloor,
   looksLikeSinceBootCounter,
+  shouldHoldSensorSessionUntilVerifiedRead,
+  shouldReplaceLiveDailyWithVerified,
 } from "./walkDisplaySteps";
 
-// Real HC 433 vs bad sensor 1592 → show 433
+// Since-boot counter vs HC — only when the candidate equals the hardware total.
 assert.equal(
   resolveWalkNotificationSteps({
     verifiedTodaySteps: 433,
     provisionalSensorTodaySteps: 1592,
+    sensorTotal: 1592,
   }),
   433,
 );
+assert.equal(
+  looksLikeSinceBootCounter({ todaySteps: 1592, sensorTotal: 1592 }),
+  true,
+);
 
-// Live walk ahead of lagging HC — show provisional (notification must move)
+// Walk daily = Health Connect / HealthKit only when that total is known.
 assert.equal(
   resolveWalkNotificationSteps({
     verifiedTodaySteps: 433,
     provisionalSensorTodaySteps: 450,
   }),
-  450,
+  433,
+);
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 52,
+    provisionalSensorTodaySteps: 104,
+  }),
+  52,
+  "HC 52 must not display doubled sensor 104",
 );
 assert.equal(
   resolveWalkNotificationSteps({
     verifiedTodaySteps: 5,
     provisionalSensorTodaySteps: 320,
   }),
-  320,
+  5,
 );
 
-// HC delayed — small provisional OK
+// HC delayed — leftover 20 must be rejected at ingest, not after it is already
+// in the display lane. resolveWalkNotificationSteps still maxes verified+live.
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 0,
+    provisionalSensorTodaySteps: 20,
+  }),
+  20,
+  "once accepted into the display lane, 20 still renders (ingest must reject it first)",
+);
 assert.equal(
   resolveWalkNotificationSteps({
     verifiedTodaySteps: 0,
@@ -48,13 +73,55 @@ assert.equal(
   120,
 );
 
-// No active race: HC=0 + a big stored/provisional total is unexplained — treat
-// as yesterday's leftover and show 0, never the +250 cap.
+assert.equal(isUnconfirmedSensorLeftover(20), true);
+assert.equal(isUnconfirmedSensorLeftover(0), false);
+assert.equal(isUnconfirmedSensorLeftover(50), false);
+assert.equal(
+  shouldHoldSensorSessionUntilVerifiedRead({
+    sessionSteps: 20,
+    verifiedSteps: 0,
+    hasVerifiedAnchor: false,
+  }),
+  true,
+  "hold leftover 20 until HC first read",
+);
+assert.equal(
+  shouldHoldSensorSessionUntilVerifiedRead({
+    sessionSteps: 20,
+    verifiedSteps: 0,
+    hasVerifiedAnchor: true,
+  }),
+  false,
+  "after HC read, leftover is handled by the sensor anchor not this hold",
+);
+assert.equal(
+  shouldHoldSensorSessionUntilVerifiedRead({
+    sessionSteps: 2345,
+    verifiedSteps: 0,
+    hasVerifiedAnchor: false,
+  }),
+  false,
+  "real FGS session still shows while HC lags",
+);
+
+// After a finished race, HC=0 is lag — keep today's live session (not race-only).
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 0,
+    provisionalSensorTodaySteps: 2345,
+    todaySteps: 2345,
+    sensorTotal: 22380,
+    dailyBaseline: 20035,
+  }),
+  2345,
+);
+// Same leftover number IS yesterday/since-boot when it matches TYPE_STEP_COUNTER.
 assert.equal(
   resolveWalkNotificationSteps({
     verifiedTodaySteps: 0,
     provisionalSensorTodaySteps: 9953,
     todaySteps: 9953,
+    sensorTotal: 9953,
   }),
   0,
 );
@@ -94,6 +161,7 @@ assert.equal(
   resolveWalkNotificationSteps({
     verifiedTodaySteps: 5,
     provisionalSensorTodaySteps: 9986,
+    sensorTotal: 9986,
   }),
   5,
 );
@@ -115,14 +183,23 @@ assert.equal(
     provisionalSensorTodaySteps: 22380,
     todaySteps: 22380,
     verifiedAuthoritative: false,
+    sensorTotal: 22380,
   }),
   3563,
 );
 
-assert.equal(isInflatedProvisionalVsVerified(433, 1592), true);
+assert.equal(isInflatedProvisionalVsVerified(433, 1592), false);
 assert.equal(isInflatedProvisionalVsVerified(433, 450), false);
-assert.equal(isStaleSensorAbsolute(0, 1592), true);
+assert.equal(isStaleSensorAbsolute(0, 1592), false);
 assert.equal(isStaleSensorAbsolute(5, 120), false);
+assert.equal(
+  shouldReplaceLiveDailyWithVerified(0, 2345),
+  false,
+  "empty HC after a race must not wipe today's walk",
+);
+assert.equal(shouldReplaceLiveDailyWithVerified(433, 1592), true);
+assert.equal(shouldReplaceLiveDailyWithVerified(433, 450), true);
+assert.equal(shouldReplaceLiveDailyWithVerified(52, 104), true);
 
 // During a live/sponsored race, do not let sensor/race totals replace HC daily.
 assert.equal(
@@ -140,7 +217,8 @@ assert.equal(
     provisionalSensorTodaySteps: 130,
     raceActive: true,
   }),
-  130,
+  113,
+  "race owns the sensor — Walk daily stays on verified HC/HK",
 );
 
 // Mid-day HC empty poll must not wipe a known total.
@@ -193,18 +271,29 @@ assert.equal(
     verifiedTodaySteps: 18496,
     provisionalSensorTodaySteps: 22380,
     todaySteps: 22380,
+    sensorTotal: 22380,
   }),
   18496,
 );
 
-// Midnight: HC 0 + leftover thousands → 0
+// Midnight leftover: HC 0 + raw since-boot counter → 0
 assert.equal(
   resolveWalkNotificationSteps({
     verifiedTodaySteps: 0,
     provisionalSensorTodaySteps: 9953,
     todaySteps: 9953,
+    sensorTotal: 9953,
   }),
   0,
+);
+// Post-race Daily Walk with no hardware totals yet: keep the live session.
+assert.equal(
+  resolveWalkNotificationSteps({
+    verifiedTodaySteps: 0,
+    provisionalSensorTodaySteps: 2345,
+    todaySteps: 2345,
+  }),
+  2345,
 );
 
 // Unsupported: since-boot hardware number must not become today's total.

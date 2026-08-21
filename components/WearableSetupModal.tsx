@@ -25,20 +25,11 @@ import {
   type HCAvailability,
 } from "@/services/steps/androidHealthConnectService";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
-import { androidLegacySensorProvider } from "@/services/steps/providers/androidLegacySensorProvider";
-import { useWalkContext } from "@/context/WalkContext";
-import { FEATURE_FLAGS } from "@/config/featureFlags";
+import { isHealthConnectOnDeviceStepsAvailable } from "@/services/steps/hcOnDeviceSteps";
 import {
   getHealthConnectVerificationState,
   isVerifiedHealthAuthoritative,
 } from "@/services/steps/healthConnectVerificationState";
-import {
-  openStepWriterApp,
-  openStepWriterInstallPage,
-  resolvePreferredStepWriterAsync,
-  isStepWriterInstalled,
-  type AndroidStepWriterApp,
-} from "@/services/steps/androidStepWriterApps";
 import {
   getDeviceStepSetupRecord,
   saveDeviceSetupResume,
@@ -48,16 +39,12 @@ const isIOS = Platform.OS === "ios";
 const TOTAL_IOS = 5;
 const TOTAL_ANDROID = 4;
 const ONBOARDING_BTN = [ONBOARDING_COLORS.cyan, ONBOARDING_COLORS.primary] as const;
-/** Hybrid: daily requires Health Connect — never offer phone-sensor daily fallback in setup. */
-const hybridDailyHcOnly = () =>
-  FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR === true;
 
 type AndroidPhase =
   | "checking"
   | "expo_go"
   | "not_supported"
   | "install"
-  | "legacy_ready"
   | "setup";
 
 interface Props {
@@ -77,8 +64,6 @@ export default function WearableSetupModal({
 }: Props) {
   const colors = useColors();
   const { safeTop, safeBottom } = useSafeLayout();
-  const { enableLimitedSensorTracking } = useWalkContext();
-
   const platform   = isIOS ? "ios_healthkit" : "android_health_connect";
   const healthName = isIOS ? "Apple Health"  : "Health Connect";
 
@@ -89,22 +74,19 @@ export default function WearableSetupModal({
   const [androidPhase,   setAndroidPhase]   = useState<AndroidPhase>("checking");
   const [hcAvailability, setHcAvailability] = useState<HCAvailability | null>(null);
   const [installLoading, setInstallLoading] = useState(false);
-  const [limitedLoading, setLimitedLoading] = useState(false);
   /** Shown when user taps Next on Enable Step Tracking without granting yet. */
   const [enableTrackingHint, setEnableTrackingHint] = useState(false);
   const [writerChecking, setWriterChecking] = useState(false);
   const [writerReady, setWriterReady] = useState(false);
   const [writerInstalled, setWriterInstalled] = useState(false);
   const [writerHint, setWriterHint] = useState("");
-  const [preferredWriter, setPreferredWriter] = useState<AndroidStepWriterApp | null>(null);
   /** True after Enable Step Tracking succeeded this open — survives stale HC "unknown" cache. */
   const stepsGrantedThisSessionRef = useRef(false);
   /** Recheck (or return-from-install) this session — Next stays dim until then. */
   const [writerRecheckedThisSession, setWriterRecheckedThisSession] = useState(false);
   /**
-   * Setup may proceed after the user opened Health Connect this session and
-   * Rechecked, even if Samsung has not written Step rows yet. Verified daily
-   * authority still requires writer evidence later.
+   * Setup may proceed after Read Steps is granted. Verified daily totals
+   * still come only from the Health Connect aggregate.
    */
   const [writerSetupReady, setWriterSetupReady] = useState(false);
   const androidPhaseRef = useRef(androidPhase);
@@ -177,7 +159,6 @@ export default function WearableSetupModal({
       setAndroidPhase("checking");
     }
     try {
-      const legacyOk = await androidLegacySensorProvider.isAvailable();
       const result = await androidHCService.initialize();
       setHcAvailability(result.availability);
 
@@ -215,19 +196,8 @@ export default function WearableSetupModal({
         return;
       }
 
-      // Non-hybrid only: phone sensor daily fallback when HC is unusable.
-      if (!hybridDailyHcOnly() && legacyOk) {
-        setAndroidPhase("legacy_ready");
-        return;
-      }
-
       setAndroidPhase("not_supported");
     } catch {
-      const legacyOk = await androidLegacySensorProvider.isAvailable().catch(() => false);
-      if (!hybridDailyHcOnly() && legacyOk) {
-        setAndroidPhase("legacy_ready");
-        return;
-      }
       setAndroidPhase("not_supported");
     }
   }, []);
@@ -290,41 +260,23 @@ export default function WearableSetupModal({
       } catch {
         /* ignore */
       }
-      const writer = await resolvePreferredStepWriterAsync();
-      setPreferredWriter(writer);
-      const installed = await isStepWriterInstalled(writer);
       const vs = await getHealthConnectVerificationState();
-      let connected =
-        vs.writerConnectedToHealthConnect === true ||
-        vs.writerEvidenceDetected === true;
-      let latestVs = vs;
-      if (!connected && installed) {
-        await new Promise((r) => setTimeout(r, 1200));
-        const vsRetry = await getHealthConnectVerificationState();
-        latestVs = vsRetry;
-        connected =
-          vsRetry.writerConnectedToHealthConnect === true ||
-          vsRetry.writerEvidenceDetected === true;
-      }
-      // App permissions can show Samsung Health as Allowed before any Step
-      // records appear. After Open Health Connect + Recheck, allow setup Next.
-      const setupReady =
-        connected ||
-        (installed === true &&
-          latestVs.readStepsPermissionGranted === true &&
-          visitedHcWriterSettingsRef.current === true);
-      setWriterInstalled(installed);
+      const onDevice = isHealthConnectOnDeviceStepsAvailable();
+      const granted = vs.readStepsPermissionGranted === true;
+      const connected = vs.currentDayVerifiedSteps > 0;
+      const setupReady = granted;
+      setWriterInstalled(granted);
       setWriterReady(connected);
       setWriterSetupReady(setupReady);
       setWriterRecheckedThisSession(true);
       setWriterHint(
         connected
           ? "Verified step data is available from Health Connect."
-          : setupReady
-            ? `${writer.label} is allowed in Health Connect. Step sync can take a few minutes — you can continue. Open ${writer.label} once if totals stay low.`
-            : installed
-              ? `In Health Connect → App permissions, ${writer.label} must be under Allowed access with Write Steps on. Tap Open Health Connect, confirm that, then Recheck.`
-              : writer.syncHint,
+          : onDevice
+            ? "Health Connect will record phone steps after you walk. A watch is optional."
+            : granted
+              ? "Health Connect is connected. Waiting for step data. Walk a bit, then Recheck."
+              : "Allow WalkChamp Read Steps in Health Connect, then Recheck.",
       );
       if (setupReady) {
         setEnableTrackingHint(false);
@@ -332,7 +284,7 @@ export default function WearableSetupModal({
       if (connected) {
         setStep((s) => Math.min(s + 1, TOTAL_ANDROID - 1));
       }
-      return { installed, ready: setupReady };
+      return { installed: granted, ready: setupReady };
     } catch {
       setWriterReady(false);
       setWriterInstalled(false);
@@ -492,8 +444,7 @@ export default function WearableSetupModal({
           verifiedOk ||
           (!!vs &&
             vs.healthConnectAvailable &&
-            vs.readStepsPermissionGranted &&
-            vs.writerInstalled);
+            vs.readStepsPermissionGranted);
         const resolvedStatus = "connected";
         try {
           await authFetch("/api/me/step-source", {
@@ -569,8 +520,7 @@ export default function WearableSetupModal({
         verifiedOk ||
         (!!vs &&
           vs.healthConnectAvailable &&
-          vs.readStepsPermissionGranted &&
-          vs.writerInstalled);
+          vs.readStepsPermissionGranted);
 
       const resolvedStatus = live === "granted" ? "connected" : "denied";
       try {
@@ -620,22 +570,6 @@ export default function WearableSetupModal({
   const goBack = () => setStep(s => Math.max(s - 1, 0));
   const isLast = step === (isIOS ? TOTAL_IOS : TOTAL_ANDROID) - 1;
 
-  const tryLimitedSensor = async (): Promise<boolean> => {
-    setLimitedLoading(true);
-    try {
-      const ok = await enableLimitedSensorTracking();
-      if (!ok) return false;
-      stepsGrantedThisSessionRef.current = true;
-      setPermStatus("granted");
-      setEnableTrackingHint(false);
-      setAndroidPhase("setup");
-      setStep(TOTAL_ANDROID - 1);
-      return true;
-    } finally {
-      setLimitedLoading(false);
-    }
-  };
-
   const HCCheckingScreen = () => <SkeletonWearableCheck />;
 
   const HCExpoGoScreen = () => (
@@ -650,25 +584,6 @@ export default function WearableSetupModal({
     </View>
   );
 
-  const HCLegacyReadyScreen = () => (
-    <View style={ws.content}>
-      <View style={[ws.iconCircle, { backgroundColor: "#00E67618" }]}>
-        <Feather name="activity" size={36} color="#00E676" />
-      </View>
-      <Text style={[ws.title, { color: colors.foreground }]}>Step Tracking Ready</Text>
-      <Text style={[ws.desc, { color: colors.mutedForeground }]}>
-        This device will use Android Steps (phone sensor). Tap Enable — no Health Connect required.
-      </Text>
-      <PrimaryAction
-        onPress={() => void tryLimitedSensor()}
-        disabled={limitedLoading}
-        loading={limitedLoading}
-        icon="check-circle"
-        label="Enable Step Tracking"
-      />
-    </View>
-  );
-
   const HCUnsupportedScreen = () => (
     <View style={ws.content}>
       <View style={[ws.iconCircle, { backgroundColor: colors.destructive + "18" }]}>
@@ -676,20 +591,8 @@ export default function WearableSetupModal({
       </View>
       <Text style={[ws.title, { color: colors.foreground }]}>Verified Step Tracking Unavailable</Text>
       <Text style={[ws.desc, { color: colors.mutedForeground }]}>
-        {hybridDailyHcOnly()
-          ? "This device does not currently support the verified health integration required for prize-based challenges. You may still see provisional live movement when your phone’s step sensor is available, but those steps cannot be used for qualification or prizes."
-          : "Step tracking is not available on this device."}
+        Health Connect is not available on this Android 14+ device. Live phone-sensor movement may still work, but it cannot be used for qualification or prizes.
       </Text>
-      {!hybridDailyHcOnly() ? (
-        <PrimaryAction
-          onPress={() => void tryLimitedSensor()}
-          disabled={limitedLoading}
-          loading={limitedLoading}
-          icon="activity"
-          label="Use Android Steps"
-          solidColor="#F59E0B"
-        />
-      ) : null}
       <TouchableOpacity
         style={[ws.actionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border }]}
         onPress={() => void checkHCAvailability()}
@@ -700,53 +603,37 @@ export default function WearableSetupModal({
     </View>
   );
 
-  const HCInstallScreen = () => {
-    const isUpdate = hcAvailability === "needs_update";
-    return (
-      <View style={ws.content}>
-        <View style={[ws.iconCircle, { backgroundColor: "#4285F418" }]}>
-          <Feather name="download" size={36} color="#4285F4" />
-        </View>
-        <Text style={[ws.title, { color: colors.foreground }]}>Health Connect Required</Text>
-        <Text style={[ws.desc, { color: colors.mutedForeground }]}>
-          {isUpdate
-            ? "WalkChamp requires an updated version of Health Connect to read your verified steps."
-            : "WalkChamp uses Health Connect to read your verified steps for challenges, races, and leaderboards."}
-        </Text>
-        <PrimaryAction
-          onPress={() => {
-            void (async () => {
-              setInstallLoading(true);
-              await androidHCService.openInstallPage();
-              setInstallLoading(false);
-            })();
-          }}
-          disabled={installLoading}
-          loading={installLoading}
-          icon="download"
-          label={isUpdate ? "Update Health Connect" : "Install Health Connect"}
-        />
-        {!hybridDailyHcOnly() ? (
-          <View style={{ marginTop: 8 }}>
-            <PrimaryAction
-              onPress={() => void tryLimitedSensor()}
-              disabled={limitedLoading}
-              loading={limitedLoading}
-              icon="activity"
-              label="Use Android Steps Instead"
-            />
-          </View>
-        ) : null}
-        <TouchableOpacity
-          style={[ws.actionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border }]}
-          onPress={() => void checkHCAvailability()}
-        >
-          <Feather name="refresh-cw" size={16} color="#4285F4" />
-          <Text style={[ws.actionBtnText, { color: "#4285F4" }]}>Try Again</Text>
-        </TouchableOpacity>
+  const HCInstallScreen = () => (
+    <View style={ws.content}>
+      <View style={[ws.iconCircle, { backgroundColor: "#4285F418" }]}>
+        <Feather name="download" size={36} color="#4285F4" />
       </View>
-    );
-  };
+      <Text style={[ws.title, { color: colors.foreground }]}>System update required</Text>
+      <Text style={[ws.desc, { color: colors.mutedForeground }]}>
+        Update your Android system / Google Play system components to enable verified step tracking.
+      </Text>
+      <PrimaryAction
+        onPress={() => {
+          void (async () => {
+            setInstallLoading(true);
+            await androidHCService.openInstallPage();
+            setInstallLoading(false);
+          })();
+        }}
+        disabled={installLoading}
+        loading={installLoading}
+        icon="download"
+        label="Open system update"
+      />
+      <TouchableOpacity
+        style={[ws.actionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border }]}
+        onPress={() => void checkHCAvailability()}
+      >
+        <Feather name="refresh-cw" size={16} color="#4285F4" />
+        <Text style={[ws.actionBtnText, { color: "#4285F4" }]}>Try Again</Text>
+      </TouchableOpacity>
+    </View>
+  );
 
   const AllowStepsScreen = () => (
     <View style={ws.content}>
@@ -875,19 +762,15 @@ export default function WearableSetupModal({
           {writerReady
             ? "Health data connected"
             : writerSetupReady
-              ? "Samsung Health allowed"
-              : writerInstalled
-                ? `Connect ${preferredWriter?.label ?? "Samsung Health"}`
-                : "Connect a health app"}
+              ? "Health Connect ready"
+              : "Allow Read Steps"}
         </Text>
         <Text style={[ws.desc, { color: colors.mutedForeground }]}>
           {writerReady
             ? "WalkChamp can read verified steps from Health Connect."
             : writerSetupReady
-              ? `${preferredWriter?.label ?? "Samsung Health"} is connected in Health Connect. You can continue — verified steps may take a few minutes to sync.`
-              : writerInstalled
-                ? `Open Health Connect → App permissions and confirm ${preferredWriter?.label ?? "Samsung Health"} is under Allowed access with Write Steps. Then return here and Recheck.`
-                : `Install ${preferredWriter?.label ?? "Samsung Health or Google Fit"}, allow it to write Steps in Health Connect, then recheck. Permission alone is not enough.`}
+              ? "Phone steps are verified from Health Connect. A Galaxy Watch or other wearable is optional — WalkChamp still reads one Health Connect total."
+              : "Allow Read Steps, then Recheck. WalkChamp does not write sensor steps into Health Connect."}
         </Text>
         {writerHint ? (
           <View style={[ws.infoCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -895,41 +778,19 @@ export default function WearableSetupModal({
           </View>
         ) : null}
         {!writerSetupReady ? (
-          <>
-            {!writerInstalled ? (
-              <PrimaryAction
-                onPress={() => {
-                  void (async () => {
-                    awaitingWriterReturnRef.current = true;
-                    visitedHcWriterSettingsRef.current = true;
-                    const writer =
-                      preferredWriter ?? (await resolvePreferredStepWriterAsync());
-                    setPreferredWriter(writer);
-                    const opened = await openStepWriterApp(writer);
-                    if (!opened) await openStepWriterInstallPage(writer);
-                  })();
-                }}
-                icon="download"
-                label={`Install ${preferredWriter?.label ?? "health app"}`}
-              />
-            ) : null}
-            <View style={{ marginTop: writerInstalled ? 0 : 8 }}>
-              <PrimaryAction
-                onPress={() => {
-                  awaitingWriterReturnRef.current = true;
-                  visitedHcWriterSettingsRef.current = true;
-                  void androidHCService.openSettings();
-                }}
-                icon="external-link"
-                label="Open Health Connect"
-              />
-            </View>
-          </>
+          <PrimaryAction
+            onPress={() => {
+              awaitingWriterReturnRef.current = true;
+              visitedHcWriterSettingsRef.current = true;
+              void androidHCService.openSettings();
+            }}
+            icon="external-link"
+            label="Open Health Connect"
+          />
         ) : null}
         <TouchableOpacity
           style={[ws.actionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, marginTop: 8 }]}
           onPress={() => {
-            // Manual Recheck = user confirmed they finished Health Connect permissions.
             visitedHcWriterSettingsRef.current = true;
             void probeWriter();
           }}
@@ -953,7 +814,6 @@ export default function WearableSetupModal({
     switch (androidPhase) {
       case "checking":      return <HCCheckingScreen />;
       case "expo_go":       return <HCExpoGoScreen />;
-      case "legacy_ready":  return <HCLegacyReadyScreen />;
       case "not_supported": return <HCUnsupportedScreen />;
       case "install":       return <HCInstallScreen />;
       default:              return null;
@@ -970,7 +830,7 @@ export default function WearableSetupModal({
   const headerTitle =
     isIOS ? "Apple Health Setup" :
     androidPhase === "checking" ? "Health Connect" :
-    androidPhase === "expo_go" || androidPhase === "not_supported" || androidPhase === "legacy_ready"
+    androidPhase === "expo_go" || androidPhase === "not_supported"
       ? "Step Tracking"
       : "Health Connect Setup";
 
@@ -1042,9 +902,9 @@ export default function WearableSetupModal({
               {enableTrackingHint && !isAndroidPreCheck && (step === 1 || step === 2) ? (
                 <Text style={[ws.enableHint, { color: "#F87171" }]}>
                   {step === 2
-                    ? writerInstalled
-                      ? "Open Health Connect, confirm Samsung Health is Allowed, then Recheck"
-                      : "Install a health app and tap Recheck before continuing"
+                    ? writerSetupReady
+                      ? "Tap Recheck if Health Connect still shows 0 after a short walk"
+                      : "Allow Read Steps, then Recheck."
                     : "Enable tracking and then go for next"}
                 </Text>
               ) : null}

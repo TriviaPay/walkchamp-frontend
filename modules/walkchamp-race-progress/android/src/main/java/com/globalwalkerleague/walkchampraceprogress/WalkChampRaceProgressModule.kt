@@ -116,6 +116,30 @@ class WalkChampRaceProgressModule : Module() {
       nativeStepStateMap(ctx)
     }
 
+    /**
+     * Health Connect on-device phone steps: Android 14 (API 34) + SDK Extension 20+.
+     * READ_STEPS is enough for HC to capture TYPE_STEP_COUNTER.
+     */
+    Function("isHealthConnectOnDeviceStepsAvailable") {
+      try {
+        if (Build.VERSION.SDK_INT < 34) return@Function false
+        android.os.ext.SdkExtensions.getExtensionVersion(34) >= 20
+      } catch (t: Throwable) {
+        android.util.Log.w("WalkChampFGS", "[Module] on-device HC check failed", t)
+        false
+      }
+    }
+
+    Function("getHealthConnectSdkExtensionVersion") {
+      try {
+        if (Build.VERSION.SDK_INT < 34) return@Function 0
+        android.os.ext.SdkExtensions.getExtensionVersion(34)
+      } catch (t: Throwable) {
+        android.util.Log.w("WalkChampFGS", "[Module] SDK extension version failed", t)
+        0
+      }
+    }
+
     AsyncFunction("startStepTrackingService") { payload: Map<String, Any?> ->
       sendWalkService(WalkChampRaceForegroundService.ACTION_START_WALK, payload)
       null
@@ -433,47 +457,18 @@ class WalkChampRaceProgressModule : Module() {
     val resolved = resolveLauncherIconName(iconName)
 
     return try {
-      val pm = ctx.packageManager
-      val target = launcherAliasComponent(ctx, resolved)
-
-      // Already on the requested launcher alias — avoid redundant PackageManager churn
-      // (some OEMs restart the process when launcher components flip unnecessarily).
-      val current = getEnabledLauncherIconName(ctx)
-      if (current == resolved && isLauncherComponentEnabled(pm, target)) {
-        android.util.Log.i(
-          "DynamicIcon",
-          "[LauncherIcon] already active=$resolved — no-op",
-        )
-        return true
-      }
-
-      // Enable the target first so a launcher entry always remains available.
-      // Only toggle activity-aliases — never MainActivity itself.
-      pm.setComponentEnabledSetting(
-        target,
-        PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-        PackageManager.DONT_KILL_APP,
-      )
-
-      for (name in launcherIconNames) {
-        if (name == resolved) continue
-        val component = launcherAliasComponent(ctx, name)
-        // Skip components that are already disabled to minimize OEM side-effects.
-        if (!isLauncherComponentEnabled(pm, component)) continue
-        pm.setComponentEnabledSetting(
-          component,
-          PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-          PackageManager.DONT_KILL_APP,
-        )
-      }
-
-      val targetEnabled = isLauncherComponentEnabled(pm, target)
-      val applied = getEnabledLauncherIconName(ctx)
+      // Persist the requested icon only. Never call setComponentEnabledSetting
+      // while the process is alive — disabling the alias that launched MainActivity
+      // kills the app on Samsung/One UI even with DONT_KILL_APP (foreground or background).
+      ctx.getSharedPreferences("walkchamp_launcher_icon", android.content.Context.MODE_PRIVATE)
+        .edit()
+        .putString("requested", resolved)
+        .apply()
       android.util.Log.i(
         "DynamicIcon",
-        "[LauncherIcon] requested=$resolved active=$applied targetEnabled=$targetEnabled",
+        "[LauncherIcon] runtime alias toggle skipped (crash-safe) requested=$resolved",
       )
-      targetEnabled || applied == resolved
+      true
     } catch (e: Exception) {
       android.util.Log.w("DynamicIcon", "[LauncherIcon] apply failed: ${e.message}")
       false

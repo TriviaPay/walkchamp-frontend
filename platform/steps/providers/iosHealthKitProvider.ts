@@ -68,14 +68,24 @@ export const iosHealthKitProvider: StepProvider = {
     const from = todayMidnight();
     const to = new Date();
     const data = await stepTracker.getStepsForTimeRange(from, to);
-    if (!data) return emptyStepResult("ios_healthkit", "verified", from, to);
-    return buildResult(data.steps, from, to);
+    if (!data) {
+      return {
+        ...emptyStepResult("ios_healthkit", "verified", from, to),
+        queryStatus: "error",
+      };
+    }
+    return buildResult(data.steps, from, to, { queryStatus: "ok" });
   },
 
   async getStepsForRange(start: Date, end: Date): Promise<StepReadResult> {
     const data = await stepTracker.getStepsForTimeRange(start, end);
-    if (!data) return emptyStepResult("ios_healthkit", "verified", start, end);
-    return buildResult(data.steps, start, end);
+    if (!data) {
+      return {
+        ...emptyStepResult("ios_healthkit", "verified", start, end),
+        queryStatus: "error",
+      };
+    }
+    return buildResult(data.steps, start, end, { queryStatus: "ok" });
   },
 
   async getRaceSteps(

@@ -14,7 +14,7 @@ import {
   resolveUnlimitedLiveDayContext,
   shouldNativeSyncClassicRaceProgress,
   shouldPauseWalkBackendSync,
-} from "../utils/unlimitedLiveDayContext";
+} from "../mappers/unlimitedLiveDayContext";
 
 // Do not import unlimitedProvisionalProgressApi here — it pulls react-native.
 
@@ -43,6 +43,13 @@ assert.equal(
 );
 
 // Walk sync stays on while Unlimited "live race" tray is active.
+assert.equal(
+  shouldPauseWalkBackendSync({
+    classicLiveRaceActive: true,
+    unlimitedDailyModeActive: false,
+  }),
+  false,
+);
 assert.equal(
   shouldPauseWalkBackendSync({
     classicLiveRaceActive: false,

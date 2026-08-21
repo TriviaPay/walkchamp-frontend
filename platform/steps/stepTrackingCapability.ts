@@ -8,6 +8,7 @@
 import { Platform } from "react-native";
 import { FEATURE_FLAGS } from "@/config/featureFlags";
 import { hasActivityRecognitionPermission } from "@/services/permissions/activityRecognitionPermissionService";
+import { isHealthConnectOnDeviceStepsAvailable } from "./hcOnDeviceSteps";
 
 import {
   resolvePaidChallengeEligibility,
@@ -176,8 +177,7 @@ async function resolveAndroidCapability(
       status.status === "available" ||
       status.status === "permission_granted" ||
       status.status === "permission_denied" ||
-      status.status === "provider_update_required" ||
-      status.status === "provider_not_installed";
+      status.status === "provider_update_required";
 
     if (
       !hcSupported ||
@@ -214,7 +214,7 @@ async function resolveAndroidCapability(
         verifiedHealthAvailable: true,
         verifiedPermissionGranted: false,
         verifiedRecordsAvailable: false,
-        nativeOnDeviceHealthStepsSupported: true,
+        nativeOnDeviceHealthStepsSupported: isHealthConnectOnDeviceStepsAvailable(),
         externalWriterRequired: false,
         compatibleWriterDetected: false,
         verificationStatus: "permission_required",
@@ -223,27 +223,12 @@ async function resolveAndroidCapability(
     }
 
     const feed = await detectHealthConnectWriterFeed();
-    const writerOk = isWriterFeedSufficientlyConfigured({
-      readable: feed.readable,
-      status: feed.status,
-      hasHistoricalStepRecords: feed.hasHistoricalStepRecords,
-      todaySteps: feed.todaySteps,
-      dataOrigins: feed.detectedOrigins,
-      recordCount: feed.recordCount,
-      writerInstalled: feed.writerInstalled,
-      requiredWriterPackageId: feed.requiredWriterPackageId,
-    });
-    const recordsAvailable =
-      feed.hasWriterEvidence &&
-      (feed.todaySteps > 0 ||
-        feed.detectedOrigins.length > 0 ||
-        feed.hasHistoricalStepRecords);
+    const onDevice = isHealthConnectOnDeviceStepsAvailable();
+    const writerOk = isWriterFeedSufficientlyConfigured(feed);
+    const recordsAvailable = feed.todaySteps > 0;
 
-    if (writerOk || recordsAvailable) {
-      const syncDelayed =
-        feed.todaySteps <= 0 &&
-        provisionalTrackingAvailable &&
-        feed.hasWriterEvidence;
+    if (writerOk) {
+      const syncDelayed = !recordsAvailable;
       return {
         platform: "android",
         provisionalTrackingAvailable,
@@ -251,19 +236,15 @@ async function resolveAndroidCapability(
         verifiedHealthAvailable: true,
         verifiedPermissionGranted: true,
         verifiedRecordsAvailable: recordsAvailable,
-        nativeOnDeviceHealthStepsSupported: true,
+        nativeOnDeviceHealthStepsSupported: onDevice,
         externalWriterRequired: false,
-        compatibleWriterDetected: true,
+        compatibleWriterDetected: feed.hasWriterEvidence || onDevice,
         verificationStatus: syncDelayed ? "sync_delayed" : "ready",
         userMessage: syncDelayed
-          ? "Your live steps are updating. Verified steps are still syncing."
+          ? "Health Connect is connected. Waiting for step data."
           : "Your device is connected and verified step tracking is active.",
       };
     }
-
-    const writerInstalledNotConnected =
-      feed.status === "installed_but_not_connected";
-    const writerLabel = feed.selectedWriterLabel ?? "your health app";
 
     return {
       platform: "android",
@@ -272,13 +253,11 @@ async function resolveAndroidCapability(
       verifiedHealthAvailable: true,
       verifiedPermissionGranted: true,
       verifiedRecordsAvailable: false,
-      nativeOnDeviceHealthStepsSupported: false,
-      externalWriterRequired: true,
+      nativeOnDeviceHealthStepsSupported: isHealthConnectOnDeviceStepsAvailable(),
+      externalWriterRequired: false,
       compatibleWriterDetected: false,
-      verificationStatus: "provider_required",
-      userMessage: writerInstalledNotConnected
-        ? `${writerLabel} is installed but not connected to Health Connect. Open Health Connect, tap + next to ${writerLabel}, and allow Write Steps.`
-        : "Connect a compatible health app so your steps can be verified.",
+      verificationStatus: "sync_delayed",
+      userMessage: "Health Connect is connected. Waiting for step data.",
     };
   } catch {
     return {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   isLocalTodayRangeStart,
   nextCachedTodaySteps,
+  shouldRereadHealthConnectToday,
 } from "./hcTodayCachePolicy";
 import {
   classifyWriterDetection,
@@ -49,12 +50,13 @@ function midnightToday(): Date {
   );
   assert.equal(
     nextCachedTodaySteps({
-      previousCache: 555,
-      rangeStart: new Date(now.getTime() - 10 * 60_000),
+      previousCache: 8000,
+      rangeStart: mid,
       rangeEnd: now,
-      steps: 12,
+      steps: 10,
     }),
-    555,
+    8000,
+    "lagging HC remainder must not overwrite a higher midnight→now total",
   );
 }
 
@@ -87,7 +89,7 @@ function midnightToday(): Date {
       dataOrigins: [],
       writerInstalled: true,
     }),
-    "installed_but_not_connected",
+    "waiting_for_sync",
   );
   assert.equal(
     classifyWriterDetection({
@@ -110,7 +112,7 @@ function midnightToday(): Date {
       todaySteps: 0,
       writerInstalled: true,
     }),
-    false,
+    true,
   );
   assert.equal(
     isWriterFeedSufficientlyConfigured({
@@ -120,7 +122,7 @@ function midnightToday(): Date {
       todaySteps: 0,
       writerInstalled: true,
     }),
-    false,
+    true,
   );
   assert.equal(
     isWriterFeedSufficientlyConfigured({
@@ -155,7 +157,7 @@ function midnightToday(): Date {
       writerInstalled: true,
       requiredWriterPackageId: "com.sec.android.app.shealth",
     }),
-    "installed_but_not_connected",
+    "writer_detected",
   );
   assert.equal(
     classifyWriterDetection({
@@ -178,7 +180,7 @@ function midnightToday(): Date {
       writerInstalled: true,
       requiredWriterPackageId: "com.sec.android.app.shealth",
     }),
-    false,
+    true,
   );
   assert.equal(
     isWriterFeedSufficientlyConfigured({
@@ -221,6 +223,83 @@ function midnightToday(): Date {
   assert.equal(
     originsIncludeWriterPackage(["android"], "com.sec.android.app.shealth"),
     false,
+  );
+}
+
+{
+  const now = 1_000_000;
+  assert.equal(
+    shouldRereadHealthConnectToday({
+      lastReadAtMs: 0,
+      lastSteps: 0,
+      nowMs: now,
+      steadyIntervalMs: 30_000,
+      emptyRetryMs: 2_500,
+      catchUpUntilMs: now + 90_000,
+    }),
+    true,
+    "first HC read is immediate",
+  );
+  assert.equal(
+    shouldRereadHealthConnectToday({
+      lastReadAtMs: now - 2_000,
+      lastSteps: 0,
+      nowMs: now,
+      steadyIntervalMs: 30_000,
+      emptyRetryMs: 2_500,
+      catchUpUntilMs: now + 90_000,
+    }),
+    false,
+    "empty catch-up waits 2.5s",
+  );
+  assert.equal(
+    shouldRereadHealthConnectToday({
+      lastReadAtMs: now - 2_500,
+      lastSteps: 0,
+      nowMs: now,
+      steadyIntervalMs: 30_000,
+      emptyRetryMs: 2_500,
+      catchUpUntilMs: now + 90_000,
+    }),
+    true,
+    "reinstall/empty HC retries every 2.5s during catch-up",
+  );
+  assert.equal(
+    shouldRereadHealthConnectToday({
+      lastReadAtMs: now - 2_500,
+      lastSteps: 0,
+      nowMs: now,
+      steadyIntervalMs: 30_000,
+      emptyRetryMs: 2_500,
+      catchUpUntilMs: now - 1,
+    }),
+    false,
+    "after catch-up window, empty HC uses the 30s interval",
+  );
+  assert.equal(
+    shouldRereadHealthConnectToday({
+      lastReadAtMs: now - 10_000,
+      lastSteps: 8000,
+      nowMs: now,
+      steadyIntervalMs: 30_000,
+      emptyRetryMs: 2_500,
+      catchUpUntilMs: now + 90_000,
+    }),
+    false,
+    "once HC has today's total, keep the 30s interval",
+  );
+  assert.equal(
+    shouldRereadHealthConnectToday({
+      lastReadAtMs: now - 2_500,
+      lastSteps: 10,
+      nowMs: now,
+      steadyIntervalMs: 30_000,
+      emptyRetryMs: 2_500,
+      catchUpUntilMs: now + 90_000,
+      catchUpBelowSteps: 50,
+    }),
+    true,
+    "reinstall remainder (10) keeps fast HC retries until the full day total lands",
   );
 }
 

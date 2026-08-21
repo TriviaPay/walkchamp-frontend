@@ -1,6 +1,6 @@
 /**
  * Pure Health Connect SDK → setup status mappings (no React Native imports).
- * Also exports source types and verification levels used across the step system.
+ * WalkChamp Android minSdk is 34. Health Connect APK onboarding is not used.
  */
 
 export const HC_SDK = {
@@ -12,7 +12,6 @@ export const HC_SDK = {
 export type AndroidStepTrackingStatus =
   | "available"
   | "provider_update_required"
-  | "provider_not_installed"
   | "unsupported"
   | "permission_granted"
   | "permission_denied"
@@ -20,34 +19,31 @@ export type AndroidStepTrackingStatus =
   | "error";
 
 export type AndroidSetupUIState =
-  // ── Health Connect states ──────────────────────────────────────────────────
-  | "checking"       // running detection
-  | "ready"          // HC available, permission not yet granted
-  | "permission"     // HC available, permission was denied
-  | "install_update" // HC needs install or update from Play Store
-  | "granted"        // HC available + permission granted
-  // ── Extended states ────────────────────────────────────────────────────────
-  | "optional_apps"      // HC unsupported; show optional fitness apps list
-  | "limited_sensor"     // No verified source; device TYPE_STEP_COUNTER only
-  | "fully_unsupported"  // Nothing available at all
-  // ── Misc ──────────────────────────────────────────────────────────────────
-  | "standalone"     // Expo Go — needs standalone build
-  | "unsupported"    // HC not supported on this device (legacy alias)
-  | "error";         // Unrecoverable error
+  | "checking"
+  | "ready"
+  | "permission"
+  | "system_update"
+  | "granted"
+  | "standalone"
+  | "unsupported"
+  | "error";
 
 export type HCPermStatus = "granted" | "unknown" | "denied" | "unavailable";
 
-/** Minimum Android API for Health Connect install flow (Android 9+). */
-export const HC_MIN_API = 28;
+/** WalkChamp Android runtime is API 34+. Kept for defensive mapping. */
+export const HC_MIN_API = 34;
 
+/**
+ * Android 14+ never uses the old Health Connect APK Play Store install flow.
+ * SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED is a system/Play-services update.
+ */
 export function isHealthConnectInstallable(
-  sdkStatus: number,
-  apiLevel: number,
+  _sdkStatus: number,
+  _apiLevel: number,
 ): boolean {
-  return (
-    apiLevel >= HC_MIN_API &&
-    sdkStatus === HC_SDK.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED
-  );
+  void _sdkStatus;
+  void _apiLevel;
+  return false;
 }
 
 export function isHealthConnectSupported(
@@ -77,9 +73,7 @@ export function mapSdkStatusToTrackingStatus(
     return "provider_update_required";
   }
   if (sdkStatus === HC_SDK.SDK_UNAVAILABLE) {
-    // Android 9-13: Health Connect app may be missing from device.
-    // Android 14+: this generally indicates the provider surface is unavailable.
-    return apiLevel >= HC_MIN_API ? "provider_not_installed" : "unsupported";
+    return "unsupported";
   }
   return "error";
 }
@@ -95,8 +89,7 @@ export function trackingStatusToUiState(
     case "available":
       return "ready";
     case "provider_update_required":
-    case "provider_not_installed":
-      return "install_update";
+      return "system_update";
     case "permission_denied":
       return "permission";
     case "unsupported":
@@ -124,8 +117,6 @@ export function toHcAvailability(
       return "available";
     case "provider_update_required":
       return "needs_update";
-    case "provider_not_installed":
-      return "not_installed";
     case "unsupported":
     case "expo_go":
     case "error":

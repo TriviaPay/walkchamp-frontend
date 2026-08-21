@@ -80,7 +80,7 @@ export function decideStepSetupPrompt(args: {
   osStepAccessGranted: boolean;
   /** This install previously completed setup while OS access was granted. */
   deviceSetupCompleted: boolean;
-  /** Health Connect app missing or needs a Play Store update. */
+  /** Health Connect service needs a system / Play services update. */
   healthConnectMissingOrNeedsUpdate: boolean;
   /** Times this install tapped Maybe Later (0–2). */
   laterCount: number;

@@ -43,7 +43,7 @@ import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { useParticipantStepAnimator } from "@/hooks/useParticipantStepAnimator";
 import { getLayoutScaleFactor, rf } from "@/utils/responsive";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
-import { formatRaceSteps, resolveLiveRaceDisplaySteps } from "@/utils/liveRaceDisplay";
+import { capStepsAtGoal, formatRaceSteps, resolveLiveRaceDisplaySteps } from "@/utils/liveRaceDisplay";
 import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
 import {
   formatPlayerCountDisplay,
@@ -2260,7 +2260,7 @@ function LiveRaceDetailScreenContent() {
    * Unlimited Live = dual lane:
    *   verifiedTodaySteps  (HC/HK) — qualification / settlement
    *   provisionalTodaySteps (sensor) — responsive live UX
-   * displayedLiveSteps = max(verified, provisional) — display only
+   * displayedLiveSteps = Health Connect / HealthKit when it has today's total.
    */
   const stepOwnerOk =
     !user?.id ||
@@ -2290,35 +2290,34 @@ function LiveRaceDetailScreenContent() {
   const unlimitedDailyRaw =
     isFreshLocalDay() && unlimitedVerifiedSteps <= 0
       ? 0
-      : resolveUnlimitedDisplayedLiveSteps(
-          Math.max(
+      : unlimitedVerifiedSteps > 0
+        ? unlimitedVerifiedSteps
+        : resolveUnlimitedDisplayedLiveSteps(
             unlimitedVerifiedSteps,
-            stepOwnerOk ? Math.max(0, raceProgress.todaySteps ?? 0) : 0,
-            stepOwnerOk ? Math.max(0, liveRaceSteps) : 0,
-          ),
-          unlimitedProvisionalSteps,
-        );
+            unlimitedProvisionalSteps,
+          );
   if (isFreshLocalDay() && unlimitedVerifiedSteps <= 0) {
     unlimitedPeakDailyStepsRef.current = 0;
   }
-  const unlimitedDailySteps =
+  const unlimitedDailyUncapped =
     isFreshLocalDay() && unlimitedVerifiedSteps <= 0
       ? 0
-      : Math.max(unlimitedPeakDailyStepsRef.current, unlimitedDailyRaw);
-  if (!(isFreshLocalDay() && unlimitedVerifiedSteps <= 0)) {
-    unlimitedPeakDailyStepsRef.current = unlimitedDailySteps;
+      : unlimitedVerifiedSteps > 0
+        ? unlimitedVerifiedSteps
+        : Math.max(unlimitedPeakDailyStepsRef.current, unlimitedDailyRaw);
+  if (unlimitedVerifiedSteps > 0) {
+    unlimitedPeakDailyStepsRef.current = unlimitedVerifiedSteps;
+  } else if (!(isFreshLocalDay() && unlimitedVerifiedSteps <= 0)) {
+    unlimitedPeakDailyStepsRef.current = unlimitedDailyUncapped;
   }
   const unlimitedProgressSource =
-    unlimitedProvisionalSteps > unlimitedVerifiedSteps
-      ? unlimitedVerifiedSteps > 0
-        ? "mixed"
-        : "provisional"
-      : unlimitedVerifiedSteps > 0
-        ? "verified"
+    unlimitedVerifiedSteps > 0
+      ? "verified"
+      : unlimitedProvisionalSteps > 0
+        ? "provisional"
         : "unavailable";
   const unlimitedHcPending =
-    unlimitedProvisionalSteps > unlimitedVerifiedSteps ||
-    (unlimitedVerifiedSteps <= 0 && unlimitedProvisionalSteps > 0);
+    unlimitedVerifiedSteps <= 0 && unlimitedProvisionalSteps > 0;
   const canonicalRank = raceProgress.rank;
   /** True when this screen's race is already being tracked (same as regular live races). */
   const trackingThisRace =
@@ -2347,6 +2346,11 @@ function LiveRaceDetailScreenContent() {
   // Declared above finalizeLiveRace so the callback can read race.targetSteps safely.
   const [race, setRace] = useState<RaceData | null>(
     initialCache?.race ?? instantShell?.race ?? null,
+  );
+  const unlimitedDailySteps = capStepsAtGoal(
+    unlimitedDailyUncapped,
+    race?.targetSteps ??
+      (Number.isFinite(parsedTargetSteps) ? parsedTargetSteps : 0),
   );
   const { status: resultStatus, refresh: refreshResultStatus } = useRaceResultStatus(
     typeof raceId === "string" ? raceId : null,
@@ -2950,7 +2954,7 @@ function LiveRaceDetailScreenContent() {
   localStepsRef.current =
     isUnlimitedHeader
       ? (unlimitedViewerDayStarted ? unlimitedDailySteps : 0)
-      : liveRaceSteps;
+      : capStepsAtGoal(liveRaceSteps, race?.targetSteps);
 
   // Unlimited: block classic progress POSTs and keep walk sync active for the whole screen life.
   useEffect(() => {
@@ -3056,7 +3060,8 @@ function LiveRaceDetailScreenContent() {
           challengeId: raceId,
           challengeDayKey: dayKey,
           timezone: dayTz,
-          provisionalCumulativeSteps: Math.max(verified, provisional),
+          provisionalCumulativeSteps:
+            verified > 0 ? verified : provisional,
         });
       }
     })();
@@ -3137,7 +3142,8 @@ function LiveRaceDetailScreenContent() {
             challengeId: raceId,
             challengeDayKey: dayKey,
             timezone: dayTz,
-            provisionalCumulativeSteps: Math.max(verified, provisional),
+            provisionalCumulativeSteps:
+              verified > 0 ? verified : provisional,
           });
         }
       })();
@@ -3190,16 +3196,16 @@ function LiveRaceDetailScreenContent() {
       if (isMe && isUnlimitedHeader && (isActive || race?.status === "in_progress")) {
         // Prefer live/HC totals even if viewerStatus is still "scheduled" —
         // otherwise the tray can show 6,890 while Live Race / Challenge Progress stay 0.
-        return Math.max(
+        return capStepsAtGoal(
           unlimitedViewerDayStarted ? unlimitedDailySteps : 0,
-          unlimitedDailySteps,
-          liveRaceSteps,
-          raceProgress.todaySteps ?? 0,
+          race?.targetSteps,
         );
       }
       // Own steps always come from the live tracker while this race is active —
       // same as classic Live Race (never show stale API 0 for self).
-      if (isMe && (isActive || trackingThisRace)) return liveRaceSteps;
+      if (isMe && (isActive || trackingThisRace)) {
+        return capStepsAtGoal(liveRaceSteps, race?.targetSteps);
+      }
       return Math.max(0, p.currentSteps);
     },
     [
@@ -3212,7 +3218,7 @@ function LiveRaceDetailScreenContent() {
       unlimitedDailySteps,
       unlimitedViewerDayStarted,
       race?.status,
-      raceProgress.todaySteps,
+      race?.targetSteps,
     ],
   );
 
@@ -3601,12 +3607,12 @@ function LiveRaceDetailScreenContent() {
   // real-world daily total and is unrelated to a race they haven't joined.
   const mySteps = isUnlimitedHeader
     ? myPlayer?.isMe
-      ? Math.max(unlimitedDailySteps, liveRaceSteps, myPlayer.steps ?? 0)
+      ? capStepsAtGoal(unlimitedDailySteps, race?.targetSteps)
       : 0
     : myPlayer?.isMe && isActive
-      ? liveRaceSteps
+      ? capStepsAtGoal(liveRaceSteps, race?.targetSteps)
       : myPlayer?.isMe
-        ? (myPlayer?.steps ?? 0)
+        ? capStepsAtGoal(myPlayer?.steps ?? 0, race?.targetSteps)
         : 0;
   const myProgress = Math.min(mySteps / Math.max(race?.targetSteps ?? 1, 1), 1);
   // Only render a rank/position for the signed-in viewer's OWN roster row — a

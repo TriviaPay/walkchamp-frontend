@@ -36,9 +36,23 @@ export function originsIncludeWriterPackage(
   if (origins.some((origin) => origin.toLowerCase().includes(needle))) {
     return true;
   }
-  // Samsung Health records sometimes use a short "shealth" origin string.
-  if (needle.includes("shealth")) {
-    return origins.some((origin) => origin.toLowerCase().includes("shealth"));
+  // Samsung Health records sometimes use a short "shealth" / "samsung" origin.
+  if (needle.includes("shealth") || needle.includes("samsung")) {
+    return origins.some((origin) => {
+      const o = origin.toLowerCase();
+      return o.includes("shealth") || o.includes("samsung");
+    });
   }
   return false;
+}
+
+/** Step count on a Health Connect Steps record (SDK `count`). */
+export function stepCountFromHcRecord(record: unknown): number {
+  if (!record || typeof record !== "object") return 0;
+  const rec = record as Record<string, unknown>;
+  const n = rec.count ?? rec.COUNT_TOTAL;
+  if (typeof n === "number" && Number.isFinite(n)) {
+    return Math.max(0, Math.floor(n));
+  }
+  return 0;
 }

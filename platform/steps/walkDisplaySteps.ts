@@ -5,10 +5,36 @@
 export const MAX_PROVISIONAL_AHEAD_OF_VERIFIED = 250;
 
 /**
+ * Persist/FGS crumbs below this are not a real day's walk. Pedometer subscribe
+ * bursts and leftover native todaySteps commonly land around 1–40 — Walk was
+ * painting those (often 20) before Health Connect finished its first read.
+ * A long-running FGS session of hundreds/thousands still shows while HC lags.
+ */
+export const UNCONFIRMED_SENSOR_LEFTOVER_MAX = 50;
+
+export function isUnconfirmedSensorLeftover(steps: number): boolean {
+  const n = Math.max(0, Math.floor(steps));
+  return n > 0 && n < UNCONFIRMED_SENSOR_LEFTOVER_MAX;
+}
+
+/**
+ * True when a small native/session total must not paint Walk yet — verified is
+ * still 0 and Health Connect/HealthKit has not completed a first read today.
+ */
+export function shouldHoldSensorSessionUntilVerifiedRead(opts: {
+  sessionSteps: number;
+  verifiedSteps: number;
+  hasVerifiedAnchor?: boolean;
+}): boolean {
+  const verified = Math.max(0, Math.floor(opts.verifiedSteps));
+  if (verified > 0) return false;
+  if (opts.hasVerifiedAnchor === true) return false;
+  return isUnconfirmedSensorLeftover(opts.sessionSteps);
+}
+
+/**
  * Walk tab + Daily Walk notification (91002) display.
- * Prefer live provisional (sensor session) when it is ahead of HC/HK, so the
- * ongoing notification keeps updating while Health Connect lags.
- * Still reject yesterday-style absolutes (huge jump from a low HC total).
+ * Daily steps always come from Health Connect / HealthKit when that total is known.
  */
 export function resolveWalkNotificationSteps(params: {
   verifiedTodaySteps: number;
@@ -35,6 +61,10 @@ export function resolveWalkNotificationSteps(params: {
       : Math.max(0, Math.floor(params.provisionalSensorTodaySteps));
   const fallback = Math.max(0, Math.floor(params.todaySteps ?? 0));
 
+  if (params.verifiedAuthoritative === true) {
+    return verified;
+  }
+
   if (params.verifiedAuthoritative === false) {
     const live = Math.max(provisional, fallback);
     // Phone-sensor daily is allowed on unsupported devices, but never the
@@ -60,11 +90,20 @@ export function resolveWalkNotificationSteps(params: {
   }
 
   if (!params.raceActive) {
-    // No active race to justify a big jump — a large provisional/fallback while
-    // HC still shows 0 is almost always yesterday's leftover, not live walking.
-    if (isStaleSensorAbsolute(verified, provisional)) return verified;
-    if (isStaleSensorAbsolute(verified, fallback)) return verified;
-    return Math.max(verified, provisional, fallback);
+    const live = Math.max(provisional, fallback);
+    if (
+      looksLikeSinceBootCounter({
+        todaySteps: live,
+        sensorTotal: params.sensorTotal,
+        dailyBaseline: params.dailyBaseline,
+      })
+    ) {
+      return verified;
+    }
+    // Health Connect / HealthKit is the Walk daily number. Never add TYPE_STEP_COUNTER
+    // on top (HC 52 + sensor 52 → 104).
+    if (verified > 0) return verified;
+    return live;
   }
 
   // Race active: `provisional` already passed the ingest-time plausibility gate
@@ -77,15 +116,15 @@ export function resolveWalkNotificationSteps(params: {
   // Walk tab while the race tray (unaffected by this function) kept counting
   // correctly from the same sensor. `fallback` may still come from an
   // untrusted/raw cache, so it keeps the stale check.
+  // Race owns TYPE_STEP_COUNTER / CMPedometer for raceSteps. Walk daily stays
+  // on verified Health Connect / HealthKit. If verified is still 0, keep the
+  // live session so Walk is not blanked while HC/HK batches.
   if (isStaleSensorAbsolute(verified, fallback)) {
     return Math.max(verified, provisional);
   }
   const live = Math.max(provisional, fallback);
-  // Small stored daily totals (including a backend row) must not flicker 0↔N.
   if (verified <= 0) return live;
-  const raceLiveCap = 80;
-  if (live > verified + raceLiveCap) return verified;
-  return Math.max(verified, live);
+  return verified;
 }
 
 /**
@@ -93,14 +132,30 @@ export function resolveWalkNotificationSteps(params: {
  * not a normal live walk ahead of a lagging HC read.
  */
 export function isStaleSensorAbsolute(
+  _verified: number,
+  _candidate: number,
+  _maxAhead: number = MAX_PROVISIONAL_AHEAD_OF_VERIFIED,
+): boolean {
+  void _verified;
+  void _candidate;
+  void _maxAhead;
+  // Do not use a numeric "yesterday leftover" threshold. Reject since-boot
+  // with looksLikeSinceBootCounter(sensorTotal / dailyBaseline) instead.
+  return false;
+}
+
+/**
+ * True when a live daily total should be discarded in favor of verified HC/HK.
+ * Verified 0 is lag (especially after a finished race), not proof the day is empty.
+ */
+export function shouldReplaceLiveDailyWithVerified(
   verified: number,
-  candidate: number,
-  maxAhead: number = MAX_PROVISIONAL_AHEAD_OF_VERIFIED,
+  live: number,
 ): boolean {
   const v = Math.max(0, Math.floor(verified));
-  const c = Math.max(0, Math.floor(candidate));
-  // Classic bad baseline: HC small/zero, sensor still holding ~thousands.
-  return c >= 1000 && c > v + Math.max(maxAhead, 1000);
+  const l = Math.max(0, Math.floor(live));
+  if (v <= 0) return false;
+  return l > v;
 }
 
 /**

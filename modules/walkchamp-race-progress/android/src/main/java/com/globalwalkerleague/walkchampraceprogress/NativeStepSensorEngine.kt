@@ -34,6 +34,11 @@ class NativeStepSensorEngine(
     private const val COUNTER_STALE_MS = 5_000L
     /** Min gap between detector-bridge increments (noise / burst protection). */
     private const val DETECTOR_MIN_GAP_MS = 180L
+    /**
+     * Persisted todaySteps below this are subscribe/FGS crumbs, not a real day.
+     * Walk was showing ~20 before Health Connect's first read.
+     */
+    private const val UNCONFIRMED_TODAY_LEFTOVER = 50
   }
 
   private var sensorManager: SensorManager? = null
@@ -52,6 +57,11 @@ class NativeStepSensorEngine(
   private var lastDetectorBridgeMs = 0L
 
   init {
+    if (state.todaySteps in 1 until UNCONFIRMED_TODAY_LEFTOVER) {
+      Log.d(TAG, "[StepFGS] drop unconfirmed leftover todaySteps=${state.todaySteps}")
+      state = state.copy(todaySteps = 0, dailyBaseline = null)
+      NativeStepState.save(context, state)
+    }
     if (state.sensorTotal > 0f) {
       lastSensorTotal = state.sensorTotal
     }
@@ -336,14 +346,14 @@ class NativeStepSensorEngine(
         sensorNow,
         state.dailyBaseline,
       )
-    // HC/HK or a JS seed of 0 may correct a poisoned since-boot absolute.
-    // Modest live lead over a lagging HC read is kept so the tray still moves.
+    // HC/HK is today's Daily Walk number. Do not keep a higher sensor session.
     val known =
-      if (
-        persistedLooksLikeSinceBoot ||
-        (verified && state.todaySteps >= 1000 && state.todaySteps > incoming + 250)
-      ) {
+      if (persistedLooksLikeSinceBoot) {
         incoming
+      } else if (verified) {
+        incoming
+      } else if (incoming <= 0) {
+        maxOf(state.todaySteps, 0)
       } else {
         maxOf(incoming, state.todaySteps)
       }
@@ -397,9 +407,8 @@ class NativeStepSensorEngine(
     val incoming = knownTodaySteps.coerceAtLeast(0)
     val source = stepSource ?: state.stepSource
     val verified = !isDeviceSensorSource(source)
-    // HC/HK correcting an inflated sensor absolute — full re-seed, not raise-only.
-    if (verified && state.todaySteps >= 1000 && state.todaySteps > incoming + 250) {
-      seedDailyBaselineFromKnownSteps(incoming, stepSource = source)
+    if (verified) {
+      resetDailyToKnown(incoming, source)
       return
     }
     val floor = maxOf(incoming, state.todaySteps)
@@ -498,11 +507,12 @@ class NativeStepSensorEngine(
   }
 
   fun endRace(todaySteps: Int) {
+    val verifiedDaily = !isDeviceSensorSource(state.stepSource)
     state = state.copy(
       activeRaceId = null,
       raceBaseline = null,
       raceSteps = 0,
-      todaySteps = todaySteps.coerceAtLeast(state.todaySteps),
+      todaySteps = if (verifiedDaily) state.todaySteps else todaySteps.coerceAtLeast(state.todaySteps),
       notificationMode = "daily_steps",
       raceStatus = "finished",
       updatedAt = System.currentTimeMillis(),
@@ -511,20 +521,12 @@ class NativeStepSensorEngine(
   }
 
   fun mergeJsWalkUpdate(todaySteps: Int, stepSource: String) {
-    // Health Connect / HealthKit from JS is authoritative for daily totals.
-    // Allow downward correction only for yesterday-style / bad-baseline inflation;
-    // modest provisional lead over lagging HC must keep closed-app sensor continuation.
+    // Health Connect / HealthKit from JS is the Daily Walk number. Set it exactly
+    // so the tray matches the app (52, not a leftover sensor 104).
     ensureCurrentDay()
     if (!isDeviceSensorSource(stepSource)) {
       val incoming = todaySteps.coerceAtLeast(0)
-      val known =
-        if (state.todaySteps >= 1000 && state.todaySteps > incoming + 250) {
-          incoming
-        } else {
-          maxOf(incoming, state.todaySteps)
-        }
-      val total = lastSensorTotal.takeIf { it >= 0f }
-      seedDailyBaselineFromKnownSteps(known, total, stepSource)
+      resetDailyToKnown(incoming, stepSource)
       return
     }
     if (todaySteps > state.todaySteps) {
@@ -542,7 +544,9 @@ class NativeStepSensorEngine(
     username: String,
     stepSource: String,
   ) {
-    val next = raceSteps.coerceAtLeast(0)
+    val next = raceSteps.coerceAtLeast(0).let { raw ->
+      if (goalSteps > 0) minOf(raw, goalSteps) else raw
+    }
     if (!isDeviceSensorSource(stepSource)) {
       if (next > state.raceSteps) {
         state = state.copy(
@@ -652,23 +656,16 @@ class NativeStepSensorEngine(
   ) {
     val verifiedDaily = !isDeviceSensorSource(state.stepSource)
 
-    // Always advance todaySteps from TYPE_STEP_COUNTER (+ detector bridge when frozen)
-    // for live Walk UI + ongoing notification. Health Connect remains the verified
-    // sync source in JS. Keep stepSource as health_connect/healthkit when verified.
+    // Sensor still drives live-race steps. Daily Walk tray is Health Connect /
+    // HealthKit only — never TYPE_STEP_COUNTER (that showed 104 while the app showed 52).
     var dailyBaseline = state.dailyBaseline
     if (dailyBaseline == null) {
       val known = pendingKnownTodaySteps
-      val persistedLooksLikeSinceBoot =
-        NativeStepState.looksLikeSinceBootCounter(
-          state.todaySteps,
-          sensorTotal,
-          state.dailyBaseline,
-        )
       dailyBaseline = if (known != null) {
         (sensorTotal - known).coerceAtLeast(0f)
-      } else if (state.todaySteps > 0 && !persistedLooksLikeSinceBoot) {
-        (sensorTotal - state.todaySteps).coerceAtLeast(0f)
       } else {
+        // Do not reconstruct today from a persisted leftover (often ~20).
+        // JS seeds verified/backend via pendingKnownTodaySteps.
         sensorTotal
       }
       pendingKnownTodaySteps = null
@@ -678,12 +675,11 @@ class NativeStepSensorEngine(
         "[StepFGS] dailyBaseline=$dailyBaseline todaySteps=${(sensorTotal - dailyBaseline).toInt().coerceAtLeast(0)} verifiedDaily=$verifiedDaily",
       )
     }
-    // Hardware baseline is today's truth. Never floor with yesterday's todaySteps
-    // (that kept Walk/Live at leftover totals after local midnight).
-    val todaySteps =
+    val sensorToday =
       (sensorTotal - dailyBaseline).toInt().coerceAtLeast(0) + bridgeSteps.coerceAtLeast(0)
+    val todaySteps = if (verifiedDaily) state.todaySteps else sensorToday
 
-    val raceSteps = if (!state.activeRaceId.isNullOrBlank()) {
+    val computedRace = if (!state.activeRaceId.isNullOrBlank()) {
       var raceBaseline = state.raceBaseline
       if (raceBaseline == null) {
         raceBaseline = if (state.raceSteps > 0) {
@@ -701,6 +697,13 @@ class NativeStepSensorEngine(
     } else {
       state.raceSteps
     }
+    val goal = state.goalSteps
+    val raceSteps =
+      if (!state.activeRaceId.isNullOrBlank() && goal > 0) {
+        minOf(computedRace, goal)
+      } else {
+        computedRace
+      }
 
     val prevToday = state.todaySteps
     val prevRace = state.raceSteps

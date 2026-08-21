@@ -1,21 +1,16 @@
 /**
- * Classify Health Connect writer / step-feed state for onboarding verify.
- * Does not read Samsung SDK / sensors — HC probe + install detection only.
+ * Classify Health Connect feed for onboarding verify.
+ * Unfiltered aggregate is the authority. Samsung / Fit / Garmin are optional
+ * contributors into Health Connect — never required to complete setup.
  */
 
 import { androidHCService } from "@/services/steps/androidHealthConnectService";
-import {
-  isStepWriterInstalled,
-  resolvePreferredStepWriterAsync,
-} from "@/services/steps/androidStepWriterApps";
-import { originsIncludeWriterPackage } from "./healthConnectOrigins";
 import {
   classifyWriterDetection,
   isWriterFeedSufficientlyConfigured as isSufficientPure,
   type HealthConnectWriterDetectionStatus,
 } from "@/services/steps/healthConnectWriterDetectionLogic";
 import type { HealthConnectReadDiagnostic } from "@/services/steps/healthConnectReadDiagnostic";
-import { hasHealthConnectWriterEvidence } from "@/services/steps/healthConnectReadDiagnostic";
 
 export type { HealthConnectWriterDetectionStatus };
 
@@ -32,12 +27,7 @@ export type HealthConnectWriterDetectionResult = {
   recordHint: string;
   readable: boolean;
   hasWriterEvidence: boolean;
-  /** Writer APK is on the device (Samsung Health / Google Fit). */
   writerInstalled: boolean;
-  /**
-   * When Samsung Health is installed, origins must include that package.
-   * Phone-only Health Connect steps do not count as Samsung connected.
-   */
   requiredWriterPackageId?: string;
   diagnostic?: HealthConnectReadDiagnostic;
 };
@@ -45,43 +35,27 @@ export type HealthConnectWriterDetectionResult = {
 export { classifyWriterDetection };
 
 /**
- * Full verify probe used by WearableSetup Confirm step.
+ * Probe today's unfiltered Health Connect aggregate.
  */
-export async function detectHealthConnectWriterFeed(opts?: {
-  writerConfirmedByUser?: boolean;
-}): Promise<HealthConnectWriterDetectionResult> {
+export async function detectHealthConnectWriterFeed(): Promise<HealthConnectWriterDetectionResult> {
   try {
-    const writer = await resolvePreferredStepWriterAsync();
-    const installed =
-      (await isStepWriterInstalled(writer)) || !!opts?.writerConfirmedByUser;
     const feed = await androidHCService.probeTodayStepFeed();
-    const requiredWriterPackageId =
-      writer.kind === "samsung_health" && installed
-        ? writer.packageId
-        : undefined;
 
     const status = classifyWriterDetection({
       readable: feed.readable,
       todaySteps: feed.steps,
       hasHistoricalStepRecords: feed.hasHistoricalStepRecords,
       dataOrigins: feed.dataOrigins,
-      writerInstalled: installed,
-      requiredWriterPackageId,
+      writerInstalled: false,
     });
 
-    const hasWriterEvidence = requiredWriterPackageId
-      ? originsIncludeWriterPackage(feed.dataOrigins, requiredWriterPackageId)
-      : hasHealthConnectWriterEvidence({
-          resolvedSteps: feed.steps,
-          recordCount: feed.recordCount,
-          dataOrigins: feed.dataOrigins,
-          hasHistoricalStepRecords: feed.hasHistoricalStepRecords,
-        });
+    const hasWriterEvidence =
+      feed.steps > 0 ||
+      feed.hasHistoricalStepRecords ||
+      feed.dataOrigins.length > 0;
 
     return {
       status,
-      selectedWriterId: writer.kind,
-      selectedWriterLabel: writer.label,
       detectedOrigins: feed.dataOrigins,
       hasHistoricalStepRecords: feed.hasHistoricalStepRecords,
       hasRecentStepRecords: feed.steps > 0,
@@ -91,8 +65,7 @@ export async function detectHealthConnectWriterFeed(opts?: {
       recordHint: feed.recordHint,
       readable: feed.readable,
       hasWriterEvidence,
-      writerInstalled: installed,
-      requiredWriterPackageId,
+      writerInstalled: false,
       diagnostic: undefined,
     };
   } catch {
@@ -111,19 +84,14 @@ export async function detectHealthConnectWriterFeed(opts?: {
   }
 }
 
-/** Setup may complete only when Health Connect shows writer evidence. */
+/** Setup may complete when Health Connect Read Steps is granted. */
 export function isWriterFeedSufficientlyConfigured(
   result: HealthConnectWriterDetectionResult,
 ): boolean {
-  if (result.hasWriterEvidence) return true;
   return isSufficientPure({
     readable: result.readable,
     status: result.status,
     hasHistoricalStepRecords: result.hasHistoricalStepRecords,
     todaySteps: result.todaySteps,
-    dataOrigins: result.detectedOrigins,
-    recordCount: result.recordCount,
-    writerInstalled: result.writerInstalled,
-    requiredWriterPackageId: result.requiredWriterPackageId,
   });
 }

@@ -1,5 +1,4 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
-import { isStaleSensorAbsolute } from "@/platform/steps/walkDisplaySteps";
 
 export type RaceProgressStatus =
   | "idle"
@@ -126,6 +125,16 @@ export interface RaceProgressState {
   dailyGoal: number;
 }
 
+function isHealthConnectOrHealthKitSource(stepSource: string | null | undefined): boolean {
+  const s = (stepSource ?? "").toLowerCase();
+  return (
+    s === "health_connect" ||
+    s === "android_health_connect" ||
+    s === "healthkit" ||
+    s === "ios_healthkit"
+  );
+}
+
 function recomputeDisplayToday(state: RaceProgressState): void {
   const verified = Math.max(0, Math.floor(state.verifiedTodaySteps));
   const provisional =
@@ -133,26 +142,24 @@ function recomputeDisplayToday(state: RaceProgressState): void {
       ? 0
       : Math.max(0, Math.floor(state.provisionalSensorTodaySteps));
 
-  // Display = max(verified, accepted provisional). Do NOT clamp provisional here —
-  // ingest already rejects yesterday-style absolutes. Clamping on every recompute
-  // froze the ongoing notification after ~250 live steps while HC lagged.
-  state.todaySteps = Math.max(verified, provisional);
-  if (provisional > verified) {
-    state.dailyDisplaySource = "sensor_estimate";
-    state.dailyVerificationStatus = "delayed";
-  } else if (verified > 0) {
-    state.dailyDisplaySource =
-      state.stepSource === "healthkit" || state.stepSource === "ios_healthkit"
-        ? "healthkit"
-        : "health_connect";
-    state.dailyVerificationStatus = "verified";
-  } else {
+  // Daily Walk is Health Connect / HealthKit only — never sensor fallback.
+  if (isHealthConnectOrHealthKitSource(state.stepSource) || state.verifiedTodayStepsAt != null) {
+    state.todaySteps = verified;
     state.dailyDisplaySource =
       state.stepSource === "healthkit" || state.stepSource === "ios_healthkit"
         ? "healthkit"
         : "health_connect";
     state.dailyVerificationStatus =
       state.verifiedTodayStepsAt != null ? "verified" : "pending";
+    return;
+  }
+  state.todaySteps = Math.max(verified, provisional);
+  if (provisional > verified) {
+    state.dailyDisplaySource = "sensor_estimate";
+    state.dailyVerificationStatus = "delayed";
+  } else {
+    state.dailyDisplaySource = "sensor_estimate";
+    state.dailyVerificationStatus = "pending";
   }
 }
 
@@ -488,22 +495,15 @@ const raceProgressSlice = createSlice({
               elapsedSec > 0 && next - prev <= elapsedSec * MAX_STEPS_PER_SEC;
             const staleTooLong = elapsedSec >= STALL_WATCHDOG_SEC;
             const catchUpAllowed = plausibleByElapsed || staleTooLong;
-            const hugeJumpFromVerified =
-              !isFirstProvisionalReading &&
-              next > verified + 250 &&
-              prev <= verified + 50 &&
-              !catchUpAllowed;
             const spikeFromPrev =
               !isFirstProvisionalReading && next > prev + 500 && !catchUpAllowed;
-            // First provisional tick must still reject since-boot TYPE_STEP_COUNTER
-            // absolutes (e.g. 22k) when HC is still 0 — otherwise recomputeDisplayToday
-            // locks Daily Walk to Math.max(verified, 22000). Honest first ticks under
-            // 1000 (or within +1k of HC) still pass isStaleSensorAbsolute.
-            const looksLikeSinceBoot = isStaleSensorAbsolute(verified, next);
-            if (implausible || hugeJumpFromVerified || spikeFromPrev || looksLikeSinceBoot) {
+            // Do not reject live sensor that is ahead of lagging Health Connect.
+            // `hugeJumpFromVerified` pinned Walk at HC (e.g. 10) while the
+            // ongoing notification already showed the native session.
+            if (implausible || spikeFromPrev) {
               if (__DEV__) {
                 console.log(
-                  `[StepStore] rejected inflated provisional next=${next} verified=${verified} prev=${prev} sinceBoot=${looksLikeSinceBoot}`,
+                  `[StepStore] rejected inflated provisional next=${next} verified=${verified} prev=${prev}`,
                 );
               }
             } else if (next >= prev || next >= verified) {
@@ -554,12 +554,11 @@ const raceProgressSlice = createSlice({
               if (stepSource && !treatStepSourceAsProvisionalOnly(stepSource)) {
                 state.stepSource = stepSource;
               }
-              if (
-                state.provisionalSensorTodaySteps != null &&
-                state.provisionalSensorTodaySteps > next + 250
-              ) {
-                state.provisionalSensorTodaySteps = next > 0 ? next : null;
-                state.provisionalSensorTodayStepsAt = next > 0 ? ts : null;
+              // Walk daily follows HC/HK exactly. Drop a doubled sensor session
+              // (52 → 104) so display cannot stay ahead of Health Connect.
+              if (next > 0) {
+                state.provisionalSensorTodaySteps = null;
+                state.provisionalSensorTodayStepsAt = null;
               }
               recomputeDisplayToday(state);
             }

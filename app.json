@@ -87,9 +87,9 @@
         "expo-build-properties",
         {
           "android": {
-            "minSdkVersion": 26,
-            "compileSdkVersion": 35,
-            "targetSdkVersion": 35,
+            "minSdkVersion": 34,
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36,
             "extraProguardRules": "-keep class com.globalwalkerleague.walkchampraceprogress.** { *; }\n-keep class com.walkchamp.app.WalkChampNotificationServiceExtension { *; }\n-keep class expo.modules.** { *; }\n-keep class expo.modules.ExpoModulesPackageList { *; }\n-keep class com.facebook.react.** { *; }\n-keep @expo.modules.core.interfaces.DoNotStrip class *"
           }
         }

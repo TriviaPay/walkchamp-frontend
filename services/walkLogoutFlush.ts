@@ -1,6 +1,7 @@
 /**
  * Persist today's daily-walk total to the API before the session is dropped.
- * Live races pause POST /api/walk/steps, so logout/login otherwise hydrates 0.
+ * Live races no longer pause POST /api/walk/steps; this still unpauses in case a
+ * previous session left the flag set, so logout/login hydrates the real total.
  */
 
 import { getValidSession } from "@/services/authService";

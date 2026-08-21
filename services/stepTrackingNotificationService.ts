@@ -165,7 +165,9 @@ async function logOngoingDiagnostics(phase: string): Promise<void> {
     percentComplete: pct,
     title: "WalkChamp",
     deepLink: "walkchamp://walk",
-    stepSource: stepProviderManager.toRaceProgressSource(),
+    stepSource: stepProviderManager.usesVerifiedStepSource()
+      ? (Platform.OS === "ios" ? "healthkit" : "health_connect")
+      : stepProviderManager.toRaceProgressSource(),
     body: formatWalkOngoingNotificationBody(steps, { provisional }),
     authToken: session ?? "",
     apiBaseUrl: API_BASE,
@@ -412,7 +414,8 @@ class StepTrackingNotificationService {
         // Redux/JS — do not keep a higher FGS-only total locked on the tray.
         const jsOwns =
           AppState.currentState === "active" && isJsAuthoritativeStepSession();
-        if (!jsOwns) {
+        const verifiedDaily = stepProviderManager.usesVerifiedStepSource();
+        if (!jsOwns && !verifiedDaily) {
           const native = await this.getNativeStepState(payload.userId);
           const today = new Date();
           const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -437,9 +440,14 @@ class StepTrackingNotificationService {
       }
     }
     // Allow forced HC correction below lastSteps (inflated sensor lock / day reset).
+    const correctingToVerified =
+      force &&
+      stepProviderManager.usesVerifiedStepSource() &&
+      lastSteps >= 0 &&
+      lastSteps > steps;
     const correctingInflated =
       force && lastSteps >= 0 && lastSteps > steps + 250;
-    if (lastSteps >= 0 && steps < lastSteps && !correctingInflated) {
+    if (lastSteps >= 0 && steps < lastSteps && !correctingInflated && !correctingToVerified) {
       logOngoing(
         `skippedReason=regression incoming=${steps} last=${lastSteps}`,
       );

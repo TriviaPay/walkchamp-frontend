@@ -10,6 +10,21 @@ export const STEP_SYNC_CONFIG = {
   /** Walk — provider reconciliation poll (backup when watch callbacks are slow) */
   WALK_LOCAL_RECONCILE_POLL_MS: 1_000,
 
+  /**
+   * Health Connect / HealthKit daily re-read. Native HC writes are batched —
+   * 1-second HC polling does not make verified steps real-time.
+   */
+  WALK_HEALTH_VERIFICATION_MS: 30_000,
+
+  /**
+   * While today's HC/HK aggregate is still 0 (reinstall, cold start, writer lag),
+   * reread faster so the full midnight→now total lands instead of leftover sensor.
+   */
+  WALK_HEALTH_EMPTY_RETRY_MS: 2_500,
+
+  /** How long after bind/resume to keep the fast empty-HC retry. */
+  WALK_HEALTH_EMPTY_RETRY_WINDOW_MS: 90_000,
+
   /** Race — read device steps locally for UI (sensor / HealthKit / Health Connect) */
   RACE_LOCAL_POLL_MS: 1_000,
 

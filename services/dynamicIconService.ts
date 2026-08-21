@@ -2,10 +2,10 @@
  * dynamicIconService — launcher icon by daily goal milestone (0 / 25 / 50 / 75 / 100 %).
  *
  * iOS: applies immediately via expo-alternate-app-icons.
- * Android: applies immediately via WalkChampRaceProgress activity-aliases
- * (MainActivity itself is never enabled/disabled — only launcher aliases).
- * Background flush remains a retry path if a foreground apply fails.
- * KEY_MILESTONE is written only after a successful native apply — never on queue alone.
+ * Android home-screen icon is NOT switched at runtime. Enabling/disabling
+ * launcher activity-aliases kills the process on many OEMs (Samsung especially)
+ * even with DONT_KILL_APP and even after the app is backgrounded. The in-app
+ * WalkProgressIcon still follows 0 / 25 / 50 / 75 / 100 % live.
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -50,12 +50,10 @@ const KEY_PENDING_DATE = "@dyn_icon_pending_date";
 const ANDROID_BACKGROUND_APPLY_DELAY_MS = 1_500;
 
 /**
- * Android launcher updates use activity-aliases only (never MainActivity).
- * Set EXPO_PUBLIC_DYNAMIC_ICON_ANDROID_DISABLE=1 to fully disable Android updates.
+ * Never toggle Android launcher aliases from JS. Runtime PackageManager flips
+ * crash the app. In-app progress icon does not use this path.
  */
-const ANDROID_LAUNCHER_DISABLED =
-  Platform.OS === "android" &&
-  process.env.EXPO_PUBLIC_DYNAMIC_ICON_ANDROID_DISABLE === "1";
+const ANDROID_LAUNCHER_DISABLED = Platform.OS === "android";
 
 let pendingIconName: DynamicAppIcon | null = null;
 let pendingMilestone: number | null = null;
@@ -150,22 +148,22 @@ function scheduleAndroidBackgroundApply(): void {
     return;
   }
 
+  // Never flip launcher aliases while the UI is visible — that crashes the app.
+  if (AppState.currentState !== "background") {
+    log(
+      `queued until background icon=${pendingIconName} state=${AppState.currentState}`,
+    );
+    return;
+  }
+
   cancelBackgroundApplyTimer();
-  // Foreground: apply soon (aliases only — MainActivity never disabled).
-  // Background: short delay so process is settled before OEM icon refresh.
-  const delay =
-    AppState.currentState === "active"
-      ? 350
-      : AppState.currentState === "background"
-        ? ANDROID_BACKGROUND_APPLY_DELAY_MS
-        : 800;
   log(
-    `apply scheduled in ${delay}ms for ${pendingIconName} state=${AppState.currentState}`,
+    `apply scheduled in ${ANDROID_BACKGROUND_APPLY_DELAY_MS}ms for ${pendingIconName} state=${AppState.currentState}`,
   );
   backgroundApplyTimer = setTimeout(() => {
     backgroundApplyTimer = null;
     void flushPendingAndroidIcon();
-  }, delay);
+  }, ANDROID_BACKGROUND_APPLY_DELAY_MS);
 }
 
 async function loadAlternateIconModule() {
@@ -233,6 +231,12 @@ async function setNativeIconOnce(iconName: DynamicAppIcon): Promise<boolean> {
   if (Platform.OS === "android") {
     if (uiSensitiveDepth > 0) {
       log(`defer android apply — UI-sensitive icon=${iconName}`);
+      return false;
+    }
+    if (AppState.currentState !== "background") {
+      log(
+        `defer android apply — not background icon=${iconName} state=${AppState.currentState}`,
+      );
       return false;
     }
     const native = getAndroidLauncherIconNative();
@@ -343,6 +347,12 @@ async function flushPendingAndroidIcon(): Promise<boolean> {
     log(`flush deferred — UI-sensitive icon=${pendingIconName}`);
     return false;
   }
+  if (AppState.currentState !== "background") {
+    log(
+      `flush deferred — not background icon=${pendingIconName} state=${AppState.currentState}`,
+    );
+    return false;
+  }
 
   androidApplyInFlight = true;
   const iconName = pendingIconName;
@@ -451,7 +461,6 @@ async function queueIconChange(
   await persistPendingQueue(targetIcon, targetMilestone, userId);
   log(`queued ${targetIcon} (${targetMilestone}%) storedPending=${targetIcon}`);
 
-  // Apply while app is active (aliases only). Background schedule is the retry path.
   scheduleAndroidBackgroundApply();
 }
 
@@ -510,8 +519,8 @@ async function reconcileMilestone(
 }
 
 /**
- * Flush any pending Android launcher icon (foreground or background).
- * Call after notifyStepsChanged / AppState transitions.
+ * Flush any pending Android launcher icon once the app is backgrounded.
+ * Call after notifyStepsChanged / AppState transitions. No-op while active.
  */
 export function flushAndroidIconIfBackground(): void {
   if (Platform.OS !== "android" || ANDROID_LAUNCHER_DISABLED) return;

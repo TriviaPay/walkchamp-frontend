@@ -22,9 +22,14 @@ import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { isJsAuthoritativeStepSession } from "@/services/steps/jsStepOwnership";
 import {
   resolveWalkNotificationSteps,
-  isInflatedProvisionalVsVerified,
   looksLikeSinceBootCounter,
 } from "@/services/steps/walkDisplaySteps";
+import {
+  noteVerifiedHealthConnectRead,
+  resetVerifiedSensorAnchor,
+  resolveAnchoredDisplaySteps,
+} from "@/services/steps/verifiedSensorAnchor";
+import { shouldRereadHealthConnectToday } from "@/platform/steps/hcTodayCachePolicy";
 import { AppState, type AppStateStatus, Platform } from "react-native";
 import { waitForAppStartupReady, isAppStartupReady } from "@/services/appStartup";
 import { getLocalDateStr, isStepSnapshotFromBeforeToday, msUntilNextLocalMidnight } from "@/utils/timezone";
@@ -60,6 +65,11 @@ let pendingWalkNotification = false;
 let lastWalkNotificationSteps = -1;
 let lastWalkNotificationPushMs = 0;
 let lastKnownTrackingDate: string | null = null;
+let lastVerifiedHealthReadAt = 0;
+let lastVerifiedHealthResult: Awaited<
+  ReturnType<typeof stepProviderManager.getTodayStepsForBackgroundPoll>
+> = null;
+let verifiedHealthCatchUpUntilMs = 0;
 let midnightCheckTimer: ReturnType<typeof setTimeout> | null = null;
 /** Avoid hammering POST /walk/steps on every midnight-check poll. */
 let flushedHistoryDateKey: string | null = null;
@@ -315,7 +325,7 @@ export async function resolveAuthoritativeTodaySteps(
         // permission cache momentarily stale, etc.) — not a genuine HC/HK 0.
         if (data) {
           providerSteps = Math.max(0, data.steps ?? 0);
-          providerReadOk = true;
+          providerReadOk = data.queryStatus !== "error";
         }
       } catch {
         providerSteps = 0;
@@ -448,21 +458,28 @@ export async function pushWalkNotificationFromCanonicalStore(
   }
 
   const raceProgressNow = store.getState().raceProgress;
-  let steps = resolveWalkNotificationSteps({
-    verifiedTodaySteps: raceProgressNow.verifiedTodaySteps ?? 0,
-    provisionalSensorTodaySteps: raceProgressNow.provisionalSensorTodaySteps,
-    todaySteps: raceProgressNow.todaySteps,
-    raceActive:
-      raceProgressNow.raceStatus === "active" || !!raceProgressNow.companionRaceId,
-  });
-  const now = Date.now();
-  const cfg = STEP_TRACKING_NOTIFICATION_CONFIG;
   const verifiedNow = Math.max(
     0,
-    Math.floor(store.getState().raceProgress.verifiedTodaySteps ?? 0),
+    Math.floor(raceProgressNow.verifiedTodaySteps ?? 0),
   );
+  let steps = stepProviderManager.usesVerifiedStepSource()
+    ? verifiedNow
+    : resolveWalkNotificationSteps({
+        verifiedTodaySteps: verifiedNow,
+        provisionalSensorTodaySteps: raceProgressNow.provisionalSensorTodaySteps,
+        todaySteps: raceProgressNow.todaySteps,
+        raceActive:
+          raceProgressNow.raceStatus === "active" || !!raceProgressNow.companionRaceId,
+      });
+  const now = Date.now();
+  const cfg = STEP_TRACKING_NOTIFICATION_CONFIG;
 
-  // Allow regression when correcting an inflated tray down to HC/HK (incl. 0).
+  // Allow the tray to drop when Daily Walk is Health Connect / HealthKit.
+  const correctingToVerified =
+    stepProviderManager.usesVerifiedStepSource() &&
+    lastWalkNotificationSteps >= 0 &&
+    lastWalkNotificationSteps > steps &&
+    steps === verifiedNow;
   const correctingInflatedTray =
     lastWalkNotificationSteps >= 0 &&
     lastWalkNotificationSteps > steps + 250 &&
@@ -470,7 +487,8 @@ export async function pushWalkNotificationFromCanonicalStore(
   if (
     lastWalkNotificationSteps >= 0 &&
     steps < lastWalkNotificationSteps &&
-    !correctingInflatedTray
+    !correctingInflatedTray &&
+    !correctingToVerified
   ) {
     stepEngineLog(
       "Notification",
@@ -641,6 +659,11 @@ export async function handleMidnightRolloverIfNeeded(): Promise<boolean> {
       androidHCService.resetTodayStepCache();
     } catch {
       // non-fatal
+    }
+    try {
+      resetVerifiedSensorAnchor();
+    } catch {
+      /* non-fatal */
     }
     try {
       const { androidLegacySensorProvider } = await import(
@@ -885,12 +908,14 @@ async function pushNotificationFromStore(): Promise<void> {
   await raceProgressNotificationService.onLocalRaceStepsUpdated(payload);
   // Keep companion race tray (id 1002) in sync with device today steps.
   if (s.companionRaceId) {
-    const companionToday = resolveWalkNotificationSteps({
-      verifiedTodaySteps: s.verifiedTodaySteps ?? 0,
-      provisionalSensorTodaySteps: s.provisionalSensorTodaySteps,
-      todaySteps: s.todaySteps,
-      raceActive: true,
-    });
+    const companionToday = stepProviderManager.usesVerifiedStepSource()
+      ? Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0))
+      : resolveWalkNotificationSteps({
+          verifiedTodaySteps: s.verifiedTodaySteps ?? 0,
+          provisionalSensorTodaySteps: s.provisionalSensorTodaySteps,
+          todaySteps: s.todaySteps,
+          raceActive: true,
+        });
     await raceProgressNotificationService.onCompanionDeviceStepsUpdated(companionToday);
   }
   store.dispatch(raceProgressActions.markNotificationUpdated());
@@ -1042,12 +1067,14 @@ async function handOffStepTrackingToNative(
     }
 
     if (s.userId && Platform.OS === "android") {
-      const steps = resolveWalkNotificationSteps({
-        verifiedTodaySteps: s.verifiedTodaySteps ?? 0,
-        provisionalSensorTodaySteps: s.provisionalSensorTodaySteps,
-        todaySteps: s.todaySteps,
-        raceActive: s.raceStatus === "active" || !!s.companionRaceId,
-      });
+      const steps = stepProviderManager.usesVerifiedStepSource()
+        ? Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0))
+        : resolveWalkNotificationSteps({
+            verifiedTodaySteps: s.verifiedTodaySteps ?? 0,
+            provisionalSensorTodaySteps: s.provisionalSensorTodaySteps,
+            todaySteps: s.todaySteps,
+            raceActive: s.raceStatus === "active" || !!s.companionRaceId,
+          });
       if (stepTrackingNotificationService.isActive()) {
         // Revive walk FGS + sensor ownership (also keeps sensor alive during a race).
         await stepTrackingNotificationService.handOffToNativeBackground({
@@ -1073,11 +1100,9 @@ async function handOffStepTrackingToNative(
               // Never Math.max with a stale FGS absolute (yesterday's 9k+) when
               // verified HC/HK already owns the day total — that re-poisons Walk.
               const nativeToday = Math.max(0, Math.floor(native?.todaySteps ?? 0));
-              const handOffSteps =
-                stepProviderManager.usesVerifiedStepSource() &&
-                isInflatedProvisionalVsVerified(steps, nativeToday)
-                  ? steps
-                  : Math.max(steps, nativeToday);
+              const handOffSteps = stepProviderManager.usesVerifiedStepSource()
+                ? steps
+                : Math.max(steps, nativeToday);
               await stepTrackingNotificationService.handOffToNativeBackground({
                 userId: s.userId,
                 todaySteps: handOffSteps,
@@ -1124,35 +1149,36 @@ export async function tickWalkBackgroundStepPoll(
   }
 
   try {
-    const data = await stepProviderManager.getTodayStepsForBackgroundPoll();
-    const hcSteps = Math.max(0, data?.steps ?? 0);
-    const current = s.todaySteps;
     const verifiedMode = stepProviderManager.usesVerifiedStepSource();
+    if (reason === "resume" && verifiedMode) {
+      verifiedHealthCatchUpUntilMs = Math.max(
+        verifiedHealthCatchUpUntilMs,
+        Date.now() + STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_WINDOW_MS,
+      );
+    }
+    const shouldReadVerified =
+      !verifiedMode ||
+      reason === "resume" ||
+      shouldRereadHealthConnectToday({
+        lastReadAtMs: lastVerifiedHealthReadAt,
+        lastSteps: lastVerifiedHealthResult?.steps ?? 0,
+        lastWasError: lastVerifiedHealthResult?.queryStatus === "error",
+        steadyIntervalMs: STEP_SYNC_CONFIG.WALK_HEALTH_VERIFICATION_MS,
+        emptyRetryMs: STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_MS,
+        catchUpUntilMs: verifiedHealthCatchUpUntilMs,
+        catchUpBelowSteps: 50,
+      });
+    let data = lastVerifiedHealthResult;
+    if (shouldReadVerified) {
+      data = await stepProviderManager.getTodayStepsForBackgroundPoll();
+      lastVerifiedHealthReadAt = Date.now();
+      lastVerifiedHealthResult = data;
+    }
+    const hcSteps = Math.max(0, data?.steps ?? 0);
+    const hcReadError = data?.queryStatus === "error";
+    const current = s.todaySteps;
 
     if (Platform.OS === "android" && verifiedMode) {
-      // Lane 1: Health Connect → verifiedTodaySteps only
-      if (hcSteps > 0) {
-        updateStepProgressFromRealSource({
-          todaySteps: hcSteps,
-          stepSource: mapProviderSource(),
-          dailyLane: "verified",
-          updatedAt: new Date().toISOString(),
-          fromWatch: false,
-        });
-      } else if (isInflatedProvisionalVsVerified(
-        Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0)),
-        current,
-      )) {
-        // HC empty but Redux/native still hold a since-boot absolute — rebaseline
-        // to the account verified floor (GET /api/walk/today), not hard 0.
-        const accountFloor = Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0));
-        stepEngineLog(
-          "StepEngine",
-          `backgroundPoll dropPoisonedDaily current=${current} hc=0 keepAccount=${accountFloor}`,
-        );
-        await rebaselineInflatedNativeDaily(s.userId, accountFloor);
-      }
-      // Lane 2: FGS sensor → provisional display only
       const native = await stepTrackingNotificationService.getNativeStepState(
         s.userId ?? undefined,
       );
@@ -1169,22 +1195,79 @@ export async function tickWalkBackgroundStepPoll(
           native?.updatedAt ?? native?.lastUpdatedAt,
           nativeToday,
         );
+      noteVerifiedHealthConnectRead({
+        verifiedSteps: hcReadError
+          ? Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0))
+          : hcSteps,
+        sensorTotal: native?.sensorTotal,
+      });
+      if (!hcReadError) {
+        if (hcSteps > 0) {
+          try {
+            const { isHealthConnectOnDeviceStepsAvailable } = await import(
+              "@/services/steps/hcOnDeviceSteps"
+            );
+            if (!isHealthConnectOnDeviceStepsAvailable()) {
+              const { markExternalVerifiedSourceConfirmed } = await import(
+                "@/services/steps/verifiedCapabilityStore"
+              );
+              void markExternalVerifiedSourceConfirmed();
+            }
+          } catch {
+            /* optional */
+          }
+        }
+        updateStepProgressFromRealSource({
+          todaySteps: hcSteps,
+          stepSource: mapProviderSource(),
+          dailyLane: "verified",
+          updatedAt: new Date().toISOString(),
+          fromWatch: false,
+        });
+        if (
+          nativeOk &&
+          hcSteps > 0 &&
+          nativeToday != null &&
+          nativeToday >= hcSteps * 2 - 2 &&
+          nativeToday <= hcSteps * 2 + 2
+        ) {
+          void rebaselineInflatedNativeDaily(s.userId, hcSteps);
+        }
+      }
       if (
         nativeOk &&
         nativeToday > 0 &&
-        !looksLikeSinceBootCounter({
+        looksLikeSinceBootCounter({
           todaySteps: nativeToday,
           sensorTotal: native?.sensorTotal,
           dailyBaseline: native?.dailyBaseline,
         })
       ) {
-        updateStepProgressFromRealSource({
-          todaySteps: nativeToday,
-          stepSource: "android_step_counter",
-          dailyLane: "provisional",
-          updatedAt: new Date().toISOString(),
-          fromWatch: reason === "fgs_tick" || reason === "interval",
+        const accountFloor = Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0));
+        stepEngineLog(
+          "StepEngine",
+          `backgroundPoll dropSinceBoot native=${nativeToday} keepAccount=${accountFloor}`,
+        );
+        await rebaselineInflatedNativeDaily(s.userId, accountFloor);
+      } else if (nativeOk && !stepProviderManager.usesVerifiedStepSource()) {
+        const verifiedNow = Math.max(
+          hcSteps,
+          Math.max(0, Math.floor(store.getState().raceProgress.verifiedTodaySteps ?? 0)),
+        );
+        const anchored = resolveAnchoredDisplaySteps({
+          verifiedSteps: verifiedNow,
+          sensorTotal: native?.sensorTotal,
+          sessionTodaySteps: nativeToday,
         });
+        if (anchored > verifiedNow) {
+          updateStepProgressFromRealSource({
+            todaySteps: anchored,
+            stepSource: "android_step_counter",
+            dailyLane: "provisional",
+            updatedAt: new Date().toISOString(),
+            fromWatch: reason === "fgs_tick" || reason === "interval",
+          });
+        }
       }
       const stepsAfter = store.getState().raceProgress.todaySteps;
       if (stepsAfter !== current) {
@@ -1296,22 +1379,22 @@ function initNativeStepEventListener(): void {
       // Hybrid live race: FGS TYPE_STEP_COUNTER owns raceSteps while daily is HC.
       // Feed native raceSteps into Redux (do not drop when verified daily).
       if (raceActive && typeof state.raceSteps === "number") {
-        if (
+        const jsOwnsRace =
+          (isDeviceSensorSource(source) ||
+            stepProviderManager.usesRaceBaseline()) &&
+          isJsAuthoritativeStepSession() &&
+          stepProviderManager.isLiveRaceWatchHealthy();
+        if (jsOwnsRace) {
+          // JS live watch is primary (and has a recent proof-of-life tick);
+          // FGS still updates the race notification natively.
+          logger.debug(
+            "StepStore",
+            "ignored native race sensor — JS live race watch owns Redux",
+          );
+        } else if (
           isDeviceSensorSource(source) ||
           stepProviderManager.usesRaceBaseline()
         ) {
-          if (
-            isJsAuthoritativeStepSession() &&
-            stepProviderManager.isLiveRaceWatchHealthy()
-          ) {
-            // JS live watch is primary (and has a recent proof-of-life tick);
-            // FGS still updates the race notification natively.
-            logger.debug(
-              "StepStore",
-              "ignored native race sensor — JS live race watch owns Redux",
-            );
-            return;
-          }
           // JS watch missing or stale (zombie Pedometer subscription — a known
           // Android issue where watchStepCount silently stops delivering
           // callbacks while the handle stays non-null) — fall through and let
@@ -1327,30 +1410,25 @@ function initNativeStepEventListener(): void {
             "LiveRaceUI",
             `real step update raceSteps=${state.raceSteps} source=${source}`,
           );
-          return;
+        } else {
+          feedRaceStepsToStore({
+            raceSteps: state.raceSteps,
+            stepSource: mapNativeStepSource(source),
+            updatedAt,
+          });
         }
-        feedRaceStepsToStore({
-          raceSteps: state.raceSteps,
-          stepSource: mapNativeStepSource(source),
-          updatedAt,
-        });
-        return;
       }
 
-      // Daily Walk (no active race): mirror FGS todaySteps into Redux so the Walk
-      // screen matches the ongoing notification. Hybrid verified daily still uses
-      // TYPE_STEP_COUNTER for live display while HC/HK remain the sync source —
-      // accept sensor-labeled emits too, but keep Redux stepSource as HC/HK.
+      // Daily Walk keeps updating during a live race (separate from raceSteps).
+      // Hybrid verified daily still uses TYPE_STEP_COUNTER for live display while
+      // HC/HK remain the sync source.
       const today = getLocalDateStr();
-      if (!raceActive && state.localDate && state.localDate !== today) {
+      if (state.localDate && state.localDate !== today) {
         logger.debug("StepStore", "ignored native update — stale localDate");
         return;
       }
       const nativeUpdatedAt = state.updatedAt ?? state.lastUpdatedAt ?? 0;
-      if (
-        !raceActive &&
-        isStepSnapshotFromBeforeToday(nativeUpdatedAt, state.todaySteps ?? 0)
-      ) {
+      if (isStepSnapshotFromBeforeToday(nativeUpdatedAt, state.todaySteps ?? 0)) {
         logger.debug("StepStore", "ignored native update — stale snapshot");
         return;
       }
@@ -1358,9 +1436,17 @@ function initNativeStepEventListener(): void {
       const currentToday = s.todaySteps;
       const incomingToday = Math.max(0, Math.floor(state.todaySteps ?? 0));
       if (incomingToday < currentToday) {
-        // Native re-baselined at local midnight — do not keep yesterday's floor.
         const nativeDay = state.localDate ?? today;
-        if (nativeDay === today && currentToday - incomingToday > 50) {
+        // Same-day drop is race-stop extras / a brief native 0 — never wipe Daily
+        // Walk after a finished match. Midnight uses handleMidnightRollover.
+        if (nativeDay === today) {
+          logger.debug(
+            "StepStore",
+            `kept daily floor incoming=${incomingToday} current=${currentToday} sameDay=true`,
+          );
+          return;
+        }
+        if (currentToday - incomingToday > 50) {
           store.dispatch(
             raceProgressActions.resetDailyStepsForNewDay({
               todaySteps: incomingToday,
@@ -1391,25 +1477,6 @@ function initNativeStepEventListener(): void {
       }
 
       if (stepProviderManager.usesVerifiedStepSource()) {
-        const verified = Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0));
-        // Yesterday-style FGS absolute — re-baseline native so the tray can track
-        // live steps again from today's verified total (like a fresh day start).
-        if (isInflatedProvisionalVsVerified(verified, incomingToday)) {
-          logger.debug(
-            "StepStore",
-            `rebaseline native inflate incoming=${incomingToday} verified=${verified}`,
-          );
-          void rebaselineInflatedNativeDaily(s.userId, verified);
-          return;
-        }
-        updateStepProgressFromRealSource({
-          todaySteps: incomingToday,
-          raceSteps: typeof state.raceSteps === "number" ? state.raceSteps : undefined,
-          stepSource: "android_step_counter",
-          dailyLane: "provisional",
-          updatedAt,
-          fromWatch: true,
-        });
         return;
       }
 
@@ -1432,7 +1499,11 @@ function initNativeStepEventListener(): void {
       if (sanitized <= currentToday) return;
       updateStepProgressFromRealSource({
         todaySteps: sanitized,
-        raceSteps: typeof state.raceSteps === "number" ? state.raceSteps : undefined,
+        raceSteps: raceActive
+          ? undefined
+          : typeof state.raceSteps === "number"
+            ? state.raceSteps
+            : undefined,
         stepSource: mapNativeStepSource(source),
         updatedAt,
         fromWatch: true,
@@ -1475,6 +1546,10 @@ async function hydrateFromNativeStepState(): Promise<void> {
     (!native.activeRaceId || native.activeRaceId === current.activeRaceId);
 
   const nativeToday = Math.max(0, Math.floor(native.todaySteps ?? 0));
+  const updatedAt = new Date(
+    native.updatedAt ?? native.lastUpdatedAt ?? Date.now(),
+  ).toISOString();
+
   if (
     looksLikeSinceBootCounter({
       todaySteps: nativeToday,
@@ -1493,57 +1568,23 @@ async function hydrateFromNativeStepState(): Promise<void> {
     return;
   }
 
-  // HC / HealthKit remain the verified sync source, but FGS TYPE_STEP_COUNTER
-  // advances live display while HC lags (Samsung often returns records=0).
-  // This value is still the on-device sensor's count, not an HC-confirmed read —
-  // tag it `provisional` explicitly so it can never masquerade as a verified
-  // total (which would otherwise let a stale/phantom sensor tick permanently
-  // inflate the number that gets synced to the backend as "real" steps).
-  if (stepProviderManager.usesVerifiedStepSource()) {
-    const verified = Math.max(0, Math.floor(current.verifiedTodaySteps ?? 0));
-    if (
-      nativeToday > current.todaySteps &&
-      !isInflatedProvisionalVsVerified(verified, nativeToday)
-    ) {
-      const updatedAt = new Date(
-        native.updatedAt ?? native.lastUpdatedAt ?? Date.now(),
-      ).toISOString();
-      updateStepProgressFromRealSource({
-        todaySteps: nativeToday,
-        stepSource: mapNativeStepSource(
-          stepProviderManager.getActiveProviderId() === "ios_healthkit"
-            ? "healthkit"
-            : "health_connect",
-        ),
+  if (stepProviderManager.usesVerifiedStepSource() || isVerifiedSource(stepSource)) {
+    if (raceActive && typeof native.raceSteps === "number") {
+      feedRaceStepsToStore({
+        raceSteps: native.raceSteps,
+        stepSource: "android_step_counter",
         updatedAt,
-        fromWatch: true,
-        dailyLane: "provisional",
       });
       logger.debug(
         "AppResume",
-        `merged native display ahead todaySteps=${nativeToday} (kept provisional — not HC-verified)`,
-      );
-    } else {
-      logger.debug(
-        "AppResume",
-        "skip native hydrate inflate — since-boot absolute rejected",
+        `merged native raceSteps=${native.raceSteps} skipped native daily`,
       );
     }
     return;
   }
 
-  if (
-    isVerifiedSource(stepSource) &&
-    !raceActive
-  ) {
-    logger.debug("StepStore", "skip unified native hydrate — verified step source active");
-    return;
-  }
   if (stepSource === "unsupported" || native.sensorSupported === false) return;
 
-  const updatedAt = new Date(
-    native.updatedAt ?? native.lastUpdatedAt ?? Date.now(),
-  ).toISOString();
   if (
     !shouldAcceptStepUpdate(
       {
@@ -1575,11 +1616,13 @@ async function hydrateFromNativeStepState(): Promise<void> {
   );
 
   updateStepProgressFromRealSource({
-    todaySteps: raceActive ? current.todaySteps : sanitizedToday,
+    todaySteps: Math.max(current.todaySteps, sanitizedToday),
     raceSteps:
-      raceActive && typeof native.raceSteps === "number"
-        ? native.raceSteps
-        : undefined,
+      raceActive
+        ? undefined
+        : typeof native.raceSteps === "number"
+          ? native.raceSteps
+          : undefined,
     stepSource: mapNativeStepSource(stepSource),
     updatedAt,
   });
@@ -2159,11 +2202,13 @@ export function clearActiveRaceProgress(
   const s = store.getState().raceProgress;
   const raceIdToStop = options?.raceId ?? s.activeRaceId;
   const companionId = s.companionRaceId;
-  const walkFloor = resolveWalkNotificationSteps({
-    verifiedTodaySteps: s.verifiedTodaySteps ?? 0,
-    provisionalSensorTodaySteps: s.provisionalSensorTodaySteps,
-    todaySteps: Math.max(s.todaySteps, options?.preserveWalkDisplay ?? 0),
-  });
+  const walkFloor = stepProviderManager.usesVerifiedStepSource()
+    ? Math.max(0, Math.floor(s.verifiedTodaySteps ?? 0))
+    : resolveWalkNotificationSteps({
+        verifiedTodaySteps: s.verifiedTodaySteps ?? 0,
+        provisionalSensorTodaySteps: s.provisionalSensorTodaySteps,
+        todaySteps: Math.max(s.todaySteps, options?.preserveWalkDisplay ?? 0),
+      });
 
   store.dispatch(
     raceProgressActions.clearActiveRace({
@@ -2177,15 +2222,17 @@ export function clearActiveRaceProgress(
   void (async () => {
     // Re-read at stop time — Walk/HC may have advanced while the race was ending.
     const latest = store.getState().raceProgress;
-    const walkSteps = resolveWalkNotificationSteps({
-      verifiedTodaySteps: latest.verifiedTodaySteps ?? 0,
-      provisionalSensorTodaySteps: latest.provisionalSensorTodaySteps,
-      todaySteps: Math.max(
-        latest.todaySteps,
-        walkFloor,
-        options?.preserveWalkDisplay ?? 0,
-      ),
-    });
+    const walkSteps = stepProviderManager.usesVerifiedStepSource()
+      ? Math.max(0, Math.floor(latest.verifiedTodaySteps ?? 0))
+      : resolveWalkNotificationSteps({
+          verifiedTodaySteps: latest.verifiedTodaySteps ?? 0,
+          provisionalSensorTodaySteps: latest.provisionalSensorTodaySteps,
+          todaySteps: Math.max(
+            latest.todaySteps,
+            walkFloor,
+            options?.preserveWalkDisplay ?? 0,
+          ),
+        });
     if (companionId) {
       await raceProgressNotificationService.stopParallel(companionId);
     }
@@ -2717,6 +2764,10 @@ export async function bindStepSessionToUser(userId: string): Promise<boolean> {
 
   const lastUserId = await storageGet<string>(STORAGE_KEYS.LAST_STEP_USER_ID);
   const switched = !!lastUserId && lastUserId !== userId;
+  lastVerifiedHealthReadAt = 0;
+  lastVerifiedHealthResult = null;
+  verifiedHealthCatchUpUntilMs =
+    Date.now() + STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_WINDOW_MS;
   if (switched) {
     logger.debug("AuthSwitch", `oldUserId=${lastUserId} newUserId=${userId}`);
     await clearUserSessionStepState(lastUserId, "account_switch");

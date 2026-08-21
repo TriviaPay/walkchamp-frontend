@@ -126,33 +126,25 @@ export async function resolveVerifiedStepProvider(): Promise<VerifiedStepProvide
         };
       }
 
-      if (status.permission === "granted" && id === "android_health_connect") {
-        try {
-          const {
-            getHealthConnectVerificationState,
-            isVerifiedHealthAuthoritative,
-          } = await import("@/services/steps/healthConnectVerificationState");
-          const vs = await getHealthConnectVerificationState();
-          if (!isVerifiedHealthAuthoritative(vs.status)) {
-            return {
-              provider:
-                vs.status === "unsupported" ? "none" : "health_connect",
-              status:
-                vs.status === "unsupported"
-                  ? "unsupported"
-                  : vs.status === "permission_required"
-                    ? "permission_required"
-                    : "provider_required",
-              isSupported: vs.status !== "unsupported",
-              isInstalled: true,
-              hasPermission: true,
-              canTrackSteps: false,
-              reasonCode: vs.status,
-            };
-          }
-        } catch {
-          /* fall through to connected */
-        }
+      const {
+        isHealthConnectOnDeviceStepsAvailable,
+      } = await import("@/services/steps/hcOnDeviceSteps");
+      const {
+        getExternalVerifiedSourceConfirmed,
+        resolveVerifiedCapabilityKind,
+      } = await import("@/services/steps/verifiedCapabilityStore");
+      const nativeHc = isHealthConnectOnDeviceStepsAvailable();
+      const readGranted =
+        status.permission === "granted" && id === "android_health_connect";
+      if (readGranted) {
+        const externalConfirmed = await getExternalVerifiedSourceConfirmed();
+        const capability = resolveVerifiedCapabilityKind({
+          platform: "android",
+          hcAvailable: true,
+          readGranted: true,
+          nativeOnDeviceSteps: nativeHc,
+          externalConfirmed,
+        });
         return {
           provider: "health_connect",
           status: "connected",
@@ -160,6 +152,7 @@ export async function resolveVerifiedStepProvider(): Promise<VerifiedStepProvide
           isInstalled: true,
           hasPermission: true,
           canTrackSteps: true,
+          reasonCode: capability,
         };
       }
       if (status.permission === "denied") {

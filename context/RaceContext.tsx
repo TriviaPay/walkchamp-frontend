@@ -978,7 +978,8 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     const myGen = subscriptionGenRef.current;
 
     setRacePhase("in_race");
-    setWalkBackendSyncPaused(true);
+    // Daily walk / streak keep POSTing /api/walk/steps during a classic live race.
+    setWalkBackendSyncPaused(false);
     setRaceTimerSeconds(0);
     setUserRaceSteps(bootSteps);
 
@@ -1107,6 +1108,15 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           );
         }
 
+        const target = raceTargetStepsRef.current;
+        // Once this match's goal is done, freeze live-race counting. Daily walk continues separately.
+        if (target > 0 && userStepsRef.current >= target) {
+          return;
+        }
+        if (target > 0 && steps > target) {
+          steps = target;
+        }
+
         const antiReg = Math.max(userStepsRef.current, steps, raceStepFloorRef.current);
         const prevSteps = userStepsRef.current;
         if (__DEV__) {
@@ -1135,7 +1145,6 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
           if (__DEV__) console.log(`[RaceStepsRealtime] local UI updated: ${antiReg}`);
         }
 
-        const target = raceTargetStepsRef.current;
         setParticipants((prev) => {
           const updated = prev.map((p) => {
             if (!p.isUser) return p;

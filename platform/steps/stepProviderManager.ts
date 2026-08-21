@@ -115,9 +115,7 @@ async function resolveAndroidLiveRaceProvider(): Promise<StepProvider | null> {
 }
 
 /**
- * Daily Android selection.
- * Hybrid: Health Connect only (never TYPE_STEP_COUNTER for todaySteps).
- * Legacy mode: HC preferred, sensor fallback.
+ * Daily Android selection: Health Connect only (never TYPE_STEP_COUNTER).
  */
 async function trySelectAndroidProvider(
   preferHc = true,
@@ -127,100 +125,56 @@ async function trySelectAndroidProvider(
     !forceReselect &&
     _activeProvider &&
     (_activeProvider.providerId === "android_health_connect" ||
-      _activeProvider.providerId === "ios_healthkit" ||
-      (!liveRaceSensorEnabled() &&
-        _activeProvider.providerId === "android_legacy_sensor"))
+      _activeProvider.providerId === "ios_healthkit")
   ) {
     return _activeProvider;
   }
 
-  // Hybrid: drop legacy if it somehow became daily.
-  if (
-    liveRaceSensorEnabled() &&
-    _activeProvider?.providerId === "android_legacy_sensor"
-  ) {
+  if (_activeProvider?.providerId === "android_legacy_sensor") {
     _activeProvider = null;
   }
 
-  const legacyAvailable = await androidLegacySensorProvider.isAvailable();
   const now = Date.now();
   const shouldProbeHc =
     preferHc &&
     (forceReselect || now - _lastHcProbeAt >= HC_PROBE_MS || !_activeProvider);
 
-  if (shouldProbeHc) {
-    _lastHcProbeAt = now;
-    try {
-      const init = await androidHCService.initialize();
-      const hcBlocked = await probeHcManifestBlocked();
-      const hcUsable =
-        init.initialized &&
-        init.availability === "available" &&
-        !hcBlocked;
-
-      if (hcUsable) {
-        const hcPerm = await androidHealthConnectProvider.getPermissionStatus();
-        devLog(`Health Connect status: usable=true permission=${hcPerm}`);
-        if (hcPerm === "granted") {
-          sourceLog(
-            "[StepSource] selected=health_connect healthConnectAvailable=true",
-          );
-          return androidHealthConnectProvider;
-        }
-        if (liveRaceSensorEnabled()) {
-          // Hybrid: keep HC as daily candidate even if not granted yet (setup UI).
-          if (hcPerm !== "denied") {
-            return androidHealthConnectProvider;
-          }
-          devLog("HC denied — hybrid daily has no sensor fallback");
-          return null;
-        }
-        if (legacyAvailable) {
-          devLog("HC not granted — preferring android_legacy_sensor");
-          return androidLegacySensorProvider;
-        }
-        if (hcPerm !== "denied") {
-          return androidHealthConnectProvider;
-        }
-      } else {
-        devLog(
-          `Health Connect not usable: availability=${init.availability} blocked=${hcBlocked}`,
-        );
-        if (liveRaceSensorEnabled()) {
-          // Health Connect itself is unusable on this device (not installed /
-          // needs update / blocked — common on Android versions that don't
-          // bundle Health Connect the way Android 14+ does). Hybrid mode
-          // still prefers HC when it CAN exist, but a device where it
-          // fundamentally can't must not be left with zero daily step
-          // tracking — fall back to the legacy sensor, same as non-hybrid.
-          if (legacyAvailable) {
-            devLog(
-              "HC unusable on this device — falling back to android_legacy_sensor for daily",
-            );
-            return androidLegacySensorProvider;
-          }
-          return null;
-        }
-      }
-    } catch (e) {
-      devLog("Health Connect selection error", e);
-      if (liveRaceSensorEnabled()) return null;
-    }
+  if (!shouldProbeHc) {
+    return liveRaceSensorEnabled() ? null : _activeProvider;
   }
 
-  if (liveRaceSensorEnabled()) {
+  _lastHcProbeAt = now;
+  try {
+    const init = await androidHCService.initialize();
+    const hcBlocked = await probeHcManifestBlocked();
+    const hcUsable =
+      init.initialized &&
+      init.availability === "available" &&
+      !hcBlocked;
+
+    if (hcUsable) {
+      const hcPerm = await androidHealthConnectProvider.getPermissionStatus();
+      devLog(`Health Connect status: usable=true permission=${hcPerm}`);
+      if (hcPerm === "granted") {
+        sourceLog(
+          "[StepSource] selected=health_connect healthConnectAvailable=true",
+        );
+        return androidHealthConnectProvider;
+      }
+      if (hcPerm !== "denied") {
+        return androidHealthConnectProvider;
+      }
+      devLog("HC denied — daily has no sensor fallback");
+      return null;
+    }
+    devLog(
+      `Health Connect not usable: availability=${init.availability} blocked=${hcBlocked}`,
+    );
+    return null;
+  } catch (e) {
+    devLog("Health Connect selection error", e);
     return null;
   }
-
-  if (legacyAvailable) {
-    devLog("selected android_legacy_sensor");
-    sourceLog(
-      "[StepSource] selected=sensor healthConnectAvailable=false sensorAvailable=true",
-    );
-    return androidLegacySensorProvider;
-  }
-
-  return null;
 }
 
 async function selectProvider(forceReselect = false): Promise<StepProvider | null> {
@@ -252,19 +206,6 @@ async function selectProvider(forceReselect = false): Promise<StepProvider | nul
   if (Platform.OS !== "android") return null;
 
   _activeProvider = await trySelectAndroidProvider(true, forceReselect);
-
-  if (!liveRaceSensorEnabled()) {
-    if (
-      !_activeProvider ||
-      ((await _activeProvider.getPermissionStatus()) === "denied" &&
-        (await androidLegacySensorProvider.isAvailable()))
-    ) {
-      const legacy = await trySelectAndroidProvider(false, forceReselect);
-      if (legacy?.providerId === "android_legacy_sensor") {
-        _activeProvider = legacy;
-      }
-    }
-  }
 
   _liveRaceProvider = await resolveAndroidLiveRaceProvider();
 
@@ -601,9 +542,7 @@ export const stepProviderManager = {
 
     if (Platform.OS === "android") {
       const hcBlocked = androidHCService.isRangeReadBlocked();
-      const legacyAvail = await androidLegacySensorProvider.isAvailable();
 
-      // Daily: Health Connect only when hybrid is on.
       if (!hcBlocked) {
         try {
           const init = await androidHCService.initialize();
@@ -611,35 +550,12 @@ export const stepProviderManager = {
             init.availability === "needs_update" ||
             init.availability === "not_installed"
           ) {
-            // Health Connect fundamentally can't run here (common on Android
-            // versions that don't bundle it the way 14+ does, or it was never
-            // installed). Hybrid mode still prefers HC when available, but a
-            // device where it can't exist must not be left with zero daily
-            // step tracking — fall back to the legacy sensor, same as the
-            // non-hybrid path already does.
-            if (liveRaceSensorEnabled() && legacyAvail) {
-              const activityGranted = await ensureActivityRecognitionPermission();
-              if (activityGranted) {
-                const legacyResult =
-                  await androidLegacySensorProvider.requestPermission();
-                if (legacyResult.status === "granted") {
-                  _activeProvider = androidLegacySensorProvider;
-                  _liveRaceProvider = androidLegacySensorProvider;
-                  return {
-                    ...legacyResult,
-                    message:
-                      "Step tracking is ready using Android Steps (Health Connect isn't available on this device).",
-                  };
-                }
-              }
-            }
+            _liveRaceProvider = await resolveAndroidLiveRaceProvider();
             return {
               status: "unavailable",
               providerId: null,
               message:
-                init.availability === "needs_update"
-                  ? "Update Health Connect from the Play Store to continue."
-                  : "Install Health Connect to track verified steps.",
+                "Update your Android system or Google Play system components to enable verified step tracking.",
             };
           }
           const hcUsable =
@@ -653,63 +569,24 @@ export const stepProviderManager = {
               _liveRaceProvider = await resolveAndroidLiveRaceProvider();
               return { ...hcResult, message: "Step tracking is ready." };
             }
-            if (liveRaceSensorEnabled()) {
-              return {
-                ...hcResult,
-                message:
-                  hcResult.message ??
-                  "WalkChamp needs Health Connect step access for verified daily tracking.",
-              };
-            }
-            devLog("HC not granted — trying legacy fallback (non-hybrid)");
-          }
-        } catch (e) {
-          if (liveRaceSensorEnabled()) {
+            _liveRaceProvider = await resolveAndroidLiveRaceProvider();
             return {
-              status: "unavailable",
-              providerId: null,
-              message: "Health Connect is required for verified daily steps.",
+              ...hcResult,
+              message:
+                hcResult.message ??
+                "WalkChamp needs Health Connect step access for verified daily tracking.",
             };
           }
-          devLog("HC permission request failed — using legacy", e);
+        } catch (e) {
+          devLog("HC permission request failed", e);
         }
       }
 
-      if (liveRaceSensorEnabled()) {
-        return {
-          status: "unavailable",
-          providerId: null,
-          message: "Health Connect is required for verified daily steps.",
-        };
-      }
-
-      if (legacyAvail) {
-        const activityGranted = await ensureActivityRecognitionPermission();
-        if (!activityGranted) {
-          return {
-            status: "denied",
-            providerId: null,
-            message:
-              "Physical activity permission is required to track steps.",
-          };
-        }
-        const legacyResult =
-          await androidLegacySensorProvider.requestPermission();
-        if (legacyResult.status === "granted") {
-          _activeProvider = androidLegacySensorProvider;
-          _liveRaceProvider = androidLegacySensorProvider;
-          return {
-            ...legacyResult,
-            message: "Step tracking is ready using Android Steps.",
-          };
-        }
-        return legacyResult;
-      }
-
+      _liveRaceProvider = await resolveAndroidLiveRaceProvider();
       return {
         status: "unavailable",
         providerId: null,
-        message: "Step tracking is not available on this device.",
+        message: "Health Connect is required for verified daily steps.",
       };
     }
 
@@ -837,31 +714,13 @@ export const stepProviderManager = {
   },
 
   /**
-   * Hybrid: arm live race sensor only — never replaces HC daily provider.
-   * Non-hybrid: promote legacy as daily (legacy behavior).
+   * Arm TYPE_STEP_COUNTER for live UI / races only.
+   * Never promotes the sensor to the verified daily provider.
    */
   async switchToLegacyFallback(reason: string): Promise<boolean> {
     if (Platform.OS !== "android") return false;
-    if (liveRaceSensorEnabled()) {
-      devLog(`arming live race sensor: ${reason}`);
-      return this.ensureLiveRaceSensorReady();
-    }
-    devLog(`switching daily to legacy fallback: ${reason}`);
-    const previousId = _activeProvider?.providerId ?? null;
-    this.stopWatchingSteps();
-    const legacyAvail = await androidLegacySensorProvider.isAvailable();
-    if (!legacyAvail) return false;
-    const activityGranted = await ensureActivityRecognitionPermission();
-    if (!activityGranted) return false;
-    const perm = await androidLegacySensorProvider.getPermissionStatus();
-    if (perm !== "granted") {
-      const req = await androidLegacySensorProvider.requestPermission();
-      if (req.status !== "granted") return false;
-    }
-    _activeProvider = androidLegacySensorProvider;
-    _liveRaceProvider = androidLegacySensorProvider;
-    stepAudit.noteSourceSwitch(previousId, "android_legacy_sensor");
-    return true;
+    devLog(`arming live race sensor: ${reason}`);
+    return this.ensureLiveRaceSensorReady();
   },
 
   toWalkSyncSource(): string | undefined {
@@ -902,6 +761,36 @@ export const stepProviderManager = {
         return canonicalLiveRaceStepSource("android");
       default:
         return "unknown";
+    }
+  },
+
+  /**
+   * Recheck capability + verified Health Connect aggregate.
+   * Does not reopen Health Connect unless permission is actually missing.
+   */
+  async recheckCanonicalState(): Promise<void> {
+    this.invalidateStatusCache();
+    try {
+      androidHCService.invalidatePermissionCache();
+    } catch {
+      /* optional */
+    }
+    await this.initialize(true);
+    const perm = _activeProvider
+      ? await _activeProvider.getPermissionStatus()
+      : "unavailable";
+    if (perm === "granted") {
+      await this.getTodaySteps();
+    }
+    if (__DEV__) {
+      try {
+        const { logStepEngineDevDiagnostics } = await import(
+          "./stepEngineDevDiagnostics"
+        );
+        await logStepEngineDevDiagnostics("recheck");
+      } catch {
+        /* optional */
+      }
     }
   },
 

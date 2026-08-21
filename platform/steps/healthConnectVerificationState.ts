@@ -39,9 +39,9 @@ export type HealthConnectVerificationState = {
   setupCompleted: boolean;
 
   writerEvidenceDetected: boolean;
-  /** Preferred writer app is installed (Samsung Health / Google Fit), even if HC has no records yet. */
+  /** Optional vendor app may be present; never required for phone verification. */
   writerInstalled: boolean;
-  /** Preferred writer package is actually writing into Health Connect. */
+  /** Optional vendor is writing into Health Connect. Unfiltered aggregate is still the authority. */
   writerConnectedToHealthConnect: boolean;
   preferredWriterLabel: string | null;
   currentDayRecordsFound: boolean;
@@ -82,7 +82,7 @@ export async function getHealthConnectVerificationState(): Promise<HealthConnect
         return {
           ...UNSUPPORTED_STATE,
           status:
-            init.availability === "not_installed" || init.availability === "needs_update"
+            init.availability === "needs_update" || init.availability === "not_installed"
               ? "provider_required"
               : "unsupported",
         };
@@ -108,8 +108,8 @@ export async function getHealthConnectVerificationState(): Promise<HealthConnect
       // Reuse the existing writer-detection probe — the single source of
       // truth for "does HC actually have step data from some provider".
       const feed = await detectHealthConnectWriterFeed();
-      const writerEvidenceDetected = feed.hasWriterEvidence;
-      const currentDayRecordsFound = feed.todaySteps > 0 || feed.hasRecentStepRecords;
+      const writerEvidenceDetected = feed.readable === true;
+      const currentDayRecordsFound = feed.todaySteps > 0;
       const setupCompleted = isWriterFeedSufficientlyConfigured(feed);
       const status = resolveHealthConnectVerificationStatus({
         writerStatus: feed.status,

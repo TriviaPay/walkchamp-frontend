@@ -1,14 +1,16 @@
 /**
- * Coordinates walk-tab backend sync with live-race sync so both streams
- * never POST step progress to different endpoints at the same time.
+ * Coordinates walk-tab backend sync with live-race sync.
  *
- * Classic live races: pause POST /api/walk/steps while RaceContext owns progress.
- * Unlimited Daily Goal challenges: walk sync must remain active (never pause for them).
+ * Both streams may run together:
+ *   POST /api/walk/steps — verified daily walk (and Unlimited streak)
+ *   POST /api/races/:id/progress — classic live-race session delta
+ *
+ * Keep this pause flag false unless a caller explicitly needs a logout/switch flush.
  */
 
 let walkBackendSyncPaused = false;
 
-/** Pause POST /api/walk/steps while a classic live race is active (race progress owns sync). */
+/** Optional pause for POST /api/walk/steps (logout / account switch). Live races do not pause this. */
 export function setWalkBackendSyncPaused(paused: boolean): void {
   walkBackendSyncPaused = paused;
   if (__DEV__) {

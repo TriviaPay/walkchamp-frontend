@@ -70,12 +70,10 @@ import { useWalkContext, TrackingStatus } from "@/context/WalkContext";
 import { useWalkTodaySteps } from "@/services/walkTodayStepsStore";
 import { useStepSourceGuard } from "@/hooks/useStepSourceGuard";
 import {
-  isVerifiedHealthAuthoritative,
-} from "@/services/steps/healthConnectVerificationStateLogic";
-import {
   getHealthConnectVerificationState,
   type HealthConnectVerificationState,
 } from "@/services/steps/healthConnectVerificationState";
+import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import {
   ENABLE_CASH_CHALLENGES,
   ENABLE_LEGACY_CASH_RACE_CARDS,
@@ -109,6 +107,7 @@ import {
 } from "@/utils/walkMyRaceCards"; // keep only this import — do not redeclare locally
 import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
 import { ensureActiveRaceInStore } from "@/core/steps/stepProgressCoordinator";
+import { bindUnlimitedBackgroundTracking } from "@/features/unlimited/services/bindUnlimitedBackgroundTracking";
 import {
   resolveUnlimitedResultStatus,
   resolveUnlimitedResultCardState,
@@ -147,9 +146,9 @@ import {
   type HostPayloadMeta,
 } from "@/utils/createChallengeFlow";
 import { trackEvent } from "@/services/analytics";
-import { resolveDisplayTodaySteps } from "@/utils/liveRaceDisplay";
 import {
   isInflatedProvisionalVsVerified,
+  looksLikeSinceBootCounter,
   resolveWalkNotificationSteps,
 } from "@/platform/steps/walkDisplaySteps";
 import { useApp } from "@/context/AppContext";
@@ -2037,12 +2036,9 @@ function WalkScreenContent() {
   // Math.max's with TYPE_STEP_COUNTER since-boot leftovers (e.g. 20k+).
   // Writer sync can lag after setup; still prefer HC + stale-sensor rejection.
   const hcAuthoritative =
-    hcVerification == null ||
-    (typeof isVerifiedHealthAuthoritative === "function"
-      ? isVerifiedHealthAuthoritative(hcVerification.status)
-      : true) ||
-    (hcVerification.healthConnectAvailable === true &&
-      hcVerification.readStepsPermissionGranted === true);
+    hcVerification?.status === "ready" ||
+    hcVerification?.status === "records_zero" ||
+    stepProviderManager.usesVerifiedStepSource();
   const contextTodaySteps = useWalkTodaySteps();
   const { userRank, walletBalance, totalEarned, walletCurrency, refreshWallet } = useApp();
   const { user, logout, loading: authLoading, sessionToken } = useAuth();
@@ -2119,25 +2115,21 @@ function WalkScreenContent() {
   });
   // Prefer the same resolution as the ongoing notification so Walk cannot show a
   // poisoned sensor absolute while Profile / backend already show HC/HK.
-  const preferHcDailyDisplay =
-    hcVerification == null ||
-    hcVerification.healthConnectAvailable === true ||
-    verificationLevel === "verified";
-  const liveTodayStepsBase = preferHcDailyDisplay
-    ? resolveWalkNotificationSteps({
-        verifiedTodaySteps,
+  const accountTodayFloor = Math.max(
+    verifiedTodaySteps,
+    Math.max(0, Math.floor(dbWalk.todaySteps ?? 0)),
+  );
+  // Health Connect is the Walk number. Do not raise it with GET /api/walk/today
+  // or a leftover sensor session (HC 84 vs app 115).
+  const liveTodaySteps = stepProviderManager.usesVerifiedStepSource()
+    ? verifiedTodaySteps
+    : resolveWalkNotificationSteps({
+        verifiedTodaySteps: accountTodayFloor,
         provisionalSensorTodaySteps,
-        todaySteps: Math.max(canonicalTodaySteps, contextTodaySteps),
+        todaySteps: Math.max(canonicalTodaySteps, contextTodaySteps, accountTodayFloor),
         raceActive: walkRaceActive,
-        verifiedAuthoritative: hcAuthoritative,
-      })
-    : resolveDisplayTodaySteps(contextTodaySteps, canonicalTodaySteps);
-  // Unlimited FGS raceSteps are the same daily HC total as the streak tray.
-  // Don't leave Walk / Daily Walk at 0 while that tray shows thousands.
-  const liveTodaySteps =
-    reduxLiveRace?.raceType === "unlimited_goal"
-      ? Math.max(liveTodayStepsBase, Math.max(0, reduxLiveRace.raceSteps ?? 0))
-      : liveTodayStepsBase;
+        verifiedAuthoritative: false,
+      });
   const [purchaseConfirmModal, setPurchaseConfirmModal] = useState<{ code: string; name: string; price: number } | null>(null);
   const [showCoinsInfo, setShowCoinsInfo] = useState(false);
   const [showCoinStore, setShowCoinStore] = useState(false);
@@ -2373,16 +2365,9 @@ function WalkScreenContent() {
     walkStepsHoldRef.current = { key: walkStepsHoldKey, steps: 0 };
   }
   // Drop a held since-boot absolute once HC / resolved display is sane.
-  if (
-    walkStepsHoldRef.current.steps > 0 &&
-    isInflatedProvisionalVsVerified(
-      Math.max(verifiedTodaySteps, rawConfirmedWalkSteps),
-      walkStepsHoldRef.current.steps,
-    )
-  ) {
-    walkStepsHoldRef.current.steps = Math.max(verifiedTodaySteps, rawConfirmedWalkSteps);
-  }
-  if (rawConfirmedWalkSteps > 0) {
+  if (stepProviderManager.usesVerifiedStepSource()) {
+    walkStepsHoldRef.current.steps = verifiedTodaySteps;
+  } else if (rawConfirmedWalkSteps > 0) {
     walkStepsHoldRef.current.steps = rawConfirmedWalkSteps;
   }
   const confirmedWalkSteps =
@@ -2694,7 +2679,7 @@ function WalkScreenContent() {
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
-    const timer = setTimeout(() => {
+    const refreshHc = () => {
       void getHealthConnectVerificationState()
         .then(async (s) => {
           if (cancelled) return;
@@ -2708,12 +2693,32 @@ function WalkScreenContent() {
             Math.floor(rp.provisionalSensorTodaySteps ?? 0),
             Math.floor(rp.verifiedTodaySteps ?? 0),
           );
-          // HC empty (0) + huge Redux absolute = since-boot poison, even if
-          // verifiedTodaySteps was also corrupted to the same value.
+          // Only wipe when today equals the raw TYPE_STEP_COUNTER. HC empty after
+          // a finished race is lag — a real 2k+ daily walk must stay on Walk.
+          let nativeSensorTotal: number | null = null;
+          let nativeDailyBaseline: number | null = null;
+          try {
+            const { stepTrackingNotificationService } = await import(
+              "@/services/stepTrackingNotificationService"
+            );
+            const native = await stepTrackingNotificationService.getNativeStepState(
+              user?.id,
+            );
+            nativeSensorTotal =
+              typeof native?.sensorTotal === "number" ? native.sensorTotal : null;
+            nativeDailyBaseline =
+              typeof native?.dailyBaseline === "number" ? native.dailyBaseline : null;
+          } catch {
+            /* keep display */
+          }
           const poisoned =
             s.healthConnectAvailable &&
             s.readStepsPermissionGranted &&
-            isInflatedProvisionalVsVerified(verified, display);
+            looksLikeSinceBootCounter({
+              todaySteps: display,
+              sensorTotal: nativeSensorTotal,
+              dailyBaseline: nativeDailyBaseline,
+            });
           if (poisoned) {
             const { updateStepProgressFromRealSource } = await import(
               "@/services/stepProgressCoordinator"
@@ -2760,10 +2765,21 @@ function WalkScreenContent() {
           }
         })
         .catch(() => {});
-    }, 400);
+    };
+    const timer = setTimeout(refreshHc, 400);
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      void import("@/services/steps/androidHealthConnectService")
+        .then(({ androidHCService }) => {
+          androidHCService.invalidatePermissionCache();
+        })
+        .catch(() => {});
+      refreshHc();
+    });
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      sub.remove();
     };
   }, [user?.id]));
 
@@ -2778,17 +2794,15 @@ function WalkScreenContent() {
         verificationLevel === "verified" &&
         verifiedTodaySteps > 0 &&
         isInflatedProvisionalVsVerified(verifiedTodaySteps, liveTodaySteps);
-      const shouldApplyDisplay =
-        inflatedVsVerified ||
-        !(Number.isFinite(liveTodaySteps) && liveTodaySteps > 0);
+      const blankWalk = !(Number.isFinite(liveTodaySteps) && liveTodaySteps > 0);
+      const shouldApplyDisplay = inflatedVsVerified || blankWalk;
       await refreshTodaySteps({
         rehydrateBackend: true,
-        mergeNative: false,
+        mergeNative: blankWalk,
         applyDisplay: shouldApplyDisplay,
       });
-    } else {
-      await refetchDbWalk();
     }
+    await refetchDbWalk();
   }, [
     liveTodaySteps,
     refetchDbWalk,
@@ -2864,6 +2878,38 @@ function WalkScreenContent() {
   >("idle");
   const registeredUpcomingRoomsRef = useRef<WalkUpcomingRoom[]>([]);
   registeredUpcomingRoomsRef.current = registeredUpcomingRooms;
+
+  // Streak / Unlimited: keep counting from Walk / background. Do not wait for Live Race.
+  useEffect(() => {
+    if (!user?.id) return;
+    for (const room of registeredUpcomingRooms) {
+      if (!room.current_user_registered || !room.room_id) continue;
+      if (
+        !isUnlimitedGoalChallenge({
+          challengeType: room.challenge_type,
+          maxPlayers: room.max_players,
+        })
+      ) {
+        continue;
+      }
+      const status = (room.status ?? "").toLowerCase();
+      const isLive =
+        status === "active" ||
+        status === "starting" ||
+        status === "settling" ||
+        status === "in_progress";
+      if (!isLive) continue;
+      bindUnlimitedBackgroundTracking({
+        challengeId: room.room_id,
+        userId: user.id,
+        username: user.username ?? "Runner",
+        goalSteps: room.target_steps ?? 0,
+        timezone: room.challenge_timezone,
+        startedAt: room.scheduled_start_at,
+      });
+      break;
+    }
+  }, [registeredUpcomingRooms, user?.id, user?.username]);
 
   // Drop Next Race cards immediately on logout so stale old-user rows never linger.
   // Hydrate My Race from cache so Walk does not wait for the Live tab.
@@ -5622,11 +5668,23 @@ function WalkScreenContent() {
                     <Text style={[styles.trackingSub, { color: colors.mutedForeground }]}>
                       {hcAuthoritative && verificationLevel === "verified"
                         ? "Verified Tracking — eligible for rewards and races"
+                        : hcVerification?.status === "records_zero" ||
+                            hcVerification?.status === "sync_delayed"
+                        ? "WalkChamp is connected. Verified steps will update as Health Connect records them."
                         : "Live steps on this phone. Prize challenges need verified Health Connect data."}
                     </Text>
                     <VerifiedStepsStatusBanner
                       state={hcVerification}
                       onSetup={() => requestHomeStepSetup()}
+                      onRecheck={() => {
+                        void stepProviderManager.recheckCanonicalState();
+                        void refreshTodaySteps();
+                      }}
+                      trackingActive
+                      stepsAccessGranted={
+                        verificationLevel === "verified" ||
+                        hcVerification?.readStepsPermissionGranted === true
+                      }
                     />
                   </>
                 ) : (
@@ -5640,13 +5698,12 @@ function WalkScreenContent() {
                     </Text>
                     <Text style={[styles.trackingSub, { color: colors.mutedForeground }]}>
                       {Platform.OS === "android" && stepPermissionStatus === "unavailable" && hcAvailability === "not_supported"
-                        ? "Phone sensor tracking may be available — tap Connect to try"
-                        : Platform.OS === "android" && stepPermissionStatus === "unavailable" && hcAvailability === "not_installed"
-                          ? "Install Health Connect from Google Play, then return to grant Steps permission"
-                        : Platform.OS === "android" && stepPermissionStatus === "unavailable" && hcAvailability === "needs_update"
-                          ? "Update Health Connect from Google Play, then return to grant Steps permission"
+                        ? "Health Connect is unavailable. Live steps can still move; verified history cannot."
+                        : Platform.OS === "android" && stepPermissionStatus === "unavailable" &&
+                          (hcAvailability === "not_installed" || hcAvailability === "needs_update")
+                          ? "Update your Android system or Google Play system components to enable verified step tracking"
                           : Platform.OS === "android" && stepPermissionStatus === "unavailable"
-                            ? "Tap Connect to set up step tracking"
+                            ? "Tap Connect to set up Health Connect step access"
                             : stepPermissionStatus === "denied"
                               ? "Tap Connect to request Steps permission again in WalkChamp"
                               : "Tap Connect to allow WalkChamp to read your steps from Health Connect"}
