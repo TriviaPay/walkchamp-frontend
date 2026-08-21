@@ -2042,7 +2042,6 @@ function WalkScreenContent() {
   const contextTodaySteps = useWalkTodaySteps();
   const { userRank, walletBalance, totalEarned, walletCurrency, refreshWallet } = useApp();
   const { user, logout, loading: authLoading, sessionToken } = useAuth();
-  const cashUiAllowed = cashEligibilityForUser(user).allowed;
   /** Set before navigating to Waiting Room while a Walk pageSheet is still covering. */
   const pendingDismissRaceCoverModalsRef = useRef(false);
   /** After Waiting Room return — bypass rooms TTL so My Race / Free Challenge gate stay in sync. */
@@ -6175,8 +6174,10 @@ function WalkScreenContent() {
           );
         })}
 
-        {/* Cash Prize Challenge — directly under Coins Battle */}
-          {ENABLE_THREE_DOLLAR_CHALLENGE && cashUiAllowed && (() => {
+        {/* Cash Prize Challenge — directly under Coins Battle.
+            Visibility matches pre-audit: build flag only. Age/region still
+            enforced on join/create (handleJoinRace / create paths). */}
+          {ENABLE_THREE_DOLLAR_CHALLENGE && (() => {
             const premOpt = RACE_OPTIONS.find((o) => o.fee === 3)!;
             // Modern cash rooms use paid_usd; fall back to legacy paid_3
             const cashPriority = [
@@ -6227,6 +6228,13 @@ function WalkScreenContent() {
                   joinRace(premFeeDollars, premCs.maxPlayers, premCs.isHost);
                   navToMatchmaking({ raceId: premCs.raceId!, isHost: !!premCs.isHost });
                 }
+                return;
+              }
+
+              // New host/join — age/region gate (card itself stays visible like pre-audit).
+              const cashEl = cashEligibilityForUser(user);
+              if (!cashEl.allowed) {
+                AppAlert.alert("Cash challenges unavailable", cashUnavailableMessage(cashEl.reason));
                 return;
               }
 

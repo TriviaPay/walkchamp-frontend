@@ -13,7 +13,9 @@ export default function AccountRestrictedScreen() {
   const { insets, safeTop, safeBottom } = useSafeLayout();
   const { logout, user } = useAuth();
 
-  const isBanned = user?.accountStatus === "banned";
+  const status = String(user?.accountStatus ?? "").toLowerCase();
+  const isBanned = status === "banned";
+  const isDeleted = status === "deleted" || status === "closed";
 
   async function handleLogout() {
     await logout();
@@ -28,11 +30,13 @@ export default function AccountRestrictedScreen() {
         </View>
 
         <Text style={[styles.title, { color: colors.foreground }]}>
-          {isBanned ? "Account Banned" : "Account Suspended"}
+          {isDeleted ? "Account Closed" : isBanned ? "Account Banned" : "Account Suspended"}
         </Text>
 
         <Text style={[styles.body, { color: colors.mutedForeground }]}>
-          {isBanned
+          {isDeleted
+            ? "This WalkChamp account has been closed and can no longer be used. Contact support if you believe this is a mistake."
+            : isBanned
             ? "Your account has been permanently banned due to violations of our Terms of Service. This decision is final."
             : "Your account has been temporarily suspended pending review. This may be due to suspicious activity or a policy violation."}
         </Text>

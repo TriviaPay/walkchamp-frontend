@@ -116,7 +116,7 @@ enum WalkChampRaceLiveActivityManager {
     guard let activity = activities[raceId] else { return }
     let state = raceContentState(from: payload)
     Task {
-      await activity.update(.init(state: state, staleDate: nil))
+      await activity.update(.init(state: state, staleDate: Date().addingTimeInterval(120)))
     }
   }
 
@@ -184,7 +184,7 @@ enum WalkChampWalkLiveActivityManager {
     guard let activity else { return }
     let state = walkContentState(from: payload)
     Task {
-      await activity.update(.init(state: state, staleDate: nil))
+      await activity.update(.init(state: state, staleDate: Date().addingTimeInterval(120)))
     }
   }
 

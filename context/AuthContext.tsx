@@ -192,6 +192,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch {
         /* best-effort */
       }
+      // Release push device row while the session JWT is still valid (A10).
+      try {
+        const { unregisterDeviceWithBackend } = require(
+          "@/services/notificationService",
+        ) as typeof import("@/services/notificationService");
+        await Promise.race([
+          unregisterDeviceWithBackend(),
+          new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+        ]);
+      } catch {
+        /* best-effort */
+      }
     }
 
     // Stop authenticated API traffic as the old user immediately.
@@ -464,6 +476,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         dispatch(authActions.refreshTokenUpdated(refresh));
       }
       void scheduleProactiveTokenRefresh();
+      // Keep Android FGS race sync on the fresh JWT (A13).
+      try {
+        const uid = store.getState().auth.user?.id;
+        if (uid && newToken) {
+          const { stepTrackingNotificationService } = require(
+            "@/services/stepTrackingNotificationService",
+          ) as typeof import("@/services/stepTrackingNotificationService");
+          await stepTrackingNotificationService.updateRaceSyncCredentials({
+            userId: uid,
+            authToken: newToken,
+          });
+        }
+      } catch {
+        /* best-effort */
+      }
     });
     return () => {
       offExpired();

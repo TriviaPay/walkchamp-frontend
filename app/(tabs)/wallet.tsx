@@ -522,9 +522,16 @@ function WalletScreenContent() {
         logger.debug("WalletDeposit", "create payment success: stripe");
       } else {
         logger.debug("WalletDeposit", "create payment started: razorpay");
+        const idempotencyKey =
+          globalThis.crypto?.randomUUID?.() ??
+          `rzp-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
         const res = await authFetch("/api/wallet/deposit/razorpay/create-order", {
           method: "POST",
-          body: JSON.stringify({ amountPaise: checkoutPaise }),
+          body: JSON.stringify({
+            amountPaise: checkoutPaise,
+            idempotencyKey,
+          }),
+          headers: { "Idempotency-Key": idempotencyKey },
         });
         if (!res.ok) {
           throw new Error(await readPaymentApiError(res, "Failed to create Razorpay payment."));
@@ -551,6 +558,7 @@ function WalletScreenContent() {
       let pollStopped = false;
       let pollInterval: ReturnType<typeof setInterval> | null = null;
       let flowHandled = false;
+      let pollInFlight = false;
 
       const completeDepositUi = async (source: string, fallbackUi?: PaymentResultStatus | null) => {
         if (flowHandled) return;
@@ -576,7 +584,8 @@ function WalletScreenContent() {
       };
 
       const runPoll = async () => {
-        if (pollStopped || polledStatus || flowHandled) return;
+        if (pollStopped || polledStatus || flowHandled || pollInFlight) return;
+        pollInFlight = true;
         try {
           const s = await fetchDepositStatus(transactionId);
           if (isPollCompleteDepositStatus(s)) {
@@ -585,6 +594,8 @@ function WalletScreenContent() {
           }
         } catch {
           // ignore transient network errors, keep polling
+        } finally {
+          pollInFlight = false;
         }
       };
 

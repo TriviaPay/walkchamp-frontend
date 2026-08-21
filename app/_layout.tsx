@@ -64,8 +64,9 @@ import {
   setupNotificationClickHandler,
   setupForegroundHandler,
 } from "@/services/notificationService";
+import { startIapBootstrap, stopIapBootstrap } from "@/services/iapBootstrap";
 import { resolveDeepLink } from "@/utils/deepLinkUtils";
-import { ingestPaymentReturnUrl, getPendingDeposit, peekPaymentResult } from "@/services/depositSession";
+import { ingestPaymentReturnUrl, peekPaymentResult } from "@/services/depositSession";
 import * as Linking from "expo-linking";
 import { queryClient } from "@/services/queryClient";
 import { PushPermissionPrompt } from "@/components/PushPermissionPrompt";
@@ -378,9 +379,10 @@ function PushNotificationSetup() {
     const sub = AppState.addEventListener("change", (next) => {
       if (next !== "active") return;
       void (async () => {
-        const pending = await getPendingDeposit();
+        // Only force-nav when a terminal payment result is waiting (A8).
+        // Raw PENDING_DEPOSIT alone must not hijack every foreground for 24h.
         const stored = await peekPaymentResult();
-        if (pending || stored) {
+        if (stored) {
           navigateFromRoute("/(tabs)/wallet", { replace: true });
         }
       })();
@@ -435,10 +437,12 @@ function PushNotificationSetup() {
     const nextId = user?.id ?? null;
     if (nextId) {
       prevUserIdRef.current = nextId;
+      void startIapBootstrap(nextId).catch(() => {});
       return;
     }
     if (prevUserIdRef.current) {
       prevUserIdRef.current = null;
+      stopIapBootstrap();
       void logoutOneSignal().catch(() => {});
     }
   }, [user?.id]);

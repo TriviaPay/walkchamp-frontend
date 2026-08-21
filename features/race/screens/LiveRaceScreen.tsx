@@ -3245,9 +3245,28 @@ function LiveRaceDetailScreenContent() {
   useEffect(() => { if (!isActive) setShowReactionPicker(false); }, [isActive]);
   // Disconnect voice when race ends — never keep mic active after the race.
   useEffect(() => { if (!isActive) disconnectVoice(); }, [isActive, disconnectVoice]);
-  // Auto-connect all participants as listeners when race becomes active so
-  // everyone hears voice without needing to tap the mic button.
-  useEffect(() => { if (isActive) notifyRaceStarted(); }, [isActive, notifyRaceStarted]);
+  // Auto-connect listeners. Spectators must create a spectateSessions row before
+  // voice-token (audit A2); await that before requesting listen-only connect.
+  useEffect(() => {
+    if (!isActive || !raceId) return;
+    let cancelled = false;
+    void (async () => {
+      if (!currentParticipant) {
+        try {
+          await authFetch("/api/spectate/start", {
+            method: "POST",
+            body: JSON.stringify({ raceRoomId: raceId }),
+          });
+        } catch {
+          /* best-effort — voice may still fail closed */
+        }
+      }
+      if (!cancelled) notifyRaceStarted();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isActive, raceId, currentParticipant, notifyRaceStarted]);
   // Close all transient modals when navigating away — prevents stuck overlays.
   useFocusEffect(useCallback(() => {
     return () => {
@@ -4318,6 +4337,8 @@ function LiveRaceDetailScreenContent() {
       if (nextState !== "active") return;
       stepEngineLog("Lifecycle", "appState=active live-detail");
       void refreshTodaySteps();
+      // Re-fetch race detail so we don't keep a stale "LIVE" shell (A21).
+      void fetchDetailsOnFocusRef.current?.(true);
       if (race?.status === "completed") {
         if (!raceCompletedRef.current) {
           const me = participantsOnFocusRef.current.find(

@@ -73,7 +73,11 @@ async function apiFetch<T>(path: string): Promise<T | null> {
   }
 }
 
-async function apiPost<T>(path: string, body: unknown): Promise<T | null> {
+async function apiPost<T>(
+  path: string,
+  body: unknown,
+  extraHeaders?: Record<string, string>,
+): Promise<T | null> {
   const session = await getValidSession();
   if (!session) return null;
   const res = await fetch(`${API_BASE}${path}`, {
@@ -82,6 +86,7 @@ async function apiPost<T>(path: string, body: unknown): Promise<T | null> {
     headers: {
       Authorization: `Bearer ${session}`,
       "Content-Type": "application/json",
+      ...(extraHeaders ?? {}),
     },
     body: JSON.stringify(body),
   });
@@ -366,13 +371,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       "Gift Card": "gift_card",
     };
 
-    await apiPost("/api/wallet/withdraw", {
-      amount,
-      payoutMethod: payoutMethodMap[method] ?? method.toLowerCase().replace(/\s+/g, "_"),
-      payoutDetails: payoutDetails.email
-        ? payoutDetails
-        : { note: `${method} withdrawal requested` },
-    });
+    const idempotencyKey =
+      globalThis.crypto?.randomUUID?.() ??
+      `wd-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+
+    await apiPost(
+      "/api/wallet/withdraw",
+      {
+        amount,
+        payoutMethod: payoutMethodMap[method] ?? method.toLowerCase().replace(/\s+/g, "_"),
+        payoutDetails: payoutDetails.email
+          ? payoutDetails
+          : { note: `${method} withdrawal requested` },
+      },
+      { "Idempotency-Key": idempotencyKey },
+    );
 
     await refreshWallet();
   }, [refreshWallet]);

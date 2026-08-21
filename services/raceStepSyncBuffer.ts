@@ -40,7 +40,7 @@ class RaceStepSyncBuffer {
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryAttempt = 0;
-  private queuedFlush: { atTarget?: boolean; reason?: string } | null = null;
+  private queuedFlush: { atTarget?: boolean; force?: boolean; reason?: string } | null = null;
   private serverStuckAt = -1;
   private serverStuckRetries = 0;
   private onProgressSynced: RaceProgressSyncedHandler | null = null;
@@ -199,11 +199,13 @@ class RaceStepSyncBuffer {
     }
 
     const steps = this.pendingRaceSteps;
-    if (steps <= this.lastSentSteps && !options.atTarget) {
+    // `force` must bypass the "already sent" guard so race-end / reconnect
+    // flushes still POST (audit A5). `atTarget` keeps goal-completion semantics.
+    if (steps <= this.lastSentSteps && !options.atTarget && !options.force) {
       return true;
     }
 
-    const bypassThrottle = options.atTarget === true;
+    const bypassThrottle = options.atTarget === true || options.force === true;
     const waitMs = this.msUntilNextHttpAllowed(bypassThrottle);
     if (waitMs > 0) {
       this.scheduleDelayedFlush(waitMs, options);
@@ -213,6 +215,7 @@ class RaceStepSyncBuffer {
     if (this.inFlight) {
       this.queuedFlush = {
         atTarget: !!options.atTarget || !!this.queuedFlush?.atTarget,
+        force: !!options.force || !!this.queuedFlush?.force,
         reason: options.reason ?? this.queuedFlush?.reason,
       };
       return false;
@@ -220,7 +223,6 @@ class RaceStepSyncBuffer {
 
     this.inFlight = true;
     this.lastHttpAttemptAt = Date.now();
-    this.lastSentSteps = steps;
     const seq = ++this.syncSeq;
 
     if (__DEV__) {
@@ -240,6 +242,10 @@ class RaceStepSyncBuffer {
         this.pendingTrackingSessionId,
       );
       ok = result.ok;
+      // Only advance lastSentSteps after HTTP success so failed POSTs retry (A5).
+      if (ok) {
+        this.lastSentSteps = Math.max(this.lastSentSteps, steps);
+      }
       if (ok && this.onProgressSynced && result.rank !== undefined) {
         this.onProgressSynced({ ...result, raceId });
       }
@@ -292,6 +298,7 @@ class RaceStepSyncBuffer {
       if (queued) {
         void this.flushRaceSteps({
           atTarget: queued.atTarget,
+          force: queued.force,
           reason: queued.reason ?? "queued",
         });
       }
@@ -313,7 +320,7 @@ class RaceStepSyncBuffer {
 
   private scheduleDelayedFlush(
     delayMs: number,
-    options: { atTarget?: boolean; reason?: string },
+    options: { atTarget?: boolean; force?: boolean; reason?: string },
   ): void {
     if (this.pendingTimer) return;
     this.pendingTimer = setTimeout(() => {
