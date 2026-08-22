@@ -2,24 +2,14 @@
  * Run: npx tsx utils/accountDeletion.test.ts
  */
 import assert from "node:assert/strict";
-import {
-  deleteAccountBalanceBlockMessage,
-  messageForDeleteAccountResponse,
-} from "./accountDeletion";
+import { messageForAccountDeletionRequestResponse } from "./accountDeletion";
 
 assert.equal(
-  deleteAccountBalanceBlockMessage({ walletBalance: 0, pendingBalance: 0 }),
-  null,
+  messageForAccountDeletionRequestResponse(429),
+  "Too many requests. Please wait and try again.",
 );
-assert.ok(
-  deleteAccountBalanceBlockMessage({ walletBalance: 1.5, pendingBalance: 0 }),
-);
-assert.ok(
-  deleteAccountBalanceBlockMessage({ walletBalance: 0, pendingBalance: 2 }),
-);
-assert.ok(messageForDeleteAccountResponse(409).toLowerCase().includes("balance"));
 assert.equal(
-  messageForDeleteAccountResponse(500, { error: "nope" }),
+  messageForAccountDeletionRequestResponse(500, { error: "nope" }),
   "nope",
 );
 

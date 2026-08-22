@@ -226,8 +226,7 @@ import CoinsBattleModal from "@/components/CoinsBattleModal";
 import { screenCache } from "@/utils/screenCache";
 import {
   DELETE_ACCOUNT_WARNING,
-  deleteAccountBalanceBlockMessage,
-  messageForDeleteAccountResponse,
+  messageForAccountDeletionRequestResponse,
 } from "@/utils/accountDeletion";
 import { warmLiveRaceDetailNavigation, prefetchLiveRaceDetailRoster } from "@/utils/warmLiveRaceDetail";
 import { buildMatchmakingParams, readWaitingRoomCacheSync } from "@/utils/waitingRoomSeed";
@@ -1122,7 +1121,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
   const { refreshUserProfile, updateUser } = useAuth();
   const { beginLocalAvatarPick, applyAvatarUploadSuccess, applyAvatarRemoved } = useAvatarCache();
   const { requestStepPermission, completeStepSetup } = useWalkContext();
-  const { refreshWallet, walletBalance, pendingBalance } = useApp();
+  const { refreshWallet } = useApp();
   const ac = user?.avatarColor ?? colors.primary;
 
   // Avatar + server stats
@@ -1392,16 +1391,8 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
     setShowAvatarPicker(true); };
 
   const handleDeleteAccount = useCallback(() => {
-    const balanceBlock = deleteAccountBalanceBlockMessage({
-      walletBalance,
-      pendingBalance,
-    });
-    if (balanceBlock) {
-      AppAlert.alert("Withdraw first", balanceBlock);
-      return;
-    }
     setShowDeleteConfirm(true);
-  }, [pendingBalance, walletBalance]);
+  }, []);
 
   const dismissDeleteConfirm = useCallback((confirmed: boolean) => {
     Animated.timing(deleteConfirmOpacity, { toValue: 0, duration: 130, useNativeDriver: true }).start(() => {
@@ -1410,22 +1401,25 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
       setDeleteLoading(true);
       void (async () => {
         try {
-          const res = await authFetch("/api/me/account", { method: "DELETE" });
+          const res = await authFetch("/api/me/account/deletion-request", { method: "POST" });
           if (res.ok) {
             onClose();
-            await logout();
+            AppAlert.alert(
+              "Request Sent",
+              "Your account deletion request was emailed to admin@miragaming.com. The WalkChamp team will review it.",
+            );
           } else {
             const j = await res.json().catch(() => ({})) as { error?: string; code?: string };
-            AppAlert.alert("Cannot delete", messageForDeleteAccountResponse(res.status, j));
+            AppAlert.alert("Request Not Sent", messageForAccountDeletionRequestResponse(res.status, j));
           }
         } catch {
-          AppAlert.alert("Error", "Network error. Please try again.");
+          AppAlert.alert("Request Not Sent", "Network error. Please try again.");
         } finally {
           setDeleteLoading(false);
         }
       })();
     });
-  }, [deleteConfirmOpacity, logout, onClose]);
+  }, [deleteConfirmOpacity, onClose]);
 
   const handleLogout = () => {
     setShowSignOutConfirm(true);
@@ -1818,7 +1812,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
                   ? <ActivityIndicator size="small" color={colors.destructive} />
                   : <Feather name="trash-2" size={17} color={colors.destructive} />}
               </View>
-              <Text style={[pmStyles.toggleLabel, { color: colors.destructive, opacity: 0.8 }]}>Delete Account</Text>
+              <Text style={[pmStyles.toggleLabel, { color: colors.destructive, opacity: 0.8 }]}>Request Account Deletion</Text>
               <Feather name="chevron-right" size={16} color={colors.destructive} />
             </TouchableOpacity>
           </View>
@@ -1857,7 +1851,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
             <Pressable style={StyleSheet.absoluteFill} onPress={() => dismissDeleteConfirm(false)} />
             <Animated.View style={[soStyles.card, { backgroundColor: colors.card, borderColor: colors.border, transform: [{ scale: deleteConfirmScale }] }]}>
               <View style={soStyles.body}>
-                <Text style={[soStyles.title, { color: colors.foreground }]}>Delete Account</Text>
+                <Text style={[soStyles.title, { color: colors.foreground }]}>Request Account Deletion</Text>
                 <Text style={[soStyles.message, { color: colors.mutedForeground }]}>
                   {DELETE_ACCOUNT_WARNING}
                 </Text>
@@ -1878,7 +1872,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
                 >
                   {deleteLoading
                     ? <ActivityIndicator size="small" color="#fff" />
-                    : <Text style={[soStyles.btnText, { color: "#fff" }]}>Delete</Text>}
+                    : <Text style={[soStyles.btnText, { color: "#fff" }]}>Send Request</Text>}
                 </Pressable>
               </View>
             </Animated.View>

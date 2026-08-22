@@ -63,8 +63,7 @@ import {
 } from "@/services/mediaApi";
 import {
   DELETE_ACCOUNT_WARNING,
-  deleteAccountBalanceBlockMessage,
-  messageForDeleteAccountResponse,
+  messageForAccountDeletionRequestResponse,
 } from "@/utils/accountDeletion";
 import { screenCache } from "@/utils/screenCache";
 
@@ -403,7 +402,7 @@ function ProfileScreenContent() {
     : searchParams.openTitles;
   const { user, logout, refreshUserProfile, updateUser } = useAuth();
   const { allTimeSteps, currentStreak, weeklySteps, requestStepPermission, completeStepSetup } = useWalk();
-  const { userRank, totalEarned, walletCurrency, walletBalance, pendingBalance, refreshWallet } = useApp();
+  const { userRank, totalEarned, walletCurrency, refreshWallet } = useApp();
 
   // Profile view state — seed from cache for instant paint
   const cachedProfile = screenCache.getSync<ProfileMeResponse>(PROFILE_ME_CACHE_KEY);
@@ -848,43 +847,38 @@ function ProfileScreenContent() {
     ]); };
 
   const handleDeleteAccount = useCallback(() => {
-    const balanceBlock = deleteAccountBalanceBlockMessage({
-      walletBalance,
-      pendingBalance,
-    });
-    if (balanceBlock) {
-      AppAlert.alert("Withdraw first", balanceBlock);
-      return;
-    }
     AppAlert.alert(
-      "Delete Account",
+      "Request Account Deletion",
       DELETE_ACCOUNT_WARNING,
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Delete My Account",
+          text: "Continue",
           style: "destructive",
           onPress: () => {
             AppAlert.alert(
               "Final Confirmation",
-              "This closes your account and signs you out. It cannot be undone.",
+              "Send this deletion request to admin@miragaming.com?",
               [
                 { text: "Cancel", style: "cancel" },
                 {
-                  text: "Confirm Delete",
+                  text: "Send Request",
                   style: "destructive",
                   onPress: async () => {
                     setDeleteLoading(true);
                     try {
-                      const res = await authFetch("/api/me/account", { method: "DELETE" });
+                      const res = await authFetch("/api/me/account/deletion-request", { method: "POST" });
                       if (res.ok) {
-                        await logout();
+                        AppAlert.alert(
+                          "Request Sent",
+                          "Your account deletion request was emailed to admin@miragaming.com. The WalkChamp team will review it.",
+                        );
                       } else {
                         const j = await res.json().catch(() => ({})) as { error?: string; code?: string };
-                        AppAlert.alert("Cannot delete", messageForDeleteAccountResponse(res.status, j));
+                        AppAlert.alert("Request Not Sent", messageForAccountDeletionRequestResponse(res.status, j));
                       }
                     } catch {
-                      AppAlert.alert("Error", "Network error. Please try again.");
+                      AppAlert.alert("Request Not Sent", "Network error. Please try again.");
                     } finally {
                       setDeleteLoading(false);
                     }
@@ -896,7 +890,7 @@ function ProfileScreenContent() {
         },
       ],
     );
-  }, [logout, pendingBalance, walletBalance]);
+  }, []);
 
   // ── Edit panel translation ──────────────────────────────────────────────────
   const editTranslateY = editAnim.interpolate({ inputRange: [0, 1], outputRange: [-20, 0] });
@@ -1332,7 +1326,7 @@ function ProfileScreenContent() {
                 ? <ActivityIndicator size="small" color={colors.destructive} />
                 : <Feather name="trash-2" size={17} color={colors.destructive} />}
             </View>
-            <Text style={[styles.settingLabel, { color: colors.destructive, opacity: 0.8 }]}>Delete Account</Text>
+            <Text style={[styles.settingLabel, { color: colors.destructive, opacity: 0.8 }]}>Request Account Deletion</Text>
             <Feather name="chevron-right" size={16} color={colors.destructive} />
           </TouchableOpacity>
         </View>

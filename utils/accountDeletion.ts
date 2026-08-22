@@ -1,31 +1,12 @@
-/**
- * Client helpers for account deletion. Backend still owns purge/settlement.
- */
+/** Client copy and response handling for the reviewed account-deletion request flow. */
 
 export const DELETE_ACCOUNT_WARNING =
-  "This closes your WalkChamp account and signs you out. Withdraw any cash balance first. Payment, security, and legal records may be kept as required by law.";
+  "Send an account deletion request to the WalkChamp team? We will email the request to admin@miragaming.com for review. Your account will remain active until the request is processed.";
 
-export function deleteAccountBalanceBlockMessage(opts: {
-  walletBalance: number;
-  pendingBalance: number;
-}): string | null {
-  const available = Number(opts.walletBalance) || 0;
-  const pending = Number(opts.pendingBalance) || 0;
-  if (available > 0.009 || pending > 0.009) {
-    return "Withdraw your cash balance and wait for pending transactions to finish before deleting your account.";
-  }
-  return null;
-}
-
-export function messageForDeleteAccountResponse(
+export function messageForAccountDeletionRequestResponse(
   status: number,
   body?: { error?: string; code?: string } | null,
 ): string {
-  if (status === 409) {
-    return (
-      body?.error ??
-      "You still have a cash balance, pending withdrawal, or an active paid challenge. Resolve that first, then try again."
-    );
-  }
-  return body?.error ?? "Failed to delete account. Please contact support.";
+  if (status === 429) return "Too many requests. Please wait and try again.";
+  return body?.error ?? "We couldn't send your deletion request. Please try again.";
 }
