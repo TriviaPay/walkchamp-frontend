@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Animated,
+  BackHandler,
   Dimensions,
   Easing,
   FlatList,
@@ -15,7 +16,11 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
+import { safeGoBack } from "@/utils/safeGoBack";
+import { STREAK_ON_IMG } from "@/utils/brandImages";
+import { InrHint } from "@/components/InrHint";
+import { INR_AMOUNT_COLOR, getUsdAmountColor } from "@/utils/currencyDisplay";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -255,7 +260,7 @@ function PremiumPrizeAmount({
     <View style={cc.premiumPrizeAmountWrap}>
       <Text
         style={[cc.premiumPrizeAmount, { color, textShadowColor: `${color}80` }]}
-        numberOfLines={1}
+        numberOfLines={2}
         adjustsFontSizeToFit
         minimumFontScale={0.72}
       >
@@ -333,9 +338,12 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
           </View>
           {isCash && (
             <View style={[cc.entryFeePill, cc.cashEntryFeePill, { borderColor: CASH_BLUE, backgroundColor: CASH_BLUE + "30" }]}>
-              <View>
+              <View style={{ minWidth: 0, flexShrink: 1 }}>
                 <Text style={[cc.entryFeeLabel, { color: "#BAE6FD" }]}>Entry Fee</Text>
-                <Text style={[cc.entryFeeAmount, cc.cashEntryFeeAmount]}>${room.entry_fee.toFixed(0)}</Text>
+                <Text style={[cc.entryFeeAmount, cc.cashEntryFeeAmount, { color: getUsdAmountColor() }]}>
+                  ${room.entry_fee.toFixed(0)}
+                  <InrHint usd={room.entry_fee} color={INR_AMOUNT_COLOR} style={cc.entryFeeAmount} />
+                </Text>
               </View>
             </View>
           )}
@@ -446,10 +454,13 @@ function RoomCard({ room, onJoin, onJoinWithCode, onViewHost, joining }: RoomCar
         {isCash && (
           <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
             <Image source={require("@/assets/images/trophy-cash.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
-            <View>
+            <View style={{ minWidth: 0, flexShrink: 1 }}>
               <Text style={cc.premiumPrizeLabel}>Prize Pool</Text>
-              <PremiumPrizeAmount>
+              <PremiumPrizeAmount color={getUsdAmountColor()}>
                 {prizePoolDollars > 0 ? `$${prizePoolDollars.toFixed(0)}` : "Updates as players join"}
+                {prizePoolDollars > 0 ? (
+                  <InrHint usd={prizePoolDollars} color={INR_AMOUNT_COLOR} style={cc.premiumPrizeAmount} />
+                ) : null}
               </PremiumPrizeAmount>
             </View>
           </View>
@@ -1286,7 +1297,13 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
             (isCash || isCoins) && cc.typeBadgeHighlight,
           ]}>
             {isSponsored ? <Text style={{ fontSize: rf(9) }}>🏆</Text>
-              : isUnlimited ? <Text style={{ fontSize: rf(10), color: accent, fontWeight: "900" }}>∞</Text>
+              : isUnlimited ? (
+                <Image
+                  source={STREAK_ON_IMG}
+                  style={{ width: 12, height: 12 }}
+                  resizeMode="contain"
+                />
+              )
               : isCash ? <Feather name="dollar-sign" size={9} color={accent} />
               : isCoins ? <CoinIcon size={11} />
               : <Ionicons name="walk-outline" size={10} color={accent} />}
@@ -1311,9 +1328,12 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
           </View>
           {isCash && (
             <View style={[cc.entryFeePill, cc.cashEntryFeePill, { borderColor: CASH_BLUE, backgroundColor: CASH_BLUE + "30" }]}>
-              <View>
+              <View style={{ minWidth: 0, flexShrink: 1 }}>
                 <Text style={[cc.entryFeeLabel, { color: "#BAE6FD" }]}>Entry Fee</Text>
-                <Text style={[cc.entryFeeAmount, cc.cashEntryFeeAmount]}>${room.entry_fee.toFixed(0)}</Text>
+                <Text style={[cc.entryFeeAmount, cc.cashEntryFeeAmount, { color: getUsdAmountColor() }]}>
+                  ${room.entry_fee.toFixed(0)}
+                  <InrHint usd={room.entry_fee} color={INR_AMOUNT_COLOR} style={cc.entryFeeAmount} />
+                </Text>
               </View>
             </View>
           )}
@@ -1425,10 +1445,13 @@ const CompactScheduledRoomCard = React.memo(function CompactScheduledRoomCard({
         {isCash && (
           <View style={[cc.chip, { flexDirection: "row", alignItems: "center", gap: 4, borderColor: GOLD + "55", backgroundColor: GOLD + "12" }]}>
             <Image source={require("@/assets/images/trophy-cash.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
-            <View>
+            <View style={{ minWidth: 0, flexShrink: 1 }}>
               <Text style={cc.premiumPrizeLabel}>Prize Pool</Text>
-              <PremiumPrizeAmount>
+              <PremiumPrizeAmount color={getUsdAmountColor()}>
                 {prizePoolDollars > 0 ? `$${prizePoolDollars}` : "Updates as players join"}
+                {prizePoolDollars > 0 ? (
+                  <InrHint usd={prizePoolDollars} color={INR_AMOUNT_COLOR} style={cc.premiumPrizeAmount} />
+                ) : null}
               </PremiumPrizeAmount>
             </View>
           </View>
@@ -1574,11 +1597,11 @@ const cc = StyleSheet.create({
   coinsEntryFeePill: { minWidth: rs(112), minHeight: rs(28), paddingVertical: 4 },
   entryFeePillText: { fontSize: rf(9), fontWeight: "700" },
   entryFeeLabel: { fontSize: rf(7), lineHeight: rf(9), fontWeight: "700", textTransform: "uppercase" },
-  entryFeeAmount: { fontSize: rf(11), lineHeight: rf(13), fontWeight: "900" },
+  entryFeeAmount: { fontSize: rf(11), fontWeight: "900" },
   cashEntryFeeAmount: {
     color: "#FFFFFF",
     fontSize: rf(13),
-    lineHeight: rf(14),
+    fontWeight: "900",
     textShadowColor: GOLD + "99",
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 5,
@@ -1601,7 +1624,7 @@ const cc = StyleSheet.create({
   chip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: "#2A3550", backgroundColor: "rgba(8,11,24,0.7)" },
   chipText: { fontSize: rf(10), fontWeight: "600", color: "#BCC8E8" },
   premiumPrizeLabel: { color: GOLD, fontSize: rf(7), lineHeight: rf(9), fontWeight: "700", textTransform: "uppercase" },
-  premiumPrizeAmountWrap: { overflow: "hidden", minWidth: rs(62) },
+  premiumPrizeAmountWrap: { overflow: "visible", minWidth: rs(62), maxWidth: "100%" },
   premiumPrizeAmount: {
     fontSize: rf(13),
     lineHeight: rf(16),
@@ -1803,6 +1826,7 @@ export default function AvailableRoomsScreen() {
 }
 
 function AvailableRoomsScreenContent() {
+  const navigation = useNavigation();
   const { safeBottom, safeTop } = useSafeLayout();
   const { setActiveRace, joinRace } = useRace();
   const { user } = useAuth();
@@ -2854,19 +2878,55 @@ function AvailableRoomsScreenContent() {
     setSelectedHostId(room.host_user_id);
   }, []);
 
+  const goBackRooms = useCallback(() => {
+    if (joinWithCodeVisible) {
+      setJoinWithCodeVisible(false);
+      setPendingPrivateRegisterRoom(null);
+      return true;
+    }
+    if (currentViewAllOpen) {
+      setCurrentViewAllOpen(false);
+      return true;
+    }
+    if (consentRoom || consentUpcomingRoom) {
+      setConsentRoom(null);
+      setConsentUpcomingRoom(null);
+      return true;
+    }
+    if (selectedHostId) {
+      setSelectedHostId(null);
+      setSelectedHostData(null);
+      return true;
+    }
+    safeGoBack("/(tabs)/walk", navigation as never);
+    return true;
+  }, [
+    joinWithCodeVisible,
+    currentViewAllOpen,
+    consentRoom,
+    consentUpcomingRoom,
+    selectedHostId,
+    navigation,
+  ]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", goBackRooms);
+    return () => sub.remove();
+  }, [goBackRooms]);
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={[s.container, { flex: 1 }]} edges={["top", "left", "right", "bottom"]}>
       {/* Header */}
       <View style={s.header}>
-        <TouchableOpacity onPress={() => router.back()} style={s.headerBtn} activeOpacity={0.7}>
+        <TouchableOpacity onPress={() => goBackRooms()} style={s.headerBtn} activeOpacity={0.7}>
           <View style={s.backBtn}>
             <Feather name="arrow-left" size={20} color="#D4DCEF" />
           </View>
         </TouchableOpacity>
         <View style={s.headerCenter}>
-          <Text style={s.headerTitle}>Available Rooms</Text>
-          <Text style={s.headerSub}>{headerSubtitle}</Text>
+          <Text style={s.headerTitle} numberOfLines={2}>Available Rooms</Text>
+          <Text style={s.headerSub} numberOfLines={2}>{headerSubtitle}</Text>
         </View>
         <TouchableOpacity
           onPress={() => void refreshAll()}
@@ -2907,20 +2967,16 @@ function AvailableRoomsScreenContent() {
             onPress={() => setJoinWithCodeVisible(true)}
             activeOpacity={0.8}
           >
-            <View style={s.joinCodeIconWrap}>
-              <Feather name="key" size={16} color={PURPLE} />
-            </View>
-            <View style={s.joinCodeTexts}>
+            <View style={s.joinCodeTop}>
+              <View style={s.joinCodeIconWrap}>
+                <Feather name="key" size={16} color={PURPLE} />
+              </View>
               <Text style={s.joinCodeTitle}>Have a private room code?</Text>
             </View>
-            <TouchableOpacity
-              style={s.joinCodeBtn}
-              onPress={() => setJoinWithCodeVisible(true)}
-              activeOpacity={0.8}
-            >
+            <View style={s.joinCodeBtn}>
               <Text style={s.joinCodeBtnText}>Join with Code</Text>
               <Feather name="chevron-right" size={13} color="#FFF" />
-            </TouchableOpacity>
+            </View>
           </TouchableOpacity>
 
           {/* Current Rooms — only when at least one active room exists */}
@@ -3173,8 +3229,9 @@ const s = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 10,
+    gap: 8,
   },
-  headerBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
+  headerBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center", flexShrink: 0 },
   backBtn: {
     width: 36, height: 36, borderRadius: 12,
     backgroundColor: "#131829", borderWidth: 1, borderColor: "#1E2640",
@@ -3185,9 +3242,9 @@ const s = StyleSheet.create({
     backgroundColor: "#131829", borderWidth: 1, borderColor: "#1E2640",
     alignItems: "center", justifyContent: "center",
   },
-  headerCenter: { flex: 1, alignItems: "center" },
-  headerTitle: { fontSize: rf(18), fontWeight: "800", color: "#EAEFF8", letterSpacing: -0.3 },
-  headerSub: { fontSize: rf(12), color: "#6B7FA8", marginTop: 2 },
+  headerCenter: { flex: 1, minWidth: 0, alignItems: "center", paddingHorizontal: 4 },
+  headerTitle: { fontSize: rf(18), fontWeight: "800", color: "#EAEFF8", letterSpacing: -0.3, textAlign: "center" },
+  headerSub: { fontSize: rf(12), color: "#6B7FA8", marginTop: 2, textAlign: "center" },
 
   sectionHeader: { paddingHorizontal: rs(16), marginTop: rs(16), marginBottom: rs(8) },
   sectionTitle: { fontSize: rf(16), fontWeight: "800", color: "#D4DCEF" },
@@ -3243,9 +3300,9 @@ const s = StyleSheet.create({
 
   joinCodeBanner: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: 10,
-    marginHorizontal: 16,
     marginBottom: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -3254,26 +3311,38 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: PURPLE + "40",
   },
+  joinCodeTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 160,
+    minWidth: 0,
+  },
   joinCodeIconWrap: {
     width: 36, height: 36, borderRadius: 10,
     backgroundColor: PURPLE + "20",
     alignItems: "center", justifyContent: "center",
     flexShrink: 0,
   },
-  joinCodeTexts: { flex: 1 },
-  joinCodeTitle: { fontSize: rf(13), fontWeight: "700", color: "#D4DCEF" },
+  joinCodeTitle: { flex: 1, minWidth: 0, fontSize: rf(13), fontWeight: "700", color: "#D4DCEF" },
   joinCodeSub: { fontSize: rf(11), color: "#6B7FA8", marginTop: 1 },
   joinCodeBtn: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: 3,
     backgroundColor: PURPLE,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 10,
-    flexShrink: 0,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 140,
+    minWidth: 0,
   },
-  joinCodeBtnText: { fontSize: rf(12), fontWeight: "700", color: "#FFF" },
+  joinCodeBtnText: { flexShrink: 1, fontSize: rf(12), fontWeight: "700", color: "#FFF" },
 
   list: { paddingHorizontal: 16, paddingTop: 4 },
   listGrow: { flexGrow: 1 },

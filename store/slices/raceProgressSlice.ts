@@ -507,10 +507,21 @@ const raceProgressSlice = createSlice({
                 );
               }
             } else if (next >= prev || next >= verified) {
-              state.provisionalSensorTodaySteps = Math.max(next, verified);
-              state.provisionalSensorTodayStepsAt = ts;
-              state.todayStepsLastUpdatedAt = ts;
-              recomputeDisplayToday(state);
+              const applied = Math.max(next, verified);
+              // Same count as last accepted reading — do not bump timestamps.
+              // 1 Hz sensor polls were rewriting Redux (and re-rendering Walk)
+              // every second while the user was standing still.
+              if (
+                !isFirstProvisionalReading &&
+                state.provisionalSensorTodaySteps === applied
+              ) {
+                /* keep last timestamps */
+              } else {
+                state.provisionalSensorTodaySteps = applied;
+                state.provisionalSensorTodayStepsAt = ts;
+                state.todayStepsLastUpdatedAt = ts;
+                recomputeDisplayToday(state);
+              }
             }
           } else if (treatVerified) {
             // HC/HK is daily authority — always accept (incl. 0 after midnight) and
@@ -548,21 +559,25 @@ const raceProgressSlice = createSlice({
               state.pendingVerifiedDownward = null;
             }
             if (!deferred) {
-              state.verifiedTodaySteps = next;
-              state.verifiedTodayStepsAt = ts;
-              state.todayStepsLastUpdatedAt = ts;
-              if (stepSource && !treatStepSourceAsProvisionalOnly(stepSource)) {
-                state.stepSource = stepSource;
+              if (next === prevVerified && state.verifiedTodayStepsAt != null) {
+                // Unchanged HC/HK reread — skip timestamp churn.
+              } else {
+                state.verifiedTodaySteps = next;
+                state.verifiedTodayStepsAt = ts;
+                state.todayStepsLastUpdatedAt = ts;
+                if (stepSource && !treatStepSourceAsProvisionalOnly(stepSource)) {
+                  state.stepSource = stepSource;
+                }
+                // Walk daily follows HC/HK exactly. Drop a doubled sensor session
+                // (52 → 104) so display cannot stay ahead of Health Connect.
+                if (next > 0) {
+                  state.provisionalSensorTodaySteps = null;
+                  state.provisionalSensorTodayStepsAt = null;
+                }
+                recomputeDisplayToday(state);
               }
-              // Walk daily follows HC/HK exactly. Drop a doubled sensor session
-              // (52 → 104) so display cannot stay ahead of Health Connect.
-              if (next > 0) {
-                state.provisionalSensorTodaySteps = null;
-                state.provisionalSensorTodayStepsAt = null;
-              }
-              recomputeDisplayToday(state);
             }
-          } else if (next >= state.todaySteps) {
+          } else if (next > state.todaySteps) {
             // Legacy / unknown — display only; never promote into verified lane.
             state.todaySteps = next;
             state.todayStepsLastUpdatedAt = ts;
@@ -577,7 +592,7 @@ const raceProgressSlice = createSlice({
       ) {
         if (!isStale(ts, state.raceStepsLastUpdatedAt)) {
           const next = Math.max(0, Math.floor(raceSteps));
-          if (next >= state.raceSteps) {
+          if (next > state.raceSteps) {
             state.raceSteps = next;
             state.raceStepsLastUpdatedAt = ts;
             // Local live candidate only — verification/finalize stay separate.
@@ -591,7 +606,11 @@ const raceProgressSlice = createSlice({
         }
       }
 
-      if (stepSource && !treatStepSourceAsProvisionalOnly(stepSource)) {
+      if (
+        stepSource &&
+        !treatStepSourceAsProvisionalOnly(stepSource) &&
+        state.stepSource !== stepSource
+      ) {
         state.stepSource = stepSource;
       }
     },
@@ -684,28 +703,44 @@ const raceProgressSlice = createSlice({
       }>,
     ) {
       const syncedAt = action.payload.syncedAt ?? new Date().toISOString();
+      let changed = state.isSyncing || !!state.syncError;
       if (action.payload.raceSteps !== undefined) {
         const accepted = Math.max(0, Math.floor(action.payload.raceSteps));
-        state.raceSteps = Math.max(state.raceSteps, accepted);
-        state.backendAcceptedLiveSteps = Math.max(
-          state.backendAcceptedLiveSteps,
-          accepted,
-        );
-        // Local merge candidate only — never treat as finalized authority.
-        state.reconciledRaceSteps = Math.max(
-          state.reconciledRaceSteps,
-          state.backendAcceptedLiveSteps,
-        );
+        if (accepted > state.raceSteps) {
+          state.raceSteps = accepted;
+          changed = true;
+        }
+        if (accepted > state.backendAcceptedLiveSteps) {
+          state.backendAcceptedLiveSteps = accepted;
+          changed = true;
+        }
+        const reconciled = Math.max(state.reconciledRaceSteps, state.backendAcceptedLiveSteps);
+        if (reconciled !== state.reconciledRaceSteps) {
+          state.reconciledRaceSteps = reconciled;
+          changed = true;
+        }
       }
-      if (action.payload.rank !== undefined) state.rank = action.payload.rank;
-      if (action.payload.totalParticipants !== undefined) {
+      if (action.payload.rank !== undefined && action.payload.rank !== state.rank) {
+        state.rank = action.payload.rank;
+        changed = true;
+      }
+      if (
+        action.payload.totalParticipants !== undefined &&
+        action.payload.totalParticipants !== state.totalParticipants
+      ) {
         state.totalParticipants = action.payload.totalParticipants;
+        changed = true;
       }
-      if (action.payload.goalSteps !== undefined) {
+      if (action.payload.goalSteps !== undefined && action.payload.goalSteps !== state.goalSteps) {
         state.goalSteps = action.payload.goalSteps;
+        changed = true;
       }
-      if (action.payload.timeLeftSeconds !== undefined) {
+      if (
+        action.payload.timeLeftSeconds !== undefined &&
+        action.payload.timeLeftSeconds !== state.timeLeftSeconds
+      ) {
         state.timeLeftSeconds = action.payload.timeLeftSeconds;
+        changed = true;
       }
       const incomingEnd = action.payload.challengeEndAt;
       if (incomingEnd != null && incomingEnd !== "") {
@@ -713,20 +748,25 @@ const raceProgressSlice = createSlice({
           typeof incomingEnd === "number"
             ? new Date(incomingEnd).toISOString()
             : String(incomingEnd);
-        if (!Number.isNaN(new Date(endIso).getTime())) {
+        if (!Number.isNaN(new Date(endIso).getTime()) && state.challengeEndAt !== endIso) {
           state.challengeEndAt = endIso;
+          changed = true;
         }
       }
-      if (action.payload.isSponsored === true) {
+      if (action.payload.isSponsored === true && !state.activeRaceIsSponsored) {
         state.activeRaceIsSponsored = true;
+        changed = true;
       }
       const incomingType = String(action.payload.raceType ?? "").trim().toLowerCase();
-      if (incomingType) {
+      if (incomingType && incomingType !== state.activeRaceType) {
         state.activeRaceType = incomingType;
+        changed = true;
       }
-      state.lastBackendSyncedAt = syncedAt;
-      state.isSyncing = false;
-      state.syncError = null;
+      if (changed) {
+        state.lastBackendSyncedAt = syncedAt;
+        state.isSyncing = false;
+        state.syncError = null;
+      }
       if (__DEV__) {
         console.log(
           `[RaceSync] response rank=${state.rank} total=${state.totalParticipants} raceSteps=${state.raceSteps}`,
@@ -736,7 +776,9 @@ const raceProgressSlice = createSlice({
 
     setWalkRaceStepsDisplay(state, action: PayloadAction<number>) {
       const safe = Math.max(0, Math.floor(action.payload));
-      if (safe > 0) state.walkRaceStepsDisplay = safe;
+      if (safe > 0 && state.walkRaceStepsDisplay !== safe) {
+        state.walkRaceStepsDisplay = safe;
+      }
     },
 
     setDailyGoal(state, action: PayloadAction<number>) {

@@ -36,6 +36,7 @@ import { cashUnavailableMessage } from "@/utils/cashEligibility";
 import { isPaymentsLiveMode } from "@/config/env";
 import { formatCurrency, formatWalletAmount } from "@/utils/format";
 import { InrHint } from "@/components/InrHint";
+import { INR_AMOUNT_COLOR, getUsdAmountColor } from "@/utils/currencyDisplay";
 import { rf, rs } from "@/utils/responsive";
 import type { WalletTransaction } from "@/utils/mockData";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
@@ -55,6 +56,7 @@ import {
   type PaymentResultStatus,
 } from "@/services/depositSession";
 import { ledgerTypeLabel } from "@/utils/walletLedger";
+import { displayCashChallengeCopy } from "@/utils/challengeDisplayNames";
 import { readPaymentApiError } from "@/utils/paymentApiErrors";
 import { logger } from "@/utils/logger";
 
@@ -73,7 +75,7 @@ const REFERRAL_ART = require("../../assets/images/referal.png");
 const EARN_CARDS = [
   {
     icon: "flag" as const,
-    title: "Cash Challenges",
+    title: "Top finishers Challenge",
     reward: "Win Cash Prizes",
     sub: "Finish Top 3 to win your share of the prize pool.",
     color: "#00E676",
@@ -95,7 +97,7 @@ const EARN_CARDS = [
     icon: "users" as const,
     title: "Referral",
     reward: "Both Get $3",
-    sub: "Invite friends. They join a Cash Challenge—you both earn $3.",
+    sub: "Invite friends. They join a Top finishers Challenge—you both earn $3.",
     color: "#00B4FF",
     fullWidth: true,
     glow: "center" as const,
@@ -168,7 +170,7 @@ function TransactionRow({
           style={[styles.txDesc, { color: colors.foreground }]}
           numberOfLines={1}
         >
-          {tx.description}
+          {displayCashChallengeCopy(tx.description)}
         </Text>
         {typeBadge ? (
           <Text style={[styles.txLedgerBadge, { color: colors.mutedForeground }]}>
@@ -684,7 +686,7 @@ function WalletScreenContent() {
           <Text style={[styles.balanceSectionLabel, { color: colors.mutedForeground }]}>
             Available Balance · {displayCurrency}
           </Text>
-          <Text style={[styles.balanceBig, { color: colors.foreground }]}>
+          <Text style={[styles.balanceBig, { color: displayCurrency === "INR" ? INR_AMOUNT_COLOR : getUsdAmountColor() }]}>
             {formatWalletAmount(availableBalance, displayCurrency)}
             {displayCurrency !== "INR" ? (
               <InrHint usd={availableBalance} style={styles.balanceBig} />
@@ -722,7 +724,7 @@ function WalletScreenContent() {
               <Text style={[styles.balanceColLabel, { color: colors.mutedForeground }]}>
                 Total Earned
               </Text>
-              <Text style={[styles.balanceColValue, { color: colors.gold }]}>
+              <Text style={[styles.balanceColValue, { color: displayCurrency === "INR" ? INR_AMOUNT_COLOR : getUsdAmountColor() }]}>
                 {formatWalletAmount(totalEarned, displayCurrency)}
                 {displayCurrency !== "INR" ? (
                   <InrHint usd={totalEarned} style={styles.balanceColValue} />

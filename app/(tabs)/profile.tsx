@@ -57,6 +57,12 @@ import { useAvatarCache, PROFILE_ME_CACHE_KEY } from "@/hooks/useAvatarCache";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
+import { ChallengeParticipationBreakdownCard } from "@/components/ChallengeParticipationBreakdownCard";
+import { useInvalidateProfileOnChallengeStart } from "@/hooks/useInvalidateProfileOnChallengeStart";
+import {
+  applyIncomingBreakdown,
+  type ChallengeParticipationBreakdown,
+} from "@/utils/challengeParticipationBreakdown";
 import {
   deleteProfileAvatar,
   uploadProfileAvatar,
@@ -92,7 +98,9 @@ interface ServerStats {
   allTimeSteps: number;
   dayStreak: number;
   dailyRank: number | null;
-  coinsEarned: number; }
+  coinsEarned: number;
+  challengeParticipationBreakdown?: ChallengeParticipationBreakdown;
+}
 
 interface ChallengeHistoryItem {
   id: string;
@@ -194,9 +202,15 @@ function applyProfileMeData(
     setChallengeHistory: (v: ChallengeHistoryItem[]) => void;
     setLast7Days: (v: { date: string; steps: number }[]) => void;
     setStepSourceInfo: React.Dispatch<React.SetStateAction<StepSourceInfo | null>>;
+    setChallengeParticipationBreakdown: React.Dispatch<
+      React.SetStateAction<ChallengeParticipationBreakdown | undefined>
+    >;
   },
 ): void {
   if (data.stats) setters.setServerStats(data.stats);
+  setters.setChallengeParticipationBreakdown((prev) =>
+    applyIncomingBreakdown(data.stats, prev),
+  );
   setters.setActiveTitle(data.activeTitle);
   if (data.challengeHistory.length > 0) setters.setChallengeHistory(data.challengeHistory);
   if (data.last7Days.length > 0) setters.setLast7Days(data.last7Days);
@@ -420,6 +434,10 @@ function ProfileScreenContent() {
   const [challengeHistory,  setChallengeHistory]  = useState<ChallengeHistoryItem[]>(cachedProfile?.challengeHistory ?? []);
   const [last7Days,         setLast7Days]         = useState<{ date: string; steps: number }[]>(cachedProfile?.last7Days ?? []);
   const [stepSourceInfo,    setStepSourceInfo]    = useState<StepSourceInfo | null>(cachedProfile?.stepSource ?? null);
+  const [challengeParticipationBreakdown, setChallengeParticipationBreakdown] = useState<
+    ChallengeParticipationBreakdown | undefined
+  >(() => applyIncomingBreakdown(cachedProfile?.stats, undefined));
+  const [profileMeReady, setProfileMeReady] = useState(!!cachedProfile);
   const [showWearableSetup, setShowWearableSetup] = useState(false);
   const [deleteLoading,     setDeleteLoading]     = useState(false);
 
@@ -665,6 +683,7 @@ function ProfileScreenContent() {
     setChallengeHistory,
     setLast7Days,
     setStepSourceInfo,
+    setChallengeParticipationBreakdown,
   });
   profileSetters.current = {
     setServerStats,
@@ -672,7 +691,23 @@ function ProfileScreenContent() {
     setChallengeHistory,
     setLast7Days,
     setStepSourceInfo,
+    setChallengeParticipationBreakdown,
   };
+
+  const refreshProfileMeOnce = useCallback(() => {
+    if (!apiFetchAllowed("profile_me_full", PROFILE_ME_TTL_MS, { force: true })) return;
+    markApiFetched("profile_me_full");
+    void (async () => {
+      const profileData = await fetchProfileMeFull();
+      if (profileData) {
+        applyProfileMeData(profileData, profileSetters.current);
+        void screenCache.set(PROFILE_ME_CACHE_KEY, profileData);
+      }
+      setProfileMeReady(true);
+    })();
+  }, []);
+
+  useInvalidateProfileOnChallengeStart(refreshProfileMeOnce);
 
   useFocusEffect(
     useCallback(() => {
@@ -688,7 +723,10 @@ function ProfileScreenContent() {
             applyProfileMeData(profileData, profileSetters.current);
             void screenCache.set(PROFILE_ME_CACHE_KEY, profileData);
           }
+          setProfileMeReady(true);
         })();
+      } else {
+        setProfileMeReady(true);
       }
 
       void refreshWallet({ silent: true });
@@ -1125,21 +1163,25 @@ function ProfileScreenContent() {
           </View>
           <View style={[styles.statCard3, { backgroundColor: colors.card, borderColor: "#FFD70030" }]}>
             {walletCurrency === "INR" ? (
-              <Text style={[styles.statCard3Num, { color: "#FFD700" }]}>
+              <Text style={[styles.statCard3Num, { color: "#FBBF24" }]}>
                 {formatWalletAmount(totalEarned, walletCurrency)}
               </Text>
             ) : (
               <UsdAmountWithInr
                 usd={totalEarned}
                 label={formatWalletAmount(totalEarned, walletCurrency)}
-                style={[styles.statCard3Num, { color: "#FFD700" }]}
-                color="#FFD700"
+                style={styles.statCard3Num}
                 align="center"
               />
             )}
             <Text style={[styles.statCard3Label, { color: colors.mutedForeground }]}>Total Earnings</Text>
           </View>
         </View>
+
+        <ChallengeParticipationBreakdownCard
+          breakdown={challengeParticipationBreakdown}
+          loading={!profileMeReady && challengeParticipationBreakdown === undefined}
+        />
 
         {/* ── Wearable Setup ── */}
         <WearableStatusCard
@@ -1183,6 +1225,40 @@ function ProfileScreenContent() {
         {/* ── Preferences ── */}
         <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Preferences</Text>
         <View style={[styles.settingsList, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <TouchableOpacity
+            style={[styles.settingRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
+            onPress={() => router.push("/profile/invite-friends")}
+            accessibilityRole="button"
+            accessibilityLabel="Invite friends"
+          >
+            <View style={[styles.settingIcon, { backgroundColor: colors.gold + "15" }]}>
+              <Feather name="gift" size={17} color={colors.gold} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[styles.settingLabel, { color: colors.foreground }]}>Refer & Earn</Text>
+              <Text style={[styles.settingSubtitle, { color: colors.mutedForeground }]} numberOfLines={2}>
+                {user?.referralCode ? `Code: ${user.referralCode}` : "Invite friends and earn rewards"}
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.settingRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
+            onPress={() => router.push("/profile/dashboard" as never)}
+            accessibilityRole="button"
+            accessibilityLabel="New dashboard"
+          >
+            <View style={[styles.settingIcon, { backgroundColor: colors.primary + "15" }]}>
+              <Feather name="bar-chart-2" size={17} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[styles.settingLabel, { color: colors.foreground }]}>New dashboard</Text>
+              <Text style={[styles.settingSubtitle, { color: colors.mutedForeground }]} numberOfLines={2}>
+                Challenge participation breakdown
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
           <View style={[styles.settingRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
             <View style={[styles.settingIcon, { backgroundColor: colors.accent + "15" }]}>
               <Feather name="smartphone" size={17} color={colors.accent} />
@@ -1246,7 +1322,7 @@ function ProfileScreenContent() {
         {/* ── Wallet & Rewards ── */}
         <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Wallet & Rewards</Text>
         <View style={[styles.settingsList, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <TouchableOpacity style={[styles.settingRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
+          <TouchableOpacity style={[styles.settingRow]}
             onPress={() => router.push("/(tabs)/wallet")}
           >
             <View style={[styles.settingIcon, { backgroundColor: "#FFD70015" }]}>
@@ -1256,20 +1332,6 @@ function ProfileScreenContent() {
               <Text style={[styles.settingLabel, { color: colors.foreground }]}>My Wallet</Text>
               <Text style={[styles.settingSubtitle, { color: colors.mutedForeground }]}>
                 Balance: {coinData ? `${coinData.currentBalance.toLocaleString()} coins` : "—"}
-              </Text>
-            </View>
-            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.settingRow]}
-            onPress={() => router.push("/profile/invite-friends")}
-          >
-            <View style={[styles.settingIcon, { backgroundColor: colors.gold + "15" }]}>
-              <Feather name="gift" size={17} color={colors.gold} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.settingLabel, { color: colors.foreground }]}>Refer & Earn</Text>
-              <Text style={[styles.settingSubtitle, { color: colors.mutedForeground }]}>
-                {user?.referralCode ? `Code: ${user.referralCode}` : "Invite friends and earn rewards"}
               </Text>
             </View>
             <Feather name="chevron-right" size={16} color={colors.mutedForeground} />

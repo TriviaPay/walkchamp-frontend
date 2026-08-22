@@ -66,7 +66,6 @@ export function CashChallengePaymentBreakdown({
                 usd={entryFeeDollars ?? 0}
                 label={formatUsdFromDollars(entryFeeDollars)}
                 style={styles.value}
-                color={colors.foreground}
               />
             </View>
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
@@ -183,7 +182,6 @@ export function CashChallengePaymentBreakdown({
                 styles.value,
                 row.label === "Total Payable" && styles.total,
               ]}
-              color={row.accent ? colors.primary : colors.foreground}
             />
           </View>
         </View>
@@ -223,7 +221,6 @@ export function CashChallengeRewardSplit({
             usd={slot.amount}
             label={formatUsdFromDollars(slot.amount)}
             style={{ fontWeight: "900", fontSize: rf(14) }}
-            color={colors.primary}
           />
         </View>
       ))}
@@ -301,13 +298,6 @@ export function CashChallengeRefundBreakdown({
                 styles.value,
                 row.label === "Refund to Wallet" && styles.total,
               ]}
-              color={
-                row.label === "Refund to Wallet"
-                  ? colors.success ?? colors.primary
-                  : row.accent
-                    ? colors.primary
-                    : colors.foreground
-              }
             />
           </View>
         </View>
@@ -327,9 +317,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   loadingRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8 },
-  row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6 },
-  label: { fontSize: rf(13), flex: 1, paddingRight: 8 },
-  value: { fontSize: rf(14), fontWeight: "600" },
+  row: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", paddingVertical: 6, gap: 8 },
+  label: { fontSize: rf(13), flex: 1, minWidth: 0, paddingRight: 8 },
+  value: { fontSize: rf(14), fontWeight: "600", flexShrink: 1, maxWidth: "55%" },
   total: { fontSize: rf(16), fontWeight: "800" },
   divider: { height: 1 },
   insufficient: { marginTop: 10, fontSize: rf(12), fontWeight: "600" },

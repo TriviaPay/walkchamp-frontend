@@ -34,7 +34,9 @@ const walkSlice = createSlice({
       state.trackingStatus = action.payload;
     },
     setTodaySteps(state, action: PayloadAction<number>) {
-      state.todaySteps = action.payload;
+      const next = Math.max(0, Math.floor(action.payload));
+      if (state.todaySteps === next) return;
+      state.todaySteps = next;
     },
     setWeeklySteps(state, action: PayloadAction<number>) {
       state.weeklySteps = action.payload;

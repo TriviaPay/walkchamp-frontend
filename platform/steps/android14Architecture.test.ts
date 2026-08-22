@@ -223,14 +223,18 @@ assert.equal(
   };
   const buildProps = (appJson.expo.plugins as unknown[]).find(
     (entry) => Array.isArray(entry) && entry[0] === "expo-build-properties",
-  ) as [string, { android?: Record<string, number> }] | undefined;
+  ) as [string, { android?: Record<string, number | boolean | string> }] | undefined;
   const androidProps = buildProps?.[1]?.android ?? {};
   assert.equal(androidProps.minSdkVersion, 34);
   assert.equal(androidProps.compileSdkVersion, 36);
   assert.equal(androidProps.targetSdkVersion, 36);
+  assert.equal(androidProps.enableMinifyInReleaseBuilds, true);
+  assert.equal(androidProps.enableShrinkResourcesInReleaseBuilds, true);
   assert.match(gradleProps, /android\.minSdkVersion=34/);
   assert.match(gradleProps, /android\.compileSdkVersion=36/);
   assert.match(gradleProps, /android\.targetSdkVersion=36/);
+  assert.match(gradleProps, /android\.enableMinifyInReleaseBuilds=true/);
+  assert.match(gradleProps, /android\.enableShrinkResourcesInReleaseBuilds=true/);
 }
 
 console.log("android14Architecture: all tests passed");

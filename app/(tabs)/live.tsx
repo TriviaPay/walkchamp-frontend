@@ -63,7 +63,7 @@ import {
   isRecentlyLeftRaceId,
 } from "@/utils/challengeLocalEvents";
 import { isUserParticipatingInRace } from "@/utils/liveRaceParticipation";
-import { appendInrHint } from "@/utils/currencyDisplay";
+import { UsdAmountWithInr } from "@/components/InrHint";
 
 export { isUserParticipatingInRace } from "@/utils/liveRaceParticipation";
 
@@ -97,7 +97,7 @@ const FILTERS = [
   "My Races",
   "Free",
   "Coins Battle",
-  "Cash Challenges",
+  "Top finishers Challenge",
   "Streak Challenges",
   "Sponsored Events",
 ] as const;
@@ -285,13 +285,14 @@ function filterToParam(filter: FilterType): string {
   if (filter === "Streak Challenges") return "all";
   if (filter === "Free") return "free";
   if (filter === "Coins Battle") return "coins_battle";
-  if (filter === "Cash Challenges") return "cash_challenges";
+  // UI chip is "Top finishers Challenge"; backend still filters classic cash (paid_usd).
+  if (filter === "Top finishers Challenge") return "cash";
   if (filter === "Sponsored Events") return "sponsored";
   return "all";
 }
 
 function applyChipFilter(races: LiveRace[], filter: FilterType): LiveRace[] {
-  if (filter === "Cash Challenges") return races.filter(isCashChallengeRace);
+  if (filter === "Top finishers Challenge") return races.filter(isCashChallengeRace);
   if (filter === "Streak Challenges") return races.filter(isUnlimitedChallengeRace);
   if (filter === "Sponsored Events") {
     return races.filter((r) => r.type === "sponsored" && !isUnlimitedChallengeRace(r));
@@ -323,7 +324,7 @@ function racesVisibleOnTab(
   let visible: LiveRace[];
   if (filter === "Streak Challenges") visible = races.filter(isUnlimitedChallengeRace);
   else if (filter === "All" || filter === "My Races") visible = races;
-  else if (filter === "Cash Challenges") visible = races.filter(isCashChallengeRace);
+  else if (filter === "Top finishers Challenge") visible = races.filter(isCashChallengeRace);
   else if (filter === "Sponsored Events") {
     visible = races.filter((r) => r.type === "sponsored" && !isUnlimitedChallengeRace(r));
   } else {
@@ -1020,17 +1021,14 @@ function RaceCardBase({
   const isCash = !isUnlimited && isCashChallengeRace(race);
   const cashBadgeLabel =
     typeof race.entryAmountCents === "number" && race.entryAmountCents > 0
-      ? appendInrHint(
-          race.entryAmountCents / 100,
-          `$${
-            race.entryAmountCents % 100 === 0
-              ? (race.entryAmountCents / 100).toFixed(0)
-              : (race.entryAmountCents / 100).toFixed(2)
-          }`,
-        )
+      ? `$${
+          race.entryAmountCents % 100 === 0
+            ? (race.entryAmountCents / 100).toFixed(0)
+            : (race.entryAmountCents / 100).toFixed(2)
+        }`
       : race.entryType && /^\$\d/.test(race.entryType)
         ? race.entryType
-        : "Cash";
+        : "Top finishers";
   const entryBadgeLabel = isSponsored
     ? "🏆 Sponsored"
     : isCoinsBattle
@@ -1061,11 +1059,21 @@ function RaceCardBase({
   })().slice(0, 3);
 
   // For sponsored events use the actual prize pool; coins battles use coin pool; paid races use 70% winners pool
-  const prizePoolDisplay = isSponsored && race.prizePoolCents > 0
-    ? `${appendInrHint(race.prizePoolCents / 100, `$${(race.prizePoolCents / 100).toFixed(0)}`)} pool`
-    : isCoinsBattle && race.coinEntryAmount > 0
+  const cashPrizeUsd =
+    isSponsored && race.prizePoolCents > 0
+      ? race.prizePoolCents / 100
+      : !isCoinsBattle && race.prizePool > 0
+        ? race.prizePool
+        : !isCoinsBattle && race.prizePoolCents > 0
+          ? race.prizePoolCents / 100
+          : null;
+  const cashPrizeLabel =
+    cashPrizeUsd != null && cashPrizeUsd > 0
+      ? `$${cashPrizeUsd % 1 === 0 ? cashPrizeUsd.toFixed(0) : cashPrizeUsd.toFixed(2)}`
+      : null;
+  const prizePoolDisplay = isCoinsBattle && race.coinEntryAmount > 0
     ? `${(race.coinEntryAmount * race.playerCount).toLocaleString()} coins`
-    : race.prizePool > 0 ? appendInrHint(race.prizePool, `$${race.prizePool.toFixed(2)}`) : null;
+    : cashPrizeLabel;
   const elapsedLabel = "Elapsed";
   const finishedStartEnd = isFinished
     ? formatFinishedStartEnd(
@@ -1094,7 +1102,7 @@ function RaceCardBase({
   const totalFreeCoins = freeRaceCoinPrizePool(race.playerCount, race.targetSteps);
   // Single reward block beside the challenge heading (all types, live + finished).
   // Never also show Prize Pool in the stats row or footer — that duplicated it next to Started/Ended.
-  const headingReward: { kind: "coins" | "text"; value: string | number; sub?: string } | null =
+  const headingReward: { kind: "coins" | "text" | "cash"; value: string | number; sub?: string; usd?: number } | null =
     !isSponsored && !isUnlimited && race.entryType === "Free" && totalFreeCoins > 0
       ? { kind: "coins", value: totalFreeCoins, sub: "coins total" }
       : isCoinsBattle && race.coinEntryAmount > 0
@@ -1102,9 +1110,11 @@ function RaceCardBase({
             kind: "text",
             value: `${(race.coinEntryAmount * Math.max(1, race.playerCount)).toLocaleString()} coins`,
           }
-        : prizePoolDisplay
-          ? { kind: "text", value: prizePoolDisplay.replace(/\s*pool$/i, "").trim() }
-          : null;
+        : cashPrizeLabel && cashPrizeUsd != null
+          ? { kind: "cash", value: cashPrizeLabel, usd: cashPrizeUsd }
+          : prizePoolDisplay
+            ? { kind: "text", value: prizePoolDisplay.replace(/\s*pool$/i, "").trim() }
+            : null;
 
   return (
     <View
@@ -1200,6 +1210,13 @@ function RaceCardBase({
                       </Text>
                     ) : null}
                   </>
+                ) : headingReward.kind === "cash" ? (
+                  <UsdAmountWithInr
+                    usd={headingReward.usd ?? 0}
+                    label={String(headingReward.value)}
+                    style={st.winnerPrize}
+                    align="flex-end"
+                  />
                 ) : (
                   <Text style={st.winnerPrize}>{headingReward.value}</Text>
                 )}
@@ -1658,7 +1675,7 @@ export default function LiveTab() {
   const { user } = useAuth();
   const cashUiAllowed = cashEligibilityForUser(user).allowed;
   const visibleFilters = useMemo(
-    () => (cashUiAllowed ? FILTERS : FILTERS.filter((f) => f !== "Cash Challenges")),
+    () => (cashUiAllowed ? FILTERS : FILTERS.filter((f) => f !== "Top finishers Challenge")),
     [cashUiAllowed],
   );
   const visibleOnTab = useCallback(
@@ -1669,7 +1686,7 @@ export default function LiveTab() {
   const tabBarHeight = useTabBarHeight();
   const [activeFilter, setActiveFilter] = useState<FilterType>("All");
   useEffect(() => {
-    if (!cashUiAllowed && activeFilter === "Cash Challenges") {
+    if (!cashUiAllowed && activeFilter === "Top finishers Challenge") {
       setActiveFilter("All");
     }
   }, [activeFilter, cashUiAllowed]);
@@ -2523,15 +2540,15 @@ export default function LiveTab() {
             <>
               <Feather name="zap-off" size={32} color={colors.mutedForeground} />
               <Text style={[st.emptyText, { color: colors.mutedForeground }]}>
-                {activeFilter === "Cash Challenges"
-                  ? "No cash challenges available right now."
+                {activeFilter === "Top finishers Challenge"
+                  ? "No Top finishers Challenges available right now."
                   : activeFilter === "Streak Challenges"
                     ? "No Streak Challenges right now."
                     : "No races found."}
               </Text>
-              {activeFilter === "Cash Challenges" && (
+              {activeFilter === "Top finishers Challenge" && (
                 <Text style={[st.emptySubText, { color: colors.mutedForeground }]}>
-                  Host or join a cash challenge when one becomes available.
+                  Host or join a Top finishers Challenge when one becomes available.
                 </Text>
               )}
               {activeFilter === "Streak Challenges" && (
@@ -2658,7 +2675,7 @@ const st = StyleSheet.create({
   dateDay:          { fontSize: rf(16), fontWeight: "900", color: "#FFFFFF", lineHeight: 18 },
 
   // Reward beside challenge heading
-  winnerBlock:      { alignItems: "flex-end", flexShrink: 0, maxWidth: "42%" },
+  winnerBlock:      { alignItems: "flex-end", flexShrink: 1, minWidth: 0, maxWidth: "48%" },
   winnerLabel:      { fontSize: rf(9), fontWeight: "900", letterSpacing: 0.8, textTransform: "uppercase" },
   winnerCoinRow:    { flexDirection: "row", alignItems: "center", gap: 3, marginTop: 2 },
   winnerCoinNum:    { fontSize: rf(16), fontWeight: "900", color: "#FFD700" },

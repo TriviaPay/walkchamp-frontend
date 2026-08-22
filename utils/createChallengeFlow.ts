@@ -80,7 +80,7 @@ export function usdFixedEntryDollarsToCents(dollars: number): number {
 
 /** Dynamic challenge title for confirm / host surfaces. */
 export function formatUsdFixedCashChallengeLabel(dollars: number): string {
-  return `$${clampUsdFixedEntryDollars(dollars)} Cash Challenge`;
+  return `$${clampUsdFixedEntryDollars(dollars)} Top finishers Challenge`;
 }
 
 export const COINS_ENTRY_AMOUNTS = [
@@ -925,7 +925,7 @@ export function inlineRulePreview(draft: CreateChallengeDraft): {
   }
   const split = getFixedWinnerSplit(draft.fixed.maxPlayers);
   return {
-    title: "Fixed Cash Challenge",
+    title: "Top finishers Challenge",
     lines: [
       `${draft.fixed.maxPlayers} players`,
       `$${draft.fixed.usdAmountDollars} entry`,

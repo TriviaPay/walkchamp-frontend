@@ -8,6 +8,18 @@
 import { store } from "@/store";
 import { getUsdToInrRateSync } from "@/utils/fxRate";
 
+/** USD cash amounts for Indian accounts — blue. */
+export const USD_AMOUNT_COLOR = "#38BDF8";
+/** USD cash amounts for non-Indian accounts — yellow only (no rupee hint). */
+export const USD_AMOUNT_COLOR_NON_INDIA = "#FBBF24";
+/** Indian rupee conversion hint — yellow. */
+export const INR_AMOUNT_COLOR = "#FBBF24";
+
+/** Dollar amount color: blue for Indian accounts, yellow for everyone else. */
+export function getUsdAmountColor(): string {
+  return isCurrentUserIndian() ? USD_AMOUNT_COLOR : USD_AMOUNT_COLOR_NON_INDIA;
+}
+
 export interface MinimalUserForCurrency {
   countryCode?: string | null;
   country?: string | null;
@@ -17,7 +29,14 @@ export function isIndiaUser(user?: MinimalUserForCurrency | null): boolean {
   if (!user) return false;
   const code = (user.countryCode ?? "").trim().toUpperCase();
   const country = (user.country ?? "").trim().toLowerCase();
-  return code === "IN" || country === "india" || country === "in";
+  return (
+    code === "IN" ||
+    code === "IND" ||
+    code === "INDIA" ||
+    country === "india" ||
+    country === "in" ||
+    country === "ind"
+  );
 }
 
 /** True when the *current signed-in* user is Indian, read straight from the Redux store. */

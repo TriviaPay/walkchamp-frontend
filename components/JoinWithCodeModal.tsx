@@ -304,7 +304,7 @@ export default function JoinWithCodeModal({
 
             {/* Room summary */}
             <View style={[styles.summaryBox, { backgroundColor: colors.background, borderColor: colors.border }]}>
-              <SummaryRow label="Challenge" value="Private Cash Challenge" colors={colors} />
+              <SummaryRow label="Challenge" value="Private Top finishers Challenge" colors={colors} />
               <SummaryRow
                 label="Entry Fee"
                 value={`$${((roomPreview?.entryAmountCents ?? 0) / 100).toFixed(2)}`}

@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AppState, InteractionManager, type AppStateStatus } from "react-native";
 import { type LeaderboardUser, type WalletTransaction } from "@/utils/mockData";
 import { formatWalletTransactionDate, mapLedgerTypeToUi } from "@/utils/walletLedger";
+import { displayCashChallengeCopy } from "@/utils/challengeDisplayNames";
 import {
   clearCachedWallet,
   loadCachedWalletBalance,
@@ -119,7 +120,7 @@ function mapApiTransaction(tx: Record<string, unknown>): WalletTransaction {
     id: String(tx.id ?? ""),
     type: uiType,
     amount: Number(tx.amount ?? 0),
-    description: String(tx.description ?? ""),
+    description: displayCashChallengeCopy(String(tx.description ?? "")),
     date: formatWalletTransactionDate(dateIso),
     status,
     ledgerType,

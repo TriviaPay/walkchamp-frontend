@@ -23,7 +23,7 @@ export function getSafeTop(insetsTop: number): number {
  * to initialWindowMetrics, then a conservative Android minimum (48 px).
  */
 export function getSafeBottom(insetsBottom: number): number {
-  const androidMin = 48;
+  const androidMin = 56;
   const iosMin = 20;
   if (insetsBottom > 0) {
     return Math.max(insetsBottom, Platform.OS === "android" ? androidMin : iosMin);

@@ -54,9 +54,9 @@ assert.equal(usdFixedEntryDollarsToCents(10), 1000);
 assert.equal(usdFixedEntryDollarsToCents(25), 2500);
 assert.equal(usdFixedEntryDollarsToCents(7), 500); // snaps to nearest allowed
 
-assert.equal(formatUsdFixedCashChallengeLabel(3), "$3 Cash Challenge");
-assert.equal(formatUsdFixedCashChallengeLabel(20), "$20 Cash Challenge");
-assert.equal(formatUsdFixedCashChallengeLabel(7), "$5 Cash Challenge");
+assert.equal(formatUsdFixedCashChallengeLabel(3), "$3 Top finishers Challenge");
+assert.equal(formatUsdFixedCashChallengeLabel(20), "$20 Top finishers Challenge");
+assert.equal(formatUsdFixedCashChallengeLabel(7), "$5 Top finishers Challenge");
 
 for (const dollars of USD_FIXED_ENTRY_DOLLARS) {
   const draft = createDefaultDraft();

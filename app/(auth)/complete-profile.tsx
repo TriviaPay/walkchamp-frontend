@@ -1,8 +1,9 @@
 import { LinearGradient } from "expo-linear-gradient";
-import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useRef, useState } from "react";
+import { router, useFocusEffect, useLocalSearchParams, useNavigation } from "expo-router";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  BackHandler,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -10,6 +11,7 @@ import {
   Text,
   TextInput,
   View} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -44,8 +46,10 @@ function calcAge(dob: string): number {
 
 export default function CompleteProfileScreen() {
   const colors = useColors();
+  const navigation = useNavigation();
   const { insets, safeTop, safeBottom } = useSafeLayout();
-  const { login } = useAuth();
+  const { login, logout } = useAuth();
+  const leavingRef = useRef(false);
   const params = useLocalSearchParams<{
     userId: string;
     email: string;
@@ -76,6 +80,38 @@ export default function CompleteProfileScreen() {
   const [error, setError] = useState("");
   const usernameTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const usernameCheckSeq = useRef(0);
+
+  const goBackToSignIn = useCallback(() => {
+    if (showCountryPicker) {
+      setShowCountryPicker(false);
+      return true;
+    }
+    if (leavingRef.current) return true;
+    leavingRef.current = true;
+    void logout().finally(() => {
+      router.replace("/(auth)");
+    });
+    return true;
+  }, [logout, showCountryPicker]);
+
+  // Root Redirect lands here with no stack history — consume hardware back so
+  // Android does not exit the app, then return to sign-in after logout.
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener("hardwareBackPress", goBackToSignIn);
+      const removeBefore = navigation.addListener("beforeRemove", (e) => {
+        if (leavingRef.current) return;
+        const actionType = e.data.action.type;
+        if (actionType !== "GO_BACK" && actionType !== "POP") return;
+        e.preventDefault();
+        goBackToSignIn();
+      });
+      return () => {
+        sub.remove();
+        removeBefore();
+      };
+    }, [goBackToSignIn, navigation]),
+  );
 
   useEffect(() => {
     if (usernameTimer.current) {
@@ -297,11 +333,35 @@ export default function CompleteProfileScreen() {
   );
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <SafeAreaView edges={["top", "left", "right", "bottom"]} style={[styles.container, { backgroundColor: colors.background }]}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.flex}>
-        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: safeTop + 20, paddingBottom: safeBottom + 30 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-          <Text style={[styles.title, { color: colors.foreground }]}>Complete Profile</Text>
-          <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>Just a few details to get you started</Text>
+        <ScrollView
+          contentContainerStyle={[
+            styles.scroll,
+            {
+              paddingTop: 12,
+              paddingLeft: rs(20),
+              paddingRight: rs(20),
+              paddingBottom: Math.max(safeBottom, insets.bottom, 56) + rs(72),
+            },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.headerRow}>
+            <TouchableOpacity
+              onPress={() => goBackToSignIn()}
+              style={styles.backBtn}
+              accessibilityLabel="Back to sign in"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Feather name="arrow-left" size={22} color={colors.foreground} />
+            </TouchableOpacity>
+            <View style={styles.headerText}>
+              <Text style={[styles.title, { color: colors.foreground }]}>Complete Profile</Text>
+              <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>Just a few details to get you started</Text>
+            </View>
+          </View>
 
           {!!error && (
             <View style={[styles.errorBox, { backgroundColor: "#FF444420", borderColor: "#FF444450" }]}>
@@ -454,17 +514,27 @@ export default function CompleteProfileScreen() {
           </ScrollView>
         </View>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
   flex: { flex: 1 },
-  scroll: { paddingHorizontal: rs(24), maxWidth: MAX_CONTENT_WIDTH, alignSelf: "center", width: "100%" },
-  title: { fontSize: rf(28), fontWeight: "800", letterSpacing: -0.5 },
-  subtitle: { fontSize: rf(15), marginTop: 6, marginBottom: rs(20) },
-  form: { gap: rs(16) },
+  scroll: { maxWidth: MAX_CONTENT_WIDTH, alignSelf: "center", width: "100%", overflow: "visible" },
+  form: { gap: rs(16), overflow: "visible" },
+  headerRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, marginBottom: rs(16) },
+  backBtn: {
+    width: rs(40),
+    height: rs(40),
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 2,
+  },
+  headerText: { flex: 1, minWidth: 0 },
+  title: { fontSize: rf(26), fontWeight: "800", letterSpacing: -0.5 },
+  subtitle: { fontSize: rf(14), marginTop: 6 },
   label: { fontSize: rf(13), fontWeight: "600", marginBottom: 6 },
   inputContainer: { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 14, borderWidth: 1, paddingHorizontal: rs(16), paddingVertical: rs(14) },
   input: { flex: 1, fontSize: rf(16) },
