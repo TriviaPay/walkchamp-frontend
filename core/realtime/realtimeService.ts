@@ -14,6 +14,29 @@ const PUSHER_CLUSTER = process.env.EXPO_PUBLIC_PUSHER_CLUSTER ?? "mt1";
 let _client: PusherInstance | null = null;
 const _channelRefs = new ChannelRefCounter<ChannelAdapter>();
 
+/** Track connect lifecycle so we only emit "reconnected" after a real drop (A14). */
+let _wasPusherConnected = false;
+let _hadPusherConnection = false;
+type PusherReconnectListener = () => void;
+const _pusherReconnectListeners = new Set<PusherReconnectListener>();
+
+export function onPusherReconnected(cb: PusherReconnectListener): () => void {
+  _pusherReconnectListeners.add(cb);
+  return () => {
+    _pusherReconnectListeners.delete(cb);
+  };
+}
+
+function emitPusherReconnected(): void {
+  _pusherReconnectListeners.forEach((cb) => {
+    try {
+      cb();
+    } catch {
+      /* ignore */
+    }
+  });
+}
+
 /** Test-only: clear ref-count map (does not touch network). */
 export function __resetChannelRefsForTests(): void {
   _channelRefs.clear(() => {});
@@ -117,14 +140,23 @@ function getClient(): PusherInstance | null {
   });
 
   _client.connection.bind("connected", () => {
+    const wasDisconnected = !_wasPusherConnected;
     markPusherConnected(true);
     perf.pusherConnected(true);
+    _wasPusherConnected = true;
+    // After a drop, ask active race screens to re-pull authoritative state (A14).
+    if (wasDisconnected && _hadPusherConnection) {
+      emitPusherReconnected();
+    }
+    _hadPusherConnection = true;
   });
   _client.connection.bind("disconnected", () => {
+    _wasPusherConnected = false;
     markPusherConnected(false);
     perf.pusherConnected(false);
   });
   _client.connection.bind("unavailable", () => {
+    _wasPusherConnected = false;
     markPusherConnected(false);
     perf.pusherConnected(false);
   });

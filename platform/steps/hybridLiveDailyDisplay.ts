@@ -60,6 +60,8 @@ async function readLiveSessionSteps(userId: string): Promise<number> {
   return live;
 }
 
+let _lastEmitted = -1;
+
 async function pollOnce(): Promise<void> {
   if (_polling) return;
   _polling = true;
@@ -102,6 +104,8 @@ async function pollOnce(): Promise<void> {
     });
     const next = Math.max(verified, anchored);
     if (next <= verified) return;
+    if (next === _lastEmitted) return;
+    _lastEmitted = next;
 
     updateStepProgressFromRealSource({
       todaySteps: next,

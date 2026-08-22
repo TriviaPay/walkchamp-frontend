@@ -48,6 +48,7 @@ import { subscribeToChannel, SPONSORED_EVENTS_CHANNEL, EVENTS } from "@/services
 import { getApiBase } from "@/utils/apiUrl";
 import { PublicProfileModal } from "@/components/PublicProfileModal";
 import type { PublicProfileInitialData } from "@/components/PublicProfileModal";
+import { InrHint } from "@/components/InrHint";
 
 const COIN_IMG     = require("@/assets/images/game-coin.png");
 const BLUE_SHOE_IMG = require("@/assets/images/footstep.png");
@@ -143,7 +144,7 @@ function PrizeBanner() {
           <View style={pb.iconWrap}>
             <Feather name="info" size={15} color="#F59E0B" />
           </View>
-          <View style={{ flex: 1 }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={pb.title}>How Prizes Work</Text>
             <Text style={pb.subtitle}>Amazon Gift Cards · 1–2 winners by player count</Text>
           </View>
@@ -155,11 +156,19 @@ function PrizeBanner() {
           <View style={pb.previewRow}>
             <View style={[pb.prizeChip, { borderColor: "#F59E0B40" }]}>
               <Text style={pb.prizeChipLabel}>🥇 1st</Text>
-              <Text style={pb.prizeChipVal}>$5 Gift Card</Text>
+              <Text style={pb.prizeChipVal}>
+                $5
+                <InrHint usd={5} style={pb.prizeChipVal} />
+                {" Gift Card"}
+              </Text>
             </View>
             <View style={[pb.prizeChip, { borderColor: "#D4A20040" }]}>
               <Text style={pb.prizeChipLabel}>🥈 2nd</Text>
-              <Text style={pb.prizeChipVal}>$5 Gift Card</Text>
+              <Text style={pb.prizeChipVal}>
+                $5
+                <InrHint usd={5} style={pb.prizeChipVal} />
+                {" Gift Card"}
+              </Text>
             </View>
           </View>
         )}
@@ -170,12 +179,19 @@ function PrizeBanner() {
             {/* Amazon branding row */}
             <View style={pb.amazonRow}>
               <Image source={require("@/assets/images/amazon-gift-card.jpeg")} style={pb.amazonCardImg} resizeMode="contain" />
-              <View style={{ flex: 1 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={pb.amazonTitle}>amazon.com gift card</Text>
-                <Text style={pb.amazonSub}>$5 value · Delivered via email</Text>
+                <Text style={pb.amazonSub}>
+                  $5
+                  <InrHint usd={5} style={pb.amazonSub} />
+                  {" value · Delivered via email"}
+                </Text>
               </View>
               <View style={pb.amazonAmount}>
-                <Text style={pb.amazonAmountText}>$5</Text>
+                <Text style={pb.amazonAmountText}>
+                  $5
+                  <InrHint usd={5} style={pb.amazonAmountText} color="#000" />
+                </Text>
               </View>
             </View>
 
@@ -223,8 +239,13 @@ const pb = StyleSheet.create({
   accentBar: { height: 3, backgroundColor: "#F59E0B" },
   body: { backgroundColor: "#0F0D08" },
   header: {
-    flexDirection: "row", alignItems: "center", gap: rs(10),
-    paddingHorizontal: rs(14), paddingTop: rs(12), paddingBottom: rs(10),
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: rs(10),
+    paddingHorizontal: rs(14),
+    paddingTop: rs(12),
+    paddingBottom: rs(10),
   },
   iconWrap: {
     width: rs(30), height: rs(30), borderRadius: 15,
@@ -234,21 +255,38 @@ const pb = StyleSheet.create({
   title: { fontSize: rf(13.5), fontWeight: "800", color: "#FFF" },
   subtitle: { fontSize: rf(10.5), color: "rgba(255,255,255,0.38)", marginTop: 1 },
   previewRow: {
-    flexDirection: "row", gap: rs(7),
-    paddingHorizontal: rs(14), paddingBottom: rs(12),
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: rs(7),
+    paddingHorizontal: rs(14),
+    paddingBottom: rs(12),
   },
   prizeChip: {
-    flex: 1, alignItems: "center", gap: 3,
-    backgroundColor: "#F59E0B10", borderWidth: 1,
-    borderRadius: 10, paddingVertical: rs(8),
+    flexGrow: 1,
+    flexBasis: 120,
+    minWidth: 0,
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "#F59E0B10",
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: rs(8),
+    paddingHorizontal: rs(6),
   },
-  prizeChipLabel: { fontSize: rf(9.5), color: "rgba(255,255,255,0.45)", fontWeight: "600" },
-  prizeChipVal: { fontSize: rf(11), fontWeight: "800", color: "#F59E0B" },
+  prizeChipLabel: { fontSize: rf(9.5), color: "rgba(255,255,255,0.45)", fontWeight: "600", textAlign: "center" },
+  prizeChipVal: { fontSize: rf(11), fontWeight: "800", color: "#F59E0B", textAlign: "center" },
   expanded: { paddingHorizontal: rs(14), paddingBottom: rs(14), gap: rs(2) },
   amazonRow: {
-    flexDirection: "row", alignItems: "center", gap: rs(10),
-    backgroundColor: "#FF990010", borderWidth: 1, borderColor: "#FF990028",
-    borderRadius: 12, padding: rs(12), marginBottom: rs(12),
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: rs(10),
+    backgroundColor: "#FF990010",
+    borderWidth: 1,
+    borderColor: "#FF990028",
+    borderRadius: 12,
+    padding: rs(12),
+    marginBottom: rs(12),
   },
   amazonCardImg: { width: rs(52), height: rs(52), borderRadius: 8 },
   amazonBadge: {
@@ -260,8 +298,13 @@ const pb = StyleSheet.create({
   amazonTitle: { fontSize: rf(12.5), fontWeight: "800", color: "#FF9900" },
   amazonSub: { fontSize: rf(10), color: "rgba(255,255,255,0.38)", marginTop: 1 },
   amazonAmount: {
-    backgroundColor: "#FF9900", borderRadius: 8,
-    paddingHorizontal: rs(8), paddingVertical: rs(4),
+    backgroundColor: "#FF9900",
+    borderRadius: 8,
+    paddingHorizontal: rs(8),
+    paddingVertical: rs(4),
+    flexShrink: 1,
+    minWidth: 0,
+    maxWidth: "100%",
   },
   amazonAmountText: { fontSize: rf(14), fontWeight: "900", color: "#000" },
   divider: { height: 1, backgroundColor: "rgba(255,255,255,0.06)", marginVertical: rs(10) },
@@ -674,8 +717,8 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
         {/* ── Header row ── */}
         <View style={card.headerRow}>
           <CalendarBadge iso={ev.scheduledStartAt} accentColor={pal.glow1} />
-          <View style={{ flex: 1 }}>
-            <Text style={card.title} numberOfLines={2}>{displayTitle}</Text>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={card.title} numberOfLines={3}>{displayTitle}</Text>
             {dayStr ? <Text style={card.dateText}>{dayStr}</Text> : null}
             {windowStr ? (
               <View style={card.windowRow}>
@@ -708,7 +751,10 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
           </View>
           <View style={[card.pill, { backgroundColor: "#FF990015", borderWidth: 1, borderColor: "#FF990030" }]}>
             <Text style={card.pillIcon}>🎁</Text>
-            <Text style={[card.pillVal, { color: "#FF9900" }]}>$5</Text>
+            <Text style={[card.pillVal, { color: "#FF9900" }]}>
+              $5
+              <InrHint usd={5} style={[card.pillVal, { color: "#FF9900" }]} />
+            </Text>
             <Text style={card.pillLbl}>each winner</Text>
           </View>
           <View style={[card.pill, { backgroundColor: "#FFFFFF08" }]}>
@@ -851,7 +897,7 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
                   >
                     <LinearGradient colors={["#4C1D95", "#7C3AFF", "#A855F7"]} style={[card.registerGrad, { gap: rs(10) }]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
                       <Feather name="users" size={17} color="#FFF" />
-                      <View style={{ flex: 1 }}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
                         <Text style={[card.registerText, { fontSize: rf(15) }]}>Join Waiting Room</Text>
                         <Text style={{ fontSize: rf(10), color: "rgba(255,255,255,0.7)", marginTop: 1 }}>Race starts automatically · no action needed</Text>
                       </View>
@@ -875,7 +921,7 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
                     {busy ? <ActivityIndicator size="small" color="#FF7777" /> : (
                       <>
                         <Feather name="log-out" size={13} color="#FF8888" />
-                        <Text style={[card.leaveBtnText, { fontSize: rf(12) }]}>Leave & Refund {ev.entryCoinFee.toLocaleString()} coins</Text>
+                        <Text style={[card.leaveBtnText, { fontSize: rf(12), flexShrink: 1 }]}>Leave & Refund {ev.entryCoinFee.toLocaleString()} coins</Text>
                       </>
                     )}
                   </TouchableOpacity>
@@ -890,7 +936,7 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
                       start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
                     >
                       <Feather name="check-circle" size={20} color="#C47BFF" />
-                      <View style={{ flex: 1 }}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
                         <Text style={card.registeredTitle}>You're Registered!</Text>
                         <Text style={card.registeredSub}>{ev.entryCoinFee.toLocaleString()} coins deducted from wallet</Text>
                       </View>
@@ -908,7 +954,7 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
                     ) : (
                       <>
                         <Feather name="log-out" size={14} color="#FF8888" />
-                        <View style={{ flex: 1 }}>
+                        <View style={{ flex: 1, minWidth: 0 }}>
                           <Text style={card.leaveBtnText}>Leave Race</Text>
                           <Text style={card.leaveBtnSub}>{ev.entryCoinFee.toLocaleString()} coins refunded immediately</Text>
                         </View>
@@ -928,7 +974,7 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
                 end={{ x: 1, y: 0 }}
               >
                 <Image source={COIN_IMG} style={{ width: 18, height: 18 }} resizeMode="contain" />
-                <View style={{ flex: 1 }}>
+                <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={card.registerText}>
                     Need {(ev.entryCoinFee - (coinBalance ?? 0)).toLocaleString()} more coins
                   </Text>
@@ -955,7 +1001,7 @@ function EventCard({ ev, index, coinBalance, onRegister, onLeave, onShare, onAva
                 ) : (
                   <>
                     <Feather name="user-plus" size={18} color="#FFF" />
-                    <View style={{ flex: 1 }}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
                       <Text style={card.registerText}>Register Now</Text>
                       <Text style={card.registerSub}>{ev.entryCoinFee.toLocaleString()} coins deducted immediately</Text>
                     </View>
@@ -1431,18 +1477,18 @@ const card = StyleSheet.create({
 
   headerRow: { flexDirection: "row", alignItems: "flex-start", gap: rs(10), marginBottom: rs(14) },
   headerRight: { alignItems: "flex-end", gap: rs(7), flexShrink: 0 },
-  title: { fontSize: rf(16), fontWeight: "800", color: "#FFF", lineHeight: 22 },
+  title: { fontSize: rf(16), fontWeight: "800", color: "#FFF" },
   dateText: { fontSize: rf(11.5), color: "rgba(255,255,255,0.5)", marginTop: 3 },
   windowRow: {
-    flexDirection: "row", alignItems: "center", gap: 5, marginTop: 4, paddingRight: 4,
+    flexDirection: "row", alignItems: "flex-start", gap: 5, marginTop: 4, paddingRight: 4,
   },
-  windowText: { flex: 1, fontSize: rf(11), fontWeight: "600", color: "rgba(255,255,255,0.72)", lineHeight: 15 },
+  windowText: { flex: 1, minWidth: 0, fontSize: rf(11), fontWeight: "600", color: "rgba(255,255,255,0.72)" },
   windowHintRow: {
     flexDirection: "row", alignItems: "flex-start", gap: 6,
     marginBottom: rs(12), marginTop: -4,
   },
   windowHintText: {
-    flex: 1, fontSize: rf(10.5), color: "rgba(255,255,255,0.38)", lineHeight: 14,
+    flex: 1, minWidth: 0, fontSize: rf(10.5), color: "rgba(255,255,255,0.38)",
   },
   statusChip: {
     borderWidth: 1, borderRadius: 12, flexShrink: 0,
@@ -1456,24 +1502,37 @@ const card = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
 
-  pillRow: { flexDirection: "row", gap: rs(7), marginBottom: rs(14) },
+  pillRow: { flexDirection: "row", flexWrap: "wrap", gap: rs(7), marginBottom: rs(14) },
   pill: {
-    flex: 1, flexDirection: "row", alignItems: "center", gap: 4,
+    flexGrow: 1,
+    flexBasis: 96,
+    minWidth: 0,
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2,
     backgroundColor: "rgba(255,255,255,0.07)",
-    borderRadius: 10, paddingHorizontal: rs(8), paddingVertical: rs(8),
+    borderRadius: 10,
+    paddingHorizontal: rs(6),
+    paddingVertical: rs(8),
   },
   pillIcon: { fontSize: rf(12) },
-  pillVal: { fontSize: rf(13), fontWeight: "800", color: "#FFF" },
-  pillLbl: { fontSize: rf(8.5), color: "rgba(255,255,255,0.35)" },
+  pillVal: { fontSize: rf(13), fontWeight: "800", color: "#FFF", textAlign: "center" },
+  pillLbl: { fontSize: rf(8.5), color: "rgba(255,255,255,0.35)", textAlign: "center" },
 
   countdownRow: {
-    flexDirection: "row", alignItems: "center", gap: rs(8),
-    borderWidth: 1, borderRadius: 12,
-    paddingHorizontal: rs(12), paddingVertical: rs(10),
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: rs(8),
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: rs(12),
+    paddingVertical: rs(10),
     marginBottom: rs(12),
   },
-  countdownLabel: { fontSize: rf(12), color: "rgba(255,255,255,0.6)", fontWeight: "600" },
-  countdownTime: { fontSize: rf(16), fontWeight: "900", letterSpacing: 0.3, flex: 1, textAlign: "right" },
+  countdownLabel: { fontSize: rf(12), color: "rgba(255,255,255,0.6)", fontWeight: "600", flexShrink: 0 },
+  countdownTime: { fontSize: rf(16), fontWeight: "900", letterSpacing: 0.3, flexGrow: 1, flexShrink: 1, minWidth: 72, textAlign: "right" },
 
   slotsRow: {
     flexDirection: "row", alignItems: "center",
@@ -1511,13 +1570,18 @@ const card = StyleSheet.create({
   registeredSub: { fontSize: rf(11), color: "rgba(196,123,255,0.65)", marginTop: 2 },
 
   leaveBtn: {
-    flexDirection: "row", alignItems: "center",
-    gap: rs(10), backgroundColor: "rgba(255,50,50,0.18)",
-    borderWidth: 1.5, borderColor: "#FF4444",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: rs(10),
+    backgroundColor: "rgba(255,50,50,0.18)",
+    borderWidth: 1.5,
+    borderColor: "#FF4444",
     borderRadius: 14,
-    paddingVertical: rs(11), paddingHorizontal: rs(14),
+    paddingVertical: rs(11),
+    paddingHorizontal: rs(14),
   },
-  leaveBtnText: { fontSize: rf(14), fontWeight: "800", color: "#FF5555" },
+  leaveBtnText: { fontSize: rf(14), fontWeight: "800", color: "#FF5555", flexShrink: 1, minWidth: 0 },
   leaveBtnSub: { fontSize: rf(10.5), color: "rgba(255,120,120,0.70)", marginTop: 1 },
 
   watchLiveBtn: { borderRadius: 14, overflow: "hidden" },
@@ -1526,11 +1590,14 @@ const card = StyleSheet.create({
 
   registerBtn: { borderRadius: 14, overflow: "hidden" },
   registerGrad: {
-    flexDirection: "row", alignItems: "center",
-    gap: rs(10), paddingVertical: rs(14), paddingHorizontal: rs(16),
+    flexDirection: "row",
+    alignItems: "center",
+    gap: rs(10),
+    paddingVertical: rs(14),
+    paddingHorizontal: rs(16),
   },
-  registerText: { fontSize: rf(14), fontWeight: "800", color: "#FFF" },
-  registerSub: { fontSize: rf(10.5), color: "rgba(255,255,255,0.6)", marginTop: 1 },
+  registerText: { fontSize: rf(14), fontWeight: "800", color: "#FFF", flexShrink: 1 },
+  registerSub: { fontSize: rf(10.5), color: "rgba(255,255,255,0.6)", marginTop: 1, flexShrink: 1 },
 
   staticBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center",

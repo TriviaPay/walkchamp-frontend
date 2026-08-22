@@ -34,6 +34,7 @@ import {
   ActivityIndicator,
   Animated,
   AppState,
+  BackHandler,
   DeviceEventEmitter,
   Easing,
   FlatList,
@@ -156,13 +157,14 @@ import { useAuth } from "@/context/AuthContext";
 import { useRace, useRaceUiProgress } from "@/context/RaceContext";
 import { formatDistance, formatCalories, stepsToDistance, formatWalletAmount } from "@/utils/format";
 import { InrHint, UsdAmountWithInr } from "@/components/InrHint";
+import { getUsdAmountColor } from "@/utils/currencyDisplay";
 import { getApiBase } from "@/utils/apiUrl";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import MyTitlesModal, { type ActiveTitle, difficultyColor } from "@/components/MyTitlesModal";
 import { TitleBadge } from "@/components/TitleBadge";
 import WearableSetupModal from "@/components/WearableSetupModal";
 import VerifiedStepsStatusBanner from "@/components/VerifiedStepsStatusBanner";
-import { usePresence, usePresenceCounts } from "@/context/PresenceContext";
+import { usePresenceCounts } from "@/context/PresenceContext";
 import { getStoredSession } from "@/services/authService";
 import { authFetch } from "@/utils/authFetch";
 import { isSponsoredRegistrationOpen, canOpenSponsoredWaitingRoom } from "@/utils/sponsoredEventRegistration";
@@ -840,8 +842,7 @@ function StatCard({ icon, value, label, color, bg }: { icon: string; value: stri
   ); }
 
 function PresenceBar({ colors }: { colors: ReturnType<typeof useColors> }) {
-  // usePresence is the full hook (still exported); counts-only is used elsewhere on Walk.
-  const { counts, formatCount } = usePresence();
+  const { counts, formatCount } = usePresenceCounts();
   const pulseAnim = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     Animated.loop(
@@ -1637,7 +1638,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
               {
                 label: "Total Earnings",
                 value: formatWalletAmount(totalEarned, walletCurrency),
-                color: "#FFD700",
+                color: walletCurrency === "INR" ? "#FBBF24" : getUsdAmountColor(),
                 usdHint: walletCurrency === "INR" ? null : totalEarned,
               },
             ] as Array<{ label: string; value: string; color: string; usdHint?: number | null }>).map((s) => (
@@ -2036,7 +2037,6 @@ function WalkScreenContent() {
   const contextTodaySteps = useWalkTodaySteps();
   const { userRank, walletBalance, totalEarned, walletCurrency, refreshWallet } = useApp();
   const { user, logout, loading: authLoading, sessionToken } = useAuth();
-  const cashUiAllowed = cashEligibilityForUser(user).allowed;
   /** Set before navigating to Waiting Room while a Walk pageSheet is still covering. */
   const pendingDismissRaceCoverModalsRef = useRef(false);
   /** After Waiting Room return — bypass rooms TTL so My Race / Free Challenge gate stay in sync. */
@@ -2059,7 +2059,6 @@ function WalkScreenContent() {
   const { userRaceSteps, walkRaceStepsDisplay } = useRaceUiProgress();
   const raceStepsOnWalk = racePhase === "in_race" ? userRaceSteps : walkRaceStepsDisplay;
   const showRaceStepsOnWalk = raceStepsOnWalk > 0;
-  const { counts, formatCount } = usePresenceCounts();
   const dispatch = useDispatch<AppDispatch>();
   const themes = useSelector((s: RootState) => s.trackThemes.themes);
   const { layouts: ownedTrackLayouts } = useOwnedTrackLayouts();
@@ -2089,9 +2088,7 @@ function WalkScreenContent() {
       goalSteps: s.raceProgress.goalSteps,
       totalParticipants: s.raceProgress.totalParticipants ?? 1,
       raceStartTime: s.raceProgress.raceStartTime,
-      raceSteps: s.raceProgress.raceSteps,
       challengeEndAt: s.raceProgress.challengeEndAt,
-      timeLeftSeconds: s.raceProgress.timeLeftSeconds,
     };
   }, shallowEqual);
   const verifiedTodaySteps = useSelector((s: RootState) =>
@@ -3733,6 +3730,16 @@ function WalkScreenContent() {
   const pendingRaceActionRef = useRef<(() => Promise<void>) | null>(null);
   const confirmEntryJoinCallbackRef = useRef<(() => void) | null>(null);
 
+  useEffect(() => {
+    if (!confirmEntry) return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      confirmEntryJoinCallbackRef.current = null;
+      setConfirmEntry(null);
+      return true;
+    });
+    return () => sub.remove();
+  }, [confirmEntry]);
+
   // Sponsored events card status
   type SponsoredCardStatus =
     | {
@@ -4134,10 +4141,7 @@ function WalkScreenContent() {
           phase: "racing",
           scheduledStartAt: liveIso,
           endsAt: liveEndsAt,
-          timeLeftSeconds:
-            reduxLiveRace?.raceId === cs.raceId
-              ? reduxLiveRace.timeLeftSeconds
-              : known?.timeLeftSeconds,
+          timeLeftSeconds: known?.timeLeftSeconds,
           registeredCount: joined,
           maxSlots: isUnlimitedEntry ? 0 : cs.maxPlayers || known?.maxPlayers || 10,
           targetSteps: cs.targetSteps ?? known?.targetSteps ?? undefined,
@@ -6169,8 +6173,10 @@ function WalkScreenContent() {
           );
         })}
 
-        {/* Cash Prize Challenge — directly under Coins Battle */}
-          {ENABLE_THREE_DOLLAR_CHALLENGE && cashUiAllowed && (() => {
+        {/* Cash Prize Challenge — directly under Coins Battle.
+            Visibility matches pre-audit: build flag only. Age/region still
+            enforced on join/create (handleJoinRace / create paths). */}
+          {ENABLE_THREE_DOLLAR_CHALLENGE && (() => {
             const premOpt = RACE_OPTIONS.find((o) => o.fee === 3)!;
             // Modern cash rooms use paid_usd; fall back to legacy paid_3
             const cashPriority = [
@@ -6221,6 +6227,13 @@ function WalkScreenContent() {
                   joinRace(premFeeDollars, premCs.maxPlayers, premCs.isHost);
                   navToMatchmaking({ raceId: premCs.raceId!, isHost: !!premCs.isHost });
                 }
+                return;
+              }
+
+              // New host/join — age/region gate (card itself stays visible like pre-audit).
+              const cashEl = cashEligibilityForUser(user);
+              if (!cashEl.allowed) {
+                AppAlert.alert("Cash challenges unavailable", cashUnavailableMessage(cashEl.reason));
                 return;
               }
 
@@ -6309,7 +6322,7 @@ function WalkScreenContent() {
                       <Feather name="award" size={22} color="#FFF" />
                     </View>
                     <View style={styles.raceCardText}>
-                      <Text style={styles.raceCardLabel}>Cash Prize Challenge</Text>
+                      <Text style={styles.raceCardLabel}>Top finishers Challenge</Text>
                       <Text style={styles.raceCardSub}>Skill-based walking challenge</Text>
                     </View>
                     <View style={styles.cashPrizeBadgeCol}>
@@ -6935,10 +6948,11 @@ function WalkScreenContent() {
               <View style={[styles.detailDivider, { backgroundColor: colors.border }]} />
               <View style={styles.detailRow}>
                 <Text style={[styles.detailLabel, { color: colors.mutedForeground }]}>Entry Fee</Text>
-                <Text style={[styles.detailValue, { color: colors.accent }]}>
-                  ${clampUsdFixedEntryDollars(confirmEntry?.fee ?? 3).toFixed(2)}
-                  <InrHint usd={clampUsdFixedEntryDollars(confirmEntry?.fee ?? 3)} style={styles.detailValue} />
-                </Text>
+                <UsdAmountWithInr
+                  usd={clampUsdFixedEntryDollars(confirmEntry?.fee ?? 3)}
+                  label={`$${clampUsdFixedEntryDollars(confirmEntry?.fee ?? 3).toFixed(2)}`}
+                  style={styles.detailValue}
+                />
               </View>
               {/* Host flow: allow $3–$25 entry selection. Join flow keeps room fee fixed. */}
               {confirmEntry?.feeEditable && confirmEntry.fee > 0 ? (

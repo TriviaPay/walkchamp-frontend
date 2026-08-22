@@ -59,7 +59,7 @@ function ClassicTabLayout() {
   // Floor Android system nav (3-button / gesture) so labels never sit under it.
   const tabBarBottomInset = Math.max(
     safeBottom,
-    Platform.OS === "android" ? 48 : 0,
+    Platform.OS === "android" ? 56 : 0,
   );
 
   const tabBarStyle = useMemo(

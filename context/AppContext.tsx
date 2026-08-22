@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AppState, InteractionManager, type AppStateStatus } from "react-native";
 import { type LeaderboardUser, type WalletTransaction } from "@/utils/mockData";
 import { formatWalletTransactionDate, mapLedgerTypeToUi } from "@/utils/walletLedger";
+import { displayCashChallengeCopy } from "@/utils/challengeDisplayNames";
 import {
   clearCachedWallet,
   loadCachedWalletBalance,
@@ -73,7 +74,11 @@ async function apiFetch<T>(path: string): Promise<T | null> {
   }
 }
 
-async function apiPost<T>(path: string, body: unknown): Promise<T | null> {
+async function apiPost<T>(
+  path: string,
+  body: unknown,
+  extraHeaders?: Record<string, string>,
+): Promise<T | null> {
   const session = await getValidSession();
   if (!session) return null;
   const res = await fetch(`${API_BASE}${path}`, {
@@ -82,6 +87,7 @@ async function apiPost<T>(path: string, body: unknown): Promise<T | null> {
     headers: {
       Authorization: `Bearer ${session}`,
       "Content-Type": "application/json",
+      ...(extraHeaders ?? {}),
     },
     body: JSON.stringify(body),
   });
@@ -114,7 +120,7 @@ function mapApiTransaction(tx: Record<string, unknown>): WalletTransaction {
     id: String(tx.id ?? ""),
     type: uiType,
     amount: Number(tx.amount ?? 0),
-    description: String(tx.description ?? ""),
+    description: displayCashChallengeCopy(String(tx.description ?? "")),
     date: formatWalletTransactionDate(dateIso),
     status,
     ledgerType,
@@ -366,13 +372,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       "Gift Card": "gift_card",
     };
 
-    await apiPost("/api/wallet/withdraw", {
-      amount,
-      payoutMethod: payoutMethodMap[method] ?? method.toLowerCase().replace(/\s+/g, "_"),
-      payoutDetails: payoutDetails.email
-        ? payoutDetails
-        : { note: `${method} withdrawal requested` },
-    });
+    const idempotencyKey =
+      globalThis.crypto?.randomUUID?.() ??
+      `wd-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+
+    await apiPost(
+      "/api/wallet/withdraw",
+      {
+        amount,
+        payoutMethod: payoutMethodMap[method] ?? method.toLowerCase().replace(/\s+/g, "_"),
+        payoutDetails: payoutDetails.email
+          ? payoutDetails
+          : { note: `${method} withdrawal requested` },
+      },
+      { "Idempotency-Key": idempotencyKey },
+    );
 
     await refreshWallet();
   }, [refreshWallet]);

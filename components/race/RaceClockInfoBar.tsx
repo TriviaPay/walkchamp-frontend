@@ -5,6 +5,8 @@
 import React, { memo } from "react";
 import { Text, View } from "react-native";
 import { useTickingNow } from "@/components/perf/LiveClockText";
+import { InrHint } from "@/components/InrHint";
+import { getUsdAmountColor } from "@/utils/currencyDisplay";
 
 /** Elapsed / remaining race time — always hh:mm:ss. */
 function fmtHms(seconds: number) {
@@ -36,6 +38,8 @@ type Props = {
   /** Third chip — shown for all race types when provided. */
   prizePoolValue?: string | null;
   prizePoolColor?: string;
+  /** When set, prize is a USD cash amount — blue USD + yellow INR hint. */
+  prizePoolUsd?: number | null;
   /** Override default "PRIZE POOL" label (e.g. "REWARDS" for short free races). */
   prizePoolLabel?: string | null;
   styles: StyleBag;
@@ -53,6 +57,7 @@ export const RaceClockInfoBar = memo(function RaceClockInfoBar({
   participantValue,
   prizePoolValue,
   prizePoolColor,
+  prizePoolUsd,
   prizePoolLabel,
   styles: s,
 }: Props) {
@@ -108,12 +113,16 @@ export const RaceClockInfoBar = memo(function RaceClockInfoBar({
     },
   ];
 
+  const cashUsd =
+    typeof prizePoolUsd === "number" && Number.isFinite(prizePoolUsd) && prizePoolUsd > 0
+      ? prizePoolUsd
+      : null;
   if (prizePoolValue != null && prizePoolValue !== "") {
     cards.push({
       icon: "🏆",
       label: prizePoolLabel?.trim() || "PRIZE POOL",
       value: prizePoolValue,
-      color: prizePoolColor ?? "#FFD700",
+      color: cashUsd != null ? getUsdAmountColor() : prizePoolColor ?? "#FFD700",
     });
   }
 
@@ -131,11 +140,11 @@ export const RaceClockInfoBar = memo(function RaceClockInfoBar({
               { textAlign: "center", alignSelf: "stretch" },
               card.color ? { color: card.color } : null,
             ]}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.75}
           >
             {card.value}
+            {card.label === (prizePoolLabel?.trim() || "PRIZE POOL") && cashUsd != null ? (
+              <InrHint usd={cashUsd} style={s.infoVal} />
+            ) : null}
           </Text>
         </View>
       ))}

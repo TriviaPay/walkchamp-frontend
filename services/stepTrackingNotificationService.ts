@@ -54,6 +54,7 @@ type NativeModule = {
   getNativeStepState?: () => Promise<NativeWalkStepState | null>;
   clearNativeStepStateForUser?: (userId: string) => Promise<void>;
   flushRaceSyncOutbox?: () => Promise<void>;
+  updateRaceSyncCredentials?: (payload: Record<string, unknown>) => Promise<boolean>;
   resetDailyStepsForNewDay?: () => Promise<boolean>;
   /** Hand continuous walk/race step delivery to native FGS (BG/closed). */
   ensureBackgroundStepTracking?: () => Promise<void>;
@@ -557,6 +558,27 @@ class StepTrackingNotificationService {
       await native.flushRaceSyncOutbox();
     } catch (err) {
       if (__DEV__) console.warn("[StepTrackingNotif] flushRaceSyncOutbox failed", err);
+    }
+  }
+
+  /** Push refreshed JWT into native FGS race sync credentials (A13). */
+  async updateRaceSyncCredentials(opts: {
+    userId: string;
+    authToken: string;
+    apiBaseUrl?: string;
+  }): Promise<void> {
+    if (Platform.OS !== "android") return;
+    if (!opts.userId || !opts.authToken) return;
+    const native = getNativeModule();
+    if (!native?.updateRaceSyncCredentials) return;
+    try {
+      await native.updateRaceSyncCredentials({
+        userId: opts.userId,
+        authToken: opts.authToken,
+        apiBaseUrl: opts.apiBaseUrl ?? API_BASE,
+      });
+    } catch (err) {
+      if (__DEV__) console.warn("[StepTrackingNotif] updateRaceSyncCredentials failed", err);
     }
   }
 

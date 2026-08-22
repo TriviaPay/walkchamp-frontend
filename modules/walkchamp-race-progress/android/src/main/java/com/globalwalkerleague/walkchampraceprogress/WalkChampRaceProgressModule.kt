@@ -1,6 +1,7 @@
 package com.globalwalkerleague.walkchampraceprogress
 
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -199,6 +200,50 @@ class WalkChampRaceProgressModule : Module() {
       }
       deliverToService(ctx, intent)
       null
+    }
+
+    /**
+     * Push a freshly refreshed JWT into native race sync prefs (audit A13).
+     */
+    AsyncFunction("updateRaceSyncCredentials") { payload: Map<String, Any?> ->
+      val ctx = appContext.reactContext ?: return@AsyncFunction false
+      val userId = (payload["userId"] as? String)?.trim().orEmpty()
+      val authToken = (payload["authToken"] as? String)?.trim().orEmpty()
+      if (userId.isEmpty() || authToken.isEmpty()) return@AsyncFunction false
+      val providedApi = (payload["apiBaseUrl"] as? String)?.trim().orEmpty()
+      val walkPrefs = ctx.getSharedPreferences("walkchamp_race_fgs_walk", Context.MODE_PRIVATE)
+      val existingApi =
+        if (providedApi.isNotBlank()) providedApi
+        else {
+          val loaded = RaceNotificationState.load(ctx)
+          RaceSyncCredentials.resolve(
+            ctx,
+            loaded ?: RaceNotificationState(
+              raceId = "",
+              userId = userId,
+              username = "",
+              raceSteps = 0,
+              rank = 0,
+              totalParticipants = 0,
+              goalSteps = 0,
+              timeLeftSeconds = 0,
+              raceStatus = "",
+              raceStartTimeMs = 0L,
+              challengeEndAtMs = 0L,
+              lastUpdatedAt = 0L,
+              apiBaseUrl = "",
+              authToken = "",
+              stepSource = "",
+            ),
+            walkPrefs,
+          )?.first.orEmpty()
+        }
+      RaceSyncCredentials.persist(ctx, userId, existingApi, authToken)
+      walkPrefs.edit().putString("walk_auth_token", authToken).apply()
+      if (existingApi.isNotBlank()) {
+        walkPrefs.edit().putString("walk_api_base_url", existingApi).apply()
+      }
+      true
     }
 
     AsyncFunction("resetDailyStepsForNewDay") {

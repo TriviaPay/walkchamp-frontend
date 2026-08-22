@@ -36,6 +36,7 @@ import { cashUnavailableMessage } from "@/utils/cashEligibility";
 import { isPaymentsLiveMode } from "@/config/env";
 import { formatCurrency, formatWalletAmount } from "@/utils/format";
 import { InrHint } from "@/components/InrHint";
+import { INR_AMOUNT_COLOR, getUsdAmountColor } from "@/utils/currencyDisplay";
 import { rf, rs } from "@/utils/responsive";
 import type { WalletTransaction } from "@/utils/mockData";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
@@ -55,6 +56,7 @@ import {
   type PaymentResultStatus,
 } from "@/services/depositSession";
 import { ledgerTypeLabel } from "@/utils/walletLedger";
+import { displayCashChallengeCopy } from "@/utils/challengeDisplayNames";
 import { readPaymentApiError } from "@/utils/paymentApiErrors";
 import { logger } from "@/utils/logger";
 
@@ -73,7 +75,7 @@ const REFERRAL_ART = require("../../assets/images/referal.png");
 const EARN_CARDS = [
   {
     icon: "flag" as const,
-    title: "Cash Challenges",
+    title: "Top finishers Challenge",
     reward: "Win Cash Prizes",
     sub: "Finish Top 3 to win your share of the prize pool.",
     color: "#00E676",
@@ -95,7 +97,7 @@ const EARN_CARDS = [
     icon: "users" as const,
     title: "Referral",
     reward: "Both Get $3",
-    sub: "Invite friends. They join a Cash Challenge—you both earn $3.",
+    sub: "Invite friends. They join a Top finishers Challenge—you both earn $3.",
     color: "#00B4FF",
     fullWidth: true,
     glow: "center" as const,
@@ -168,7 +170,7 @@ function TransactionRow({
           style={[styles.txDesc, { color: colors.foreground }]}
           numberOfLines={1}
         >
-          {tx.description}
+          {displayCashChallengeCopy(tx.description)}
         </Text>
         {typeBadge ? (
           <Text style={[styles.txLedgerBadge, { color: colors.mutedForeground }]}>
@@ -522,9 +524,16 @@ function WalletScreenContent() {
         logger.debug("WalletDeposit", "create payment success: stripe");
       } else {
         logger.debug("WalletDeposit", "create payment started: razorpay");
+        const idempotencyKey =
+          globalThis.crypto?.randomUUID?.() ??
+          `rzp-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
         const res = await authFetch("/api/wallet/deposit/razorpay/create-order", {
           method: "POST",
-          body: JSON.stringify({ amountPaise: checkoutPaise }),
+          body: JSON.stringify({
+            amountPaise: checkoutPaise,
+            idempotencyKey,
+          }),
+          headers: { "Idempotency-Key": idempotencyKey },
         });
         if (!res.ok) {
           throw new Error(await readPaymentApiError(res, "Failed to create Razorpay payment."));
@@ -551,6 +560,7 @@ function WalletScreenContent() {
       let pollStopped = false;
       let pollInterval: ReturnType<typeof setInterval> | null = null;
       let flowHandled = false;
+      let pollInFlight = false;
 
       const completeDepositUi = async (source: string, fallbackUi?: PaymentResultStatus | null) => {
         if (flowHandled) return;
@@ -576,7 +586,8 @@ function WalletScreenContent() {
       };
 
       const runPoll = async () => {
-        if (pollStopped || polledStatus || flowHandled) return;
+        if (pollStopped || polledStatus || flowHandled || pollInFlight) return;
+        pollInFlight = true;
         try {
           const s = await fetchDepositStatus(transactionId);
           if (isPollCompleteDepositStatus(s)) {
@@ -585,6 +596,8 @@ function WalletScreenContent() {
           }
         } catch {
           // ignore transient network errors, keep polling
+        } finally {
+          pollInFlight = false;
         }
       };
 
@@ -673,7 +686,7 @@ function WalletScreenContent() {
           <Text style={[styles.balanceSectionLabel, { color: colors.mutedForeground }]}>
             Available Balance · {displayCurrency}
           </Text>
-          <Text style={[styles.balanceBig, { color: colors.foreground }]}>
+          <Text style={[styles.balanceBig, { color: displayCurrency === "INR" ? INR_AMOUNT_COLOR : getUsdAmountColor() }]}>
             {formatWalletAmount(availableBalance, displayCurrency)}
             {displayCurrency !== "INR" ? (
               <InrHint usd={availableBalance} style={styles.balanceBig} />
@@ -711,7 +724,7 @@ function WalletScreenContent() {
               <Text style={[styles.balanceColLabel, { color: colors.mutedForeground }]}>
                 Total Earned
               </Text>
-              <Text style={[styles.balanceColValue, { color: colors.gold }]}>
+              <Text style={[styles.balanceColValue, { color: displayCurrency === "INR" ? INR_AMOUNT_COLOR : getUsdAmountColor() }]}>
                 {formatWalletAmount(totalEarned, displayCurrency)}
                 {displayCurrency !== "INR" ? (
                   <InrHint usd={totalEarned} style={styles.balanceColValue} />

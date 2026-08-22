@@ -108,8 +108,16 @@ export default function LoginScreen() {
         return;
       }
 
-      const status = (profile.accountStatus ?? profile.account_status) as string;
-      if (status === "suspended" || status === "banned") {
+      const status = String(
+        profile.accountStatus ?? profile.account_status ?? "",
+      ).toLowerCase();
+      if (
+        status === "suspended" ||
+        status === "banned" ||
+        status === "deleted" ||
+        status === "restricted" ||
+        status === "closed"
+      ) {
         router.replace("/(auth)/account-restricted");
         return;
       }
@@ -157,6 +165,8 @@ export default function LoginScreen() {
         } else {
           setError("Invalid email or password.");
         }
+      } else if (err instanceof ApiError && err.code === "ACCOUNT_RESTRICTED") {
+        router.replace("/(auth)/account-restricted");
       } else if (err instanceof ApiError && err.status >= 500) {
         setError("Server unavailable. Please try again later.");
       } else {
@@ -205,8 +215,16 @@ export default function LoginScreen() {
         return;
       }
 
-      const status = (profile.accountStatus ?? profile.account_status) as string;
-      if (status === "suspended" || status === "banned") {
+      const status = String(
+        profile.accountStatus ?? profile.account_status ?? "",
+      ).toLowerCase();
+      if (
+        status === "suspended" ||
+        status === "banned" ||
+        status === "deleted" ||
+        status === "restricted" ||
+        status === "closed"
+      ) {
         router.replace("/(auth)/account-restricted");
         return;
       }
@@ -233,6 +251,8 @@ export default function LoginScreen() {
       const msg = err instanceof Error ? err.message : "";
       if (msg.toLowerCase().includes("cancelled")) {
         // User dismissed the Apple sheet — show nothing
+      } else if (err instanceof ApiError && err.code === "ACCOUNT_RESTRICTED") {
+        router.replace("/(auth)/account-restricted");
       } else if (err instanceof ApiError && err.status >= 500) {
         setError("Server unavailable. Please try again later.");
       } else {

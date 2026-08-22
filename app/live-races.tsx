@@ -14,7 +14,7 @@ import { useSafeLayout } from "@/hooks/useSafeLayout";
 import { Feather } from "@expo/vector-icons";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { LiveRace, formatElapsed } from "@/utils/mockLiveRaces";
-import { usePresence } from "@/context/PresenceContext";
+import { usePresenceCounts } from "@/context/PresenceContext";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { authFetch } from "@/utils/authFetch";
 import { subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
@@ -216,7 +216,7 @@ function RaceCard({ race, onWatch, colors }: { race: LiveRace; onWatch: () => vo
 export default function LiveRacesScreen() {
   const colors = useColors();
   const { insets, safeTop, safeBottom } = useSafeLayout();
-  const { counts, formatCount } = usePresence();
+  const { counts, formatCount } = usePresenceCounts();
   const [activeFilter, setActiveFilter] = useState<FilterType>("All");
   const [liveRaces, setLiveRaces] = useState<LiveRace[]>([]);
   const [loading, setLoading] = useState(true);

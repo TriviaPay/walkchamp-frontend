@@ -123,11 +123,17 @@ export async function handleSessionInvalidation(
     return false;
   }
 
-  // Ambiguous SESSION_INVALID without sessionId must not force-logout (stale/foreign header).
-  // SESSION_REPLACED / login_on_new_device from the API means the session we presented was
-  // superseded — treat missing sessionId as targeting the local session.
+  // Backend often omits sessionId on SESSION_REVOKED / EXPIRED / INVALID rejects.
+  // Treat missing sessionId as targeting the local session for those codes too
+  // (same as SESSION_REPLACED). Login grace above still blocks self-kick races.
   if (!payload.sessionId) {
-    if (!isReplacedReason(payload.reason)) {
+    const reason = String(payload.reason).toUpperCase();
+    const treatAsLocal =
+      isReplacedReason(payload.reason) ||
+      reason === "SESSION_REVOKED" ||
+      reason === "SESSION_EXPIRED" ||
+      reason === "SESSION_INVALID";
+    if (!treatAsLocal) {
       if (__DEV__) {
         console.log(
           `[AuthSession] invalidation ignored — ${payload.reason} without sessionId`,

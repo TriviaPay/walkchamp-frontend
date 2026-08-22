@@ -11,14 +11,22 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   ActivityIndicator,
+  Dimensions,
   Image,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import { rf } from "@/utils/responsive";
+import { ChallengeParticipationBreakdownCard } from "@/components/ChallengeParticipationBreakdownCard";
+import {
+  extractBreakdownFromPublicUserPayload,
+  statsHasBreakdownField,
+  type ChallengeParticipationBreakdown,
+} from "@/utils/challengeParticipationBreakdown";
 
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { AppAlert } from "@/components/AppAlert";
@@ -92,8 +100,14 @@ interface PublicProfileStats {
 
 // ── 60s in-memory stats cache ─────────────────────────────────────────────────
 
-const statsCache = new Map<string, { stats: PublicProfileStats; at: number }>();
+const statsCache = new Map<string, {
+  stats: PublicProfileStats;
+  breakdown?: ChallengeParticipationBreakdown;
+  breakdownKnown: boolean;
+  at: number;
+}>();
 const CACHE_TTL = 60_000;
+const MODAL_MAX_HEIGHT = Math.round(Dimensions.get("window").height * 0.78);
 
 // ── Number formatter ──────────────────────────────────────────────────────────
 
@@ -260,6 +274,7 @@ export function PublicProfileModal({
   const [stats, setStats] = useState<PublicProfileStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState(false);
+  const [breakdown, setBreakdown] = useState<ChallengeParticipationBreakdown | undefined>(undefined);
 
   // When visible + userId changes, fetch fresh profile data
   const lastFetchedUserId = useRef<string | null>(null);
@@ -290,6 +305,7 @@ export function PublicProfileModal({
     const cached = statsCache.get(userId);
     if (cached && Date.now() - cached.at < CACHE_TTL) {
       setStats(cached.stats);
+      if (cached.breakdownKnown) setBreakdown(cached.breakdown);
     } else {
       setStatsLoading(true);
       setStatsError(false);
@@ -325,6 +341,7 @@ export function PublicProfileModal({
             raceWins: number;
             totalWinning: number;
             currentStreakDays: number;
+            challengeParticipationBreakdown?: ChallengeParticipationBreakdown;
           };
         };
         setProfile({
@@ -350,8 +367,18 @@ export function PublicProfileModal({
             totalWinning:     data.stats.totalWinning ?? 0,
             currentStreakDays: data.stats.currentStreakDays,
           };
-          statsCache.set(userId, { stats: s, at: Date.now() });
+          const fieldPresent = statsHasBreakdownField(data.stats);
+          const nextBreakdown = fieldPresent
+            ? extractBreakdownFromPublicUserPayload(data)
+            : undefined;
           setStats(s);
+          if (fieldPresent) setBreakdown(nextBreakdown);
+          statsCache.set(userId, {
+            stats: s,
+            breakdown: fieldPresent ? nextBreakdown : undefined,
+            breakdownKnown: fieldPresent,
+            at: Date.now(),
+          });
           if (__DEV__) console.log("[PublicProfile] stats loaded:", s);
         } else {
           setStatsError(true);
@@ -374,6 +401,7 @@ export function PublicProfileModal({
     lastFetchedUserId.current = null;
     setProfile(null);
     setStats(null);
+    setBreakdown(undefined);
     setStatsLoading(false);
     setStatsError(false);
     setFriendLoading(false);
@@ -478,7 +506,13 @@ export function PublicProfileModal({
   return (
     <Modal visible transparent animationType="fade" onRequestClose={handleClose}>
       <Pressable style={[s.overlay, { backgroundColor: "rgba(0,0,0,0.72)" }]} onPress={handleClose}>
-        <Pressable style={[s.card, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => {}}>
+        <Pressable style={[s.card, { backgroundColor: colors.card, borderColor: colors.border, maxHeight: MODAL_MAX_HEIGHT }]} onPress={() => {}}>
+          <ScrollView
+            nestedScrollEnabled
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+            contentContainerStyle={s.cardInner}
+          >
 
           {/* Close */}
           <TouchableOpacity
@@ -553,6 +587,12 @@ export function PublicProfileModal({
             loading={statsLoading}
             error={statsError}
             colors={colors}
+          />
+
+          <ChallengeParticipationBreakdownCard
+            breakdown={breakdown}
+            loading={statsLoading && breakdown === undefined}
+            compact
           />
 
           <View style={[s.divider, { backgroundColor: colors.border }]} />
@@ -656,6 +696,7 @@ export function PublicProfileModal({
               }
             </TouchableOpacity>
           )}
+          </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>
@@ -678,7 +719,11 @@ const s = StyleSheet.create({
     borderWidth: 1,
     padding: 24,
     alignItems: "stretch",
+  },
+  cardInner: {
+    alignItems: "stretch",
     gap: 10,
+    paddingBottom: 4,
   },
   closeBtn: {
     position: "absolute",

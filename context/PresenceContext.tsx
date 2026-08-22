@@ -25,6 +25,7 @@ import {
 } from "@/utils/presenceIds";
 import { waitForAppStartupReady } from "@/services/appStartup";
 import { perf } from "@/utils/perfLogger";
+import { runCoalesced, apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 
 export type UserStatus =
   | "online"
@@ -56,7 +57,10 @@ interface PresenceContextType {
 const PresenceContext = createContext<PresenceContextType | null>(null);
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
-const ONLINE_IDS_POLL_MS = 8_000;
+/** Pusher is primary; HTTP is a slow fallback so Chat/Waiting Room recover after missed events. */
+const ONLINE_IDS_POLL_MS = 30_000;
+const ONLINE_IDS_FETCH_KEY = "presence_online_ids";
+const PRESENCE_IDS_MIN_GAP_MS = 15_000;
 const EMPTY_COUNTS: PresenceCounts = {
   online: 0,
   walking: 0,
@@ -129,76 +133,69 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const refreshOnlineIds = useCallback(async () => {
+  const refreshOnlineIds = useCallback(async (opts?: { force?: boolean }) => {
     if (!isSignedIn) {
       setOnlineUserIds(new Set());
       return;
     }
-    const next = new Set<string>();
-    if (selfId) next.add(selfId);
+    if (!opts?.force && !apiFetchAllowed(ONLINE_IDS_FETCH_KEY, PRESENCE_IDS_MIN_GAP_MS)) {
+      return;
+    }
+    markApiFetched(ONLINE_IDS_FETCH_KEY);
 
-    try {
-      const [friendsOnlineSettled, legacySettled, friendsSettled] =
-        await Promise.allSettled([
+    await runCoalesced(ONLINE_IDS_FETCH_KEY, async () => {
+      const next = new Set<string>();
+      if (selfId) next.add(selfId);
+
+      try {
+        // Presence endpoints only — never pull the full friends list on this timer.
+        const [friendsOnlineSettled, legacySettled] = await Promise.allSettled([
           authFetch("/api/presence/friends/online", {
             timeoutMs: PRESENCE_TIMEOUT,
           }),
           authFetch("/api/presence/online-ids", {
             timeoutMs: PRESENCE_TIMEOUT,
           }),
-          authFetch("/api/friends", {
-            timeoutMs: PRESENCE_TIMEOUT,
-          }),
         ]);
 
-      if (
-        friendsOnlineSettled.status === "fulfilled" &&
-        friendsOnlineSettled.value.ok
-      ) {
-        const data: unknown = await friendsOnlineSettled.value.json();
-        for (const id of extractOnlineIdsFromPayload(data)) {
-          const n = normalizeUserId(id);
-          if (n) next.add(n);
-        }
-      }
-
-      if (legacySettled.status === "fulfilled" && legacySettled.value.ok) {
-        const data: unknown = await legacySettled.value.json();
-        for (const id of extractOnlineIdsFromPayload(data)) {
-          const n = normalizeUserId(id);
-          if (n) next.add(n);
-        }
-      }
-
-      if (friendsSettled.status === "fulfilled" && friendsSettled.value.ok) {
-        const friendsData = (await friendsSettled.value.json()) as {
-          friends?: { id?: string; userId?: string; isOnline?: boolean }[];
-        };
-        for (const f of friendsData.friends ?? []) {
-          if (!f.isOnline) continue;
-          const id = normalizeUserId(f.userId ?? f.id);
-          if (id) next.add(id);
-        }
-      }
-    } catch {
-      // optional enrichment
-    }
-
-    setOnlineUserIds((prev) => {
-      if (prev.size === next.size) {
-        let same = true;
-        for (const id of next) {
-          if (!prev.has(id)) {
-            same = false;
-            break;
+        if (
+          friendsOnlineSettled.status === "fulfilled" &&
+          friendsOnlineSettled.value.ok
+        ) {
+          const data: unknown = await friendsOnlineSettled.value.json();
+          for (const id of extractOnlineIdsFromPayload(data)) {
+            const n = normalizeUserId(id);
+            if (n) next.add(n);
           }
         }
-        if (same) {
-          if (__DEV__) perf.presenceSkippedUnchanged();
-          return prev;
+
+        if (legacySettled.status === "fulfilled" && legacySettled.value.ok) {
+          const data: unknown = await legacySettled.value.json();
+          for (const id of extractOnlineIdsFromPayload(data)) {
+            const n = normalizeUserId(id);
+            if (n) next.add(n);
+          }
         }
+      } catch {
+        // optional enrichment
       }
-      return next;
+
+      setOnlineUserIds((prev) => {
+        if (prev.size === next.size) {
+          let same = true;
+          for (const id of next) {
+            if (!prev.has(id)) {
+              same = false;
+              break;
+            }
+          }
+          if (same) {
+            if (__DEV__) perf.presenceSkippedUnchanged();
+            return prev;
+          }
+        }
+        return next;
+      });
     });
   }, [isSignedIn, selfId]);
 
@@ -242,9 +239,18 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
     }
     if (!startupReady) return;
     fetchPresenceSummary().then((c) => {
-      if (c) setCounts(c);
+      if (c) {
+        setCounts((prev) =>
+          prev.online === c.online &&
+          prev.walking === c.walking &&
+          prev.racing === c.racing &&
+          prev.spectating === c.spectating
+            ? prev
+            : c,
+        );
+      }
     });
-    void refreshOnlineIds();
+    void refreshOnlineIds({ force: true });
   }, [isSignedIn, refreshOnlineIds, startupReady]);
 
   // Heartbeat — only while authenticated and past startup gate
@@ -286,9 +292,18 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
           sendHeartbeat(userStatus).catch(() => {});
         }, HEARTBEAT_INTERVAL_MS);
         fetchPresenceSummary().then((c) => {
-          if (c) setCounts(c);
+          if (c) {
+            setCounts((prev) =>
+              prev.online === c.online &&
+              prev.walking === c.walking &&
+              prev.racing === c.racing &&
+              prev.spectating === c.spectating
+                ? prev
+                : c,
+            );
+          }
         });
-        void refreshOnlineIds();
+        void refreshOnlineIds({ force: true });
       }
     });
     return () => sub.remove();
@@ -304,7 +319,17 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
 
     channel.bind(EVENTS.PRESENCE_UPDATED, (data: { counts: PresenceCounts }) => {
       markPusherEvent("presence");
-      if (data?.counts) setCounts(data.counts);
+      if (data?.counts) {
+        const c = data.counts;
+        setCounts((prev) =>
+          prev.online === c.online &&
+          prev.walking === c.walking &&
+          prev.racing === c.racing &&
+          prev.spectating === c.spectating
+            ? prev
+            : c,
+        );
+      }
       void refreshOnlineIds();
     });
 

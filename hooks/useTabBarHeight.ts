@@ -7,7 +7,7 @@ export function useTabBarHeight(): number {
   const { safeBottom } = useSafeLayout();
   const bottomInset = Math.max(
     safeBottom,
-    Platform.OS === "android" ? 48 : 0,
+    Platform.OS === "android" ? 56 : 0,
   );
   return TAB_BAR_BASE + bottomInset;
 }

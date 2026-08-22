@@ -328,8 +328,10 @@ export function setupPurchaseListeners(callbacks: {
   onMicPassGrant: () => void;
   onPending: (msg: string) => void;
   onError: (msg: string) => void;
+  /** Fired on store cancel so UI can clear in-flight buy state (audit A7). */
+  onCancelled?: () => void;
 }): () => void {
-  const { onCoinPurchase, onMicPassGrant, onPending, onError } = callbacks;
+  const { onCoinPurchase, onMicPassGrant, onPending, onError, onCancelled } = callbacks;
 
   const isConsumableId = (productId: string) =>
     COIN_IAP_PRODUCTS.some((p) => p.productId === productId);
@@ -425,11 +427,14 @@ export function setupPurchaseListeners(callbacks: {
 
   try {
     errorSub = purchaseErrorListener((error: PurchaseError) => {
-      // E_USER_CANCELLED is expected — do not surface to the user
+      // E_USER_CANCELLED is expected — do not surface to the user, but must
+      // clear the in-flight buy flag or packs stay spun until app kill (A7).
       iapLog("purchase error", { code: error.code, message: error.message });
-      if (error.code !== "E_USER_CANCELLED") {
-        onError("Purchase failed. Please try again.");
+      if (error.code === "E_USER_CANCELLED") {
+        onCancelled?.();
+        return;
       }
+      onError("Purchase failed. Please try again.");
     });
   } catch {}
 

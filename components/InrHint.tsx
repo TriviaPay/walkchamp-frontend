@@ -1,7 +1,11 @@
 import React from "react";
-import { Text, View, type StyleProp, type TextStyle } from "react-native";
+import { Text, type StyleProp, type TextStyle } from "react-native";
 
-import { getInrHintLabel } from "@/utils/currencyDisplay";
+import {
+  getInrHintLabel,
+  getUsdAmountColor,
+  INR_AMOUNT_COLOR,
+} from "@/utils/currencyDisplay";
 
 function flatten(style?: StyleProp<TextStyle>): TextStyle {
   if (!style) return {};
@@ -15,19 +19,18 @@ function flatten(style?: StyleProp<TextStyle>): TextStyle {
 }
 
 /**
- * "(≈₹YYY)" for Indian users. Use `below` so the dollar amount keeps its original
- * size — the rupee line sits under it in a smaller, still-readable font.
- * Renders nothing for non-Indian users or zero amounts.
+ * "(≈₹YYY)" for Indian users, rendered inline next to the USD amount.
+ * Safe as a nested `<Text>` child. Renders nothing for non-Indian users or zero amounts.
  */
 export function InrHint({
   usd,
   style,
   color,
-  below = false,
 }: {
   usd: number;
   style?: StyleProp<TextStyle>;
   color?: string;
+  /** @deprecated INR is always inline now; kept so older call sites still type-check. */
   below?: boolean;
 }) {
   const label = getInrHintLabel(usd);
@@ -35,26 +38,22 @@ export function InrHint({
 
   const base = flatten(style);
   const baseSize = typeof base.fontSize === "number" ? base.fontSize : 13;
-  const hintSize = below
-    ? Math.max(10, Math.round(baseSize * 0.52))
-    : Math.max(9, Math.round(baseSize * 0.62));
+  const hintSize = Math.max(11, Math.round(baseSize * 0.92));
 
   return (
     <Text
       style={{
         fontSize: hintSize,
-        fontWeight: "500",
-        color: color ?? (base.color as string | undefined),
-        opacity: color ? 1 : 0.75,
-        marginTop: below ? 1 : 0,
+        fontWeight: "700",
+        color: color ?? INR_AMOUNT_COLOR,
       }}
     >
-      {below ? label : ` ${label}`}
+      {` ${label}`}
     </Text>
   );
 }
 
-/** Dollar line unchanged; INR sits underneath in a smaller font. Alignment stays as-is. */
+/** "$X.XX (≈₹YYY)" on one wrapping line — Indian: USD blue + INR yellow; others: USD yellow only. */
 export function UsdAmountWithInr({
   usd,
   label,
@@ -68,12 +67,35 @@ export function UsdAmountWithInr({
   color?: string;
   align?: "flex-end" | "center" | "flex-start";
 }) {
+  const inrLabel = getInrHintLabel(usd);
+  const base = flatten(style);
+  const baseSize = typeof base.fontSize === "number" ? base.fontSize : 13;
+  const textAlign = align === "center" ? "center" : align === "flex-start" ? "left" : "right";
+  const usdColor = color ?? getUsdAmountColor();
+
   return (
-    <View style={{ alignItems: align, flexShrink: 1 }}>
-      <Text style={[style, color ? { color } : null]} numberOfLines={1}>
-        {label}
-      </Text>
-      <InrHint usd={usd} below style={[style, color ? { color } : null]} />
-    </View>
+    <Text
+      style={[
+        style,
+        {
+          color: usdColor,
+          flexShrink: 1,
+          textAlign,
+        },
+      ]}
+    >
+      {label}
+      {inrLabel ? (
+        <Text
+          style={{
+            color: INR_AMOUNT_COLOR,
+            fontWeight: "700",
+            fontSize: Math.max(11, Math.round(baseSize * 0.92)),
+          }}
+        >
+          {` ${inrLabel}`}
+        </Text>
+      ) : null}
+    </Text>
   );
 }

@@ -97,6 +97,9 @@ export function MicPassModal({ visible, onClose, onGranted }: Props) {
                 : msg,
             );
           },
+          onCancelled: () => {
+            setLoading(false);
+          },
         });
       } catch {
         if (!cancelled) {

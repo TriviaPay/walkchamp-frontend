@@ -151,6 +151,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
+    public code?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -914,7 +915,26 @@ export async function fetchMe(
   }
 
   if (data.profile_completed === false && !data.profile) return null;
-  return (data.profile as DbProfile) ?? null;
+  const profile = (data.profile as DbProfile) ?? null;
+  if (profile) {
+    const status = String(
+      profile.accountStatus ?? profile.account_status ?? "",
+    ).toLowerCase();
+    if (
+      status === "deleted" ||
+      status === "restricted" ||
+      status === "banned" ||
+      status === "closed" ||
+      String(data.code ?? "").toUpperCase() === "ACCOUNT_RESTRICTED"
+    ) {
+      throw new ApiError(
+        data.error ?? "This account has been closed.",
+        res.status === 200 ? 403 : res.status,
+        "ACCOUNT_RESTRICTED",
+      );
+    }
+  }
+  return profile;
 }
 
 // GET /api/auth/profile/:userId — unauthenticated internal lookup

@@ -7,9 +7,11 @@ import { router, useLocalSearchParams, useFocusEffect, useNavigation } from "exp
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { NavigationProp, ParamListBase } from "@react-navigation/native";
 import { safeGoBack } from "@/utils/safeGoBack";
+import { getUsdAmountColor } from "@/utils/currencyDisplay";
 import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 import {   Alert,
   AppState,
+  BackHandler,
   Easing as RNEasing,
   Image,
   InteractionManager,
@@ -2124,6 +2126,14 @@ function LiveRaceDetailScreenContent() {
     }
   }, [navigation]);
 
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      leaveLiveDetail();
+      return true;
+    });
+    return () => sub.remove();
+  }, [leaveLiveDetail]);
+
   const {
     id: raceId,
     trackLayout: initialTrackLayout,
@@ -3245,9 +3255,28 @@ function LiveRaceDetailScreenContent() {
   useEffect(() => { if (!isActive) setShowReactionPicker(false); }, [isActive]);
   // Disconnect voice when race ends — never keep mic active after the race.
   useEffect(() => { if (!isActive) disconnectVoice(); }, [isActive, disconnectVoice]);
-  // Auto-connect all participants as listeners when race becomes active so
-  // everyone hears voice without needing to tap the mic button.
-  useEffect(() => { if (isActive) notifyRaceStarted(); }, [isActive, notifyRaceStarted]);
+  // Auto-connect listeners. Spectators must create a spectateSessions row before
+  // voice-token (audit A2); await that before requesting listen-only connect.
+  useEffect(() => {
+    if (!isActive || !raceId) return;
+    let cancelled = false;
+    void (async () => {
+      if (!currentParticipant) {
+        try {
+          await authFetch("/api/spectate/start", {
+            method: "POST",
+            body: JSON.stringify({ raceRoomId: raceId }),
+          });
+        } catch {
+          /* best-effort — voice may still fail closed */
+        }
+      }
+      if (!cancelled) notifyRaceStarted();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isActive, raceId, currentParticipant, notifyRaceStarted]);
   // Close all transient modals when navigating away — prevents stuck overlays.
   useFocusEffect(useCallback(() => {
     return () => {
@@ -3515,6 +3544,25 @@ function LiveRaceDetailScreenContent() {
   const myPlayer = useMemo(
     () => sortedPlayers.find((p) => p.isMe) ?? trackPlayers[0] ?? sortedPlayers[0] ?? null,
     [sortedPlayers, trackPlayers],
+  );
+  const isSpectatorView =
+    !currentParticipant && race?.currentUserParticipating !== true;
+  const spectatorDayTotal = Math.max(
+    1,
+    unlimitedTaglineSchedule?.durationDays
+      ?? (typeof race?.challengeDurationDays === "number" && race.challengeDurationDays > 0
+        ? Math.floor(race.challengeDurationDays)
+        : 1),
+  );
+  const spectatorDayCurrent = Math.min(
+    spectatorDayTotal,
+    Math.max(
+      1,
+      unlimitedTaglineSchedule?.currentDayIndex
+        ?? (typeof race?.currentDayIndex === "number" && race.currentDayIndex > 0
+          ? Math.floor(race.currentDayIndex)
+          : 1),
+    ),
   );
 
   // Leave / forfeit only: missed-day streak users stay on the board and keep steps.
@@ -4318,6 +4366,8 @@ function LiveRaceDetailScreenContent() {
       if (nextState !== "active") return;
       stepEngineLog("Lifecycle", "appState=active live-detail");
       void refreshTodaySteps();
+      // Re-fetch race detail so we don't keep a stale "LIVE" shell (A21).
+      void fetchDetailsOnFocusRef.current?.(true);
       if (race?.status === "completed") {
         if (!raceCompletedRef.current) {
           const me = participantsOnFocusRef.current.find(
@@ -5556,7 +5606,8 @@ function LiveRaceDetailScreenContent() {
         const dollars = cents / 100;
         return {
           value: "$" + (dollars % 1 === 0 ? dollars.toFixed(0) : dollars.toFixed(2)),
-          color: "#FFD700",
+          color: getUsdAmountColor(),
+          usd: dollars,
         };
       }
       return { value: "equal split", color: "#FFD700" };
@@ -5578,7 +5629,8 @@ function LiveRaceDetailScreenContent() {
         const dollars = cents / 100;
         return {
           value: "$" + (dollars % 1 === 0 ? dollars.toFixed(0) : dollars.toFixed(2)),
-          color: "#FFD700",
+          color: getUsdAmountColor(),
+          usd: dollars,
         };
       }
       return { value: "Gift cards", color: "#FF9900" };
@@ -5602,10 +5654,11 @@ function LiveRaceDetailScreenContent() {
       const dollars = cents / 100;
       return {
         value: "$" + (dollars % 1 === 0 ? dollars.toFixed(0) : dollars.toFixed(2)),
-        color: "#FFD700",
+        color: getUsdAmountColor(),
+        usd: dollars,
       };
     }
-    return { value: "$0", color: "#FFD700" };
+    return { value: "$0", color: getUsdAmountColor() };
   })();
 
   const trackMedia = {
@@ -5938,6 +5991,7 @@ function LiveRaceDetailScreenContent() {
           participantValue={participantValue}
           prizePoolValue={prizePoolChip.value}
           prizePoolColor={prizePoolChip.color}
+          prizePoolUsd={"usd" in prizePoolChip ? prizePoolChip.usd : undefined}
           prizePoolLabel={"label" in prizePoolChip ? prizePoolChip.label : undefined}
           styles={{
             infoCard: s.infoCard,
@@ -6189,6 +6243,22 @@ function LiveRaceDetailScreenContent() {
 
       {/* ── Progress tracker — hidden in fullscreen so track fills more space ── */}
       {!isTrackFullscreen && <View style={st.progSection}>
+        {isSpectatorView ? (
+          <View style={st.progLeft}>
+            <View style={st.spectatingBadge}>
+              <Feather name="eye" size={14} color="#C4B5FD" />
+              <Text style={st.spectatingBadgeText}>SPECTATING</Text>
+            </View>
+            <View style={st.progMain}>
+              <Text style={[st.progMine, { fontSize: rs(17) }]}>
+                {spectatorDayCurrent}/{spectatorDayTotal}
+              </Text>
+              <Text style={[st.progSub, { fontSize: Math.max(8, rs(9)), marginTop: 2 }]}>
+                Day {spectatorDayCurrent} of {spectatorDayTotal}
+              </Text>
+            </View>
+          </View>
+        ) : (
         <View style={st.progLeft}>
           <BlueShoe size={rs(24)} />
           <View style={st.progMain}>
@@ -6232,13 +6302,7 @@ function LiveRaceDetailScreenContent() {
             </Text>
             {isActive && !(isUnlimitedHeader && unlimitedEligibility === "not_eligible") ? (
               <Text style={[st.progSub, { fontSize: Math.max(8, rs(9)), marginTop: 2, opacity: 0.85 }]}>
-                {/* Spectators (not on this race's roster) must never see any personal
-                    step/verification figure here — unlimitedVerifiedSteps / mySteps are
-                    the viewer's own device totals and are unrelated to a race they
-                    haven't joined. */}
-                {!myPlayer?.isMe
-                  ? "Spectating — join to track your own progress"
-                  : isUnlimitedHeader
+                {isUnlimitedHeader
                     ? unlimitedHcPending
                       ? `Live · ${formatSteps(mySteps)} steps · verification pending`
                       : unlimitedProgressSource === "verified"
@@ -6247,9 +6311,7 @@ function LiveRaceDetailScreenContent() {
                     : FEATURE_FLAGS.ENABLE_LIVE_RACE_DEVICE_SENSOR
                       ? `Live tracking · ${formatSteps(mySteps)} race steps`
                       : "Live tracking"}
-                {!myPlayer?.isMe
-                  ? ""
-                  : isUnlimitedHeader
+                {isUnlimitedHeader
                     ? unlimitedHcPending
                       ? " · Sensor live; prizes use Health Connect / HealthKit"
                       : unlimitedVerifiedSteps > 0
@@ -6275,6 +6337,7 @@ function LiveRaceDetailScreenContent() {
             <Text style={[st.progPct, { fontSize: rs(15) }]}>{Math.round(myProgress * 100)}%</Text>
           )}
         </View>
+        )}
       </View>}
 
       {/* ── Live chat + cheers — same visibility as the send bar (both Race Track + Live Board) ── */}
@@ -6770,6 +6833,23 @@ const st = StyleSheet.create({
   prizeChipsOverlay: { position: "absolute", top: 50, left: 10, zIndex: 24 },
 
   progSection: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, minHeight: 66, paddingVertical: 10, backgroundColor: "#050711", borderTopWidth: 1, borderTopColor: "#1A1D2E" },
+  spectatingBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#7C3AED28",
+    borderWidth: 1,
+    borderColor: "#7C3AED",
+  },
+  spectatingBadgeText: {
+    fontSize: rf(11),
+    fontWeight: "800",
+    color: "#C4B5FD",
+    letterSpacing: 0.6,
+  },
   progLeft:    { flex: 1, flexDirection: "row", alignItems: "center", gap: 8 },
   progEmoji:   { fontSize: rf(27) },
   progMain:    { flex: 1 },

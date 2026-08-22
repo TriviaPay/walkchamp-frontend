@@ -284,7 +284,6 @@ function CreateChallengeCheckoutStepInner({
               usd={payment.entryDollars}
               label={payment.rows.entryValue}
               style={styles.payValue}
-              color={colors.foreground}
             />
           </View>
           <View style={styles.payRow}>
@@ -293,7 +292,6 @@ function CreateChallengeCheckoutStepInner({
               usd={payment.taxDollars}
               label={payment.rows.taxValue}
               style={styles.payValue}
-              color={colors.foreground}
             />
           </View>
           <View style={styles.payRow}>
@@ -302,7 +300,6 @@ function CreateChallengeCheckoutStepInner({
               usd={payment.platformDollars}
               label={payment.rows.platformFeeValue}
               style={styles.payValue}
-              color={colors.foreground}
             />
           </View>
           <View style={[styles.payDivider, { backgroundColor: colors.border }]} />
@@ -314,7 +311,6 @@ function CreateChallengeCheckoutStepInner({
               usd={payment.totalDollars}
               label={payment.rows.totalValue}
               style={styles.payTotal}
-              color={accent}
             />
           </View>
           <Text style={[styles.prizeNote, { color: accentLink }]}>{payment.rows.prizePoolNote}</Text>
@@ -521,12 +517,16 @@ const styles = StyleSheet.create({
   },
   payLabel: {
     flex: 1,
+    minWidth: 0,
     fontSize: rf(12),
     fontWeight: "600",
   },
   payValue: {
     fontSize: rf(13),
     fontWeight: "700",
+    flexShrink: 1,
+    maxWidth: "52%",
+    textAlign: "right",
   },
   payDivider: {
     height: StyleSheet.hairlineWidth,

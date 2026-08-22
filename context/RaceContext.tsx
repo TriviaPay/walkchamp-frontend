@@ -60,7 +60,7 @@ import {
 } from "@/services/steps/raceHealthVerification";
 import { STORAGE_KEYS, storageGet, storageSet, storageRemove } from "@/utils/storage";
 import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
-import { subscribeToChannel, unsubscribeFromChannel } from "@/services/realtimeService";
+import { subscribeToChannel, unsubscribeFromChannel, onPusherReconnected } from "@/services/realtimeService";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
@@ -1975,6 +1975,21 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     });
     return () => sub.remove();
   }, [catchUpLiveRaceSteps, pauseRaceStepTracking]);
+
+  // After Pusher drop, re-pull race status so forfeits/completions aren't missed (A14).
+  useEffect(() => {
+    return onPusherReconnected(() => {
+      const raceId = raceIdRef.current;
+      if (!raceId || raceEndedRef.current) return;
+      void fetchRaceStatus(raceId).then((raceData) => {
+        if (!raceData) return;
+        const status = String(raceData.status ?? "").toLowerCase();
+        if (status === "completed" || status === "cancelled" || status === "settled") {
+          raceEndedRef.current = true;
+        }
+      });
+    });
+  }, []);
 
   // Backend rank/steps → Android ongoing notification / iOS Live Activity
   useEffect(() => {

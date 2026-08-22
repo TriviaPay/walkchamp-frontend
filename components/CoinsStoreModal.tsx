@@ -397,6 +397,9 @@ function CoinsStoreModal({ visible, onClose, onCoinsAdded, onMicPassGranted, sta
       setBuyingProductId(null);
       AppAlert.alert("Purchase Failed", msg);
     },
+    onCancelled: () => {
+      setBuyingProductId(null);
+    },
   }), [setHasMicPass, fetchMicEntitlement]);
 
   // Load IAP products from App Store / Google Play.

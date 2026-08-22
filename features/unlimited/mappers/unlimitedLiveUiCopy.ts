@@ -6,6 +6,7 @@
 import type { UnlimitedDayRow } from "./unlimitedDayProgress";
 import type { PrizePoolEligibilityStatus } from "./unlimitedResults";
 import type { UnlimitedViewerSchedule } from "./unlimitedViewerSchedule";
+import { displayCashChallengeCopy } from "@/utils/challengeDisplayNames";
 
 export const UNLIMITED_COPY = {
   missADayOut: "Miss a day = out",
@@ -33,11 +34,11 @@ export function streakChallengeTitle(dailyGoalSteps: number): string {
   return `Streak challenge · ${n > 0 ? n.toLocaleString() : "—"} steps/day`;
 }
 
-/** Remap legacy "Unlimited" product name on live/list cards without changing other titles. */
+/** Remap legacy product names on live/list cards without changing other titles. */
 export function displayChallengeTitle(title: string | null | undefined): string {
   const t = (title ?? "").trim();
   if (!t) return t;
-  return t.replace(/^Unlimited\b/i, "Streak challenge");
+  return displayCashChallengeCopy(t.replace(/^Unlimited\b/i, "Streak challenge"));
 }
 
 export function missedDayFooterCopy(missedDayIndex: number | null | undefined): string {

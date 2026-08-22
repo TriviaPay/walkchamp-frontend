@@ -560,11 +560,50 @@ export async function registerDeviceWithBackend(subscriptionId?: string): Promis
     });
     if (res.ok) {
       pushLog("device registered with backend");
+    } else if (res.status === 409) {
+      // Stale row from a previous account on this device — release then retry once.
+      pushLog("device register conflict 409 — unregistering then retrying");
+      await unregisterDeviceWithBackend(resolvedId);
+      const retry = await authFetch("/api/push/register-device", {
+        method: "POST",
+        body: JSON.stringify({
+          onesignalSubscriptionId: resolvedId,
+          devicePlatform: Platform.OS,
+          appVersion: APP_VERSION,
+        }),
+      });
+      if (retry.ok) pushLog("device registered with backend after 409 recovery");
+      else pushLog(`device register retry failed status=${retry.status}`);
     } else {
       pushLog(`device register failed status=${res.status}`);
     }
   } catch (error) {
     pushLog("device register error", error);
+  }
+}
+
+/** Release backend device row before OneSignal logout (audit A10). */
+export async function unregisterDeviceWithBackend(
+  subscriptionId?: string,
+): Promise<void> {
+  if (Platform.OS === "web") return;
+  try {
+    const OneSignal = await ensureOneSignalInitialized();
+    const resolvedId =
+      subscriptionId ??
+      (OneSignal ? await resolvePushSubscriptionId(OneSignal) : null);
+    if (!resolvedId) {
+      pushLog("device unregister skipped — no subscription id");
+      return;
+    }
+    const res = await authFetch("/api/notifications/unregister-device", {
+      method: "POST",
+      body: JSON.stringify({ onesignalPlayerId: resolvedId }),
+    });
+    if (res.ok) pushLog("device unregistered with backend");
+    else pushLog(`device unregister failed status=${res.status}`);
+  } catch (error) {
+    pushLog("device unregister error", error);
   }
 }
 
@@ -598,6 +637,9 @@ export async function logoutOneSignal(): Promise<void> {
   const OneSignal = await ensureOneSignalInitialized();
   if (!OneSignal) return;
   try {
+    // Backend unregister is preferred from AuthContext.logout (while JWT valid).
+    // Best-effort here if logout path skipped it.
+    await unregisterDeviceWithBackend().catch(() => {});
     await OneSignal.logout();
     _loggedInUserId = null;
     pushLog("logged out");

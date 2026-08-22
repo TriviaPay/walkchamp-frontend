@@ -978,8 +978,8 @@ export function CreateChallengeFlow({
                       accessibilityState={{ selected: fixedSelected }}
                       accessibilityLabel={
                         fixedSelected
-                          ? "Top Finishers Challenge, selected"
-                          : "Top Finishers Challenge, not selected"
+                          ? "Top finishers Challenge, selected"
+                          : "Top finishers Challenge, not selected"
                       }
                       onPress={() => {
                         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -1042,7 +1042,7 @@ export function CreateChallengeFlow({
                                   },
                                 ]}
                               >
-                                ⚡ Top Finishers Challenge
+                                ⚡ Top finishers Challenge
                               </Text>
                               <Text
                                 style={[

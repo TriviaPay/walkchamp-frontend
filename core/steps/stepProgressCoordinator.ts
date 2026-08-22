@@ -818,6 +818,21 @@ export function updateStepProgressFromRealSource(input: {
     resolvedTodaySteps = next;
   }
 
+  const nextRace =
+    input.raceSteps !== undefined ? Math.max(0, Math.floor(input.raceSteps)) : undefined;
+  const todayUnchanged =
+    resolvedTodaySteps === undefined ||
+    (dailyLane === "verified"
+      ? resolvedTodaySteps === current.verifiedTodaySteps
+      : dailyLane === "provisional"
+        ? current.provisionalSensorTodaySteps != null &&
+          resolvedTodaySteps === current.provisionalSensorTodaySteps
+        : resolvedTodaySteps === current.todaySteps);
+  const raceUnchanged = nextRace === undefined || nextRace === current.raceSteps;
+  if (todayUnchanged && raceUnchanged) {
+    return;
+  }
+
   stepCoordDebug(
     `[StepSource] real update source=${source} lane=${dailyLane} todaySteps=${resolvedTodaySteps ?? current.todaySteps} raceSteps=${input.raceSteps ?? current.raceSteps}`,
   );
