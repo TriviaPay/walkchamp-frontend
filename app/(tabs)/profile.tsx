@@ -57,12 +57,7 @@ import { useAvatarCache, PROFILE_ME_CACHE_KEY } from "@/hooks/useAvatarCache";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
-import { ChallengeParticipationBreakdownCard } from "@/components/ChallengeParticipationBreakdownCard";
 import { useInvalidateProfileOnChallengeStart } from "@/hooks/useInvalidateProfileOnChallengeStart";
-import {
-  applyIncomingBreakdown,
-  type ChallengeParticipationBreakdown,
-} from "@/utils/challengeParticipationBreakdown";
 import {
   deleteProfileAvatar,
   uploadProfileAvatar,
@@ -99,7 +94,6 @@ interface ServerStats {
   dayStreak: number;
   dailyRank: number | null;
   coinsEarned: number;
-  challengeParticipationBreakdown?: ChallengeParticipationBreakdown;
 }
 
 interface ChallengeHistoryItem {
@@ -202,15 +196,9 @@ function applyProfileMeData(
     setChallengeHistory: (v: ChallengeHistoryItem[]) => void;
     setLast7Days: (v: { date: string; steps: number }[]) => void;
     setStepSourceInfo: React.Dispatch<React.SetStateAction<StepSourceInfo | null>>;
-    setChallengeParticipationBreakdown: React.Dispatch<
-      React.SetStateAction<ChallengeParticipationBreakdown | undefined>
-    >;
   },
 ): void {
   if (data.stats) setters.setServerStats(data.stats);
-  setters.setChallengeParticipationBreakdown((prev) =>
-    applyIncomingBreakdown(data.stats, prev),
-  );
   setters.setActiveTitle(data.activeTitle);
   if (data.challengeHistory.length > 0) setters.setChallengeHistory(data.challengeHistory);
   if (data.last7Days.length > 0) setters.setLast7Days(data.last7Days);
@@ -334,7 +322,7 @@ function WearableStatusCard({
 }
 
 const wsCard = StyleSheet.create({
-  card:  { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 20 },
+  card:  { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 10 },
   dot:   { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
   title: { fontSize: rf(14), fontWeight: "700" },
   sub:   { fontSize: rf(12), marginTop: 2, lineHeight: 17 },
@@ -434,10 +422,6 @@ function ProfileScreenContent() {
   const [challengeHistory,  setChallengeHistory]  = useState<ChallengeHistoryItem[]>(cachedProfile?.challengeHistory ?? []);
   const [last7Days,         setLast7Days]         = useState<{ date: string; steps: number }[]>(cachedProfile?.last7Days ?? []);
   const [stepSourceInfo,    setStepSourceInfo]    = useState<StepSourceInfo | null>(cachedProfile?.stepSource ?? null);
-  const [challengeParticipationBreakdown, setChallengeParticipationBreakdown] = useState<
-    ChallengeParticipationBreakdown | undefined
-  >(() => applyIncomingBreakdown(cachedProfile?.stats, undefined));
-  const [profileMeReady, setProfileMeReady] = useState(!!cachedProfile);
   const [showWearableSetup, setShowWearableSetup] = useState(false);
   const [deleteLoading,     setDeleteLoading]     = useState(false);
 
@@ -683,7 +667,6 @@ function ProfileScreenContent() {
     setChallengeHistory,
     setLast7Days,
     setStepSourceInfo,
-    setChallengeParticipationBreakdown,
   });
   profileSetters.current = {
     setServerStats,
@@ -691,7 +674,6 @@ function ProfileScreenContent() {
     setChallengeHistory,
     setLast7Days,
     setStepSourceInfo,
-    setChallengeParticipationBreakdown,
   };
 
   const refreshProfileMeOnce = useCallback(() => {
@@ -703,7 +685,6 @@ function ProfileScreenContent() {
         applyProfileMeData(profileData, profileSetters.current);
         void screenCache.set(PROFILE_ME_CACHE_KEY, profileData);
       }
-      setProfileMeReady(true);
     })();
   }, []);
 
@@ -723,10 +704,7 @@ function ProfileScreenContent() {
             applyProfileMeData(profileData, profileSetters.current);
             void screenCache.set(PROFILE_ME_CACHE_KEY, profileData);
           }
-          setProfileMeReady(true);
         })();
-      } else {
-        setProfileMeReady(true);
       }
 
       void refreshWallet({ silent: true });
@@ -1178,52 +1156,13 @@ function ProfileScreenContent() {
           </View>
         </View>
 
-        <ChallengeParticipationBreakdownCard
-          breakdown={challengeParticipationBreakdown}
-          loading={!profileMeReady && challengeParticipationBreakdown === undefined}
-        />
-
-        {/* ── Wearable Setup ── */}
+        {/* Order: Step tracking → Invite friends → New dashboard → Vibration → Dark mode */}
         <WearableStatusCard
           stepSource={stepSourceInfo}
           onSetupPress={() => setShowWearableSetup(true)}
           colors={colors}
         />
 
-        {/* ── Challenge History ── */}
-        {challengeHistory.length > 0 && (
-          <>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Challenge History</Text>
-            <View style={[styles.historyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              {challengeHistory.map((item, i) => (
-                <ChallengeHistoryRow key={item.id} item={item} colors={colors} isLast={i === challengeHistory.length - 1} />
-              ))}
-            </View>
-          </>
-        )}
-
-        {/* Badge progress */}
-        {nextBadge && (
-          <View style={[styles.badgeProgressCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.badgeProgressTop}>
-              <Text style={[styles.badgeProgressLabel, { color: colors.mutedForeground }]}>
-                Progress to <Text style={{ color: colors.foreground, fontWeight: "700" }}>{nextBadge.name}</Text>
-              </Text>
-              <Text style={[styles.badgeProgressPct, { color: colors.primary }]}>{Math.round(progressToNext * 100)}%</Text>
-            </View>
-            <View style={[styles.badgeProgressBar, { backgroundColor: colors.border }]}>
-              <LinearGradient
-                colors={[colors.primary, colors.accent]}
-                style={[styles.badgeProgressFill, { width: `${Math.min(progressToNext * 100, 100)}%` }]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-              />
-            </View>
-          </View>
-        )}
-
-        {/* ── Preferences ── */}
-        <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Preferences</Text>
         <View style={[styles.settingsList, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <TouchableOpacity
             style={[styles.settingRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
@@ -1235,7 +1174,7 @@ function ProfileScreenContent() {
               <Feather name="gift" size={17} color={colors.gold} />
             </View>
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={[styles.settingLabel, { color: colors.foreground }]}>Refer & Earn</Text>
+              <Text style={[styles.settingLabel, { color: colors.foreground }]}>Invite friends</Text>
               <Text style={[styles.settingSubtitle, { color: colors.mutedForeground }]} numberOfLines={2}>
                 {user?.referralCode ? `Code: ${user.referralCode}` : "Invite friends and earn rewards"}
               </Text>
@@ -1257,7 +1196,11 @@ function ProfileScreenContent() {
                 Challenge participation breakdown
               </Text>
             </View>
-            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+            <Feather
+              name="chevron-right"
+              size={16}
+              color={colors.mutedForeground}
+            />
           </TouchableOpacity>
           <View style={[styles.settingRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
             <View style={[styles.settingIcon, { backgroundColor: colors.accent + "15" }]}>
@@ -1274,7 +1217,7 @@ function ProfileScreenContent() {
             <View style={[styles.settingIcon, { backgroundColor: colors.neonBlue + "15" }]}>
               <Feather name={darkTheme ? "moon" : "sun"} size={17} color={colors.neonBlue} />
             </View>
-            <Text style={[styles.settingLabel, { color: colors.foreground }]}>Dark Theme</Text>
+            <Text style={[styles.settingLabel, { color: colors.foreground }]}>Dark mode</Text>
             <Switch value={darkTheme} onValueChange={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); toggleTheme(); }}
               trackColor={{ false: colors.border, true: colors.neonBlue + "80" }}
               thumbColor={darkTheme ? colors.neonBlue : colors.mutedForeground}
@@ -1318,6 +1261,38 @@ function ProfileScreenContent() {
             />
           </View>
         </View>
+
+        {/* ── Challenge History ── */}
+        {challengeHistory.length > 0 && (
+          <>
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Challenge History</Text>
+            <View style={[styles.historyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {challengeHistory.map((item, i) => (
+                <ChallengeHistoryRow key={item.id} item={item} colors={colors} isLast={i === challengeHistory.length - 1} />
+              ))}
+            </View>
+          </>
+        )}
+
+        {/* Badge progress */}
+        {nextBadge && (
+          <View style={[styles.badgeProgressCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={styles.badgeProgressTop}>
+              <Text style={[styles.badgeProgressLabel, { color: colors.mutedForeground }]}>
+                Progress to <Text style={{ color: colors.foreground, fontWeight: "700" }}>{nextBadge.name}</Text>
+              </Text>
+              <Text style={[styles.badgeProgressPct, { color: colors.primary }]}>{Math.round(progressToNext * 100)}%</Text>
+            </View>
+            <View style={[styles.badgeProgressBar, { backgroundColor: colors.border }]}>
+              <LinearGradient
+                colors={[colors.primary, colors.accent]}
+                style={[styles.badgeProgressFill, { width: `${Math.min(progressToNext * 100, 100)}%` }]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+              />
+            </View>
+          </View>
+        )}
 
         {/* ── Wallet & Rewards ── */}
         <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Wallet & Rewards</Text>

@@ -209,26 +209,35 @@ const ZERO: ChallengeParticipationBreakdown = {
   assert.match(cardSrc, /accessibilityLabel/);
   assert.match(cardSrc, /SilentErrorBoundary|ErrorBoundary/);
 
-  assert.match(profileSrc, /ChallengeParticipationBreakdownCard/);
-  assert.match(profileSrc, /Your Stats/);
   assert.match(profileSrc, /New dashboard/);
   assert.match(profileSrc, /Vibration/);
-  assert.match(profileSrc, /Dark Theme/);
-  assert.match(profileSrc, /Refer & Earn/);
+  assert.match(profileSrc, /Dark mode/);
+  assert.match(profileSrc, /Invite friends/);
   const newDashIdx = profileSrc.indexOf("New dashboard");
   const vibrationIdx = profileSrc.indexOf(">Vibration<") >= 0
     ? profileSrc.indexOf(">Vibration<")
     : profileSrc.indexOf("Vibration");
   assert.ok(newDashIdx > 0 && vibrationIdx > newDashIdx);
+  assert.equal(profileSrc.includes("dashboardExpanded"), false);
 
-  assert.match(modalSrc, /ChallengeParticipationBreakdownCard/);
-  assert.match(modalSrc, /extractBreakdownFromPublicUserPayload|applyIncomingBreakdown/);
+  assert.equal(modalSrc.includes("ChallengeParticipationBreakdownCard"), false);
   assert.match(modalSrc, /Lifetime Steps/);
   assert.match(modalSrc, /Races Played/);
 
   assert.match(dashboardSrc, /ChallengeParticipationBreakdownCard/);
   assert.match(dashboardSrc, /profileMePath|PROFILE_ME_CACHE_KEY/);
   assert.equal(dashboardSrc.includes("setInterval"), false);
+
+  const walkSrc = fs.readFileSync(path.join(root, "features", "walk", "screens", "WalkScreen.tsx"), "utf8");
+  assert.match(walkSrc, /New dashboard/);
+  assert.match(walkSrc, /Invite friends/);
+  assert.match(walkSrc, /isEditing \?[\s\S]*width: 22/);
+  assert.equal(walkSrc.includes("ChallengeParticipationBreakdownCard"), false);
+  assert.equal(walkSrc.includes("dashboardExpanded"), false);
+  assert.match(modalSrc, /position:\s*"absolute"/);
+  assert.match(modalSrc, /right:\s*rs\(10\)/);
+  assert.match(profileSrc, /\/profile\/dashboard/);
+  assert.match(walkSrc, /\/profile\/dashboard/);
 
   assert.match(hookSrc, /RACE_STARTED/);
   assert.match(hookSrc, /challenge_started/);

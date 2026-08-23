@@ -171,8 +171,14 @@ export function GroupPublicStatsModal({
         <Pressable style={[st.card, { backgroundColor: colors.card }]} onPress={() => {}}>
 
           {/* Close button */}
-          <TouchableOpacity style={st.closeBtn} onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Feather name="x" size={20} color={colors.mutedForeground} />
+          <TouchableOpacity
+            style={[st.closeBtn, { backgroundColor: colors.border + "99" }]}
+            onPress={onClose}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+          >
+            <Feather name="x" size={rf(16)} color={colors.foreground} />
           </TouchableOpacity>
 
           {/* Avatar */}
@@ -295,9 +301,14 @@ const st = StyleSheet.create({
   },
   closeBtn: {
     position: "absolute",
-    top: rs(14),
-    right: rs(14),
-    padding: rs(4),
+    top: rs(10),
+    right: rs(10),
+    width: rs(32),
+    height: rs(32),
+    borderRadius: rs(16),
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 20,
   },
   avatar: {
     width: rs(72),

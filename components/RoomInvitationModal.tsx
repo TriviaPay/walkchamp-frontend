@@ -299,14 +299,19 @@ const styles = StyleSheet.create({
   // Close
   closeBtn: {
     position: "absolute",
-    top: 12,
-    right: 14,
-    zIndex: 10,
-    padding: 4,
+    top: 10,
+    right: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#161A26",
+    borderWidth: 1,
+    borderColor: "#1E2230",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 20,
   },
-
-  // Avatar
-  avatarWrap: { alignItems: "center", marginTop: 14, marginBottom: 6 },
+  avatarWrap: { alignItems: "center", marginTop: 40, marginBottom: 6 },
   avatarRing: {
     width: 60,
     height: 60,

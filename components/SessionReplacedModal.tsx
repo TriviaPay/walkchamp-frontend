@@ -118,8 +118,8 @@ const styles = StyleSheet.create({
   },
   closeBtn: {
     position: "absolute",
-    top: 16,
-    right: 16,
+    top: 10,
+    right: 10,
     width: 32,
     height: 32,
     borderRadius: 16,
@@ -128,7 +128,7 @@ const styles = StyleSheet.create({
     borderColor: "#1E2230",
     justifyContent: "center",
     alignItems: "center",
-    zIndex: 1,
+    zIndex: 20,
   },
   iconRow: {
     alignItems: "center",

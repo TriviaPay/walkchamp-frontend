@@ -1257,7 +1257,6 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
       const json = await res.json().catch(() => ({}));
       const stats = json.data?.stats ?? null;
       if (stats) {
-        const profileId = json.data?.profile?.id ?? null;
         const title: ActiveTitle | null = json.data?.active_title ?? null;
         setProfileStats({ ...stats, activeTitle: title });
         setActiveTitle(title);
@@ -1441,7 +1440,11 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
 
   return (
     <Modal visible={visible} animationType={animationType} presentationStyle="pageSheet"
-      onRequestClose={() => { if (profilePage !== "main") { setProfilePage("main"); } else { onClose(); } }}>
+      onRequestClose={() => {
+        if (profilePage !== "main") { setProfilePage("main"); return; }
+        if (isEditing) { setIsEditing(false); setUsernameError(""); return; }
+        onClose();
+      }}>
       <SafeAreaView
         edges={["top", "left", "right", "bottom"]}
         style={[pmStyles.container, { backgroundColor: colors.background }]}
@@ -1455,16 +1458,22 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
           <TermsSubpage colors={colors} onBack={() => setProfilePage("main")} />
         ) : (<>
 
-        {/* Header: X close | title | edit pencil/X */}
+        {/* Header: X close (hidden while editing) | title | edit pencil/X */}
         <View style={[pmStyles.header, { borderBottomColor: colors.border }]}>
-          <TouchableOpacity onPress={onClose} hitSlop={12}>
-            <Feather name="x" size={22} color={colors.foreground} />
-          </TouchableOpacity>
+          {isEditing ? (
+            <View style={{ width: 22 }} />
+          ) : (
+            <TouchableOpacity onPress={onClose} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close profile">
+              <Feather name="x" size={22} color={colors.foreground} />
+            </TouchableOpacity>
+          )}
           <Text style={[pmStyles.headerTitle, { color: colors.foreground }]}>My Profile</Text>
           <TouchableOpacity
             hitSlop={12}
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsEditing((e) => !e); setUsernameError(""); }}
             style={[pmStyles.editToggleBtn, { backgroundColor: isEditing ? colors.primary + "20" : "transparent", borderColor: isEditing ? colors.primary : colors.border }]}
+            accessibilityRole="button"
+            accessibilityLabel={isEditing ? "Cancel editing" : "Edit profile"}
           >
             <Feather name={isEditing ? "x" : "edit-2"} size={17} color={isEditing ? colors.primary : colors.mutedForeground} />
           </TouchableOpacity>
@@ -1695,9 +1704,41 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
             <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
           </TouchableOpacity>
 
-
-          {/* ── Preferences ── */}
+          {/* Order: Step tracking → Invite friends → New dashboard → Vibration → Dark mode */}
           <View style={[pmStyles.settingsList, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <TouchableOpacity
+              style={[pmStyles.toggleRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
+              onPress={() => onNavigate("/profile/invite-friends")}
+              accessibilityRole="button"
+              accessibilityLabel="Invite friends"
+            >
+              <View style={[pmStyles.toggleIcon, { backgroundColor: colors.gold + "18" }]}>
+                <Feather name="gift" size={17} color={colors.gold} />
+              </View>
+              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>Invite friends</Text>
+              <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[pmStyles.toggleRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
+              onPress={() => onNavigate("/profile/dashboard")}
+              accessibilityRole="button"
+              accessibilityLabel="New dashboard"
+            >
+              <View style={[pmStyles.toggleIcon, { backgroundColor: colors.primary + "18" }]}>
+                <Feather name="bar-chart-2" size={17} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>New dashboard</Text>
+                <Text style={{ fontSize: rf(11), color: colors.mutedForeground, marginTop: 1 }} numberOfLines={1}>
+                  Challenge participation breakdown
+                </Text>
+              </View>
+              <Feather
+                name="chevron-right"
+                size={16}
+                color={colors.mutedForeground}
+              />
+            </TouchableOpacity>
             <View style={[pmStyles.toggleRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
               <View style={[pmStyles.toggleIcon, { backgroundColor: colors.accent + "18" }]}>
                 <Feather name="volume-2" size={17} color={colors.accent} />
@@ -1713,7 +1754,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
               <View style={[pmStyles.toggleIcon, { backgroundColor: colors.neonBlue + "18" }]}>
                 <Feather name={darkTheme ? "moon" : "sun"} size={17} color={colors.neonBlue} />
               </View>
-              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>{darkTheme ? "Dark Mode" : "Light Mode"}</Text>
+              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>Dark mode</Text>
               <Switch value={darkTheme} onValueChange={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); toggleTheme(); }}
                 trackColor={{ false: colors.border, true: colors.neonBlue + "80" }}
                 thumbColor={darkTheme ? colors.neonBlue : colors.mutedForeground}
@@ -1733,20 +1774,6 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
                     ios_backgroundColor={colors.border}
                   />}
             </View>
-          </View>
-
-          {/* ── Wallet & Rewards ── */}
-          <View style={[pmStyles.settingsList, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <TouchableOpacity
-              style={[pmStyles.toggleRow]}
-              onPress={() => onNavigate("/profile/invite-friends")}
-            >
-              <View style={[pmStyles.toggleIcon, { backgroundColor: colors.gold + "18" }]}>
-                <Feather name="gift" size={17} color={colors.gold} />
-              </View>
-              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>Invite Friends</Text>
-              <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
-            </TouchableOpacity>
           </View>
 
           {/* ── Support & Legal ── */}
