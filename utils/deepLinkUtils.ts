@@ -151,6 +151,7 @@ export function resolveRaceRoomRoute(roomId: string, notificationType?: string):
     type === "race_starting" ||
     type === "race_joined" ||
     type === "race_finished" ||
+    type === "race_verification_pending" ||
     type === "coins_battle_joined" ||
     type === "live_activity_race_update"
   ) {
@@ -320,6 +321,21 @@ export function resolveNotificationRoute(
       return roomId
         ? `/sponsored-events/waiting-room?id=${encodeURIComponent(roomId)}`
         : "/sponsored-events";
+
+    case "race_verification_pending": {
+      const challengeId = pickString(
+        data,
+        "challengeId",
+        "challenge_id",
+        "raceId",
+        "race_id",
+        "roomId",
+        "room_id",
+      );
+      return challengeId
+        ? resolveRaceRoomRoute(challengeId, type)
+        : "/rooms/available";
+    }
 
     case "race_invite":
     case "race_starting":

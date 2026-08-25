@@ -307,5 +307,21 @@ public class WalkChampRaceProgressModule: Module {
         WalkChampWalkLiveActivityManager.end()
       }
     }
+
+    AsyncFunction("resolveApprovedHealthKitSourceId") { () -> String? in
+      Bundle.main.bundleIdentifier
+    }
+
+    AsyncFunction("readProtectedRaceSteps") { (_: [String: Any]) -> [String: Any]? in
+      nil
+    }
+
+    Function("isAppAttestAvailable") { () -> Bool in
+      false
+    }
+
+    AsyncFunction("requestAppAttestAssertion") { (_: String, _: String) -> String? in
+      nil
+    }
   }
 }

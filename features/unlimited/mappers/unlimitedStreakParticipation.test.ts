@@ -25,6 +25,14 @@ assert.equal(
     viewerResultReasonCode: "daily_goal_missed",
     resultsStatus: "in_progress",
   }),
+  "pending_settlement",
+);
+assert.equal(
+  resolveStreakDetailUiBranch({
+    viewerResultsReady: true,
+    viewerResultReasonCode: "daily_goal_missed",
+    resultsStatus: "results_ready",
+  }),
   "broken",
 );
 assert.equal(
@@ -37,6 +45,14 @@ assert.equal(
 assert.equal(
   resolveStreakDetailUiBranch({ viewerStatus: "active", resultsStatus: "in_progress" }),
   "live",
+);
+assert.equal(
+  resolveStreakDetailUiBranch({
+    viewerStatus: "completed",
+    finalVerificationStatus: "submitted",
+    resultsStatus: "steps_validation_in_progress",
+  }),
+  "pending_settlement",
 );
 
 console.log("unlimitedStreakParticipation.test.ts: ok");

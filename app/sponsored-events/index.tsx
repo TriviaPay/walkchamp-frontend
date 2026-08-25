@@ -43,6 +43,11 @@ import { rf, rs } from "@/utils/responsive";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { authFetch } from "@/utils/authFetch";
+import { beginProtectedPreflightAfterJoin } from "@/services/raceVerification/raceVerificationService";
+import {
+  isProtectedRacePlatformSupported,
+  IOS_PROTECTED_UNAVAILABLE_MESSAGE,
+} from "@/services/raceVerification/prizeRaceHelpers";
 import { getBadgeColor } from "@/utils/mockData";
 import { subscribeToChannel, SPONSORED_EVENTS_CHANNEL, EVENTS } from "@/services/realtimeService";
 import { getApiBase } from "@/utils/apiUrl";
@@ -1269,6 +1274,15 @@ function SponsoredEventsScreenContent() {
   const confirmRegister = async () => {
     const ev = registerModal.ev;
     if (!ev) return;
+    if (!isProtectedRacePlatformSupported()) {
+      setRegisterModal({ visible: false, ev: null });
+      setErrorModal({
+        visible: true,
+        title: "Not available on iPhone",
+        message: IOS_PROTECTED_UNAVAILABLE_MESSAGE,
+      });
+      return;
+    }
     setRegisteringId(ev.id);
     try {
       const res  = await authFetch(`/api/sponsored-events/${ev.id}/register`, { method: "POST" });
@@ -1288,6 +1302,9 @@ function SponsoredEventsScreenContent() {
       if (data.coinBalance !== undefined) dispatch(setReduxCoinBalance(data.coinBalance));
       dispatch(fetchCoinBalance());
       fetchEvents();
+      if (userId) {
+        void beginProtectedPreflightAfterJoin(ev.id, userId);
+      }
       // Navigate to the right destination based on race state
       if (ev.status === "in_progress") {
         router.push({ pathname: "/race/live-detail", params: { id: ev.id } });

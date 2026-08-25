@@ -18,7 +18,7 @@ import { authFetch } from "@/utils/authFetch";
 import { profileMePath } from "@/utils/profileApi";
 import { screenCache } from "@/utils/screenCache";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
-import { PROFILE_ME_CACHE_KEY } from "@/hooks/useAvatarCache";
+import { profileMeCacheKey } from "@/hooks/useAvatarCache";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { SkeletonEditForm } from '@/components/SkeletonRows';
 import { rf } from "@/utils/responsive";
@@ -67,7 +67,8 @@ async function updateProfileMe(updates: Partial<ProfileData>): Promise<{ success
 export default function EditProfileScreen() {
   const colors  = useColors();
   const { safeTop, safeBottom } = useSafeLayout();
-  const { refreshUserProfile } = useAuth();
+  const { user, refreshUserProfile } = useAuth();
+  const profileCacheKey = profileMeCacheKey(user?.id);
 
   const [loading,     setLoading]     = useState(true);
   const [saving,      setSaving]      = useState(false);
@@ -93,12 +94,12 @@ export default function EditProfileScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    const cached = screenCache.getSync<{ profile: ProfileData | null }>(PROFILE_ME_CACHE_KEY);
+    const cached = screenCache.getSync<{ profile: ProfileData | null }>(profileCacheKey);
     if (cached?.profile) {
       applyProfileFields(cached.profile);
       setLoading(false);
     }
-    void screenCache.get<{ profile: ProfileData | null }>(PROFILE_ME_CACHE_KEY).then((disk) => {
+    void screenCache.get<{ profile: ProfileData | null }>(profileCacheKey).then((disk) => {
       if (cancelled || !disk?.profile) return;
       applyProfileFields(disk.profile);
       setLoading(false);
@@ -113,7 +114,7 @@ export default function EditProfileScreen() {
       setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [applyProfileFields]);
+  }, [applyProfileFields, profileCacheKey]);
 
   const validateUsername = useCallback((val: string) => {
     if (!val) { setUsernameError(""); return; }

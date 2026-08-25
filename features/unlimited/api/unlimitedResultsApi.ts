@@ -3,7 +3,7 @@
  *
  * Detail: `GET /api/unlimited-challenges/:id`
  * History: `GET /api/unlimited-challenges/:id/daily-history?userId=`
- * Own prize: `GET /api/notifications` for `race_won` payoutCents only.
+ * Own prize: prefer participant-row `payoutCents` from detail; notifications are fallback only.
  */
 import { authFetch } from "@/utils/authFetch";
 import {
@@ -49,14 +49,33 @@ export async function fetchUnlimitedDailyHistory(
   }
 }
 
+/** Prefer backend payout stored on the viewer’s participant row. */
+export function payoutCentsFromParticipants(
+  participants: UnlimitedLiveDetailMapped["participants"] | null | undefined,
+  viewerUserId: string | null | undefined,
+): number | null {
+  if (!viewerUserId || !participants?.length) return null;
+  const me = participants.find((p) => p.userId === viewerUserId);
+  const cents = me?.payoutCents;
+  if (typeof cents !== "number" || !Number.isFinite(cents)) return null;
+  return Math.floor(cents);
+}
+
 /**
- * The logged-in user's own final payout for this challenge, sourced from
- * their `race_won` notification `data.payoutCents` — backend-authoritative,
- * written only once by `settleUnlimitedChallenge`. Returns `null` when no
- * such notification exists yet (not a winner, or settlement hasn't credited
- * this user yet).
+ * The logged-in user's own final payout for this challenge.
+ * Prefer participant-row `payoutCents` from challenge detail (authoritative).
+ * Fallback: scan recent `race_won` notifications (limit=50) — retention/ordering fragile.
  */
-export async function fetchUnlimitedOwnPrizeShareCents(challengeId: string): Promise<number | null> {
+export async function fetchUnlimitedOwnPrizeShareCents(
+  challengeId: string,
+  opts?: {
+    viewerUserId?: string | null;
+    participants?: UnlimitedLiveDetailMapped["participants"] | null;
+  },
+): Promise<number | null> {
+  const fromRow = payoutCentsFromParticipants(opts?.participants, opts?.viewerUserId);
+  if (fromRow != null) return fromRow;
+
   try {
     const res = await authFetch("/api/notifications?limit=50");
     if (!res.ok) return null;

@@ -53,7 +53,7 @@ import MyTitlesModal, { type ActiveTitle, difficultyColor } from "@/components/M
 import WearableSetupModal from "@/components/WearableSetupModal";
 import { markDeviceStepSetupCompleted } from "@/services/permissions/permissionCoordinator";
 import { useTitleUnlock } from "@/context/TitleUnlockContext";
-import { useAvatarCache, PROFILE_ME_CACHE_KEY } from "@/hooks/useAvatarCache";
+import { useAvatarCache, profileMeCacheKey } from "@/hooks/useAvatarCache";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
@@ -408,7 +408,8 @@ function ProfileScreenContent() {
   const { userRank, totalEarned, walletCurrency, walletBalance, pendingBalance, refreshWallet } = useApp();
 
   // Profile view state — seed from cache for instant paint
-  const cachedProfile = screenCache.getSync<ProfileMeResponse>(PROFILE_ME_CACHE_KEY);
+  const profileCacheKey = profileMeCacheKey(user?.id);
+  const cachedProfile = screenCache.getSync<ProfileMeResponse>(profileCacheKey);
   const [serverStats,       setServerStats]       = useState<ServerStats | null>(cachedProfile?.stats ?? null);
   const [showTitlesModal,   setShowTitlesModal]   = useState(false);
 
@@ -683,16 +684,16 @@ function ProfileScreenContent() {
       const profileData = await fetchProfileMeFull();
       if (profileData) {
         applyProfileMeData(profileData, profileSetters.current);
-        void screenCache.set(PROFILE_ME_CACHE_KEY, profileData);
+        void screenCache.set(profileCacheKey, profileData);
       }
     })();
-  }, []);
+  }, [profileCacheKey]);
 
   useInvalidateProfileOnChallengeStart(refreshProfileMeOnce);
 
   useFocusEffect(
     useCallback(() => {
-      void screenCache.get<ProfileMeResponse>(PROFILE_ME_CACHE_KEY).then((cached) => {
+      void screenCache.get<ProfileMeResponse>(profileCacheKey).then((cached) => {
         if (cached) applyProfileMeData(cached, profileSetters.current);
       });
 
@@ -702,7 +703,7 @@ function ProfileScreenContent() {
           const profileData = await fetchProfileMeFull();
           if (profileData) {
             applyProfileMeData(profileData, profileSetters.current);
-            void screenCache.set(PROFILE_ME_CACHE_KEY, profileData);
+            void screenCache.set(profileCacheKey, profileData);
           }
         })();
       }
@@ -1388,9 +1389,9 @@ function ProfileScreenContent() {
           };
           setStepSourceInfo((prev) => mergeStepSource(next, prev) ?? next);
           void (async () => {
-            const cached = await screenCache.get<ProfileMeResponse>(PROFILE_ME_CACHE_KEY);
+            const cached = await screenCache.get<ProfileMeResponse>(profileCacheKey);
             if (cached) {
-              await screenCache.set(PROFILE_ME_CACHE_KEY, { ...cached, stepSource: next });
+              await screenCache.set(profileCacheKey, { ...cached, stepSource: next });
             }
           })();
           if (permissionStatus === "connected") {

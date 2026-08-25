@@ -4,6 +4,8 @@
  * manually leave or forfeit. Classic races keep their own DQ = out rules.
  */
 
+import { canPublishFinalResult } from "./unlimitedResults";
+
 export const STREAK_REMOVED_STATUSES = new Set([
   "left",
   "forfeited",
@@ -38,6 +40,7 @@ export type StreakViewerResultInput = {
   resultsStatus?: string | null;
   failedDays?: number | null;
   eligibilityReasonCode?: string | null;
+  finalVerificationStatus?: string | null;
 };
 
 export function isViewerStreakBroken(input: StreakViewerResultInput): boolean {
@@ -50,19 +53,30 @@ export function isViewerStreakBroken(input: StreakViewerResultInput): boolean {
   return (input.failedDays ?? 0) > 0;
 }
 
+export type StreakDetailUiBranch = "broken" | "final" | "live" | "pending_settlement";
+
 /**
  * Recommended UI branch from the streak backend contract.
- * `live` = keep racing chrome. `broken` = personal failed result, challenge still running.
- * `final` = global or personal results_ready that is not a missed-day break.
+ * Winner/loser chrome only after global `results_ready`.
  */
 export function resolveStreakDetailUiBranch(
   input: StreakViewerResultInput,
-): "broken" | "final" | "live" {
-  const globalReady = (input.resultsStatus ?? "").trim().toLowerCase() === "results_ready";
-  const ready = input.viewerResultsReady === true || globalReady;
-  if (ready) {
+): StreakDetailUiBranch {
+  const globalReady = canPublishFinalResult(input.resultsStatus);
+  if (globalReady) {
     return isViewerStreakBroken(input) ? "broken" : "final";
   }
-  if ((input.viewerStatus ?? "").trim().toLowerCase() === "failed") return "broken";
+  const viewer = (input.viewerStatus ?? "").trim().toLowerCase();
+  const verify = (input.finalVerificationStatus ?? "").trim().toLowerCase();
+  if (
+    input.viewerResultsReady === true ||
+    viewer === "completed" ||
+    viewer === "failed" ||
+    verify === "requested" ||
+    verify === "submitted" ||
+    verify === "completed"
+  ) {
+    return "pending_settlement";
+  }
   return "live";
 }

@@ -21,4 +21,5 @@ regexes = [
   '''pk_(test|live)_[A-Za-z0-9]+''',
   '''rzp_(test|live)_[A-Za-z0-9]+''',
   '''walkchamp_[a-z0-9_]+_v\d+''',
+  '''wc_[a-z0-9_]+_v\d+''',
 ]

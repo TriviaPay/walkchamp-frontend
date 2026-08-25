@@ -16,7 +16,7 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useColors } from "@/hooks/useColors";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
-import { getValidSession } from "@/services/authService";
+import { authFetch } from "@/utils/authFetch";
 import { Image } from "expo-image";
 import CoinsStoreModal from "@/components/CoinsStoreModal";
 import { getApiBase } from "@/utils/apiUrl";
@@ -33,6 +33,10 @@ import type { AppDispatch, RootState } from "@/store";
 import { isTrackLayoutId } from "@/constants/trackLayouts";
 import { resolveTrackThemeImageSource } from "@/utils/trackThemeMedia";
 import { rf } from "@/utils/responsive";
+import {
+  isProtectedRacePlatformSupported,
+  IOS_PROTECTED_UNAVAILABLE_MESSAGE,
+} from "@/services/raceVerification/prizeRaceHelpers";
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
@@ -312,21 +316,22 @@ export default function CoinsBattleModal({ visible, onClose, onCreated }: CoinsB
 
   const handleHost = async () => {
     if (!hasEnough) { shake(); return; }
+    if (!isProtectedRacePlatformSupported()) {
+      setError(IOS_PROTECTED_UNAVAILABLE_MESSAGE);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const session = await getValidSession();
-      if (!session) { setError("Not authenticated"); setLoading(false); return; }
       const blocking = await fetchBlockingNonSponsoredChallenge();
       if (blocking) {
         setError("You already have an active challenge. Leave it before starting a Coins Battle.");
         setLoading(false);
         return;
       }
-      const res = await fetch(`${getApiBase()}/api/coins-battle/host`, {
+      const res = await authFetch(`/api/coins-battle/host`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session}` },
-        body: JSON.stringify({ coinEntryAmount: coinEntry, maxPlayers: playerCount, targetSteps, trackLayout }),
+        body: JSON.stringify({ coinEntryAmount: coinEntry, maxPlayers: playerCount, targetSteps, trackLayout, durationMinutes: 60 }),
       });
       const data = await res.json() as { raceId?: string; error?: string; code?: string };
       if (!res.ok) {

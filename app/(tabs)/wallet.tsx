@@ -41,12 +41,13 @@ import { rf, rs } from "@/utils/responsive";
 import type { WalletTransaction } from "@/utils/mockData";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { authFetch } from "@/utils/authFetch";
-import { PAYMENT_DEEP_LINK_SCHEME, DEPOSIT_POLL_FIRST_MS, DEPOSIT_POLL_INTERVAL_MS } from "@/config/paymentsConfig";
+import { PAYMENT_DEEP_LINK_SCHEME, depositPollDelayMs, DEPOSIT_POLL_RATE_LIMIT_MS } from "@/config/paymentsConfig";
 import {
   clearPendingDeposit,
   consumePaymentResult,
   depositStatusToUiResult,
   fetchDepositStatus,
+  fetchDepositStatusDetailed,
   isPollCompleteDepositStatus,
   isTerminalDepositStatus,
   resolveDepositUiFromTransaction,
@@ -558,9 +559,10 @@ function WalletScreenContent() {
       // show the wallet result immediately — do not wait for the browser session to end.
       let polledStatus: DepositPollStatus | null = null;
       let pollStopped = false;
-      let pollInterval: ReturnType<typeof setInterval> | null = null;
+      let pollTimeout: ReturnType<typeof setTimeout> | null = null;
       let flowHandled = false;
       let pollInFlight = false;
+      let pollAttempt = 0;
 
       const completeDepositUi = async (source: string, fallbackUi?: PaymentResultStatus | null) => {
         if (flowHandled) return;
@@ -575,7 +577,7 @@ function WalletScreenContent() {
 
         flowHandled = true;
         pollStopped = true;
-        if (pollInterval) clearInterval(pollInterval);
+        if (pollTimeout) clearTimeout(pollTimeout);
 
         setShowDeposit(false);
         resetDeposit();
@@ -585,25 +587,42 @@ function WalletScreenContent() {
         logger.debug("WalletDeposit", `complete: ${ui} (${source})`);
       };
 
+      const schedulePoll = (delayMs: number) => {
+        if (pollStopped || flowHandled) return;
+        if (pollTimeout) clearTimeout(pollTimeout);
+        pollTimeout = setTimeout(() => {
+          void runPoll();
+        }, delayMs);
+      };
+
       const runPoll = async () => {
         if (pollStopped || polledStatus || flowHandled || pollInFlight) return;
         pollInFlight = true;
         try {
-          const s = await fetchDepositStatus(transactionId);
+          const result = await fetchDepositStatusDetailed(transactionId);
+          const s = result.status;
           if (isPollCompleteDepositStatus(s)) {
             polledStatus = s;
             await completeDepositUi("poll", depositStatusToUiResult(s));
+            return;
           }
+          if (s === "rate_limited" || result.httpStatus === 429) {
+            schedulePoll(result.retryAfterMs ?? DEPOSIT_POLL_RATE_LIMIT_MS);
+            return;
+          }
+          pollAttempt += 1;
+          schedulePoll(depositPollDelayMs(pollAttempt));
         } catch {
-          // ignore transient network errors, keep polling
+          // Transient network — keep sparse backoff (do not burn rate-limit budget).
+          pollAttempt += 1;
+          schedulePoll(depositPollDelayMs(pollAttempt));
         } finally {
           pollInFlight = false;
         }
       };
 
-      pollInterval = setInterval(() => void runPoll(), DEPOSIT_POLL_INTERVAL_MS);
-      setTimeout(() => void runPoll(), DEPOSIT_POLL_FIRST_MS);
-      void runPoll();
+      // Sparse backoff polls (create-intent already used one rate-limit slot).
+      schedulePoll(depositPollDelayMs(0));
 
       // Android: openBrowserAsync + poll (avoids stuck "Return to WalkChamp" done page).
       // iOS: openAuthSessionAsync intercepts the custom-scheme redirect.
@@ -615,7 +634,7 @@ function WalletScreenContent() {
               presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
             });
 
-      clearInterval(pollInterval!);
+      if (pollTimeout) clearTimeout(pollTimeout);
       pollStopped = true;
 
       if (flowHandled) {

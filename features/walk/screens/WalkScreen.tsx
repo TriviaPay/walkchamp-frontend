@@ -26,6 +26,11 @@ import {
 } from "@/components/RaceStartingSoonCard";
 import { LiveClockText } from "@/components/perf/LiveClockText";
 import { ensureMatchStepPermissionsReady } from "@/services/permissions/matchPermissionGate";
+import { beginProtectedPreflightAfterJoin } from "@/services/raceVerification/raceVerificationService";
+import {
+  isProtectedRacePlatformSupported,
+  IOS_PROTECTED_UNAVAILABLE_MESSAGE,
+} from "@/services/raceVerification/prizeRaceHelpers";
 import { requestHomeStepSetup } from "@/services/permissions/homePermissionFlow";
 import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -225,7 +230,7 @@ import { PrivacyPolicyDocument } from "@/components/PrivacyPolicyDocument";
 import { TermsAndConditionsDocument } from "@/components/TermsAndConditionsDocument";
 import { clampDailyProgress } from "@/utils/stepProgress";
 import CoinsBattleModal from "@/components/CoinsBattleModal";
-import { screenCache } from "@/utils/screenCache";
+import { screenCache, scopedScreenCacheKey } from "@/utils/screenCache";
 import {
   DELETE_ACCOUNT_WARNING,
   deleteAccountBalanceBlockMessage,
@@ -475,9 +480,13 @@ function cashHostBody(fee: number, maxPlayers: number, targetSteps: number, trac
       trackLayout,
       customEntryAmountCents: entryFeeCents,
       entryFeeCents,
+      durationMinutes: 60,
     };
   }
-  return { entryType, maxPlayers, targetSteps, trackLayout };
+  if (entryType === "free") {
+    return { entryType, maxPlayers, targetSteps, trackLayout };
+  }
+  return { entryType, maxPlayers, targetSteps, trackLayout, durationMinutes: 60 };
 }
 
 function cashChallengeBlockedMessage(serverError?: string): string {
@@ -2958,9 +2967,9 @@ function WalkScreenContent() {
   }, [user?.id]);
 
   // Group count for the compact "Groups" entry — reuse Groups screen cache only (no new API).
-  const GROUPS_CACHE_KEY = "screen_groups_overview";
+  const groupsCacheKey = scopedScreenCacheKey("screen_groups_overview", user?.id);
   const [groupCount, setGroupCount] = useState(() => {
-    const cached = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(GROUPS_CACHE_KEY);
+    const cached = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(groupsCacheKey);
     return cached?.summary?.total_groups ?? cached?.groups?.length ?? 0;
   });
   const [availableChallengeCount, setAvailableChallengeCount] = useState(() => {
@@ -3026,14 +3035,14 @@ function WalkScreenContent() {
   }, [user?.id]);
 
   const syncGroupCountFromCache = useCallback(async () => {
-    const mem = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(GROUPS_CACHE_KEY);
+    const mem = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(groupsCacheKey);
     if (mem) {
       setGroupCount(mem.summary?.total_groups ?? mem.groups?.length ?? 0);
       return;
     }
-    const disk = await screenCache.get<{ summary?: { total_groups?: number }; groups?: unknown[] }>(GROUPS_CACHE_KEY);
+    const disk = await screenCache.get<{ summary?: { total_groups?: number }; groups?: unknown[] }>(groupsCacheKey);
     if (disk) setGroupCount(disk.summary?.total_groups ?? disk.groups?.length ?? 0);
-  }, []);
+  }, [groupsCacheKey]);
 
   const fetchRegisteredUpcomingRooms = useCallback(async () => {
     const uid = user?.id;
@@ -4909,6 +4918,11 @@ function WalkScreenContent() {
       if (!gate.allowed) return;
     }
 
+    if (setupModal.fee > 0 && !isProtectedRacePlatformSupported()) {
+      AppAlert.alert("Not available on iPhone", IOS_PROTECTED_UNAVAILABLE_MESSAGE);
+      return;
+    }
+
     setFreeJoining(true);
     try {
       let raceId: string;
@@ -4983,6 +4997,9 @@ function WalkScreenContent() {
       setRaceTargetSteps(selectedTargetSteps);
       joinRace(setupModal.fee, playerCount, isHosting);
       loadChallengeStatuses();
+      if (user?.id && setupModal.fee > 0) {
+        void beginProtectedPreflightAfterJoin(raceId, user.id);
+      }
 
       // Instant-close the modal then navigate — same pattern as Create Challenge.
       // setupModal stays open (covering the Walk tab) while matchmaking mounts,
@@ -5007,6 +5024,10 @@ function WalkScreenContent() {
   // Direct join: skips the player-count modal and immediately joins the existing open room
   const doDirectJoin = useCallback(async (raceId: string, fee: number, maxPlayers: number, entryKey: string) => {
     if (freeJoining || joiningEntryKey) return;
+    if (fee > 0 && !isProtectedRacePlatformSupported()) {
+      AppAlert.alert("Not available on iPhone", IOS_PROTECTED_UNAVAILABLE_MESSAGE);
+      return;
+    }
     // Permission gate — verified tracking required for ALL joins (incl. free)
     if (user?.id) {
       const gate = await ensureMatchStepPermissionsReady({
@@ -5047,6 +5068,9 @@ function WalkScreenContent() {
       setActiveRace(raceId, false);
       joinRace(fee, maxPlayers, false);
       loadChallengeStatuses();
+      if (user?.id && fee > 0) {
+        void beginProtectedPreflightAfterJoin(raceId, user.id);
+      }
       navToMatchmaking({ raceId, isHost: false });
     } catch {
       AppAlert.alert("Error", "Could not connect. Please try again.");
@@ -5073,6 +5097,10 @@ function WalkScreenContent() {
   }, [doDirectJoin]);
 
   const handleCoinsBattleJoin = useCallback(async (raceId: string) => {
+    if (!isProtectedRacePlatformSupported()) {
+      AppAlert.alert("Not available on iPhone", IOS_PROTECTED_UNAVAILABLE_MESSAGE);
+      return;
+    }
     guardRewardAction(() => {
       void (async () => {
     setJoiningEntryKey("coins_battle");
@@ -5107,6 +5135,9 @@ function WalkScreenContent() {
         joinedCount: Math.max(1, data.currentPlayers ?? 0),
       });
       void loadChallengeStatuses({ force: true });
+      if (user?.id) {
+        void beginProtectedPreflightAfterJoin(raceId, user.id);
+      }
       navToMatchmaking({ raceId, isHost: false });
     } catch {
       AppAlert.alert("Error", "Network error. Please try again.");
@@ -7260,6 +7291,9 @@ function WalkScreenContent() {
             joinedCount: 1,
           });
           void loadChallengeStatuses({ force: true });
+          if (user?.id) {
+            void beginProtectedPreflightAfterJoin(raceId, user.id);
+          }
           navToMatchmaking({ raceId, isHost, initialCurrentPlayers: 1 });
         }}
       />

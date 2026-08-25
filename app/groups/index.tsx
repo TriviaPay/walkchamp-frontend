@@ -19,7 +19,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { screenCache } from "@/utils/screenCache";
+import { screenCache, scopedScreenCacheKey } from "@/utils/screenCache";
 import { perf } from "@/utils/perfLogger";
 import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
 import { runCoalesced, apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
@@ -382,7 +382,7 @@ interface GroupsOverviewCache {
   pendingInvites: PendingInvite[];
 }
 
-const GROUPS_CACHE_KEY = "screen_groups_overview";
+const GROUPS_CACHE_BASE = "screen_groups_overview";
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 export default function GroupsScreen() {
@@ -397,25 +397,26 @@ function GroupsScreenContent() {
   useScreenMountPerf("Groups");
   const router = useRouter();
   const { user } = useAuth();
+  const groupsCacheKey = scopedScreenCacheKey(GROUPS_CACHE_BASE, user?.id);
   const liveSteps = useWalkTodaySteps();
   const { pendingGroupInvites: groupInviteCount, clearGroupInvites } = useUnread();
 
   const [loading, setLoading] = useState(
-    () => screenCache.getSync(GROUPS_CACHE_KEY) === null,
+    () => screenCache.getSync(groupsCacheKey) === null,
   );
   const [refreshing, setRefreshing] = useState(false);
   const [summary, setSummary] = useState<OverviewSummary>(
-    () => screenCache.getSync<GroupsOverviewCache>(GROUPS_CACHE_KEY)?.summary
+    () => screenCache.getSync<GroupsOverviewCache>(groupsCacheKey)?.summary
       ?? { total_groups: 0, today_user_steps: 0, active_members_total: 0 },
   );
   const [filters, setFilters] = useState<FilterChip[]>(
-    () => screenCache.getSync<GroupsOverviewCache>(GROUPS_CACHE_KEY)?.filters ?? [],
+    () => screenCache.getSync<GroupsOverviewCache>(groupsCacheKey)?.filters ?? [],
   );
   const [groups, setGroups] = useState<UserGroup[]>(
-    () => screenCache.getSync<GroupsOverviewCache>(GROUPS_CACHE_KEY)?.groups ?? [],
+    () => screenCache.getSync<GroupsOverviewCache>(groupsCacheKey)?.groups ?? [],
   );
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>(
-    () => screenCache.getSync<GroupsOverviewCache>(GROUPS_CACHE_KEY)?.pendingInvites ?? [],
+    () => screenCache.getSync<GroupsOverviewCache>(groupsCacheKey)?.pendingInvites ?? [],
   );
   const [selectedFilter, setSelectedFilter] = useState<GroupTypeFilter>("all");
   const hasLoadedRef = useRef(false);
@@ -454,7 +455,7 @@ function GroupsScreenContent() {
   }, [selectedFilter]);
 
   const fetchOverview = useCallback(async (opts?: { force?: boolean }) => {
-    const cacheKey = `${GROUPS_CACHE_KEY}_${getLocalDateStr()}`;
+    const cacheKey = `${groupsCacheKey}_${getLocalDateStr()}`;
     if (!opts?.force && !apiFetchAllowed(cacheKey, 30_000)) {
       perf.apiSkipped("groups_overview_throttled");
       setLoading(false);
@@ -464,7 +465,7 @@ function GroupsScreenContent() {
     markApiFetched(cacheKey);
 
     try {
-      await runCoalesced(GROUPS_CACHE_KEY, async () => {
+      await runCoalesced(groupsCacheKey, async () => {
         const res = await authFetch(`/api/groups/overview?localDate=${getLocalDateStr()}`);
         if (!res.ok) return;
         const data = await res.json();
@@ -478,7 +479,7 @@ function GroupsScreenContent() {
         if (data.filters) setFilters(data.filters);
         if (data.groups) setGroups(data.groups);
         if (data.pendingInvites !== undefined) setPendingInvites(data.pendingInvites);
-        void screenCache.set(GROUPS_CACHE_KEY, next);
+        void screenCache.set(groupsCacheKey, next);
       });
     } catch (e) {
       if (__DEV__) console.log("[GroupsLanding] fetch error:", e);
@@ -486,27 +487,27 @@ function GroupsScreenContent() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [summary]);
+  }, [summary, groupsCacheKey]);
 
   useFocusEffect(
     useCallback(() => {
       void (async () => {
-        if (!screenCache.getSync(GROUPS_CACHE_KEY)) {
-          const diskCached = await screenCache.get<GroupsOverviewCache>(GROUPS_CACHE_KEY);
+        if (!screenCache.getSync(groupsCacheKey)) {
+          const diskCached = await screenCache.get<GroupsOverviewCache>(groupsCacheKey);
           if (diskCached) {
-            perf.cacheHit(GROUPS_CACHE_KEY);
+            perf.cacheHit(groupsCacheKey);
             setSummary(diskCached.summary);
             setFilters(diskCached.filters);
             setGroups(diskCached.groups);
             setPendingInvites(diskCached.pendingInvites);
             setLoading(false);
           } else {
-            perf.cacheMiss(GROUPS_CACHE_KEY);
+            perf.cacheMiss(groupsCacheKey);
           }
         } else {
-          perf.cacheHit(GROUPS_CACHE_KEY);
+          perf.cacheHit(groupsCacheKey);
         }
-        if (!hasLoadedRef.current) setLoading(screenCache.getSync(GROUPS_CACHE_KEY) === null);
+        if (!hasLoadedRef.current) setLoading(screenCache.getSync(groupsCacheKey) === null);
         await fetchOverview();
         hasLoadedRef.current = true;
       })();

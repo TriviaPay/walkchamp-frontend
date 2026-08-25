@@ -72,6 +72,7 @@ import { UnlimitedDayProgressModal } from "@/components/race/UnlimitedDayProgres
 import {
   resolveUnlimitedResultStatus,
   resolvePrizePoolEligibilityStatus,
+  canPublishFinalResult,
 } from "@/utils/unlimitedResults";
 import { isUnlimitedPrizeLost, UNLIMITED_COPY } from "@/utils/unlimitedLiveUiCopy";
 import { isStreakManualLeaveStatus } from "@/utils/unlimitedStreakParticipation";
@@ -108,6 +109,7 @@ import { useRace, useRaceUiProgress } from "@/context/RaceContext";
 import { useWalkContext } from "@/context/WalkContext";
 import { usePresenceActions } from "@/context/PresenceContext";
 import { useRaceProgress } from "@/hooks/useRaceProgress";
+import { useUnlimitedFinalVerificationObserver } from "@/hooks/useUnlimitedFinalVerificationObserver";
 import { updateRankFromBackend, ensureActiveRaceInStore, clearActiveRaceProgress, suppressLiveRaceNotification, suppressSpectatorLiveRaceNotifications, switchDailyStepsNotification, handleMidnightRolloverIfNeeded } from "@/services/stepProgressCoordinator";
 import { findEligibleLiveRaceParticipant } from "@/utils/raceNotificationEligibility";
 import { resolveRaceNotificationTypeHint } from "@/utils/raceNotificationType";
@@ -121,6 +123,7 @@ import {
   canShowFinalRaceOutcome,
 } from "@/services/steps/finalRaceAuthority";
 import { useRaceResultStatus } from "@/hooks/useRaceResultStatus";
+import { useProtectedRaceVerificationLifecycle } from "@/hooks/useProtectedRaceVerification";
 import {
   verificationStatusToReconciliation,
   isRaceVerifyFeatureEnabled,
@@ -339,6 +342,9 @@ interface RaceData {
   coinWinnersPool?: number;
   winnerCount?: number;
   prizePoolCents?: number;
+  protectedRace?: boolean;
+  serverEndAt?: string | null;
+  adjudicationStatus?: string | null;
   hasExplicitPlayerCount?: boolean;
   challengeTimezone?: string | null;
   challengeDayKey?: string | null;
@@ -365,6 +371,12 @@ interface RaceData {
   viewerResultsStatus?: string | null;
   viewerResultReasonCode?: string | null;
   eligibilityReasonCode?: string | null;
+  finalVerificationStatus?: string | null;
+  finalVerificationRequired?: boolean | null;
+  finalVerificationSubmittedAt?: string | null;
+  finalVerificationCompletedAt?: string | null;
+  finalVerificationSource?: string | null;
+  inSettlementPopulation?: boolean | null;
   passedDays?: number | null;
   failedDays?: number | null;
   pendingDays?: number | null;
@@ -1221,7 +1233,7 @@ const cpStyles = StyleSheet.create({
 
 // ── LiveBoardPanel ────────────────────────────────────────────────────────────
 
-function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAvatarPress, colors, stepDeltas = {}, listHeader = null, listFooter = null }: {
+function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAvatarPress, colors, stepDeltas = {}, listHeader = null, listFooter = null, resultsAuthoritative = true }: {
   race: RaceData; participants: RaceParticipant[];
   currentUserId: string | null; userAvatarUrl?: string | null;
   onAvatarPress?: (p: RaceParticipant) => void;
@@ -1231,6 +1243,7 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
   /** Rendered above the leaderboard (e.g. FinishedBanner) — FlatList is the sole vertical scroller. */
   listHeader?: React.ReactNode;
   listFooter?: React.ReactNode;
+  resultsAuthoritative?: boolean;
 }) {
   const { getAvatarVersion } = useAvatarVersionContext();
   const isCompleted = race.status === "completed";
@@ -1394,6 +1407,7 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
                   qualificationStatus: (item as RaceParticipant).qualificationStatus,
                   prizePoolEligibilityStatus: (item as RaceParticipant)
                     .prizePoolEligibilityStatus,
+                  resultsStatus: race.resultsStatus,
                 })
               : false,
           } as LiveBoardRowParticipant}
@@ -1423,6 +1437,7 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
       race.targetSteps,
       isUnlimited,
       race.challengeDurationDays,
+      race.resultsStatus,
       colors.primary,
       colors.foreground,
       colors.mutedForeground,
@@ -1449,9 +1464,17 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
         ]}
       >
         <View style={lbpStyles.header}>
-          <View style={[lbpStyles.dot, { backgroundColor: isCompleted ? colors.gold : colors.destructive }]} />
+          <View style={[lbpStyles.dot, { backgroundColor: isUnlimited
+            ? (canPublishFinalResult(race.resultsStatus) ? colors.gold : colors.destructive)
+            : (isCompleted ? colors.gold : colors.destructive) }]} />
           <Text style={[lbpStyles.title, { color: colors.foreground }]}>
-            {isCompleted ? "Final Leaderboard" : "Live Leaderboard"}
+            {isUnlimited
+              ? canPublishFinalResult(race.resultsStatus)
+                ? UNLIMITED_COPY.finalLeaderboard
+                : UNLIMITED_COPY.liveStandings
+              : isCompleted
+                ? "Final Leaderboard"
+                : "Live Leaderboard"}
           </Text>
           {isSponsored ? (
             <TouchableOpacity
@@ -1581,6 +1604,7 @@ function LiveBoardPanel({ race, participants, currentUserId, userAvatarUrl, onAv
                   participants={participants}
                   colors={colors}
                   embedded
+                  resultsAuthoritative={resultsAuthoritative}
                 />
               </ScrollView>
             </View>
@@ -1726,14 +1750,17 @@ const cfStyles = StyleSheet.create({
 
 // ── SponsoredPrizePanel ───────────────────────────────────────────────────────
 
-function SponsoredPrizePanel({ race, participants, colors, embedded = false }: {
+function SponsoredPrizePanel({ race, participants, colors, embedded = false, resultsAuthoritative = true }: {
   race: RaceData;
   participants?: RaceParticipant[];
   colors: ReturnType<typeof useColors>;
   /** When true, drop outer chrome (used inside the info modal). */
   embedded?: boolean;
+  /** Protected races must not treat live finishers as prize winners. */
+  resultsAuthoritative?: boolean;
 }) {
   const isCompleted = race.status === "completed";
+  const showFinalWinners = isCompleted && resultsAuthoritative;
   const targetSteps =
     typeof race.targetSteps === "number" && race.targetSteps > 0
       ? race.targetSteps
@@ -1781,7 +1808,7 @@ function SponsoredPrizePanel({ race, participants, colors, embedded = false }: {
         </View>
       ) : null}
       {!embedded ? <View style={[pzStyles.divider, { backgroundColor: colors.border }]} /> : null}
-      {isCompleted ? (
+      {showFinalWinners ? (
         winners.length > 0 ? (
           winners.map((p, i) => (
             <View key={p.userId} style={pzStyles.row}>
@@ -1800,6 +1827,10 @@ function SponsoredPrizePanel({ race, participants, colors, embedded = false }: {
             No winners — no one completed the {targetSteps.toLocaleString()} step goal
           </Text>
         )
+      ) : isCompleted ? (
+        <Text style={{ fontSize: rf(12), color: colors.mutedForeground, textAlign: "center", paddingVertical: 4 }}>
+          Prize results are pending verified activity. Live finish order is not final.
+        </Text>
       ) : (
         <>
           <View style={pzStyles.row}>
@@ -2180,6 +2211,10 @@ function LiveRaceDetailScreenContent() {
     paramCapacityMode === "unlimited" ||
     paramChallengeType === "unlimited_goal" ||
     knownUnlimited;
+  useUnlimitedFinalVerificationObserver(
+    typeof raceId === "string" ? raceId : null,
+    unlimitedHint && isUnlimitedGoalFrontendEnabled(),
+  );
   const useDummyRace = shouldUseDummyUnlimitedRace(
     typeof raceId === "string" ? raceId : null,
     paramDummyRace,
@@ -2369,6 +2404,28 @@ function LiveRaceDetailScreenContent() {
       pollWhilePending: true,
     },
   );
+  const protectedVerification = useProtectedRaceVerificationLifecycle({
+    raceId: typeof raceId === "string" ? raceId : null,
+    userId: user?.id ?? null,
+    participantId: user?.id ?? null,
+    challengeType: race?.challengeType ?? race?.type ?? null,
+    entryType: race?.entryType ?? null,
+    entryFeeCents:
+      typeof race?.entryAmountCents === "number" ? race.entryAmountCents : null,
+    protectedRace: race?.protectedRace,
+    durationMinutes:
+      race?.startedAt && race?.endsAt
+        ? Math.max(
+            1,
+            Math.round(
+              (new Date(race.endsAt).getTime() - new Date(race.startedAt).getTime()) /
+                60_000,
+            ),
+          )
+        : null,
+    raceCompleted: race?.status === "completed",
+    provisionalSteps: liveRaceSteps,
+  });
   const finalizeLiveRace = useCallback((
     backendSteps?: number,
     allResults?: Array<{ userId?: string; currentSteps?: number }>,
@@ -2570,6 +2627,7 @@ function LiveRaceDetailScreenContent() {
     if (
       canShowFinalRaceOutcome(recon, {
         verificationFeatureEnabled: feature === false ? false : feature ?? null,
+        settlementStatus: resultStatus?.settlementStatus,
       })
     ) {
       setCoinWinAmount(pendingCoinWinAmount);
@@ -2580,6 +2638,7 @@ function LiveRaceDetailScreenContent() {
     coinWinAmount,
     resultStatus?.featureEnabled,
     resultStatus?.verificationStatus,
+    resultStatus?.settlementStatus,
   ]);
 
   // ── Step-delta animation for other participants ────────────────────────────
@@ -2601,6 +2660,9 @@ function LiveRaceDetailScreenContent() {
   const [showReactionPicker,   setShowReactionPicker]   = useState(false);
   const [showUnlimitedDayProgress, setShowUnlimitedDayProgress] = useState(false);
   const [unlimitedHistoryRows, setUnlimitedHistoryRows] = useState<UnlimitedDayRow[] | null>(null);
+  const [unlimitedFinalVerificationStatus, setUnlimitedFinalVerificationStatus] = useState<
+    string | null
+  >(null);
   const [trackLayoutId, setTrackLayoutId] = useState<TrackLayoutId>(() => {
     if (isTrackLayoutId(initialTrackLayout)) {
       return initialTrackLayout;
@@ -3344,11 +3406,12 @@ function LiveRaceDetailScreenContent() {
 
   const sponsoredEndIso = useMemo(() => {
     if (!isSponsored) return null;
+    if (race?.serverEndAt) return race.serverEndAt;
     if (race?.endsAt) return race.endsAt;
     const start = race?.startedAt ?? race?.scheduledStartAt;
     if (!start) return null;
     return new Date(new Date(start).getTime() + 3 * 60 * 60 * 1000).toISOString();
-  }, [isSponsored, race?.endsAt, race?.startedAt, race?.scheduledStartAt]);
+  }, [isSponsored, race?.serverEndAt, race?.endsAt, race?.startedAt, race?.scheduledStartAt]);
 
   // Freeze Start time / ends label once per race for the tagline rotator.
   const taglineFrozenRaceIdRef = useRef<string | null>(null);
@@ -3587,6 +3650,9 @@ function LiveRaceDetailScreenContent() {
     let cancelled = false;
     void fetchUnlimitedDailyHistory(raceId, currentUserId).then((payload) => {
       if (cancelled) return;
+      if (typeof payload?.finalVerificationStatus === "string") {
+        setUnlimitedFinalVerificationStatus(payload.finalVerificationStatus);
+      }
       const rows = dayRowsFromDailyHistory(payload, {
         schedule: unlimitedTaglineSchedule ?? null,
         todaySteps: unlimitedDailySteps,
@@ -4890,10 +4956,13 @@ function LiveRaceDetailScreenContent() {
     const onCompleted = (data?: {
       endedReason?: string;
       challengeType?: string;
+      settlementPending?: boolean;
+      adjudicationStatus?: string;
       results?: Array<{ userId?: string; prizeCoins?: number; currentSteps?: number }>;
     }) => {
       flushFinalSteps();
       setPendingMatchEnd(false);
+      const settlementPending = data?.settlementPending === true;
       const meResult = currentUserId ? data?.results?.find((r) => r.userId === currentUserId) : undefined;
       finalizeLiveRaceRef.current(
         meResult?.currentSteps ?? localStepsRef.current,
@@ -4901,9 +4970,18 @@ function LiveRaceDetailScreenContent() {
       );
       void refreshResultStatus();
       if (data?.endedReason) setForfeitReason(data.endedReason);
-      setRace((prev) => prev ? { ...prev, status: "completed", completedAt: prev.completedAt ?? new Date().toISOString() } : prev);
+      setRace((prev) => prev ? {
+        ...prev,
+        status: "completed",
+        completedAt: prev.completedAt ?? new Date().toISOString(),
+        adjudicationStatus: data?.adjudicationStatus ?? prev.adjudicationStatus,
+      } : prev);
       emitChallengeStatusesRefresh("race_completed");
-      if (data?.challengeType === "coins_battle" && Array.isArray(data.results)) {
+      if (
+        !settlementPending &&
+        data?.challengeType === "coins_battle" &&
+        Array.isArray(data.results)
+      ) {
         // Store prizes for ALL participants so the finished card can show each person's prize
         const map = new Map<string, number>();
         for (const r of data.results) {
@@ -4918,6 +4996,9 @@ function LiveRaceDetailScreenContent() {
             setPendingCoinWinAmount(myResult.prizeCoins!);
           }
         }
+      } else if (settlementPending && data?.challengeType === "coins_battle") {
+        // Pending completion is not a winner announcement.
+        setPendingCoinWinAmount(null);
       }
       refresh(true); };
     const onProgress = (data: {
@@ -5248,6 +5329,9 @@ function LiveRaceDetailScreenContent() {
       ch.bind("race:verification_delayed", onVerificationEvent);
       ch.bind("race:review_required", onVerificationEvent);
       ch.bind("race:final_progress_confirmed", onVerificationEvent);
+      ch.bind("race:final-verification-requested", refresh);
+      ch.bind("race:final-verification-updated", refresh);
+      ch.bind("race:results_ready", refresh);
       return onVerificationEvent;
     };
 
@@ -5274,6 +5358,9 @@ function LiveRaceDetailScreenContent() {
               : data.currentSteps,
       });
     };
+    const onUnlimitedSettlement = () => {
+      void refresh(true);
+    };
     if (unlimitedChannel) {
       unlimitedChannel.bind("progress_updated", onUnlimitedProgress);
       unlimitedChannel.bind("participant_joined", refreshParticipants);
@@ -5281,6 +5368,10 @@ function LiveRaceDetailScreenContent() {
       unlimitedChannel.bind("challenge_started", onStarted);
       unlimitedChannel.bind("challenge_completed", onCompleted);
       unlimitedChannel.bind("challenge_cancelled", onCompleted);
+      unlimitedChannel.bind("results_status_changed", onUnlimitedSettlement);
+      unlimitedChannel.bind("final_verification_requested", onUnlimitedSettlement);
+      unlimitedChannel.bind("final_verification_updated", onUnlimitedSettlement);
+      unlimitedChannel.bind("results_ready", onUnlimitedSettlement);
     }
 
     return () => {
@@ -5304,6 +5395,9 @@ function LiveRaceDetailScreenContent() {
         channel.unbind("race:verification_delayed", onVerificationEvent);
         channel.unbind("race:review_required", onVerificationEvent);
         channel.unbind("race:final_progress_confirmed", onVerificationEvent);
+        channel.unbind("race:final-verification-requested", refresh);
+        channel.unbind("race:final-verification-updated", refresh);
+        channel.unbind("race:results_ready", refresh);
         unsubscribeFromChannel(channelName);
       }
       if (unlimitedChannel) {
@@ -5313,6 +5407,10 @@ function LiveRaceDetailScreenContent() {
         unlimitedChannel.unbind("challenge_started", onStarted);
         unlimitedChannel.unbind("challenge_completed", onCompleted);
         unlimitedChannel.unbind("challenge_cancelled", onCompleted);
+        unlimitedChannel.unbind("results_status_changed", onUnlimitedSettlement);
+        unlimitedChannel.unbind("final_verification_requested", onUnlimitedSettlement);
+        unlimitedChannel.unbind("final_verification_updated", onUnlimitedSettlement);
+        unlimitedChannel.unbind("results_ready", onUnlimitedSettlement);
         unsubscribeFromChannel(unlimitedChannelName);
       }
     };
@@ -5681,7 +5779,20 @@ function LiveRaceDetailScreenContent() {
   const allForfeited =
     forfeitReason === "all_forfeited" || (isCompleted && everyoneForfeitedLocal);
   const winnerByForfeit = forfeitReason === "winner_by_forfeit";
+  const protectedFeature =
+    resultStatus?.featureEnabled ?? isRaceVerifyFeatureEnabled();
+  const protectedRecon = resultStatus
+    ? verificationStatusToReconciliation(resultStatus.verificationStatus)
+    : store.getState().raceProgress.reconciliationStatus;
+  const hideProtectedFinalOutcome =
+    (race?.protectedRace === true || protectedVerification.enabled) &&
+    !canShowFinalRaceOutcome(protectedRecon, {
+      verificationFeatureEnabled:
+        protectedFeature === false ? false : protectedFeature ?? null,
+      settlementStatus: resultStatus?.settlementStatus,
+    });
   const sponsoredMeQualified =
+    !hideProtectedFinalOutcome &&
     !!currentParticipant &&
     (
       currentParticipant.eligibleForPrize === true ||
@@ -5720,7 +5831,9 @@ function LiveRaceDetailScreenContent() {
       {isSponsored && currentParticipant ? (
         <View style={s.sponsoredFinishBody}>
           <Text style={s.sponsoredFinishMsg}>
-            {sponsoredMeQualified
+            {hideProtectedFinalOutcome
+              ? (protectedVerification.label || "Prize results are pending verified activity.")
+              : sponsoredMeQualified
               ? "Congratulations! You reached the target steps and qualified for the event reward"
               : "Oops! Target steps not completed, so you’re not eligible for this event’s reward. Better luck next time—keep walking!"}
           </Text>
@@ -5737,7 +5850,12 @@ function LiveRaceDetailScreenContent() {
           Opponent forfeited. Confirming the winner…
         </Text>
       )}
-      {!allForfeited && winners.map((w, i) => {
+      {protectedVerification.enabled && protectedVerification.outcomePending ? (
+        <Text style={{ color: "#9CA3AF", fontSize: rf(13), paddingHorizontal: 4, paddingBottom: 6 }}>
+          {protectedVerification.label || "Checking final results"}
+        </Text>
+      ) : null}
+      {!hideProtectedFinalOutcome && !allForfeited && winners.map((w, i) => {
         const rank = w.displayRank ?? w.rank ?? (i + 1);
         const rankNum = rank === 1 ? "#1" : rank === 2 ? "#2" : `#${rank}`;
         const tiedInGroup = w.isTied && (w.tieGroupSize ?? 1) > 1;
@@ -6020,6 +6138,9 @@ function LiveRaceDetailScreenContent() {
           viewerResultsReady={race.viewerResultsReady}
           viewerResultReasonCode={race.viewerResultReasonCode}
           resultsStatus={race.resultsStatus}
+          finalVerificationStatus={
+            race.finalVerificationStatus ?? unlimitedFinalVerificationStatus
+          }
         />
       ) : null}
       {isUnlimitedLive ? (
@@ -6203,6 +6324,7 @@ function LiveRaceDetailScreenContent() {
             })}
             currentUserId={currentUserId}
             stepDeltas={stepDeltaFlash}
+            resultsAuthoritative={!hideProtectedFinalOutcome}
             userAvatarUrl={user?.id && user?.profileImageUrl ? `${getApiBase()}/api/profile/avatar/${user.id}?v=${user?.avatarVersion ?? ''}` : null}
             onAvatarPress={(p) => {
               setProfileInitialData({

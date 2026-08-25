@@ -76,6 +76,7 @@ import { setHomeStepSetupShellReady } from "@/services/permissions/homePermissio
 import { SessionRealtimeGuard } from "@/components/SessionRealtimeGuard";
 import { SessionNoticeHost } from "@/components/SessionNoticeHost";
 import { StepTrackingNotificationPrompt } from "@/components/StepTrackingNotificationPrompt";
+import { UnlimitedFinalVerificationHost } from "@/components/UnlimitedFinalVerificationHost";
 import { logger } from "@/utils/logger";
 
 // Cap OS accessibility font scaling (see constants/accessibility.ts policy).
@@ -466,6 +467,7 @@ function PushNotificationSetup() {
       <SessionRealtimeGuard />
       <SessionNoticeHost />
       <StepTrackingNotificationPrompt />
+      <UnlimitedFinalVerificationHost />
     </>
   );
 }

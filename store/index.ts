@@ -4,6 +4,7 @@ import authReducer from "./slices/authSlice";
 import coinsReducer from "./slices/coinsSlice";
 import trackThemesReducer from "./slices/trackThemesSlice";
 import raceProgressReducer from "./slices/raceProgressSlice";
+import prizeVerificationReducer from "./slices/prizeVerificationSlice";
 
 /**
  * Store of record for auth, coins, themes, and canonical step progress.
@@ -15,6 +16,7 @@ const appReducer = combineReducers({
   coins: coinsReducer,
   trackThemes: trackThemesReducer,
   raceProgress: raceProgressReducer,
+  prizeVerification: prizeVerificationReducer,
 });
 
 type AppState = ReturnType<typeof appReducer>;

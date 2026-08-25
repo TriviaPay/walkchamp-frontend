@@ -129,7 +129,16 @@ export type UnlimitedDailyHistoryDay = {
   dailyGoalSteps?: number;
   goalSteps?: number;
   verifiedSteps?: number | null;
+  windowStartUtc?: string;
+  windowEndUtc?: string;
+  verificationStatus?: "live" | "awaiting_verification" | "final" | string;
 };
+
+export type UnlimitedFinalVerificationStatus =
+  | "pending"
+  | "requested"
+  | "submitted"
+  | "completed";
 
 export type UnlimitedDailyHistoryPayload = {
   durationDays?: number;
@@ -143,6 +152,17 @@ export type UnlimitedDailyHistoryPayload = {
   viewerResultReasonCode?: string | null;
   prizePoolEligibilityStatus?: string | null;
   eligibilityReasonCode?: string | null;
+  resultsStatus?: string | null;
+  finalVerificationStatus?: UnlimitedFinalVerificationStatus | string | null;
+  finalVerificationRequired?: boolean;
+  finalVerificationRequestedAt?: string | null;
+  finalVerificationSubmittedAt?: string | null;
+  finalVerificationCompletedAt?: string | null;
+  finalVerificationSource?: string | null;
+  inSettlementPopulation?: boolean;
+  participantStartAtUtc?: string;
+  participantEndAtUtc?: string;
+  participantTimezone?: string;
 };
 
 /** Map backend daily-history payload → day rows (authoritative verified steps). */

@@ -56,6 +56,8 @@ import {
 import { UNLIMITED_COPY } from "@/utils/unlimitedLiveUiCopy";
 import { UnlimitedProgressSummary } from "@/components/race/UnlimitedProgressSummary";
 import { isViewerStreakBroken } from "@/utils/unlimitedStreakParticipation";
+import { unlimitedFinalVerificationPendingCopy } from "@/utils/unlimitedFinalVerification";
+import { useUnlimitedFinalVerificationObserver } from "@/hooks/useUnlimitedFinalVerificationObserver";
 import { subscribeToChannel, unsubscribeFromChannel, CHANNELS } from "@/services/realtimeService";
 import { rf } from "@/utils/responsive";
 
@@ -66,9 +68,11 @@ export default function UnlimitedResultsScreen() {
   const challengeId = typeof params.challengeId === "string" ? params.challengeId : null;
   const { user } = useAuth();
   const { safeTop, safeBottom } = useSafeLayout();
+  useUnlimitedFinalVerificationObserver(challengeId);
 
   const [data, setData] = useState<UnlimitedResultsData | null>(null);
   const [historyRows, setHistoryRows] = useState<UnlimitedDayRow[] | null>(null);
+  const [finalVerificationStatus, setFinalVerificationStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [ownPrizeShareCents, setOwnPrizeShareCents] = useState<number | null>(null);
@@ -84,6 +88,11 @@ export default function UnlimitedResultsScreen() {
         fetchUnlimitedDailyHistory(challengeId, user?.id),
       ]);
       if (result) setData(result);
+      if (typeof history?.finalVerificationStatus === "string") {
+        setFinalVerificationStatus(history.finalVerificationStatus);
+      } else if (typeof result?.race.finalVerificationStatus === "string") {
+        setFinalVerificationStatus(result.race.finalVerificationStatus);
+      }
       const mappedHistory = dayRowsFromDailyHistory(history, {
         todaySteps: result?.participants.find((p) => p.userId === user?.id)?.currentSteps,
       });
@@ -110,11 +119,17 @@ export default function UnlimitedResultsScreen() {
     channel?.bind("challenge_cancelled", onRealtimeRefresh);
     channel?.bind("progress_updated", onRealtimeRefresh);
     channel?.bind("results_status_changed", onRealtimeRefresh);
+    channel?.bind("final_verification_requested", onRealtimeRefresh);
+    channel?.bind("final_verification_updated", onRealtimeRefresh);
+    channel?.bind("results_ready", onRealtimeRefresh);
     return () => {
       channel?.unbind("challenge_completed", onRealtimeRefresh);
       channel?.unbind("challenge_cancelled", onRealtimeRefresh);
       channel?.unbind("progress_updated", onRealtimeRefresh);
       channel?.unbind("results_status_changed", onRealtimeRefresh);
+      channel?.unbind("final_verification_requested", onRealtimeRefresh);
+      channel?.unbind("final_verification_updated", onRealtimeRefresh);
+      channel?.unbind("results_ready", onRealtimeRefresh);
       unsubscribeFromChannel(channelName);
     };
   }, [challengeId, load]);
@@ -197,9 +212,17 @@ export default function UnlimitedResultsScreen() {
 
   useEffect(() => {
     if (resultStatus === "results_ready" && eligibility === "eligible" && challengeId) {
-      void fetchUnlimitedOwnPrizeShareCents(challengeId).then(setOwnPrizeShareCents);
+      const fromRow = currentParticipant?.payoutCents;
+      if (typeof fromRow === "number" && Number.isFinite(fromRow)) {
+        setOwnPrizeShareCents(Math.floor(fromRow));
+        return;
+      }
+      void fetchUnlimitedOwnPrizeShareCents(challengeId, {
+        viewerUserId: user?.id,
+        participants: data?.participants,
+      }).then(setOwnPrizeShareCents);
     }
-  }, [resultStatus, eligibility, challengeId]);
+  }, [resultStatus, eligibility, challengeId, currentParticipant?.payoutCents, data?.participants, user?.id]);
 
   const eligibleParticipants = useMemo(
     () => (data?.participants ?? []).filter((p) => (p.qualificationStatus ?? "").toLowerCase() === "qualified"),
@@ -219,14 +242,25 @@ export default function UnlimitedResultsScreen() {
     participantsFinishedCount: data?.race.participantsFinishedCount,
     participantsPendingCount: data?.race.participantsPendingCount,
   });
-  const streakBroken = isViewerStreakBroken({
-    viewerResultsReady: data?.race.viewerResultsReady,
-    viewerResultReasonCode: data?.race.viewerResultReasonCode,
-    viewerStatus: data?.race.viewerStatus ?? schedule?.viewerStatus,
-    resultsStatus: data?.race.resultsStatus,
-    failedDays: data?.race.failedDays,
-    eligibilityReasonCode: data?.race.eligibilityReasonCode,
-  });
+  const streakBroken =
+    resultStatus === "results_ready" &&
+    isViewerStreakBroken({
+      viewerResultsReady: data?.race.viewerResultsReady,
+      viewerResultReasonCode: data?.race.viewerResultReasonCode,
+      viewerStatus: data?.race.viewerStatus ?? schedule?.viewerStatus,
+      resultsStatus: data?.race.resultsStatus,
+      failedDays: data?.race.failedDays,
+      eligibilityReasonCode: data?.race.eligibilityReasonCode,
+    });
+  const settlementPendingCopy =
+    resultStatus !== "results_ready" &&
+    (schedule?.viewerStatus === "completed" ||
+      schedule?.viewerStatus === "failed" ||
+      finalVerificationStatus === "requested" ||
+      finalVerificationStatus === "submitted" ||
+      finalVerificationStatus === "completed")
+      ? unlimitedFinalVerificationPendingCopy(finalVerificationStatus)
+      : null;
   const durationDays = data?.race.challengeDurationDays ?? schedule?.durationDays ?? 0;
 
   if (loading && !data) {
@@ -276,16 +310,22 @@ export default function UnlimitedResultsScreen() {
           <View>
             <StatusHeaderCard
               resultStatus={resultStatus}
-              statusHeadline={streakBroken ? UNLIMITED_COPY.lostBadge : copy.statusHeadline}
+              statusHeadline={
+                streakBroken
+                  ? UNLIMITED_COPY.lostBadge
+                  : settlementPendingCopy
+                    ? settlementPendingCopy.title
+                    : copy.statusHeadline
+              }
               message={
                 streakBroken
                   ? UNLIMITED_COPY.lostAfterMiss
-                  : copy.message
+                  : settlementPendingCopy
+                    ? settlementPendingCopy.subtitle
+                    : copy.message
               }
               secondaryText={
-                streakBroken
-                  ? UNLIMITED_COPY.modalWarning
-                  : copy.secondaryText
+                streakBroken ? UNLIMITED_COPY.modalWarning : copy.secondaryText
               }
               durationDays={durationDays}
               completedDays={daySummary.completedCount}

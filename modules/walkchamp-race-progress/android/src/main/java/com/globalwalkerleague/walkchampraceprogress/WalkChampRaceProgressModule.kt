@@ -423,6 +423,31 @@ class WalkChampRaceProgressModule : Module() {
         false
       }
     }
+
+    /**
+     * Native current-device Health Connect source for protected-race evidence.
+     * Do not hardcode origin as "android".
+     */
+    AsyncFunction("resolveNativeHealthConnectSourceId") {
+      val ctx = appContext.reactContext ?: return@AsyncFunction null
+      try {
+        ctx.packageName
+      } catch (_: Exception) {
+        null
+      }
+    }
+
+    AsyncFunction("readProtectedRaceSteps") { args: Map<String, Any?> ->
+      null
+    }
+
+    Function("isPlayIntegrityAvailable") {
+      false
+    }
+
+    AsyncFunction("requestPlayIntegrityToken") { _requestHash: String ->
+      null
+    }
   }
 
   private val launcherIconNames = listOf(

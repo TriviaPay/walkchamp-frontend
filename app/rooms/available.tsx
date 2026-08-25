@@ -36,6 +36,12 @@ import { filterOutCashDiscovery, isPaidCashClientRoom } from "@/utils/cashEligib
 import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { AppAlert } from "@/components/AppAlert";
+import { beginProtectedPreflightAfterJoin } from "@/services/raceVerification/raceVerificationService";
+import {
+  isProtectedPrizeRace,
+  isProtectedRacePlatformSupported,
+  IOS_PROTECTED_UNAVAILABLE_MESSAGE,
+} from "@/services/raceVerification/prizeRaceHelpers";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import ActiveRaceModal, {
   type ActiveRaceInfo,
@@ -2514,6 +2520,17 @@ function AvailableRoomsScreenContent() {
         return;
       }
     }
+    if (
+      isProtectedPrizeRace({
+        challengeType: room.challenge_type,
+        entryFee: room.entry_fee,
+        isSponsored: room.challenge_type === "sponsored",
+      }) &&
+      !isProtectedRacePlatformSupported()
+    ) {
+      AppAlert.alert("Not available on iPhone", IOS_PROTECTED_UNAVAILABLE_MESSAGE);
+      return;
+    }
     setJoiningRoomId(room.room_id);
     try {
       const isUnlimitedJoin =
@@ -2554,6 +2571,9 @@ function AvailableRoomsScreenContent() {
 
       setActiveRace(room.room_id, false);
       joinRace(room.entry_fee, room.max_players, false);
+      if (user?.id && !isUnlimitedJoin) {
+        void beginProtectedPreflightAfterJoin(room.room_id, user.id);
+      }
       if (isUnlimitedJoin) {
         void saveHostedUnlimitedChallenge({
           room_id: room.room_id,

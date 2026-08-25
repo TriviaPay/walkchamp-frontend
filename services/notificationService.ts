@@ -753,6 +753,21 @@ export async function setupNotificationClickHandler(
         notificationLog(`navigatingToRace raceId=${String(data.raceId ?? data.race_id ?? data.roomId ?? "")}`);
       }
     }
+    if (type === "race_verification_pending") {
+      const challengeId =
+        (typeof data.challengeId === "string" && data.challengeId) ||
+        (typeof data.challenge_id === "string" && data.challenge_id) ||
+        (typeof data.raceId === "string" && data.raceId) ||
+        (typeof data.race_id === "string" && data.race_id) ||
+        (typeof data.roomId === "string" && data.roomId) ||
+        (typeof data.room_id === "string" && data.room_id) ||
+        null;
+      void import("@/services/unlimitedFinalVerificationCoordinator")
+        .then(({ notifyUnlimitedFinalVerificationPush }) => {
+          notifyUnlimitedFinalVerificationPush(challengeId);
+        })
+        .catch(() => {});
+    }
     const route = resolveNotificationRoute(data, launchUrl);
     if (route) {
       pushLog(`notification click route=${route} type=${String(data.type ?? "unknown")}`);
@@ -815,6 +830,21 @@ export async function setupForegroundHandler(): Promise<() => void> {
       const eventType = String(data.eventType ?? data.event_type ?? "unknown");
       notificationLog(`received type=race_starting_soon`);
       notificationLog(`eventType=${eventType}`);
+    }
+    if (type === "race_verification_pending") {
+      const challengeId =
+        (typeof data.challengeId === "string" && data.challengeId) ||
+        (typeof data.challenge_id === "string" && data.challenge_id) ||
+        (typeof data.raceId === "string" && data.raceId) ||
+        (typeof data.race_id === "string" && data.race_id) ||
+        (typeof data.roomId === "string" && data.roomId) ||
+        (typeof data.room_id === "string" && data.room_id) ||
+        null;
+      void import("@/services/unlimitedFinalVerificationCoordinator")
+        .then(({ notifyUnlimitedFinalVerificationPush }) => {
+          notifyUnlimitedFinalVerificationPush(challengeId);
+        })
+        .catch(() => {});
     }
     const visualMeta = resolvePushVisualMeta(data);
     if (__DEV__) {

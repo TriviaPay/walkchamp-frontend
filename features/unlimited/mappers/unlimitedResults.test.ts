@@ -9,6 +9,7 @@ import {
   liveEligibilityLabel,
   resultsScreenCopy,
   resolveUnlimitedResultCardState,
+  canPublishFinalResult,
 } from "./unlimitedResults";
 
 // ── §1/§2 CORE RULE: never "results_ready" just because the viewer finished ──
@@ -109,10 +110,19 @@ for (const settlementStatus of ["completed", "refunded", "rolled_over"]) {
   );
   assert.equal(liveEligibilityLabel("pending"), "Still Eligible");
 
-  // A finalized failed day disqualifies immediately, even while others still race.
+  // Disqualification is masked until global results_ready (race-wide settlement).
   assert.equal(
     resolvePrizePoolEligibilityStatus({
       resultStatus: "waiting_for_participants",
+      qualificationStatus: "disqualified",
+    }),
+    "pending",
+  );
+  assert.equal(liveEligibilityLabel("pending"), "Still Eligible");
+
+  assert.equal(
+    resolvePrizePoolEligibilityStatus({
+      resultStatus: "results_ready",
       qualificationStatus: "disqualified",
     }),
     "not_eligible",
@@ -155,10 +165,12 @@ for (const settlementStatus of ["completed", "refunded", "rolled_over"]) {
   const waiting = resultsScreenCopy("waiting_for_participants");
   assert.equal(waiting.title, "Challenge Complete");
   assert.match(waiting.statusHeadline, /Waiting for all participants/);
+  assert.equal(waiting.message, "We're waiting for all participants' challenge days to finish.");
   assert.ok(!/winner|payout|prize share/i.test(waiting.message + waiting.secondaryText));
 
   const validating = resultsScreenCopy("steps_validation_in_progress");
   assert.match(validating.statusHeadline, /Validation in Progress/);
+  assert.equal(validating.message, "Final results are being verified.");
   assert.ok(!/winner|payout|prize share/i.test(validating.message));
 
   const ready = resultsScreenCopy("results_ready");
@@ -185,6 +197,7 @@ for (const settlementStatus of ["completed", "refunded", "rolled_over"]) {
   });
   assert.equal(indiaViewerStatus, "waiting_for_participants");
   assert.notEqual(indiaViewerStatus, "results_ready");
+  assert.equal(canPublishFinalResult("waiting_for_participants"), false);
 }
 
 // ── REALTIME SEQUENCE: waiting → validating → ready (spec §23, §30) ───────────

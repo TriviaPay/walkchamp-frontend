@@ -21,6 +21,7 @@ import {
   type UnlimitedDayRow,
 } from "@/utils/unlimitedDayProgress";
 import { resolveStreakDetailUiBranch } from "@/utils/unlimitedStreakParticipation";
+import { unlimitedFinalVerificationPendingCopy } from "@/utils/unlimitedFinalVerification";
 import { rf } from "@/utils/responsive";
 import { streakIconSource } from "@/utils/brandImages";
 
@@ -36,6 +37,7 @@ type Props = {
   viewerResultsReady?: boolean | null;
   viewerResultReasonCode?: string | null;
   resultsStatus?: string | null;
+  finalVerificationStatus?: string | null;
 };
 
 /** Compact calendar tile — green header + current day number (1–99). */
@@ -118,6 +120,7 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
   viewerResultsReady,
   viewerResultReasonCode,
   resultsStatus,
+  finalVerificationStatus,
 }: Props) {
   const { isDark } = useTheme();
   const uiBranch = resolveStreakDetailUiBranch({
@@ -125,15 +128,27 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
     viewerResultReasonCode,
     viewerStatus: schedule.viewerStatus,
     resultsStatus,
+    finalVerificationStatus,
   });
   const beforeStart = schedule.viewerStatus === "scheduled";
   const left = schedule.viewerStatus === "left";
-  const finished = uiBranch === "final" || left || schedule.viewerStatus === "completed";
-  const lost = uiBranch === "broken" || isUnlimitedPrizeLost({
-    eligibility,
-    qualificationStatus,
-    viewerStatus: schedule.viewerStatus,
-  });
+  const pendingSettlement = uiBranch === "pending_settlement";
+  const finished =
+    uiBranch === "final" ||
+    left ||
+    schedule.viewerStatus === "completed" ||
+    pendingSettlement;
+  const lost =
+    uiBranch === "broken" ||
+    isUnlimitedPrizeLost({
+      eligibility,
+      qualificationStatus,
+      viewerStatus: schedule.viewerStatus,
+      resultsStatus,
+    });
+  const settlementCopy = pendingSettlement
+    ? unlimitedFinalVerificationPendingCopy(finalVerificationStatus)
+    : null;
   const missedDay = resolveUnlimitedMissedDayIndex({
     historyRows,
     schedule,
@@ -144,7 +159,9 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
   const displaySteps = beforeStart ? 0 : todaySteps;
   const footerLabel = lost
     ? missedDayFooterCopy(missedDay)
-    : UNLIMITED_COPY.missADayOut;
+    : pendingSettlement
+      ? settlementCopy!.subtitle
+      : UNLIMITED_COPY.missADayOut;
 
   const body = (
     <>
@@ -153,7 +170,16 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
 
         <View style={styles.mid}>
           {/* Day N of Y is intentionally omitted here — shown in Challenge Progress only. */}
-          {!beforeStart ? (
+          {pendingSettlement && settlementCopy ? (
+            <>
+              <Text style={styles.goalLabel} numberOfLines={1}>
+                {settlementCopy.title}
+              </Text>
+              <Text style={styles.settlementSub} numberOfLines={2}>
+                {settlementCopy.subtitle}
+              </Text>
+            </>
+          ) : !beforeStart ? (
             <>
               <Text style={styles.goalLabel} numberOfLines={1}>
                 {UNLIMITED_COPY.todayGoal}
@@ -191,7 +217,7 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
             </View>
           ) : null}
           {/* Eligible mock: miss-a-day sits under flame on the right */}
-          {!lost ? (
+          {!lost && !pendingSettlement ? (
             <TouchableOpacity
               onPress={onPressInfo}
               disabled={!onPressInfo}
@@ -248,7 +274,7 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
           <Text style={styles.viewResultsText}>View Results</Text>
           <Feather name="arrow-right" size={13} color="#0B0F1A" />
         </TouchableOpacity>
-      ) : finished && onPressViewResults ? (
+      ) : (finished || pendingSettlement) && onPressViewResults ? (
         <TouchableOpacity style={styles.viewResultsBtn} onPress={onPressViewResults}>
           <Text style={styles.viewResultsText}>View Results</Text>
           <Feather name="arrow-right" size={13} color="#0B0F1A" />
@@ -299,6 +325,12 @@ const styles = StyleSheet.create({
     fontSize: rf(15),
     fontWeight: "600",
     color: "#C7CDDA",
+  },
+  settlementSub: {
+    fontSize: rf(12),
+    fontWeight: "600",
+    color: "#A8B0C4",
+    marginTop: 2,
   },
   right: {
     alignItems: "flex-end",

@@ -364,6 +364,13 @@ export type UnlimitedLiveDetailMapped = {
     viewerResultsStatus?: string | null;
     viewerResultReasonCode?: string | null;
     eligibilityReasonCode?: string | null;
+    finalVerificationStatus?: string | null;
+    finalVerificationRequired?: boolean | null;
+    finalVerificationRequestedAt?: string | null;
+    finalVerificationSubmittedAt?: string | null;
+    finalVerificationCompletedAt?: string | null;
+    finalVerificationSource?: string | null;
+    inSettlementPopulation?: boolean | null;
     passedDays?: number | null;
     failedDays?: number | null;
     pendingDays?: number | null;
@@ -395,6 +402,8 @@ export type UnlimitedLiveDetailMapped = {
     raceStartBaselineSteps?: number | null;
     /** Display-only: challenge-day progress (usually today's total). */
     challengeDaySteps?: number | null;
+    /** Backend-settled payout on the participant row (cents). Prefer over notifications. */
+    payoutCents?: number | null;
   }>;
 };
 
@@ -477,6 +486,17 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
   const challengeDaySteps = asNumber(
     pick(obj, "challengeDaySteps", "challenge_day_steps"),
   );
+  const payoutCents = asNumber(
+    pick(
+      obj,
+      "payoutCents",
+      "payout_cents",
+      "prizeShareCents",
+      "prize_share_cents",
+      "ownPayoutCents",
+      "own_payout_cents",
+    ),
+  );
   return {
     id:
       asString(pick(obj, "participantId", "participant_id", "registrationId", "registration_id")) ??
@@ -521,6 +541,7 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
     ...(prizePoolEligibilityStatus ? { prizePoolEligibilityStatus } : {}),
     ...(raceStartBaselineSteps != null ? { raceStartBaselineSteps } : {}),
     ...(challengeDaySteps != null ? { challengeDaySteps } : {}),
+    ...(payoutCents != null ? { payoutCents } : {}),
   };
 }
 
@@ -868,6 +889,39 @@ export function mapUnlimitedDetailToLiveDetail(
       ),
       eligibilityReasonCode: asString(
         pick(viewer ?? root ?? {}, "eligibilityReasonCode", "eligibility_reason_code"),
+      ),
+      finalVerificationStatus: asString(
+        pick(viewer ?? root ?? {}, "finalVerificationStatus", "final_verification_status"),
+      ),
+      finalVerificationRequired: asBool(
+        pick(viewer ?? root ?? {}, "finalVerificationRequired", "final_verification_required"),
+      ),
+      finalVerificationRequestedAt: asString(
+        pick(
+          viewer ?? root ?? {},
+          "finalVerificationRequestedAt",
+          "final_verification_requested_at",
+        ),
+      ),
+      finalVerificationSubmittedAt: asString(
+        pick(
+          viewer ?? root ?? {},
+          "finalVerificationSubmittedAt",
+          "final_verification_submitted_at",
+        ),
+      ),
+      finalVerificationCompletedAt: asString(
+        pick(
+          viewer ?? root ?? {},
+          "finalVerificationCompletedAt",
+          "final_verification_completed_at",
+        ),
+      ),
+      finalVerificationSource: asString(
+        pick(viewer ?? root ?? {}, "finalVerificationSource", "final_verification_source"),
+      ),
+      inSettlementPopulation: asBool(
+        pick(viewer ?? root ?? {}, "inSettlementPopulation", "in_settlement_population"),
       ),
       passedDays: asNumber(pick(viewer ?? root ?? {}, "passedDays", "passed_days", "completedDays")),
       failedDays: asNumber(pick(viewer ?? root ?? {}, "failedDays", "failed_days")),

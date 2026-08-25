@@ -87,7 +87,11 @@ import {
   UNLIMITED_LOCAL_MIDNIGHT_NOTE,
 } from "@/utils/unlimitedViewerSchedule";
 import { getDeviceTimezone } from "@/utils/timezone";
-import { isUnlimitedRaceDummyDataEnabled, isUnlimitedGoalFrontendEnabled } from "@/config/featureFlags";
+import { isUnlimitedRaceDummyDataEnabled, isUnlimitedGoalFrontendEnabled, isProtectedRaceVerificationEnabled } from "@/config/featureFlags";
+import { ProtectedRaceReadinessPanel } from "@/components/race/ProtectedRaceReadinessPanel";
+import { ensurePrizeRaceReadiness } from "@/services/permissions/prizeRacePermissionGate";
+import { isProtectedPrizeRace } from "@/services/raceVerification/raceVerificationService";
+import type { PrizeRaceReadiness } from "@/services/raceVerification/raceVerificationTypes";
 import {
   DUMMY_UNLIMITED_RACE_ID,
   getDummyWaitingRoomParticipants,
@@ -957,6 +961,8 @@ function MatchmakingScreenContent() {
   const [refundModalVisible, setRefundModalVisible] = useState(false);
   const [refundQuote, setRefundQuote] = useState<CashChallengePaymentQuote | null>(null);
   const [refundConfirming, setRefundConfirming] = useState(false);
+  const [prizeReadiness, setPrizeReadiness] = useState<PrizeRaceReadiness | null>(null);
+  const [prizeReadinessLoading, setPrizeReadinessLoading] = useState(false);
   /** Inline confirm — opens instantly (no AppAlert dismiss delay, no pre-fetch). */
   const [confirmModal, setConfirmModal] = useState<
     "host_cancel" | "leave" | "leave_pre_start" | "leave_post_start" | null
@@ -1117,6 +1123,7 @@ function MatchmakingScreenContent() {
     cancellationReason?: string | null;
     challengeType?: string;
     capacityMode?: string;
+    protectedRace?: boolean;
   } | null>(() => {
     if (!params.initialEntryType && !params.initialCurrentPlayers && params.initialCapacityMode !== "unlimited") {
       return null;
@@ -1394,6 +1401,47 @@ function MatchmakingScreenContent() {
         (typeof params.initialCapacityMode === "string" ? params.initialCapacityMode : null),
       maxPlayers: liveRoom?.maxPlayers,
     }) || isUnlimitedGoalRoom || isPaidCashRoom;
+
+  const showProtectedRaceReadiness =
+    isProtectedRaceVerificationEnabled() &&
+    isProtectedPrizeRace({
+      protectedRace: liveRoom?.protectedRace,
+      challengeType: liveRoom?.challengeType,
+      entryType: liveRoom?.entryType,
+      entryFeeCents,
+    }) &&
+    !isUnlimitedGoalRoom;
+
+  useEffect(() => {
+    if (!showProtectedRaceReadiness || !backendRaceId || !user?.id) {
+      setPrizeReadiness(null);
+      return;
+    }
+    let cancelled = false;
+    setPrizeReadinessLoading(true);
+    void ensurePrizeRaceReadiness({
+      userId: user.id,
+      raceId: backendRaceId,
+      challengeType: liveRoom?.challengeType,
+      entryType: liveRoom?.entryType,
+      entryFeeCents,
+      protectedRace: liveRoom?.protectedRace,
+    }).then((gate) => {
+      if (cancelled) return;
+      setPrizeReadiness(gate.readiness);
+      setPrizeReadinessLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    showProtectedRaceReadiness,
+    backendRaceId,
+    user?.id,
+    entryFeeCents,
+    liveRoom?.coinPrizePool,
+    (liveRoom as { challengeType?: string } | null)?.challengeType,
+  ]);
 
   const cashLeaveHasStartedPreview = previewChallengeHasStarted({
     scheduledStartAt,
@@ -2404,6 +2452,7 @@ function MatchmakingScreenContent() {
             null,
           challengeType: dataRace.challengeType,
           capacityMode: unlimitedCapacity ? "unlimited" : dataRace.capacityMode,
+          protectedRace: (dataRace as { protectedRace?: boolean }).protectedRace === true,
         };
         setLiveRoom(nextLiveRoom);
         const apiTrack =
@@ -2883,11 +2932,45 @@ function MatchmakingScreenContent() {
         startingRef.current = false;
         return;
       }
+      if (showProtectedRaceReadiness && user?.id) {
+        const gate = await ensurePrizeRaceReadiness({
+          userId: user.id,
+          raceId: backendRaceId,
+          challengeType: (liveRoomRef.current as { challengeType?: string } | null)?.challengeType,
+          entryType: liveRoomRef.current?.entryType,
+          protectedRace: liveRoomRef.current?.protectedRace,
+          isSponsored:
+            (liveRoomRef.current as { isSponsored?: boolean } | null)?.isSponsored === true ||
+            (liveRoomRef.current as { challengeType?: string } | null)?.challengeType ===
+              "sponsored",
+          entryFeeCents:
+            liveRoomRef.current?.entryAmountCents ??
+            (raceEntryFee > 0 ? Math.round(raceEntryFee * 100) : 0),
+        });
+        setPrizeReadiness(gate.readiness);
+        if (!gate.allowed) {
+          setStart("idle");
+          startingRef.current = false;
+          AppAlert.alert(
+            "Step tracking not ready",
+            gate.readiness?.userMessage ??
+              "Your step tracker isn't ready for verified challenges.",
+          );
+          return;
+        }
+      }
       const res = await authFetch(`/api/races/${backendRaceId}/start`, { method: "POST" });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({})) as { error?: string };
+        const err = await res.json().catch(() => ({})) as { error?: string; code?: string };
         setStart("idle");
         startingRef.current = false;
+        if (err.code === "PROTECTED_PREFLIGHT_INCOMPLETE") {
+          AppAlert.alert(
+            "Waiting for all participants to verify",
+            err.error ?? "Every participant must complete protected-race preflight before start.",
+          );
+          return;
+        }
         AppAlert.alert("Couldn't Start", err.error ?? "Please try again.");
         return;
       }
@@ -2899,7 +2982,15 @@ function MatchmakingScreenContent() {
       startingRef.current = false;
       AppAlert.alert("Couldn't Start", "Network error. Please try again.");
     }
-  }, [backendRaceId, setStart, beginCountdown, scheduledStartAt]);
+  }, [
+    backendRaceId,
+    setStart,
+    beginCountdown,
+    scheduledStartAt,
+    showProtectedRaceReadiness,
+    user?.id,
+    raceEntryFee,
+  ]);
 
   /** Unlimited Waiting Room → Live Race when the Unlimited frontend flag is on. */
   const enterUnlimitedLiveRace = useCallback(async () => {
@@ -3702,6 +3793,16 @@ function MatchmakingScreenContent() {
             </View>
           )}
         </View>
+
+        {showProtectedRaceReadiness ? (
+          <View style={{ marginHorizontal: rs(16), marginBottom: rs(12) }}>
+            <ProtectedRaceReadinessPanel
+              readiness={prizeReadiness}
+              loading={prizeReadinessLoading}
+              onFixStepTracking={() => router.push("/(tabs)/walk")}
+            />
+          </View>
+        ) : null}
 
         <View style={styles.statsRow}>
           <View style={styles.statCol}>

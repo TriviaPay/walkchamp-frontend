@@ -225,7 +225,7 @@ const ZERO: ChallengeParticipationBreakdown = {
   assert.match(modalSrc, /Races Played/);
 
   assert.match(dashboardSrc, /ChallengeParticipationBreakdownCard/);
-  assert.match(dashboardSrc, /profileMePath|PROFILE_ME_CACHE_KEY/);
+  assert.match(dashboardSrc, /profileMePath|PROFILE_ME_CACHE_KEY|profileMeCacheKey/);
   assert.equal(dashboardSrc.includes("setInterval"), false);
 
   const walkSrc = fs.readFileSync(path.join(root, "features", "walk", "screens", "WalkScreen.tsx"), "utf8");

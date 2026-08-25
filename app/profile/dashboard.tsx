@@ -6,7 +6,8 @@ import { ChallengeParticipationBreakdownCard } from "@/components/ChallengeParti
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { useColors } from "@/hooks/useColors";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
-import { PROFILE_ME_CACHE_KEY } from "@/hooks/useAvatarCache";
+import { useAuth } from "@/context/AuthContext";
+import { profileMeCacheKey } from "@/hooks/useAvatarCache";
 import { authFetch } from "@/utils/authFetch";
 import { profileMePath } from "@/utils/profileApi";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
@@ -23,8 +24,10 @@ const PROFILE_ME_TTL_MS = 90_000;
 
 export default function ProfileDashboardScreen() {
   const colors = useColors();
+  const { user } = useAuth();
   const { safeTop, safeBottom } = useSafeLayout();
-  const cached = screenCache.getSync<{ stats?: unknown }>(PROFILE_ME_CACHE_KEY);
+  const profileCacheKey = profileMeCacheKey(user?.id);
+  const cached = screenCache.getSync<{ stats?: unknown }>(profileCacheKey);
   const [breakdown, setBreakdown] = useState<ChallengeParticipationBreakdown | undefined>(() =>
     applyIncomingBreakdown(cached?.stats, undefined),
   );
@@ -32,7 +35,7 @@ export default function ProfileDashboardScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      const cachedNow = screenCache.getSync<{ stats?: unknown }>(PROFILE_ME_CACHE_KEY);
+      const cachedNow = screenCache.getSync<{ stats?: unknown }>(profileCacheKey);
       if (cachedNow?.stats) {
         setBreakdown((prev) => applyIncomingBreakdown(cachedNow.stats, prev));
         setLoading(false);
@@ -57,7 +60,7 @@ export default function ProfileDashboardScreen() {
           setLoading(false);
         }
       })();
-    }, []),
+    }, [profileCacheKey]),
   );
 
   return (

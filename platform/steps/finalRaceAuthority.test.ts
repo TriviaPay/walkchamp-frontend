@@ -98,6 +98,14 @@ import {
 }
 
 assert.equal(canShowFinalRaceOutcome("finalized"), true);
+assert.equal(
+  canShowFinalRaceOutcome("finalized", { settlementStatus: "paid" }),
+  true,
+);
+assert.equal(
+  canShowFinalRaceOutcome("finalized", { settlementStatus: "awaiting_verification" }),
+  false,
+);
 assert.equal(canShowFinalRaceOutcome("pending"), false);
 assert.equal(
   canShowFinalRaceOutcome("pending", { verificationFeatureEnabled: false }),
