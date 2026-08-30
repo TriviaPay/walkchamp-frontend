@@ -338,7 +338,9 @@ export function computeUnlimitedViewerSchedule(
     apiStatus === "completed" ||
     apiStatus === "failed" ||
     apiStatus === "left"
-      ? apiStatus
+      ? apiStatus === "active" && nowMs >= viewerEndAtMs
+        ? "completed"
+        : apiStatus
       : resolveViewerStatus({
           challengeStatus: challenge.challengeStatus,
           qualificationStatus: opts.liveDay?.qualificationStatus,

@@ -6,6 +6,7 @@
  */
 
 import { getStoredSession } from "@/services/authService";
+import { getInstallationId } from "@/services/deviceIdentity";
 import { storageGet, STORAGE_KEYS } from "@/utils/storage";
 import type { UserProfile } from "@/store/types";
 
@@ -23,6 +24,8 @@ export function beginStartupWarmup(): void {
 
   // Warm SecureStore → memory (single-flight inside getStoredSession).
   void getStoredSession().catch(() => undefined);
+  // Warm device installation id in parallel so relogin / session register never waits.
+  void getInstallationId().catch(() => undefined);
 
   if (!userWarmPromise) {
     userWarmPromise = storageGet<UserProfile>(STORAGE_KEYS.USER)

@@ -225,6 +225,14 @@ export type UnlimitedUpcomingRoom = {
   qualified_participant_count?: number | null;
   /** Top-3 roster from list APIs (`players` / `participants`). Empty when the server sent none. */
   players?: UnlimitedCardPlayer[];
+  /** Per-viewer schedule from my-active / detail `viewer` block (authoritative for card badges). */
+  viewerStatus?: string | null;
+  verificationPending?: boolean | null;
+  viewerEndAt?: string | null;
+  viewerTimezone?: string | null;
+  viewerResultsReady?: boolean | null;
+  resultsStatus?: string | null;
+  completedDays?: number | null;
 };
 
 export type UnlimitedCardPlayer = {
@@ -493,6 +501,14 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
   const status =
     asString(pickRaw(obj, "status", "room_status", "roomStatus")) ?? "scheduled";
 
+  const viewerObj = asRecord(pickRaw(obj, "viewer")) ?? {};
+  const viewerField = (...keys: string[]) =>
+    asString(pickRaw(viewerObj, ...keys)) ?? asString(pickRaw(obj, ...keys));
+  const viewerBool = (...keys: string[]) =>
+    asBool(pickRaw(viewerObj, ...keys)) ?? asBool(pickRaw(obj, ...keys));
+  const viewerNum = (...keys: string[]) =>
+    asNumber(pickRaw(viewerObj, ...keys)) ?? asNumber(pickRaw(obj, ...keys));
+
   return {
     room_id: id,
     status,
@@ -538,6 +554,13 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
       pickRaw(obj, "qualifiedParticipantCount", "qualified_participant_count"),
     ),
     players: readUnlimitedCardPlayers(obj),
+    viewerStatus: viewerField("viewerStatus", "viewer_status"),
+    verificationPending: viewerBool("verificationPending", "verification_pending"),
+    viewerEndAt: viewerField("viewerEndAt", "viewer_end_at"),
+    viewerTimezone: viewerField("viewerTimezone", "viewer_timezone"),
+    viewerResultsReady: viewerBool("viewerResultsReady", "viewer_results_ready"),
+    resultsStatus: viewerField("viewerResultsStatus", "viewer_results_status", "resultsStatus", "results_status"),
+    completedDays: viewerNum("completedDays", "completed_days", "passedDays", "passed_days"),
   };
 }
 
@@ -590,6 +613,13 @@ export function mergeUpcomingRoomsById<T extends { room_id: string; current_user
       const merged = { ...prev, ...room } as T & Record<string, unknown>;
       // Later rows must not wipe API start/end/prize/count with null hosted-cache leftovers.
       for (const key of [
+        "viewerStatus",
+        "verificationPending",
+        "viewerEndAt",
+        "viewerTimezone",
+        "viewerResultsReady",
+        "resultsStatus",
+        "completedDays",
         "challenge_end_at",
         "scheduled_start_at",
         "challenge_timezone",

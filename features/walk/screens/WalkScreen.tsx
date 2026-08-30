@@ -72,6 +72,8 @@ import { useTheme } from "@/context/ThemeContext";
 import { useSound } from "@/context/SoundContext";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
 import { useIncrementalStepDisplay } from "@/hooks/useIncrementalStepDisplay";
+import { useChallengeParticipationBreakdown } from "@/hooks/useChallengeParticipationBreakdown";
+import { ChallengeParticipationBreakdownCard } from "@/components/ChallengeParticipationBreakdownCard";
 import { useWalkContext, TrackingStatus } from "@/context/WalkContext";
 import { useWalkTodaySteps } from "@/services/walkTodayStepsStore";
 import { useStepSourceGuard } from "@/hooks/useStepSourceGuard";
@@ -113,6 +115,7 @@ import {
 import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
 import { ensureActiveRaceInStore } from "@/core/steps/stepProgressCoordinator";
 import { bindUnlimitedBackgroundTracking } from "@/features/unlimited/services/bindUnlimitedBackgroundTracking";
+import { resolveUnlimitedNextRacePhase } from "@/features/unlimited/mappers/unlimitedStreakParticipation";
 import {
   previewUnlimitedGoalPaymentQuote,
   type UnlimitedGoalPaymentQuote,
@@ -1145,6 +1148,9 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
   const [stepSourceInfo,    setStepSourceInfo]    = useState<{ platform: string; permissionStatus: string; setupCompleted: boolean } | null>(null);
   const [showWearableSetup, setShowWearableSetup] = useState(false);
   const [deleteLoading,     setDeleteLoading]     = useState(false);
+  const [dashboardExpanded, setDashboardExpanded] = useState(false);
+  const { breakdown: dashboardBreakdown, loading: dashboardLoading } =
+    useChallengeParticipationBreakdown(user?.id, dashboardExpanded);
 
   // Sign-out confirmation overlay (rendered inside the modal so it works on iOS)
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
@@ -1158,7 +1164,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
 
   // Inline sub-page state — reset to "main" whenever the modal closes
   const [profilePage, setProfilePage] = useState<"main" | "help" | "faq" | "privacy" | "terms">("main");
-  useEffect(() => { if (!visible) setProfilePage("main"); }, [visible]);
+  useEffect(() => { if (!visible) { setProfilePage("main"); setDashboardExpanded(false); } }, [visible]);
 
   // Local rank from profile fetch (real all-time global rank from the API)
   const [profileRank, setProfileRank] = useState<number>(userRank);
@@ -1724,10 +1730,20 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
               <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
             </TouchableOpacity>
             <TouchableOpacity
-              style={[pmStyles.toggleRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
-              onPress={() => onNavigate("/profile/dashboard")}
+              style={[
+                pmStyles.toggleRow,
+                {
+                  borderBottomColor: colors.border,
+                  borderBottomWidth: dashboardExpanded ? 0 : StyleSheet.hairlineWidth,
+                },
+              ]}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setDashboardExpanded((v) => !v);
+              }}
               accessibilityRole="button"
               accessibilityLabel="New dashboard"
+              accessibilityState={{ expanded: dashboardExpanded }}
             >
               <View style={[pmStyles.toggleIcon, { backgroundColor: colors.primary + "18" }]}>
                 <Feather name="bar-chart-2" size={17} color={colors.primary} />
@@ -1739,11 +1755,32 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
                 </Text>
               </View>
               <Feather
-                name="chevron-right"
+                name={dashboardExpanded ? "chevron-up" : "chevron-down"}
                 size={16}
                 color={colors.mutedForeground}
               />
             </TouchableOpacity>
+            {dashboardExpanded ? (
+              <View
+                style={{
+                  paddingHorizontal: rs(8),
+                  paddingBottom: rs(4),
+                  borderBottomColor: colors.border,
+                  borderBottomWidth: StyleSheet.hairlineWidth,
+                }}
+              >
+                <ChallengeParticipationBreakdownCard
+                  breakdown={dashboardBreakdown}
+                  loading={dashboardLoading}
+                  compact
+                />
+                {!dashboardLoading && dashboardBreakdown === undefined ? (
+                  <Text style={{ fontSize: rf(13), lineHeight: 18, color: colors.mutedForeground, paddingHorizontal: rs(8), paddingBottom: rs(8) }}>
+                    Challenge participation is unavailable right now.
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
             <View style={[pmStyles.toggleRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
               <View style={[pmStyles.toggleIcon, { backgroundColor: colors.accent + "18" }]}>
                 <Feather name="volume-2" size={17} color={colors.accent} />
@@ -2915,6 +2952,12 @@ function WalkScreenContent() {
     /** Unlimited Daily Goal Challenge only — result-state derivation (utils/unlimitedResults.ts). */
     settlement_status?: string | null;
     prize_pool_cents?: number | null;
+    viewerStatus?: string | null;
+    verificationPending?: boolean | null;
+    viewerEndAt?: string | null;
+    viewerResultsReady?: boolean | null;
+    resultsStatus?: string | null;
+    completedDays?: number | null;
   };
   const [registeredUpcomingRooms, setRegisteredUpcomingRooms] = useState<WalkUpcomingRoom[]>([]);
   /** Distinguish loading from confirmed empty for Next Race / Live Race card. */
@@ -3144,6 +3187,12 @@ function WalkScreenContent() {
             typeof u.reward_pool === "number" && u.reward_pool > 0
               ? Math.round(u.reward_pool * 100)
               : null,
+          viewerStatus: u.viewerStatus ?? null,
+          verificationPending: u.verificationPending ?? null,
+          viewerEndAt: u.viewerEndAt ?? null,
+          viewerResultsReady: u.viewerResultsReady ?? null,
+          resultsStatus: u.resultsStatus ?? null,
+          completedDays: u.completedDays ?? null,
         };
       });
       const unlimitedHydrated: WalkUpcomingRoom[] = await Promise.all(
@@ -3165,6 +3214,12 @@ function WalkScreenContent() {
                 ? Math.round(detail.reward_pool * 100)
                 : u.prize_pool_cents ?? null,
             status: detail.status || u.status,
+            viewerStatus: detail.viewerStatus ?? u.viewerStatus ?? null,
+            verificationPending: detail.verificationPending ?? u.verificationPending ?? null,
+            viewerEndAt: detail.viewerEndAt ?? u.viewerEndAt ?? null,
+            viewerResultsReady: detail.viewerResultsReady ?? u.viewerResultsReady ?? null,
+            resultsStatus: detail.resultsStatus ?? u.resultsStatus ?? null,
+            completedDays: detail.completedDays ?? u.completedDays ?? null,
           };
         }),
       );
@@ -4190,7 +4245,19 @@ function WalkScreenContent() {
         cards.push({
           key: `challenge-live:${entryKey}:${cs.raceId}`,
           challengeType,
-          phase: "racing",
+          phase:
+            isUnlimitedEntry && roomMeta
+              ? resolveUnlimitedNextRacePhase({
+                  status: roomMeta.status ?? cs.status,
+                  viewerStatus: roomMeta.viewerStatus,
+                  verificationPending: roomMeta.verificationPending,
+                  viewerEndAt: roomMeta.viewerEndAt,
+                  resultsStatus: roomMeta.resultsStatus ?? roomMeta.settlement_status,
+                  viewerResultsReady: roomMeta.viewerResultsReady,
+                  completedDays: roomMeta.completedDays,
+                  challengeDurationDays: unlimitedDays ?? undefined,
+                }) ?? "racing"
+              : "racing",
           scheduledStartAt: liveIso,
           endsAt: liveEndsAt,
           timeLeftSeconds: known?.timeLeftSeconds,
@@ -4368,12 +4435,25 @@ function WalkScreenContent() {
       if (!isUnlimitedRoom && hasStarted && !isLiveStatus) continue;
 
       const msLeft = startMs - now;
+      const viewerPhase = isUnlimitedRoomEarly
+        ? resolveUnlimitedNextRacePhase({
+            status: room.status,
+            viewerStatus: room.viewerStatus,
+            verificationPending: room.verificationPending,
+            viewerEndAt: room.viewerEndAt,
+            resultsStatus: room.resultsStatus ?? room.settlement_status,
+            viewerResultsReady: room.viewerResultsReady,
+            completedDays: room.completedDays,
+            challengeDurationDays: room.challenge_duration_days,
+          })
+        : null;
       const phase: RaceStartingSoonPhase =
-        hasStarted && (isUnlimitedRoom || isLiveStatus)
+        viewerPhase ??
+        (hasStarted && (isUnlimitedRoom || isLiveStatus)
           ? "racing"
           : msLeft < 10 * 60_000
             ? "join_window"
-            : "registered";
+            : "registered");
       const challengeType: RaceStartingSoonChallengeType =
         room.challenge_type === "sponsored"
           ? "sponsored"
@@ -4418,7 +4498,7 @@ function WalkScreenContent() {
         unlimitedChallengeTimezone: isUnlimitedRoom ? room.challenge_timezone : undefined,
         unlimitedDurationDays: isUnlimitedRoom ? room.challenge_duration_days : undefined,
         onPressInCta:
-          phase === "racing"
+          phase === "racing" || phase === "verifying"
             ? () => {
                 warmLiveRaceDetailNavigation({
                   raceId: room.room_id,
@@ -4462,7 +4542,7 @@ function WalkScreenContent() {
             return;
           }
           // Live race (classic or Unlimited): always open Live Detail with track UI.
-          if (phase === "racing") {
+          if (phase === "racing" || phase === "verifying") {
             const params = warmLiveRaceDetailNavigation({
               raceId: room.room_id,
               userId: user?.id,
@@ -4599,7 +4679,21 @@ function WalkScreenContent() {
         cards.push({
           key: `session-live:${sessionLiveId}`,
           challengeType,
-          phase: (racePhase as string) === "waiting" || racePhase === "countdown" ? "join_window" : "racing",
+          phase:
+            (racePhase as string) === "waiting" || racePhase === "countdown"
+              ? "join_window"
+              : isUnlimitedLive && roomMeta
+                ? resolveUnlimitedNextRacePhase({
+                    status: roomMeta.status,
+                    viewerStatus: roomMeta.viewerStatus,
+                    verificationPending: roomMeta.verificationPending,
+                    viewerEndAt: roomMeta.viewerEndAt,
+                    resultsStatus: roomMeta.resultsStatus ?? roomMeta.settlement_status,
+                    viewerResultsReady: roomMeta.viewerResultsReady,
+                    completedDays: roomMeta.completedDays,
+                    challengeDurationDays: unlimitedDays ?? undefined,
+                  }) ?? "racing"
+                : "racing",
           scheduledStartAt: liveIso,
           endsAt: liveEndsAt,
           registeredCount: Math.max(joined, roomMeta?.registered_count ?? 0),
@@ -4643,8 +4737,9 @@ function WalkScreenContent() {
 
     // Live/participating races first, then upcoming by start time.
     cards.sort((a, b) => {
-      if (a.phase === "racing" && b.phase !== "racing") return -1;
-      if (b.phase === "racing" && a.phase !== "racing") return 1;
+      const active = (p: RaceStartingSoonPhase) => p === "racing" || p === "verifying";
+      if (active(a.phase) && !active(b.phase)) return -1;
+      if (active(b.phase) && !active(a.phase)) return 1;
       return a.sortMs - b.sortMs;
     });
     return cards;

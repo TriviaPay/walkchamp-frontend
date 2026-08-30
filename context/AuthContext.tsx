@@ -118,6 +118,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (profile: UserProfile, sessionJwt: string, refreshJwt: string) => {
       if (authTimerRef.current) clearTimeout(authTimerRef.current);
       setIsAuthenticating(true);
+      void import("@/services/startupWarmup").then(({ beginStartupWarmup }) => {
+        beginStartupWarmup();
+      });
+      void import("@/services/deviceIdentity").then(({ getInstallationId }) => {
+        void getInstallationId();
+      });
       const { beginSessionLoginGrace } = await import(
         "@/services/sessionInvalidation"
       );

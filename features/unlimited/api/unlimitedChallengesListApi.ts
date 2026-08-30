@@ -722,6 +722,12 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
         currentUserParticipantStatus: room.participation_status ?? null,
         challengeType: "unlimited_goal" as const,
         capacityMode: "unlimited" as const,
+        viewerStatus: room.viewerStatus ?? null,
+        verificationPending: room.verificationPending ?? null,
+        viewerEndAt: room.viewerEndAt ?? null,
+        viewerResultsReady: room.viewerResultsReady ?? null,
+        resultsStatus: room.resultsStatus ?? room.settlement_status ?? null,
+        completedDays: room.completedDays ?? null,
       });
       continue;
     }

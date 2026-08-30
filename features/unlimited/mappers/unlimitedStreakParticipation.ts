@@ -41,6 +41,8 @@ export type StreakViewerResultInput = {
   failedDays?: number | null;
   eligibilityReasonCode?: string | null;
   finalVerificationStatus?: string | null;
+  /** Backend viewer block — personal window ended, last day(s) still verifying. */
+  verificationPending?: boolean | null;
 };
 
 export function isViewerStreakBroken(input: StreakViewerResultInput): boolean {
@@ -58,10 +60,50 @@ export type StreakDetailUiBranch = "broken" | "final" | "live" | "pending_settle
 export type UnlimitedPastLiveInput = StreakViewerResultInput & {
   viewerEndAt?: string | null;
   challengeStatus?: string | null;
+  completedDays?: number | null;
+  durationDays?: number | null;
+  /** Viewer locked-timezone end (ms) — from backend viewerEndAt or schedule math. */
+  viewerEndAtMs?: number | null;
 };
 
-/** True when backend says the viewer is past live daily racing (never local schedule guesses). */
+export function buildUnlimitedPastLiveInput(
+  race: {
+    viewerResultsReady?: boolean | null;
+    viewerResultReasonCode?: string | null;
+    viewerStatus?: string | null;
+    resultsStatus?: string | null;
+    finalVerificationStatus?: string | null;
+    viewerEndAt?: string | null;
+    rawStatus?: string | null;
+    status?: string | null;
+    verificationPending?: boolean | null;
+    completedDays?: number | null;
+    passedDays?: number | null;
+    challengeDurationDays?: number | null;
+  },
+  opts?: {
+    finalVerificationStatus?: string | null;
+    viewerEndAtMs?: number | null;
+  },
+): UnlimitedPastLiveInput {
+  return {
+    viewerResultsReady: race.viewerResultsReady,
+    viewerResultReasonCode: race.viewerResultReasonCode,
+    viewerStatus: race.viewerStatus,
+    resultsStatus: race.resultsStatus,
+    finalVerificationStatus: opts?.finalVerificationStatus ?? race.finalVerificationStatus,
+    viewerEndAt: race.viewerEndAt,
+    challengeStatus: race.rawStatus ?? race.status,
+    verificationPending: race.verificationPending,
+    completedDays: race.completedDays ?? race.passedDays,
+    durationDays: race.challengeDurationDays,
+    viewerEndAtMs: opts?.viewerEndAtMs,
+  };
+}
+
+/** True when the viewer is past live daily racing (backend contract + locked viewer window). */
 export function isUnlimitedViewerPastLivePhase(input: UnlimitedPastLiveInput): boolean {
+  if (input.verificationPending === true) return true;
   if (input.viewerResultsReady === true) return true;
   const viewer = (input.viewerStatus ?? "").trim().toLowerCase();
   if (viewer === "completed" || viewer === "failed" || viewer === "left") return true;
@@ -69,6 +111,9 @@ export function isUnlimitedViewerPastLivePhase(input: UnlimitedPastLiveInput): b
   if (verify === "requested" || verify === "submitted" || verify === "completed") return true;
   const challenge = (input.challengeStatus ?? "").trim().toLowerCase();
   if (challenge === "settling" || challenge === "completed") return true;
+  if (input.viewerEndAtMs != null && Number.isFinite(input.viewerEndAtMs) && input.viewerEndAtMs <= Date.now()) {
+    return true;
+  }
   if (input.viewerEndAt) {
     const endMs = new Date(input.viewerEndAt).getTime();
     if (Number.isFinite(endMs) && endMs <= Date.now()) return true;
@@ -84,6 +129,61 @@ export function isUnlimitedViewerPastLivePhase(input: UnlimitedPastLiveInput): b
   return false;
 }
 
+export type UnlimitedCardBadgeKind = "live" | "verifying" | "finished" | "waiting";
+
+/** Live / Walk card badge — viewer-scoped when backend viewer fields are present. */
+export function resolveUnlimitedCardBadge(
+  input: UnlimitedPastLiveInput & { globalStatus?: string | null },
+): { kind: UnlimitedCardBadgeKind; label: string } {
+  const global = (input.challengeStatus ?? input.globalStatus ?? "").trim().toLowerCase();
+  if (global === "completed" || global === "finished" || global === "ended") {
+    return { kind: "finished", label: "FINISHED" };
+  }
+  if (isUnlimitedViewerPastLivePhase(input)) {
+    return { kind: "verifying", label: "VERIFYING" };
+  }
+  const viewer = (input.viewerStatus ?? "").trim().toLowerCase();
+  if (viewer === "scheduled" || global === "waiting") {
+    return { kind: "waiting", label: "WAITING" };
+  }
+  return { kind: "live", label: "LIVE" };
+}
+
+/** My Race card phase when viewer fields are present on the room row. */
+export function resolveUnlimitedNextRacePhase(input: {
+  status?: string | null;
+  viewerStatus?: string | null;
+  verificationPending?: boolean | null;
+  viewerEndAt?: string | null;
+  resultsStatus?: string | null;
+  viewerResultsReady?: boolean | null;
+  completedDays?: number | null;
+  challengeDurationDays?: number | null;
+}): "racing" | "verifying" | null {
+  if (
+    input.viewerStatus == null &&
+    input.verificationPending !== true &&
+    input.viewerEndAt == null
+  ) {
+    return null;
+  }
+  const badge = resolveUnlimitedCardBadge(
+    buildUnlimitedPastLiveInput({
+      viewerStatus: input.viewerStatus,
+      verificationPending: input.verificationPending,
+      viewerEndAt: input.viewerEndAt,
+      resultsStatus: input.resultsStatus,
+      viewerResultsReady: input.viewerResultsReady,
+      completedDays: input.completedDays,
+      rawStatus: input.status,
+      challengeDurationDays: input.challengeDurationDays,
+    }),
+  );
+  if (badge.kind === "verifying") return "verifying";
+  if (badge.kind === "live") return "racing";
+  return null;
+}
+
 /**
  * Recommended UI branch from the streak backend contract.
  * Winner/loser chrome only after global `results_ready`.
@@ -95,6 +195,7 @@ export function resolveStreakDetailUiBranch(
   if (globalReady) {
     return isViewerStreakBroken(input) ? "broken" : "final";
   }
+  if (input.verificationPending === true) return "pending_settlement";
   const viewer = (input.viewerStatus ?? "").trim().toLowerCase();
   const verify = (input.finalVerificationStatus ?? "").trim().toLowerCase();
   if (

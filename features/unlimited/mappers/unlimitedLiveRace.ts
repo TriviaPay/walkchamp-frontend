@@ -232,6 +232,12 @@ export type UnlimitedLiveRaceFields = {
   currentUserParticipantStatus: string | null;
   challengeType: typeof UNLIMITED_GOAL_CHALLENGE_TYPE;
   capacityMode: "unlimited";
+  viewerStatus?: string | null;
+  verificationPending?: boolean | null;
+  viewerEndAt?: string | null;
+  viewerResultsReady?: boolean | null;
+  resultsStatus?: string | null;
+  completedDays?: number | null;
 };
 
 export function mapUnlimitedUpcomingToLiveRaceFields(
@@ -306,6 +312,12 @@ export function mapUnlimitedUpcomingToLiveRaceFields(
     currentUserParticipantStatus: room.participation_status ?? null,
     challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
     capacityMode: "unlimited",
+    viewerStatus: room.viewerStatus ?? null,
+    verificationPending: room.verificationPending ?? null,
+    viewerEndAt: room.viewerEndAt ?? null,
+    viewerResultsReady: room.viewerResultsReady ?? null,
+    resultsStatus: room.resultsStatus ?? room.settlement_status ?? null,
+    completedDays: room.completedDays ?? null,
   };
 }
 
@@ -354,6 +366,8 @@ export type UnlimitedLiveDetailMapped = {
     viewerStartAt?: string | null;
     viewerEndAt?: string | null;
     viewerStatus?: string | null;
+    /** True when the viewer's window ended but day verification is still running. */
+    verificationPending?: boolean | null;
     viewerTimezone?: string | null;
     currentDayStartAt?: string | null;
     currentDayEndAt?: string | null;
@@ -879,6 +893,9 @@ export function mapUnlimitedDetailToLiveDetail(
       viewerStartAt: asString(pick(viewer ?? root ?? {}, "viewerStartAt", "viewer_start_at")),
       viewerEndAt: asString(pick(viewer ?? root ?? {}, "viewerEndAt", "viewer_end_at")),
       viewerStatus: asString(pick(viewer ?? root ?? {}, "viewerStatus", "viewer_status")),
+      verificationPending: asBool(
+        pick(viewer ?? root ?? {}, "verificationPending", "verification_pending"),
+      ),
       viewerTimezone: asString(pick(viewer ?? root ?? {}, "viewerTimezone", "viewer_timezone")),
       currentDayStartAt: asString(pick(viewer ?? root ?? {}, "currentDayStartAt", "current_day_start_at")),
       currentDayEndAt: asString(pick(viewer ?? root ?? {}, "currentDayEndAt", "current_day_end_at")),

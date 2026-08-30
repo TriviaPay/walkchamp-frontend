@@ -68,6 +68,8 @@ import {
   messageForDeleteAccountResponse,
 } from "@/utils/accountDeletion";
 import { screenCache } from "@/utils/screenCache";
+import { ChallengeParticipationBreakdownCard } from "@/components/ChallengeParticipationBreakdownCard";
+import { useChallengeParticipationBreakdown } from "@/hooks/useChallengeParticipationBreakdown";
 
 // iOS can report HEIC as the mimeType even when quality<1 converts data to JPEG.
 // Normalize it so the server always receives a recognised image type.
@@ -425,6 +427,9 @@ function ProfileScreenContent() {
   const [stepSourceInfo,    setStepSourceInfo]    = useState<StepSourceInfo | null>(cachedProfile?.stepSource ?? null);
   const [showWearableSetup, setShowWearableSetup] = useState(false);
   const [deleteLoading,     setDeleteLoading]     = useState(false);
+  const [dashboardExpanded, setDashboardExpanded] = useState(false);
+  const { breakdown: dashboardBreakdown, loading: dashboardLoading } =
+    useChallengeParticipationBreakdown(user?.id, dashboardExpanded);
 
   // Inline edit state
   const [isEditing,      setIsEditing]      = useState(false);
@@ -1183,10 +1188,20 @@ function ProfileScreenContent() {
             <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.settingRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
-            onPress={() => router.push("/profile/dashboard" as never)}
+            style={[
+              styles.settingRow,
+              {
+                borderBottomColor: colors.border,
+                borderBottomWidth: dashboardExpanded ? 0 : StyleSheet.hairlineWidth,
+              },
+            ]}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setDashboardExpanded((v) => !v);
+            }}
             accessibilityRole="button"
             accessibilityLabel="New dashboard"
+            accessibilityState={{ expanded: dashboardExpanded }}
           >
             <View style={[styles.settingIcon, { backgroundColor: colors.primary + "15" }]}>
               <Feather name="bar-chart-2" size={17} color={colors.primary} />
@@ -1198,11 +1213,33 @@ function ProfileScreenContent() {
               </Text>
             </View>
             <Feather
-              name="chevron-right"
+              name={dashboardExpanded ? "chevron-up" : "chevron-down"}
               size={16}
               color={colors.mutedForeground}
             />
           </TouchableOpacity>
+          {dashboardExpanded ? (
+            <View
+              style={[
+                styles.dashboardExpand,
+                {
+                  borderBottomColor: colors.border,
+                  borderBottomWidth: StyleSheet.hairlineWidth,
+                },
+              ]}
+            >
+              <ChallengeParticipationBreakdownCard
+                breakdown={dashboardBreakdown}
+                loading={dashboardLoading}
+                compact
+              />
+              {!dashboardLoading && dashboardBreakdown === undefined ? (
+                <Text style={[styles.dashboardUnavailable, { color: colors.mutedForeground }]}>
+                  Challenge participation is unavailable right now.
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
           <View style={[styles.settingRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
             <View style={[styles.settingIcon, { backgroundColor: colors.accent + "15" }]}>
               <Feather name="smartphone" size={17} color={colors.accent} />
@@ -1588,6 +1625,8 @@ const styles = StyleSheet.create({
   settingIcon:  { width: rs(34), height: rs(34), borderRadius: 10, alignItems: "center", justifyContent: "center" },
   settingLabel:    { flex: 1, fontSize: rf(15), fontWeight: "500" },
   settingSubtitle: { fontSize: rf(11), marginTop: 1 },
+  dashboardExpand: { paddingHorizontal: rs(12), paddingBottom: rs(4) },
+  dashboardUnavailable: { fontSize: rf(13), lineHeight: 18, paddingHorizontal: rs(12), paddingBottom: rs(12) },
 
   // Logout
   logoutBtn:  { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: 14, borderWidth: 1, paddingVertical: rs(14), marginBottom: 8 },

@@ -68,6 +68,7 @@ import {
 } from "@/utils/unlimitedViewerSchedule";
 import { getDeviceTimezone } from "@/utils/timezone";
 import { UnlimitedCurrentDayCard } from "@/components/race/UnlimitedCurrentDayCard";
+import { UnlimitedFinalResultStageStack } from "@/components/race/UnlimitedFinalResultStageStack";
 import { UnlimitedDayProgressModal } from "@/components/race/UnlimitedDayProgressModal";
 import { resolveUnlimitedFinalResultStages } from "@/features/unlimited/mappers/unlimitedTimezoneChange";
 import { unlimitedFinalVerificationPendingCopy } from "@/utils/unlimitedFinalVerification";
@@ -78,6 +79,7 @@ import {
 } from "@/utils/unlimitedResults";
 import { isUnlimitedPrizeLost, UNLIMITED_COPY } from "@/utils/unlimitedLiveUiCopy";
 import {
+  buildUnlimitedPastLiveInput,
   isStreakManualLeaveStatus,
   isUnlimitedViewerPastLivePhase,
   resolveStreakDetailUiBranch,
@@ -368,6 +370,8 @@ interface RaceData {
   viewerStartAt?: string | null;
   viewerEndAt?: string | null;
   viewerStatus?: string | null;
+  /** Backend: viewer window ended, day(s) still verifying. */
+  verificationPending?: boolean | null;
   viewerTimezone?: string | null;
   accountTimezone?: string | null;
   pendingTimezone?: string | null;
@@ -2934,9 +2938,6 @@ function LiveRaceDetailScreenContent() {
         (race as { rawStatus?: string | null } | null)?.rawStatus ?? race?.status ?? "",
       ).toLowerCase(),
     );
-  const isActive =
-    !isCompleted &&
-    (race?.status === "in_progress" || trackingThisRace || unlimitedServerLive);
 
   useEffect(() => {
     if (!isUnlimitedHeader || !user?.id) return;
@@ -3058,33 +3059,98 @@ function LiveRaceDetailScreenContent() {
         unlimitedTaglineSchedule.viewerStatus !== "left"
       : true);
   const unlimitedPastLivePhaseForSync = useMemo(
-    () =>
-      isUnlimitedHeader && race
-        ? isUnlimitedViewerPastLivePhase({
-            viewerResultsReady: race.viewerResultsReady,
-            viewerResultReasonCode: race.viewerResultReasonCode,
-            viewerStatus: race.viewerStatus,
-            resultsStatus: race.resultsStatus,
-            finalVerificationStatus:
-              race.finalVerificationStatus ?? unlimitedFinalVerificationStatus,
-            viewerEndAt: race.viewerEndAt,
-            challengeStatus: race.rawStatus ?? race.status,
-          })
-        : false,
+    () => {
+      if (!isUnlimitedHeader || !race) return false;
+      if (race.verificationPending === true) return true;
+      if (
+        unlimitedTaglineSchedule?.viewerStatus === "completed" ||
+        unlimitedTaglineSchedule?.viewerStatus === "failed"
+      ) {
+        return true;
+      }
+      if (
+        unlimitedTaglineSchedule &&
+        Number.isFinite(unlimitedTaglineSchedule.viewerEndAtMs) &&
+        Date.now() >= unlimitedTaglineSchedule.viewerEndAtMs
+      ) {
+        return true;
+      }
+      return isUnlimitedViewerPastLivePhase(
+        buildUnlimitedPastLiveInput(
+          {
+            ...race,
+            viewerStatus: unlimitedTaglineSchedule?.viewerStatus ?? race.viewerStatus,
+          },
+          {
+            finalVerificationStatus: unlimitedFinalVerificationStatus,
+            viewerEndAtMs: unlimitedTaglineSchedule?.viewerEndAtMs,
+          },
+        ),
+      );
+    },
     [
       isUnlimitedHeader,
       race,
       race?.viewerResultsReady,
       race?.viewerResultReasonCode,
       race?.viewerStatus,
+      race?.verificationPending,
       race?.resultsStatus,
       race?.finalVerificationStatus,
       race?.viewerEndAt,
       race?.rawStatus,
       race?.status,
+      race?.completedDays,
+      race?.passedDays,
+      race?.challengeDurationDays,
       unlimitedFinalVerificationStatus,
+      unlimitedTaglineSchedule?.viewerEndAtMs,
+      unlimitedTaglineSchedule?.viewerStatus,
     ],
   );
+  const unlimitedViewerPersonallyFinishedEarly = useMemo(() => {
+    if (!isUnlimitedHeader || !race) return false;
+    if (race.verificationPending === true) return true;
+    if (
+      unlimitedTaglineSchedule?.viewerStatus === "completed" ||
+      unlimitedTaglineSchedule?.viewerStatus === "failed" ||
+      unlimitedTaglineSchedule?.viewerStatus === "left"
+    ) {
+      return true;
+    }
+    if (race.viewerResultsReady === true) return true;
+    if (
+      ["completed", "failed", "left"].includes((race.viewerStatus ?? "").trim().toLowerCase())
+    ) {
+      return true;
+    }
+    if (race.viewerEndAt && new Date(race.viewerEndAt).getTime() <= Date.now()) return true;
+    if (unlimitedTaglineSchedule && Date.now() >= unlimitedTaglineSchedule.viewerEndAtMs) {
+      return true;
+    }
+    if (
+      unlimitedTaglineSchedule &&
+      ["completed", "failed", "left"].includes(unlimitedTaglineSchedule.viewerStatus)
+    ) {
+      return true;
+    }
+    return false;
+  }, [
+    isUnlimitedHeader,
+    race,
+    race?.verificationPending,
+    race?.viewerResultsReady,
+    race?.viewerStatus,
+    race?.viewerEndAt,
+    unlimitedTaglineSchedule,
+  ]);
+  const isActive =
+    !isCompleted &&
+    !(
+      isUnlimitedHeader &&
+      (unlimitedPastLivePhaseForSync || unlimitedViewerPersonallyFinishedEarly)
+    ) &&
+    (race?.status === "in_progress" || trackingThisRace || unlimitedServerLive);
   unlimitedLiveSyncCtxRef.current = {
     unlimitedViewerDayStarted,
     isUnlimitedParticipant,
@@ -3507,7 +3573,16 @@ function LiveRaceDetailScreenContent() {
     trackEvent("unlimited_live_race_viewed", { raceId });
   }, [isUnlimitedHeader, raceId]);
 
-  const statusLabel = isCompleted ? "FINISHED" : isActive ? "LIVE" : race ? "WAITING" : "NO RACE";
+  const statusLabel = isCompleted
+    ? "FINISHED"
+    : isUnlimitedHeader &&
+        (unlimitedPastLivePhaseForSync || unlimitedViewerPersonallyFinishedEarly)
+      ? "VERIFYING"
+      : isActive
+        ? "LIVE"
+        : race
+          ? "WAITING"
+          : "NO RACE";
 
   const challengeEndsLabel = useMemo(() => {
     if (isUnlimitedHeader) {
@@ -3916,7 +3991,14 @@ function LiveRaceDetailScreenContent() {
           isUnlimited: true,
         })
       : "Waiting";
-  const trackStatusText = isCompleted ? "FINISHED" : isActive ? "LIVE" : "WAITING";
+  const trackStatusText = isCompleted
+    ? "FINISHED"
+    : isUnlimitedHeader &&
+        (unlimitedPastLivePhaseForSync || unlimitedViewerPersonallyFinishedEarly)
+      ? "VERIFYING"
+      : isActive
+        ? "LIVE"
+        : "WAITING";
 
   useEffect(() => {
     progress.value = withTiming(myProgress, { duration: 900 }); }, [myProgress, progress]);
@@ -3995,15 +4077,11 @@ function LiveRaceDetailScreenContent() {
 
     // ── Unlimited Daily Goal: NEVER start classic RaceContext / pause walk sync ──
     if (isUnlimited) {
-      const pastLive = isUnlimitedViewerPastLivePhase({
-        viewerResultsReady: raceData.viewerResultsReady,
-        viewerResultReasonCode: raceData.viewerResultReasonCode,
-        viewerStatus: raceData.viewerStatus,
-        resultsStatus: raceData.resultsStatus,
-        finalVerificationStatus: raceData.finalVerificationStatus,
-        viewerEndAt: raceData.viewerEndAt,
-        challengeStatus: raceData.rawStatus ?? raceData.status,
-      });
+      const pastLive = isUnlimitedViewerPastLivePhase(
+        buildUnlimitedPastLiveInput(raceData, {
+          finalVerificationStatus: raceData.finalVerificationStatus,
+        }),
+      );
       if (pastLive || unlimitedLiveTrayReleasedRef.current === raceId) {
         releaseUnlimitedLiveRaceTray("unlimited_past_live_hydrate");
         return;
@@ -4989,16 +5067,13 @@ function LiveRaceDetailScreenContent() {
     if (!isActive || !raceId || race?.status !== "in_progress" || !sessionToken) return;
     if (
       isUnlimitedHeader &&
-      isUnlimitedViewerPastLivePhase({
-        viewerResultsReady: race.viewerResultsReady,
-        viewerResultReasonCode: race.viewerResultReasonCode,
-        viewerStatus: race.viewerStatus,
-        resultsStatus: race.resultsStatus,
-        finalVerificationStatus:
-          race.finalVerificationStatus ?? unlimitedFinalVerificationStatus,
-        viewerEndAt: race.viewerEndAt,
-        challengeStatus: race.rawStatus ?? race.status,
-      })
+      isUnlimitedViewerPastLivePhase(
+        buildUnlimitedPastLiveInput(race, {
+          finalVerificationStatus:
+            race.finalVerificationStatus ?? unlimitedFinalVerificationStatus,
+          viewerEndAtMs: unlimitedTaglineSchedule?.viewerEndAtMs,
+        }),
+      )
     ) {
       return;
     }
@@ -5903,31 +5978,14 @@ function LiveRaceDetailScreenContent() {
       )
     : null;
 
-  const unlimitedViewerPersonallyFinished = Boolean(
-    race.viewerResultsReady === true ||
-      ["completed", "failed", "left"].includes(
-        (race.viewerStatus ?? "").trim().toLowerCase(),
-      ) ||
-      (race.viewerEndAt &&
-        Number.isFinite(new Date(race.viewerEndAt).getTime()) &&
-        new Date(race.viewerEndAt).getTime() <= Date.now()) ||
-      (unlimitedViewerSchedule &&
-        (unlimitedViewerSchedule.viewerStatus === "completed" ||
-          unlimitedViewerSchedule.viewerStatus === "failed" ||
-          unlimitedViewerSchedule.viewerStatus === "left")),
-  );
-  const unlimitedPastLivePhase =
-    isUnlimitedLive &&
-    isUnlimitedViewerPastLivePhase({
-      viewerResultsReady: race.viewerResultsReady,
-      viewerResultReasonCode: race.viewerResultReasonCode,
-      viewerStatus: race.viewerStatus,
-      resultsStatus: race.resultsStatus,
-      finalVerificationStatus:
-        race.finalVerificationStatus ?? unlimitedFinalVerificationStatus,
-      viewerEndAt: race.viewerEndAt,
-      challengeStatus: race.rawStatus ?? race.status,
-    });
+  const unlimitedViewerPersonallyFinished =
+    unlimitedViewerPersonallyFinishedEarly ||
+    Boolean(
+      isUnlimitedLive &&
+        unlimitedViewerSchedule &&
+        ["completed", "failed", "left"].includes(unlimitedViewerSchedule.viewerStatus),
+    );
+  const unlimitedPastLivePhase = isUnlimitedLive && unlimitedPastLivePhaseForSync;
   if (unlimitedPastLivePhase) unlimitedStatusSlotLatchedRef.current = true;
   const unlimitedResultStatus = isUnlimitedLive
     ? resolveUnlimitedResultStatus({
@@ -5943,6 +6001,7 @@ function LiveRaceDetailScreenContent() {
         viewerResultReasonCode: race.viewerResultReasonCode,
         viewerStatus: race.viewerStatus,
         resultsStatus: race.resultsStatus,
+        verificationPending: race.verificationPending,
         finalVerificationStatus:
           race.finalVerificationStatus ?? unlimitedFinalVerificationStatus,
       })
@@ -6227,7 +6286,11 @@ function LiveRaceDetailScreenContent() {
   const showUnlimitedStatusInStepsSlot =
     !isSpectatorView &&
     isUnlimitedLive &&
-    (unlimitedStatusSlotLatchedRef.current || unlimitedPastLivePhase);
+    (unlimitedStatusSlotLatchedRef.current ||
+      unlimitedPastLivePhase ||
+      unlimitedViewerPersonallyFinished ||
+      unlimitedUiBranch === "pending_settlement" ||
+      race.verificationPending === true);
   const showClassicOutcomeInStepsSlot =
     !isSpectatorView &&
     !isUnlimitedLive &&
@@ -6261,6 +6324,7 @@ function LiveRaceDetailScreenContent() {
       finalVerificationStatus: unlimitedFinalFvStatus,
       showingFinalResults: canPublishFinalResult(race?.resultsStatus),
       pastLivePhase: unlimitedPastLivePhase || unlimitedStatusSlotLatchedRef.current,
+      verificationPending: race?.verificationPending,
       registeredParticipantCount: race?.registeredParticipantCount,
       participantsFinishedCount: race?.participantsFinishedCount,
       participantsPendingCount: race?.participantsPendingCount,
@@ -6309,6 +6373,14 @@ function LiveRaceDetailScreenContent() {
         <View style={s.hCenter}>
           {isActive && !pendingMatchEnd && (
             <Text style={[s.hLive, isSponsored && s.hLiveSponsored]}>LIVE </Text>
+          )}
+          {!isActive &&
+            !isCompleted &&
+            isUnlimitedHeader &&
+            (unlimitedPastLivePhaseForSync || unlimitedViewerPersonallyFinishedEarly) && (
+            <Text style={[s.hLive, isSponsored && s.hLiveSponsored, { color: "#F59E0B" }]}>
+              VERIFYING{" "}
+            </Text>
           )}
           {isActive && pendingMatchEnd && (
             <Text style={[s.hLive, isSponsored && s.hLiveSponsored, { color: "#F59E0B" }]}>ENDING </Text>
@@ -6474,6 +6546,13 @@ function LiveRaceDetailScreenContent() {
             resultsStatus={race.resultsStatus}
             finalVerificationStatus={
               race.finalVerificationStatus ?? unlimitedFinalVerificationStatus
+            }
+            verificationPending={race.verificationPending}
+            settlementTitle={
+              showUnlimitedStatusInStepsSlot ? unlimitedStepsSlotStatus.title : null
+            }
+            settlementDescription={
+              showUnlimitedStatusInStepsSlot ? unlimitedStepsSlotStatus.desc : null
             }
           />
         </>
@@ -6709,49 +6788,23 @@ function LiveRaceDetailScreenContent() {
         >
         {showStatusInStepsSlot && !isSpectatorView ? (
           isUnlimitedLive ? (
-            <View style={[st.progLeft, { flex: 1 }]}>
-              <BlueShoe size={rs(24)} />
-              <View style={st.progMain}>
-                <Text>
-                  <Text style={[st.progMine, { fontSize: rs(17) }]}>
-                    {formatSteps(unlimitedSettlementSteps)}
-                  </Text>
-                  <Text style={[st.progTarget, { fontSize: rs(13) }]}>
-                    {" "}/ {formatSteps(race.targetSteps)} steps
-                  </Text>
-                </Text>
-                <View style={st.progBarBg}>
-                  <View
-                    style={[
-                      st.progBarFill,
-                      { width: `${Math.round(unlimitedSettlementProgress * 100)}%` },
-                    ]}
-                  />
-                </View>
-                <Text
-                  style={[
-                    st.progSub,
-                    {
-                      fontSize: Math.max(8, rs(9)),
-                      marginTop: 2,
-                      color: "#A78BFA",
-                      fontWeight: "700",
-                    },
-                  ]}
-                  numberOfLines={1}
-                >
-                  {unlimitedStepsSlotStatus.title}
-                </Text>
-                <Text
-                  style={[
-                    st.progSub,
-                    { fontSize: Math.max(8, rs(9)), marginTop: 1, opacity: 0.9 },
-                  ]}
-                  numberOfLines={2}
-                >
-                  {unlimitedStepsSlotStatus.desc}
-                </Text>
-              </View>
+            <View style={st.progUnlimitedStatusWrap}>
+            <UnlimitedFinalResultStageStack
+              resultStatus={unlimitedResultStatus}
+              viewerPersonallyFinished={unlimitedViewerPersonallyFinished}
+              finalVerificationStatus={unlimitedFinalFvStatus}
+              showingFinalResults={canPublishFinalResult(race.resultsStatus)}
+              currentStageOnly
+              bottomBanner
+              pastLivePhase={
+                unlimitedPastLivePhase || unlimitedStatusSlotLatchedRef.current
+              }
+              verificationPending={race.verificationPending}
+              registeredParticipantCount={race.registeredParticipantCount}
+              participantsFinishedCount={race.participantsFinishedCount}
+              participantsPendingCount={race.participantsPendingCount}
+              pendingOpponentLabel={unlimitedPendingOpponentLabel}
+            />
             </View>
           ) : OutcomeBanner ? (
             <ScrollView
@@ -7420,12 +7473,20 @@ const st = StyleSheet.create({
     borderTopColor: "#1A1D2E",
   },
   progSectionPendingBanner: {
+    flexDirection: "column",
     paddingHorizontal: 0,
     paddingVertical: 0,
     minHeight: 72,
-    height: 72,
     alignItems: "stretch",
+    alignSelf: "stretch",
+    width: "100%",
     overflow: "hidden",
+  },
+  progUnlimitedStatusWrap: {
+    flex: 1,
+    width: "100%",
+    minWidth: 0,
+    alignSelf: "stretch",
   },
   progSectionClassicOutcome: {
     paddingHorizontal: 0,

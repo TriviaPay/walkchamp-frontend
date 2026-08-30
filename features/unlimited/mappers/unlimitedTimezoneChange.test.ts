@@ -65,6 +65,14 @@ const verifying = resolveUnlimitedFinalResultStages({
 assert.equal(verifying.at(-1)?.id, "verifying_final_results");
 assert.equal(verifying.at(-1)?.title, "Verifying Final Results");
 
+const pendingFlag = resolveUnlimitedFinalResultStages({
+  resultStatus: "challenge_in_progress",
+  viewerPersonallyFinished: true,
+  verificationPending: true,
+  pastLivePhase: true,
+});
+assert.equal(pendingFlag.at(-1)?.id, "verifying_final_results");
+
 const ready = resolveUnlimitedFinalResultStages({
   resultStatus: "results_ready",
   viewerPersonallyFinished: true,

@@ -37,6 +37,10 @@ type Props = {
   viewerResultReasonCode?: string | null;
   resultsStatus?: string | null;
   finalVerificationStatus?: string | null;
+  /** When set, replaces Today Goal / steps with settlement status (post final-day). */
+  settlementTitle?: string | null;
+  settlementDescription?: string | null;
+  verificationPending?: boolean | null;
 };
 
 /** Compact calendar tile — green header + day number + "Day" label. */
@@ -132,6 +136,9 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
   viewerResultReasonCode,
   resultsStatus,
   finalVerificationStatus,
+  settlementTitle,
+  settlementDescription,
+  verificationPending,
 }: Props) {
   const { isDark } = useTheme();
   const uiBranch = resolveStreakDetailUiBranch({
@@ -140,7 +147,13 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
     viewerStatus: schedule.viewerStatus,
     resultsStatus,
     finalVerificationStatus,
+    verificationPending,
   });
+  const settlementMode =
+    uiBranch === "pending_settlement" ||
+    verificationPending === true ||
+    schedule.viewerStatus === "completed" ||
+    Boolean(settlementTitle);
   const beforeStart = schedule.viewerStatus === "scheduled";
   const left = schedule.viewerStatus === "left";
   const finished =
@@ -180,8 +193,24 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
         <CalendarGoalIcon dayNumber={displayDay} />
 
         <View style={styles.mid}>
-          {/* Keep calendar + daily goal visible — settlement status lives in the bottom strip. */}
-          {!beforeStart ? (
+          {settlementMode && settlementTitle ? (
+            <>
+              <Text
+                style={[styles.goalLabel, { color: "#A78BFA" }]}
+                numberOfLines={2}
+                adjustsFontSizeToFit
+                minimumFontScale={0.85}
+                ellipsizeMode="tail"
+              >
+                {settlementTitle}
+              </Text>
+              {settlementDescription ? (
+                <Text style={styles.settlementDesc} numberOfLines={2} ellipsizeMode="tail">
+                  {settlementDescription}
+                </Text>
+              ) : null}
+            </>
+          ) : !beforeStart ? (
             <>
               <Text style={styles.goalLabel} numberOfLines={1}>
                 {UNLIMITED_COPY.todayGoal}
@@ -206,7 +235,7 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
               <Text style={styles.lostBadgeText}>{UNLIMITED_COPY.lostBadge}</Text>
             </View>
           ) : null}
-          {!finished ? (
+          {!finished && !settlementMode ? (
             <View style={styles.flameRow}>
               <Image
                 source={streakIconSource({ completed: !lost, isDark })}
@@ -314,6 +343,12 @@ const styles = StyleSheet.create({
     fontSize: rf(13),
     fontWeight: "700",
     color: "#E2E8F8",
+  },
+  settlementDesc: {
+    fontSize: rf(11),
+    lineHeight: rf(14),
+    color: "rgba(226,232,248,0.78)",
+    marginTop: 2,
   },
   stepsLine: {
     marginTop: 1,

@@ -33,6 +33,10 @@ import {
 import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
 import { ChallengeEndsPillLabel } from "@/components/ChallengeEndsPillLabel";
 import { displayChallengeTitle } from "@/features/unlimited/mappers/unlimitedLiveUiCopy";
+import {
+  buildUnlimitedPastLiveInput,
+  resolveUnlimitedCardBadge,
+} from "@/features/unlimited/mappers/unlimitedStreakParticipation";
 import { STREAK_ON_IMG } from "@/utils/brandImages";
 import { AppAlert } from "@/components/AppAlert";
 import { Image } from "expo-image";
@@ -239,6 +243,13 @@ export interface LiveRace {
   currentUserParticipating?: boolean;
   challengeType?: string | null;
   capacityMode?: string | null;
+  /** Unlimited viewer block — card badge when personally past live window. */
+  viewerStatus?: string | null;
+  verificationPending?: boolean | null;
+  viewerEndAt?: string | null;
+  viewerResultsReady?: boolean | null;
+  resultsStatus?: string | null;
+  completedDays?: number | null;
 }
 
 export function formatElapsed(seconds: number): string {
@@ -836,7 +847,6 @@ function RaceCardBase({
   style?: StyleProp<ViewStyle>;
 }) {
   const { isDark } = useTheme();
-  const isFinished = race.status === "completed";
   const participating = isUserParticipatingInRace(
     race,
     liveParticipationOpts(race, {
@@ -845,6 +855,27 @@ function RaceCardBase({
       myActiveRaceIds,
     }),
   );
+  const isUnlimitedRace = isUnlimitedChallengeRace(race);
+  const unlimitedCardBadge =
+    isUnlimitedRace &&
+    (participating || race.viewerStatus != null || race.verificationPending === true)
+      ? resolveUnlimitedCardBadge(
+          buildUnlimitedPastLiveInput({
+            viewerStatus: race.viewerStatus,
+            verificationPending: race.verificationPending,
+            viewerEndAt: race.viewerEndAt,
+            resultsStatus: race.resultsStatus,
+            viewerResultsReady: race.viewerResultsReady,
+            rawStatus: race.status,
+            completedDays: race.completedDays,
+            challengeDurationDays: race.challengeDurationDays,
+          }),
+        )
+      : null;
+  const isFinished = unlimitedCardBadge
+    ? unlimitedCardBadge.kind === "finished"
+    : race.status === "completed";
+  const isVerifying = unlimitedCardBadge?.kind === "verifying";
 
   // ── Per-card reaction counts (optimistic local state) ─────────────────────
   const [localReactions, setLocalReactions] = useState<Record<string, number>>(
@@ -1051,8 +1082,12 @@ function RaceCardBase({
       ? "#38BDF8"
       : (entryColor[race.entryType] ?? NEON_PURPLE);
 
-  const cardBorderColor = isFinished ? "#22C55EAA" : NEON_PURPLE + "60";
-  const cardShadowColor = isFinished ? NEON_GREEN : NEON_PURPLE;
+  const cardBorderColor = isFinished
+    ? "#22C55EAA"
+    : isVerifying
+      ? "#F59E0BAA"
+      : NEON_PURPLE + "60";
+  const cardShadowColor = isFinished ? NEON_GREEN : isVerifying ? "#F59E0B" : NEON_PURPLE;
 
   const top3 = (() => {
     const seen = new Set<string>();
@@ -1163,6 +1198,11 @@ function RaceCardBase({
                 <View style={[st.finishedBadge, !isDark && { backgroundColor: "rgba(0,0,0,0.12)" }]}>
                   <Feather name="check-circle" size={10} color={NEON_GREEN} />
                   <Text style={st.finishedBadgeText}>FINISHED</Text>
+                </View>
+              ) : isVerifying ? (
+                <View style={[st.liveBadge, { backgroundColor: "rgba(245,158,11,0.22)", borderColor: "rgba(245,158,11,0.55)" }]}>
+                  <Feather name="clock" size={10} color="#F59E0B" />
+                  <Text style={[st.liveBadgeText, { color: "#F59E0B" }]}>VERIFYING</Text>
                 </View>
               ) : (
                 <View style={st.liveBadge}>

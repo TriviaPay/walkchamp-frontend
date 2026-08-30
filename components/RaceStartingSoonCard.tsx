@@ -19,7 +19,7 @@ import {
 } from "@/utils/sponsoredEventsApi";
 import { freeRaceCoinPrizePool } from "@/utils/freeRaceRewards";
 
-export type RaceStartingSoonPhase = "registered" | "join_window" | "racing";
+export type RaceStartingSoonPhase = "registered" | "join_window" | "racing" | "verifying";
 export type RaceStartingSoonChallengeType = "free" | "coins" | "cash" | "sponsored";
 
 export type RaceStartingSoonCardProps = {
@@ -592,14 +592,18 @@ export function RaceStartingSoonCard({
   const effectiveStartAt = scheduledStartAt;
   const hasStart = Boolean(effectiveStartAt);
   const liveEndIso = endsAt ?? null;
+  const isVerifying = phase === "verifying";
   const phaseLive = phase === "racing";
-  const countdownIso = phaseLive ? liveEndIso : effectiveStartAt;
+  const countdownIso = phaseLive || isVerifying ? liveEndIso : effectiveStartAt;
   const parts = useStartsInParts(countdownIso);
-  const elapsed = useElapsedParts(effectiveStartAt, phaseLive && !liveEndIso);
+  const elapsed = useElapsedParts(effectiveStartAt, (phaseLive || isVerifying) && !liveEndIso);
   const urgent =
     phase === "join_window" ||
-    (!phaseLive && !parts.expired && parts.totalMs > 0 && parts.totalMs < 10 * 60_000);
-  const isLive = phaseLive || (hasStart && parts.expired && phase !== "registered");
+    (!phaseLive && !isVerifying && !parts.expired && parts.totalMs > 0 && parts.totalMs < 10 * 60_000);
+  const isLive =
+    isVerifying ||
+    phaseLive ||
+    (hasStart && parts.expired && phase !== "registered");
 
   const glow = useRef(new Animated.Value(0.45)).current;
 
@@ -628,13 +632,21 @@ export function RaceStartingSoonCard({
     maxSlots,
   });
 
-  const title = isLive ? "LIVE NOW ⚡" : "Race Starting Soon! 🚀";
+  const title = isVerifying
+    ? "VERIFYING 🔍"
+    : isLive
+      ? "LIVE NOW ⚡"
+      : "Race Starting Soon! 🚀";
   const subtitle =
-    isLive && !isUnlimitedGoal
+    isVerifying
       ? isParticipant
-        ? "Your race is live. Open it now!"
-        : "Your race is live. Join now!"
-      : null;
+        ? "Final steps are being verified."
+        : "Challenge is settling results."
+      : isLive && !isUnlimitedGoal
+        ? isParticipant
+          ? "Your race is live. Open it now!"
+          : "Your race is live. Join now!"
+        : null;
   const ctaLabel = isLive
     ? isParticipant
       ? "View Race"
@@ -718,11 +730,17 @@ export function RaceStartingSoonCard({
       ]}
     >
       <LinearGradient
-        colors={isLive ? theme.cardLiveGrad : theme.cardGrad}
+        colors={
+          isVerifying
+            ? (["#1a1208", "#422006", "#292010"] as [string, string, string])
+            : isLive
+              ? theme.cardLiveGrad
+              : theme.cardGrad
+        }
         style={[
           styles.card,
           urgent && !isLive && styles.cardUrgent,
-          isLive && styles.cardLive,
+          isLive && !isVerifying && styles.cardLive,
         ]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
@@ -730,8 +748,14 @@ export function RaceStartingSoonCard({
         <View
           style={[
             styles.neonBorder,
-            { borderColor: isLive ? theme.neonLive : theme.neon },
-            isLive && styles.neonBorderLive,
+            {
+              borderColor: isVerifying
+                ? "rgba(245,158,11,0.65)"
+                : isLive
+                  ? theme.neonLive
+                  : theme.neon,
+            },
+            isLive && !isVerifying && styles.neonBorderLive,
           ]}
           pointerEvents="none"
         />
@@ -741,18 +765,35 @@ export function RaceStartingSoonCard({
             style={[
               styles.badge,
               {
-                backgroundColor: isLive ? "rgba(16,185,129,0.35)" : theme.badgeBg,
-                borderColor: isLive ? "rgba(110,231,183,0.55)" : theme.badgeBorder,
+                backgroundColor: isVerifying
+                  ? "rgba(245,158,11,0.35)"
+                  : isLive
+                    ? "rgba(16,185,129,0.35)"
+                    : theme.badgeBg,
+                borderColor: isVerifying
+                  ? "rgba(251,191,36,0.55)"
+                  : isLive
+                    ? "rgba(110,231,183,0.55)"
+                    : theme.badgeBorder,
               },
               isCash && !isLive && styles.badgeCash,
             ]}
           >
-            <Text style={[styles.badgeText, { color: isLive ? "#D1FAE5" : theme.badgeText }]}>
-              {isLive ? "LIVE EVENT" : theme.badgeLabel}
+            <Text
+              style={[
+                styles.badgeText,
+                {
+                  color: isVerifying ? "#FDE68A" : isLive ? "#D1FAE5" : theme.badgeText,
+                },
+              ]}
+            >
+              {isVerifying ? "VERIFYING" : isLive ? "LIVE EVENT" : theme.badgeLabel}
             </Text>
           </View>
           <View style={styles.registeredBadge}>
-            <Text style={styles.registeredText}>{isLive ? "● RACING" : "✓ REGISTERED"}</Text>
+            <Text style={styles.registeredText}>
+              {isVerifying ? "● VERIFYING" : isLive ? "● RACING" : "✓ REGISTERED"}
+            </Text>
           </View>
         </View>
 

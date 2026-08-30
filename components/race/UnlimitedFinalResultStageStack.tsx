@@ -22,6 +22,7 @@ type Props = {
   /** Match Live Race bottom "Race Finished" banner layout (full-width strip). */
   bottomBanner?: boolean;
   pastLivePhase?: boolean;
+  verificationPending?: boolean | null;
   registeredParticipantCount?: number | null;
   participantsFinishedCount?: number | null;
   participantsPendingCount?: number | null;
@@ -51,6 +52,7 @@ export const UnlimitedFinalResultStageStack = memo(function UnlimitedFinalResult
   currentStageOnly = false,
   bottomBanner = false,
   pastLivePhase = false,
+  verificationPending,
   registeredParticipantCount,
   participantsFinishedCount,
   participantsPendingCount,
@@ -62,6 +64,7 @@ export const UnlimitedFinalResultStageStack = memo(function UnlimitedFinalResult
     finalVerificationStatus,
     showingFinalResults,
     pastLivePhase,
+    verificationPending,
     registeredParticipantCount,
     participantsFinishedCount,
     participantsPendingCount,
@@ -106,13 +109,17 @@ export const UnlimitedFinalResultStageStack = memo(function UnlimitedFinalResult
                   bottomBanner && styles.titleBottomBanner,
                   { color: stage.accent },
                 ]}
-                numberOfLines={1}
+                numberOfLines={bottomBanner ? 2 : 1}
+                adjustsFontSizeToFit={bottomBanner}
+                minimumFontScale={0.82}
+                ellipsizeMode="tail"
               >
                 {stage.title}
               </Text>
               <Text
                 style={[styles.desc, bottomBanner && styles.descBottomBanner]}
                 numberOfLines={bottomBanner ? 2 : 3}
+                ellipsizeMode="tail"
               >
                 {stage.description}
               </Text>
@@ -132,7 +139,10 @@ const styles = StyleSheet.create({
     marginBottom: 0,
   },
   wrapBottomBanner: {
+    flex: 1,
     width: "100%",
+    minWidth: 0,
+    alignSelf: "stretch",
     gap: 0,
   },
   card: {
@@ -149,35 +159,42 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(16,22,42,0.98)",
   },
   cardBottomBanner: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     borderWidth: 1,
     borderRadius: 0,
+    borderLeftWidth: 0,
+    borderRightWidth: 0,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 10,
     backgroundColor: "rgba(10,14,28,0.92)",
     width: "100%",
+    minWidth: 0,
     minHeight: 72,
-    height: 72,
+    maxHeight: 96,
   },
   iconGlowBottomBanner: {
     width: 28,
     height: 28,
     borderRadius: 14,
     marginTop: 0,
+    flexShrink: 0,
   },
   titleBottomBanner: {
-    fontSize: rf(13),
+    fontSize: rf(12),
     fontWeight: "800",
-    marginBottom: 1,
-    letterSpacing: 0.1,
+    marginBottom: 2,
+    letterSpacing: 0,
+    flexShrink: 1,
   },
   descBottomBanner: {
-    fontSize: rf(11),
-    lineHeight: rf(14),
+    fontSize: rf(10),
+    lineHeight: rf(13),
     fontWeight: "500",
     color: "#858A9C",
+    flexShrink: 1,
   },
   iconGlow: {
     width: 28,
@@ -185,8 +202,9 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
+    flexShrink: 0,
   },
-  textCol: { flex: 1, minWidth: 0 },
+  textCol: { flex: 1, minWidth: 0, flexShrink: 1 },
   title: {
     fontSize: rf(12),
     fontWeight: "800",

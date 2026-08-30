@@ -153,6 +153,8 @@ export function resolveUnlimitedFinalResultStages(input: {
   showingFinalResults?: boolean;
   /** Backend says viewer is past live daily racing — always surface a pending stage. */
   pastLivePhase?: boolean;
+  /** Backend viewer block — personal window ended, day(s) still verifying. */
+  verificationPending?: boolean | null;
   registeredParticipantCount?: number | null;
   participantsFinishedCount?: number | null;
   participantsPendingCount?: number | null;
@@ -223,7 +225,9 @@ export function resolveUnlimitedFinalResultStages(input: {
 
   let current: UnlimitedFinalResultStageId | null = null;
 
-  if (input.resultStatus === "results_ready") {
+  if (input.verificationPending === true) {
+    current = "verifying_final_results";
+  } else if (input.resultStatus === "results_ready") {
     current = input.showingFinalResults ? "challenge_completed" : "results_ready";
   } else if (verifying || allOthersDone) {
     current = "verifying_final_results";
