@@ -102,7 +102,6 @@ import {
   isValidUnlimitedEntryFeeCents,
   type UnlimitedGoalDurationDays,
 } from "@/utils/unlimitedGoal";
-import { computeUnlimitedViewerSchedule } from "@/utils/unlimitedViewerSchedule";
 import { getDeviceTimezone } from "@/utils/timezone";
 import { readKnownRaceSnapshot } from "@/utils/knownRaceSnapshot";
 import {
@@ -114,11 +113,6 @@ import {
 import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
 import { ensureActiveRaceInStore } from "@/core/steps/stepProgressCoordinator";
 import { bindUnlimitedBackgroundTracking } from "@/features/unlimited/services/bindUnlimitedBackgroundTracking";
-import {
-  resolveUnlimitedResultStatus,
-  resolveUnlimitedResultCardState,
-  unlimitedResultCardCopy,
-} from "@/utils/unlimitedResults";
 import {
   previewUnlimitedGoalPaymentQuote,
   type UnlimitedGoalPaymentQuote,
@@ -153,8 +147,10 @@ import {
 } from "@/utils/createChallengeFlow";
 import { trackEvent } from "@/services/analytics";
 import {
+  advanceVerifiedStepsHold,
   isInflatedProvisionalVsVerified,
   looksLikeSinceBootCounter,
+  resolveVerifiedStepsForWalkDisplay,
   resolveWalkNotificationSteps,
 } from "@/platform/steps/walkDisplaySteps";
 import { useApp } from "@/context/AppContext";
@@ -185,6 +181,7 @@ import {
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { androidHCService } from "@/services/steps/androidHealthConnectService";
 import { rf, rs } from "@/utils/responsive";
+import { FIXED_CHROME_TEXT_PROPS, FIXED_PILL_TEXT_PROPS } from "@/constants/accessibility";
 import { shallowEqual, useDispatch, useSelector } from "react-redux";
 import type { RootState, AppDispatch } from "@/store";
 import { fetchTrackThemes, purchaseTrackTheme, clearPurchaseError } from "@/store/slices/trackThemesSlice";
@@ -223,7 +220,6 @@ import {
   CashChallengePaymentBreakdown,
   CashChallengeRewardSplit,
 } from "@/components/CashChallengePaymentBreakdown";
-import { WalkProgressIcon } from "@/components/WalkProgressIcon";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { FaqAccordionList } from "@/components/FaqAccordionList";
 import { PrivacyPolicyDocument } from "@/components/PrivacyPolicyDocument";
@@ -846,8 +842,8 @@ function StatCard({ icon, value, label, color, bg }: { icon: string; value: stri
       <View style={[styles.statIconBox, { backgroundColor: bg }]}>
         <Feather name={icon as never} size={14} color={color} />
       </View>
-      <Text style={[styles.statValue, { color: colors.foreground }]}>{value}</Text>
-      <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>{label}</Text>
+      <Text style={[styles.statValue, { color: colors.foreground }]} {...FIXED_CHROME_TEXT_PROPS}>{value}</Text>
+      <Text style={[styles.statLabel, { color: colors.mutedForeground }]} {...FIXED_PILL_TEXT_PROPS}>{label}</Text>
     </View>
   ); }
 
@@ -2152,10 +2148,27 @@ function WalkScreenContent() {
     verifiedTodaySteps,
     Math.max(0, Math.floor(dbWalk.todaySteps ?? 0)),
   );
+  const walkStepsHoldKey = `${user?.id ?? ""}:${getTodayKey()}`;
+  if (walkStepsHoldRef.current.key !== walkStepsHoldKey) {
+    walkStepsHoldRef.current = { key: walkStepsHoldKey, steps: 0 };
+  }
+  const usesVerifiedStepSource = stepProviderManager.usesVerifiedStepSource();
+  if (usesVerifiedStepSource) {
+    walkStepsHoldRef.current.steps = advanceVerifiedStepsHold(
+      walkStepsHoldRef.current.steps,
+      verifiedTodaySteps,
+    );
+  }
+  const effectiveVerifiedTodaySteps = usesVerifiedStepSource
+    ? resolveVerifiedStepsForWalkDisplay(
+        verifiedTodaySteps,
+        walkStepsHoldRef.current.steps,
+      )
+    : verifiedTodaySteps;
   // Health Connect is the Walk number. Do not raise it with GET /api/walk/today
   // or a leftover sensor session (HC 84 vs app 115).
-  const liveTodaySteps = stepProviderManager.usesVerifiedStepSource()
-    ? verifiedTodaySteps
+  const liveTodaySteps = usesVerifiedStepSource
+    ? effectiveVerifiedTodaySteps
     : resolveWalkNotificationSteps({
         verifiedTodaySteps: accountTodayFloor,
         provisionalSensorTodaySteps,
@@ -2393,14 +2406,7 @@ function WalkScreenContent() {
   // real value lands — hold the last confirmed value for *today* so the hero,
   // calories, distance and goal ring don't flash down to 0 mid-refresh. Keyed
   // by user+day so a genuine new day (or account switch) still starts at 0.
-  const walkStepsHoldKey = `${user?.id ?? ""}:${getTodayKey()}`;
-  if (walkStepsHoldRef.current.key !== walkStepsHoldKey) {
-    walkStepsHoldRef.current = { key: walkStepsHoldKey, steps: 0 };
-  }
-  // Drop a held since-boot absolute once HC / resolved display is sane.
-  if (stepProviderManager.usesVerifiedStepSource()) {
-    walkStepsHoldRef.current.steps = verifiedTodaySteps;
-  } else if (rawConfirmedWalkSteps > 0) {
+  if (!usesVerifiedStepSource && rawConfirmedWalkSteps > 0) {
     walkStepsHoldRef.current.steps = rawConfirmedWalkSteps;
   }
   const confirmedWalkSteps =
@@ -2717,9 +2723,15 @@ function WalkScreenContent() {
         .then(async (s) => {
           if (cancelled) return;
           setHcVerification(s);
-          const verified = Math.max(0, Math.floor(s.currentDayVerifiedSteps ?? 0));
+          const hcRead = Math.max(0, Math.floor(s.currentDayVerifiedSteps ?? 0));
           const { store } = await import("@/store");
           const rp = store.getState().raceProgress;
+          const prevVerified = Math.max(
+            0,
+            Math.floor(rp.verifiedTodaySteps ?? 0),
+            Math.floor(rp.todaySteps ?? 0),
+          );
+          const verified = resolveVerifiedStepsForWalkDisplay(hcRead, prevVerified);
           const display = Math.max(
             0,
             Math.floor(rp.todaySteps ?? 0),
@@ -3957,8 +3969,6 @@ function WalkScreenContent() {
     isUnlimitedGoal?: boolean;
     unlimitedChallengeTimezone?: string | null;
     unlimitedDurationDays?: number | null;
-    /** Set once the viewer's own Unlimited duration has ended but results aren't final yet (spec §25). */
-    unlimitedResultBadge?: { title: string; subtitle: string } | null;
   };
 
   /** Tick so Next Race drops cards / flips phase when scheduledStartAt crosses thresholds.
@@ -4383,36 +4393,6 @@ function WalkScreenContent() {
       const entryAmountCents =
         room.entry_fee > 0 ? Math.round(room.entry_fee * 100) : undefined;
 
-      // Unlimited Daily Goal: once the VIEWER'S OWN local duration has ended,
-      // the walk card must show Results Pending / Validation in Progress /
-      // View Results instead of the live "racing" CTA — never a final result
-      // just because this participant is done (spec §25, utils/unlimitedResults.ts).
-      let unlimitedResultBadge: { title: string; subtitle: string } | null = null;
-      if (isUnlimitedRoom && room.scheduled_start_at && room.challenge_duration_days) {
-        const viewerSchedule = computeUnlimitedViewerSchedule(
-          {
-            startAtUtc: room.scheduled_start_at,
-            challengeTimezone: room.challenge_timezone ?? null,
-            durationDays: room.challenge_duration_days,
-            dailyGoalSteps: room.target_steps,
-            challengeStatus: room.status,
-          },
-          { fallbackTimezone: getDeviceTimezone(), nowMs: now },
-        );
-        const personallyFinished =
-          viewerSchedule?.viewerStatus === "completed" ||
-          viewerSchedule?.viewerStatus === "failed" ||
-          viewerSchedule?.viewerStatus === "left";
-        if (personallyFinished) {
-          const unlimitedResultStatus = resolveUnlimitedResultStatus({
-            challengeStatus: room.status,
-            settlementStatus: room.settlement_status,
-            viewerPersonallyFinished: true,
-          });
-          const cardState = resolveUnlimitedResultCardState(unlimitedResultStatus);
-          if (cardState) unlimitedResultBadge = unlimitedResultCardCopy(cardState);
-        }
-      }
       cards.push({
         key: `upcoming:${room.room_id}`,
         challengeType,
@@ -4437,7 +4417,6 @@ function WalkScreenContent() {
         isUnlimitedGoal: isUnlimitedRoom,
         unlimitedChallengeTimezone: isUnlimitedRoom ? room.challenge_timezone : undefined,
         unlimitedDurationDays: isUnlimitedRoom ? room.challenge_duration_days : undefined,
-        unlimitedResultBadge,
         onPressInCta:
           phase === "racing"
             ? () => {
@@ -4482,15 +4461,7 @@ function WalkScreenContent() {
             openSponsoredWaitingRoom(room.room_id);
             return;
           }
-          // Unlimited: viewer's own days are done — go to Results, never back into Live Detail's racing UI.
-          if (unlimitedResultBadge) {
-            router.push({
-              pathname: "/race/unlimited-results",
-              params: { challengeId: room.room_id },
-            } as never);
-            return;
-          }
-          // Live race (classic or Unlimited): go straight to Live Detail.
+          // Live race (classic or Unlimited): always open Live Detail with track UI.
           if (phase === "racing") {
             const params = warmLiveRaceDetailNavigation({
               raceId: room.room_id,
@@ -5808,7 +5779,6 @@ function WalkScreenContent() {
             </View>
 
             <View style={styles.stepsHero}>
-              <WalkProgressIcon steps={displayedWalkSteps} goal={goalSteps} size={56} style={styles.stepsHeroIcon} />
               <View style={styles.stepsHeroText}>
                 {stepsInitializing ? (
                   <>
@@ -5902,28 +5872,6 @@ function WalkScreenContent() {
                 onPressInCta={card.onPressInCta}
                 style={width != null ? { width, marginBottom: 0 } : undefined}
               />
-              {card.unlimitedResultBadge ? (
-                <TouchableOpacity
-                  onPress={card.onPressCta}
-                  activeOpacity={0.85}
-                  style={{
-                    marginTop: 6,
-                    borderRadius: 12,
-                    paddingVertical: 9,
-                    paddingHorizontal: 14,
-                    backgroundColor: "rgba(124,58,255,0.16)",
-                    borderWidth: 1,
-                    borderColor: "rgba(124,58,255,0.4)",
-                  }}
-                >
-                  <Text style={{ color: "#C4B5FD", fontWeight: "800", fontSize: rf(12.5) }}>
-                    {card.unlimitedResultBadge.title}
-                  </Text>
-                  <Text style={{ color: "#8B9AC0", fontSize: rf(10.5), marginTop: 2 }}>
-                    {card.unlimitedResultBadge.subtitle}
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
             </View>
           );
 
@@ -6401,7 +6349,7 @@ function WalkScreenContent() {
                   <View style={styles.cashPrizeChipsRow}>
                     {["$3–$25", "Step Goal", "Prize rewards"].map((chip) => (
                       <View key={chip} style={styles.cashPrizeChip}>
-                        <Text numberOfLines={1} style={styles.cashPrizeChipText}>{chip}</Text>
+                        <Text style={styles.cashPrizeChipText} {...FIXED_PILL_TEXT_PROPS}>{chip}</Text>
                       </View>
                     ))}
                   </View>
@@ -6543,18 +6491,18 @@ function WalkScreenContent() {
                         {isRegistered && (
                           <View style={[styles.newBadge, { backgroundColor: "#A855F725", borderColor: "#A855F755", borderWidth: 1 }]}>
                             <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: "#A855F7" }} />
-                            <Text style={[styles.newBadgeText, { color: "#A855F7" }]}>JOINED</Text>
+                            <Text style={[styles.newBadgeText, { color: "#A855F7" }]} {...FIXED_PILL_TEXT_PROPS}>JOINED</Text>
                           </View>
                         )}
                         {!isRacing && !isJoinWin && !isRegistered && !isWatchLive && (
                           <View style={styles.newBadge}>
-                            <Text style={styles.newBadgeText}>NEW</Text>
+                            <Text style={styles.newBadgeText} {...FIXED_PILL_TEXT_PROPS}>NEW</Text>
                           </View>
                         )}
                         {isRacing && (
                           <View style={[styles.newBadge, { backgroundColor: "#00E67625", borderColor: "#00E67655", borderWidth: 1 }]}>
                             <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: "#00E676" }} />
-                            <Text style={[styles.newBadgeText, { color: "#00E676" }]}>LIVE</Text>
+                            <Text style={[styles.newBadgeText, { color: "#00E676" }]} {...FIXED_PILL_TEXT_PROPS}>LIVE</Text>
                           </View>
                         )}
                       </View>
@@ -6563,10 +6511,10 @@ function WalkScreenContent() {
                         <View style={styles.sponsoredBadgesRow}>
                           <View style={styles.sponsoredBadge}>
                             <Image source={require("@/assets/images/game-coin.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
-                            <Text style={styles.sponsoredBadgeText}>5,000 entry</Text>
+                            <Text style={styles.sponsoredBadgeText} {...FIXED_PILL_TEXT_PROPS}>5,000 entry</Text>
                           </View>
                           <View style={[styles.sponsoredBadge, styles.sponsoredSlotBadge]}>
-                            <Text style={[styles.sponsoredBadgeText, { color: "#00E5FF" }]}>⚡ Limited slots</Text>
+                            <Text style={[styles.sponsoredBadgeText, { color: "#00E5FF" }]} {...FIXED_PILL_TEXT_PROPS}>⚡ Limited slots</Text>
                           </View>
                         </View>
                       )}
@@ -6579,7 +6527,7 @@ function WalkScreenContent() {
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 1 }}
                     >
-                      <Text style={styles.sponsoredCtaText}>{ctaLabel}</Text>
+                      <Text style={styles.sponsoredCtaText} {...FIXED_PILL_TEXT_PROPS}>{ctaLabel}</Text>
                     </LinearGradient>
                   </View>
                 </LinearGradient>
@@ -6642,16 +6590,16 @@ function WalkScreenContent() {
                       Create or join groups with friends, family and coworkers to compete together every day.
                     </Text>
                     <View style={styles.groupsTagRow}>
-                      <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Friends</Text></View>
-                      <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Family</Text></View>
-                      <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Office</Text></View>
+                      <View style={styles.groupsTag}><Text style={styles.groupsTagText} {...FIXED_PILL_TEXT_PROPS}>Friends</Text></View>
+                      <View style={styles.groupsTag}><Text style={styles.groupsTagText} {...FIXED_PILL_TEXT_PROPS}>Family</Text></View>
+                      <View style={styles.groupsTag}><Text style={styles.groupsTagText} {...FIXED_PILL_TEXT_PROPS}>Office</Text></View>
             </View>
                   </View>
                 </View>
 
                 <Animated.View style={[styles.groupsCta, { transform: [{ scale: groupsExploreScale }] }]}>
                   <View style={styles.groupsCtaBtn}>
-                    <Text style={styles.groupsCtaText}>Explore</Text>
+                    <Text style={styles.groupsCtaText} {...FIXED_PILL_TEXT_PROPS}>Explore</Text>
                   </View>
                 </Animated.View>
               </LinearGradient>
@@ -7381,6 +7329,7 @@ function WalkScreenContent() {
           </Modal>
         );
       })()}
+
     </View>
   ); }
 

@@ -7,6 +7,7 @@
 
 import { AppState, Platform, type AppStateStatus } from "react-native";
 import { LIVE_RACE_SYNC_CONFIG, STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
+import { raceBackendSyncIntervalForMode } from "@/config/batteryTrackingModes";
 import {
   postRaceProgress,
   type RaceProgressResult,
@@ -131,6 +132,10 @@ class RaceStepSyncBuffer {
     }
     const cfg = LIVE_RACE_SYNC_CONFIG;
     const now = Date.now();
+    const adaptiveBackendSyncMs =
+      AppState.currentState === "active"
+        ? raceBackendSyncIntervalForMode("live_race_foreground")
+        : raceBackendSyncIntervalForMode("live_race_background");
 
     this.pendingRaceId = raceId;
     this.pendingRaceSteps = Math.max(this.pendingRaceSteps, raceSteps);
@@ -173,7 +178,7 @@ class RaceStepSyncBuffer {
     const burstSync = delta >= STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_FORCE_DELTA;
     const shouldSync =
       delta >= cfg.minStepDeltaToSync &&
-      (elapsedSinceHttp >= cfg.backendSyncMs || burstSync);
+      (elapsedSinceHttp >= adaptiveBackendSyncMs || burstSync);
 
     if (shouldSync) {
       if (this.pendingTimer) {
@@ -184,7 +189,7 @@ class RaceStepSyncBuffer {
       return;
     }
 
-    this.scheduleTrailingSync(elapsedSinceHttp);
+    this.scheduleTrailingSync(elapsedSinceHttp, adaptiveBackendSyncMs);
   }
 
   async flushRaceSteps(
@@ -329,11 +334,14 @@ class RaceStepSyncBuffer {
     }, delayMs);
   }
 
-  private scheduleTrailingSync(elapsedSinceLastSync: number): void {
+  private scheduleTrailingSync(
+    elapsedSinceLastSync: number,
+    backendSyncMs: number = LIVE_RACE_SYNC_CONFIG.backendSyncMs,
+  ): void {
     if (this.pendingTimer) return;
     const delay = Math.max(
       250,
-      LIVE_RACE_SYNC_CONFIG.backendSyncMs - elapsedSinceLastSync,
+      backendSyncMs - elapsedSinceLastSync,
       LIVE_RACE_SYNC_CONFIG.maxPendingAgeMs > 0
         ? LIVE_RACE_SYNC_CONFIG.maxPendingAgeMs - elapsedSinceLastSync
         : 0,

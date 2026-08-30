@@ -70,6 +70,8 @@ let lastVerifiedHealthResult: Awaited<
   ReturnType<typeof stepProviderManager.getTodayStepsForBackgroundPoll>
 > = null;
 let verifiedHealthCatchUpUntilMs = 0;
+/** Empty/fast HC retries in the current catch-up window (bounded). */
+let verifiedHealthFastRetryCount = 0;
 let midnightCheckTimer: ReturnType<typeof setTimeout> | null = null;
 /** Avoid hammering POST /walk/steps on every midnight-check poll. */
 let flushedHistoryDateKey: string | null = null;
@@ -1139,6 +1141,17 @@ async function handOffStepTrackingToNative(
     if (reason === "background" && !raceLive) {
       void tickWalkBackgroundStepPoll("background");
     }
+    // Android: native FGS owns sensors + tray — stop the 1Hz-class JS poll so we
+    // do not double-work while backgrounded. Resume restarts it in hydrateOnAppResume.
+    if (Platform.OS === "android") {
+      stopWalkBackgroundStepPoll();
+      try {
+        const { batteryDiag } = require("@/config/batteryTrackingModes") as typeof import("@/config/batteryTrackingModes");
+        batteryDiag("js_poll_stopped_native_handoff", { reason, raceLive });
+      } catch {
+        /* optional */
+      }
+    }
     stepEngineLog("Lifecycle", `nativeHandOff reason=${reason}`);
   } catch (err) {
     logger.warn("Lifecycle", "native step handoff failed", err);
@@ -1170,6 +1183,7 @@ export async function tickWalkBackgroundStepPoll(
         verifiedHealthCatchUpUntilMs,
         Date.now() + STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_WINDOW_MS,
       );
+      verifiedHealthFastRetryCount = 0;
     }
     const shouldReadVerified =
       !verifiedMode ||
@@ -1182,12 +1196,22 @@ export async function tickWalkBackgroundStepPoll(
         emptyRetryMs: STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_MS,
         catchUpUntilMs: verifiedHealthCatchUpUntilMs,
         catchUpBelowSteps: 50,
+        fastRetryCount: verifiedHealthFastRetryCount,
+        maxFastRetries: STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_MAX_ATTEMPTS,
       });
     let data = lastVerifiedHealthResult;
     if (shouldReadVerified) {
       data = await stepProviderManager.getTodayStepsForBackgroundPoll();
       lastVerifiedHealthReadAt = Date.now();
       lastVerifiedHealthResult = data;
+      const stepsNow = Math.max(0, data?.steps ?? 0);
+      const wasError = data?.queryStatus === "error";
+      const inCatchUp = verifiedHealthCatchUpUntilMs > Date.now();
+      if (wasError || (inCatchUp && stepsNow < 50)) {
+        verifiedHealthFastRetryCount += 1;
+      } else if (stepsNow >= 50) {
+        verifiedHealthFastRetryCount = 0;
+      }
     }
     const hcSteps = Math.max(0, data?.steps ?? 0);
     const hcReadError = data?.queryStatus === "error";
@@ -1353,9 +1377,30 @@ export async function tickWalkBackgroundStepPoll(
 
 export function startWalkBackgroundStepPoll(): void {
   if (walkBackgroundPollTimer) return;
+  let intervalMs: number = STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_POLL_MS;
+  try {
+    const {
+      resolveBatteryTrackingMode,
+      reconcileIntervalForMode,
+      batteryDiag,
+    } = require("@/config/batteryTrackingModes") as typeof import("@/config/batteryTrackingModes");
+    const s = store.getState().raceProgress;
+    const raceLive = s.raceStatus === "active" && !!s.activeRaceId;
+    const mode = resolveBatteryTrackingMode({
+      appVisible: AppState.currentState === "active",
+      walkFgsActive: Platform.OS === "android",
+      raceLive,
+      finalizing: false,
+      autoTrackingEnabled: true,
+    });
+    intervalMs = reconcileIntervalForMode(mode);
+    batteryDiag("js_poll_interval", { mode, intervalMs });
+  } catch {
+    /* optional */
+  }
   walkBackgroundPollTimer = setInterval(() => {
     void tickWalkBackgroundStepPoll("interval");
-  }, STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_POLL_MS);
+  }, intervalMs);
   if (STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE) {
     notificationBgLog("backgroundPollStarted=true");
   }
@@ -2783,6 +2828,7 @@ export async function bindStepSessionToUser(userId: string): Promise<boolean> {
   lastVerifiedHealthResult = null;
   verifiedHealthCatchUpUntilMs =
     Date.now() + STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_WINDOW_MS;
+  verifiedHealthFastRetryCount = 0;
   if (switched) {
     logger.debug("AuthSwitch", `oldUserId=${lastUserId} newUserId=${userId}`);
     await clearUserSessionStepState(lastUserId, "account_switch");

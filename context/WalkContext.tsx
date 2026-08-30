@@ -41,7 +41,7 @@ import {
   writeDailyStepsForUserDate,
 } from "@/utils/stepScopedStorage";
 import { getValidSession } from "@/services/authService";
-import { timeoutSignal, STEP_SYNC_TIMEOUT, API_TIMEOUT_MS } from "@/utils/authFetch";
+import { authFetch, STEP_SYNC_TIMEOUT } from "@/utils/authFetch";
 import { stepTracker, PermissionStatus } from "@/services/StepTrackingService";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import type { StepProviderId } from "@/services/steps/stepProviderTypes";
@@ -125,8 +125,6 @@ import {
   STEP_SOURCES,
   type VerifiedDailyProviderQueryStatus,
 } from "@/services/steps/hybridStepState";
-
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
 /** Reject provider-only +1/+N bumps on tab refresh/hydrate (same rules as applyTodayStepCount). */
 function clampHydratedDisplaySteps(
@@ -282,8 +280,6 @@ async function submitStepsToBackend(
   unchanged?: boolean;
 } | null> {
   if (steps <= 0) return null;
-  const session = await getValidSession();
-  if (!session) return null;
   try {
     const body: Record<string, unknown> = {
       steps,
@@ -327,23 +323,11 @@ async function submitStepsToBackend(
       /* optional */
     }
 
-    let deviceHeaders: Record<string, string> = {};
-    try {
-      const { buildSessionRequestHeaders } = await import(
-        "@/services/sessionRequestHeaders"
-      );
-      deviceHeaders = await buildSessionRequestHeaders();
-    } catch {
-      /* optional — backend falls back to single-device totals without it */
-    }
-    const res = await fetch(`${API_BASE}/api/walk/steps`, {
+    const res = await authFetch("/api/walk/steps", {
       method: "POST",
-      signal: timeoutSignal(STEP_SYNC_TIMEOUT),
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${session}`,
-        ...deviceHeaders,
-      },
+      timeoutMs: STEP_SYNC_TIMEOUT,
+      retryOnUnauthorized: false,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     if (__DEV__) {
@@ -1242,26 +1226,19 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       // (happens on first install, app re-install, or cleared storage)
       if (!allTime || !streak) {
         try {
-          const session = await getValidSession();
-          if (session) {
-            const res = await fetch(
-              `${API_BASE}/api/profile/me?localDate=${encodeURIComponent(getTodayKey())}`,
-              {
-              headers: { Authorization: `Bearer ${session}` },
-              signal: timeoutSignal(API_TIMEOUT_MS),
-              },
-            );
-            if (res.ok) {
-              const json = await res.json();
-              const stats = json.data?.stats;
-              if (stats?.allTimeSteps > 0 && !allTime) {
-                setAllTimeSteps(stats.allTimeSteps);
-                await storageSet(keys.totalSteps, stats.allTimeSteps);
-              }
-              if (stats?.dayStreak > 0 && !streak) {
-                setCurrentStreak(stats.dayStreak);
-                await storageSet(keys.streak, stats.dayStreak);
-              }
+          const res = await authFetch(
+            `/api/profile/me?localDate=${encodeURIComponent(getTodayKey())}`,
+          );
+          if (res.ok) {
+            const json = await res.json();
+            const stats = json.data?.stats;
+            if (stats?.allTimeSteps > 0 && !allTime) {
+              setAllTimeSteps(stats.allTimeSteps);
+              await storageSet(keys.totalSteps, stats.allTimeSteps);
+            }
+            if (stats?.dayStreak > 0 && !streak) {
+              setCurrentStreak(stats.dayStreak);
+              await storageSet(keys.streak, stats.dayStreak);
             }
           }
         } catch {
@@ -3088,24 +3065,24 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
         );
         if (!data) return;
         const sSteps = data.steps;
-        setSession({
+        sessionRef.current = {
           steps: sSteps,
           distance: stepsToDistance(sSteps),
           calories: stepsToCalories(sSteps),
           durationSeconds: sessionRef.current.durationSeconds,
-        });
+        };
       };
       stepIntervalRef.current = setInterval(pollSession, 3000);
     } else {
-      // Android: use todayStepsRef for live session display
+      // Android: keep live session metrics in sessionRef only — avoid provider fan-out.
       stepIntervalRef.current = setInterval(() => {
         const current = todayStepsRef.current;
-        setSession((prev) => ({
+        sessionRef.current = {
           steps: current,
           distance: stepsToDistance(current),
           calories: stepsToCalories(current),
-          durationSeconds: prev.durationSeconds,
-        }));
+          durationSeconds: sessionRef.current.durationSeconds,
+        };
       }, 2000);
     }
 
@@ -3305,7 +3282,7 @@ export function WalkProvider({ children }: { children: React.ReactNode }) {
       authReady,
     }),
     [
-      trackingStatus, isWalking, isPaused, session, weeklySteps, allTimeSteps,
+      trackingStatus, isWalking, isPaused, weeklySteps, allTimeSteps,
       currentStreak, activeDurationMinutes, milestoneReached, autoTrackingEnabled, usingRealTracking,
       stepPermissionStatus, hcAvailability, activeStepSource, verificationLevel, todayActiveMinutes,
       todayDailyRank, todayDailyGoal, setTrackingStatus, togglePause, clearMilestone,

@@ -91,6 +91,7 @@ import {
   UNLIMITED_LOCAL_MIDNIGHT_NOTE,
 } from "@/utils/unlimitedViewerSchedule";
 import { getDeviceTimezone } from "@/utils/timezone";
+import { unlimitedJoinTimezoneBody } from "@/features/unlimited/api/unlimitedTimezoneApi";
 import { fetchAvailableUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
 import { mergeUpcomingRoomsById } from "@/utils/unlimitedChallengeRooms";
 import { saveHostedUnlimitedChallenge } from "@/utils/hostedUnlimitedCache";
@@ -2074,17 +2075,20 @@ function AvailableRoomsScreenContent() {
     if (registeringRoomId) return;
     setRegisteringRoomId(room.room_id);
     try {
-      const body: Record<string, unknown> = {
-        acceptedCashChallengeConsent: room.entry_fee > 0,
-      };
-      if (room.requires_code && roomCode) {
-        body.code = roomCode;
-      }
       const isUnlimitedRoom = isUnlimitedGoalChallenge({
         challengeType: room.challenge_type,
         capacityMode: room.capacity_mode,
         maxPlayers: room.max_players,
       });
+      const body: Record<string, unknown> = isUnlimitedRoom
+        ? unlimitedJoinTimezoneBody({
+            acceptedCashChallengeConsent: room.entry_fee > 0,
+            ...(room.requires_code && roomCode ? { inviteCode: roomCode, code: roomCode } : {}),
+          })
+        : {
+            acceptedCashChallengeConsent: room.entry_fee > 0,
+            ...(room.requires_code && roomCode ? { code: roomCode } : {}),
+          };
       const registerPath = isUnlimitedRoom
         ? `/api/unlimited-challenges/${room.room_id}/join`
         : `/api/rooms/${room.room_id}/register`;
@@ -2544,7 +2548,11 @@ function AvailableRoomsScreenContent() {
       const res = await authFetch(endpoint, {
         method: "POST",
         body: isUnlimitedJoin
-          ? JSON.stringify({ acceptedCashChallengeConsent: room.entry_fee > 0 })
+          ? JSON.stringify(
+              unlimitedJoinTimezoneBody({
+                acceptedCashChallengeConsent: room.entry_fee > 0,
+              }),
+            )
           : undefined,
       });
 

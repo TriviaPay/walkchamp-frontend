@@ -1,8 +1,6 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
-import { getStoredSession } from "@/services/authService";
+import { authFetch } from "@/utils/authFetch";
 import type { TrackThemeImageSet } from "@/utils/trackThemeMedia";
-
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
 export interface TrackTheme {
   code: string;
@@ -74,11 +72,7 @@ export function resolveSelectedThemeCode(payload: TrackThemesResponse): string {
 }
 
 export const fetchTrackThemes = createAsyncThunk("trackThemes/fetch", async () => {
-  const { session } = await getStoredSession();
-  if (!session) throw new Error("Not authenticated");
-  const res = await fetch(`${API_BASE}/api/track-themes`, {
-    headers: { Authorization: `Bearer ${session}` },
-  });
+  const res = await authFetch("/api/track-themes");
   if (!res.ok) throw new Error("Failed to fetch themes");
   return (await res.json()) as TrackThemesResponse;
 });
@@ -86,11 +80,9 @@ export const fetchTrackThemes = createAsyncThunk("trackThemes/fetch", async () =
 export const purchaseTrackTheme = createAsyncThunk(
   "trackThemes/purchase",
   async (themeCode: string, { rejectWithValue }) => {
-    const { session } = await getStoredSession();
-    if (!session) return rejectWithValue("Not authenticated");
-    const res = await fetch(`${API_BASE}/api/track-themes/${themeCode}/purchase`, {
+    const res = await authFetch(`/api/track-themes/${themeCode}/purchase`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${session}`, "Content-Type": "application/json" },
+      retryOnUnauthorized: false,
     });
     const json = await res.json();
     if (!res.ok)
@@ -104,11 +96,9 @@ export const purchaseTrackTheme = createAsyncThunk(
 export const equipTrackTheme = createAsyncThunk(
   "trackThemes/equip",
   async (themeCode: string, { rejectWithValue }) => {
-    const { session } = await getStoredSession();
-    if (!session) return rejectWithValue("Not authenticated");
-    const res = await fetch(`${API_BASE}/api/track-themes/${themeCode}/equip`, {
+    const res = await authFetch(`/api/track-themes/${themeCode}/equip`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${session}`, "Content-Type": "application/json" },
+      retryOnUnauthorized: false,
     });
     if (!res.ok) return rejectWithValue("Failed to equip theme");
     const json = (await res.json().catch(() => null)) as

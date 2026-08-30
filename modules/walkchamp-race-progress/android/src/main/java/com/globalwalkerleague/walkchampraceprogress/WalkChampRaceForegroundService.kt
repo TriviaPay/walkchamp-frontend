@@ -75,18 +75,21 @@ class WalkChampRaceForegroundService : Service() {
         "Tracking your steps - $formatted steps today"
       }
     }
-    private const val NOTIFICATION_TICK_MS = 3_000L
-    /** Race progress backend sync â€” latest value only, not every sensor tick. */
-    private const val BACKEND_SYNC_MS = 15_000L
-    private const val RACE_SYNC_MIN_INTERVAL_MS = 10_000L
+    private const val NOTIFICATION_TICK_MS = 5_000L
+    /** Race progress backend sync — latest value only, not every sensor tick. */
+    private const val BACKEND_SYNC_MS = 20_000L
+    private const val RACE_SYNC_MIN_INTERVAL_MS = 15_000L
     private const val RACE_SYNC_MIN_STEP_DELTA = 3
     /** How often to sync daily walk steps to the backend when backgrounded. */
-    private const val WALK_BACKEND_SYNC_MS = 30_000L
+    private const val WALK_BACKEND_SYNC_MS = 45_000L
     /** Interactive refresh cadence while the screen is on. */
-    private const val WALK_STEP_REFRESH_MS = 3_000L
-    /** Faster poll while screen is off — OEM step batching is most aggressive then. */
-    private const val WALK_STEP_REFRESH_SCREEN_OFF_MS = 1_500L
-    private const val SENSOR_WATCHDOG_MS = 15_000L
+    private const val WALK_STEP_REFRESH_MS = 5_000L
+    /**
+     * Screen-off hardware poll — keep native tracking alive under OEM batching,
+     * but avoid 1.5s CPU wake loops (battery). Sensor events still deliver ASAP.
+     */
+    private const val WALK_STEP_REFRESH_SCREEN_OFF_MS = 12_000L
+    private const val SENSOR_WATCHDOG_MS = 30_000L
     /** Bumped so legacy getService PendingIntents are superseded by getForegroundService. */
     private const val SENSOR_WATCHDOG_REQUEST_CODE = 99102
     private const val SENSOR_WATCHDOG_LEGACY_REQUEST_CODE = 99101
@@ -94,6 +97,8 @@ class WalkChampRaceForegroundService : Service() {
     private const val DEFERRED_RESTORE_MS = 2_000L
     /** Poll for local-midnight rollover while FGS is alive (phone idle at 12:00 AM). */
     private const val MIDNIGHT_CHECK_MS = 60_000L
+    /** Short wake lock — renewed on ticks while tracking; never hold a 24h lock. */
+    private const val WAKE_LOCK_HOLD_MS = 10 * 60 * 1000L
     private val SYNC_BACKOFF_STEPS = longArrayOf(5_000L, 10_000L, 30_000L, 60_000L)
 
     private var walkRunning = false
@@ -344,6 +349,9 @@ class WalkChampRaceForegroundService : Service() {
   private var workerThread: HandlerThread? = null
   private var workerHandler: Handler? = null
   private var wakeLock: PowerManager.WakeLock? = null
+  /** Active wake-lock owners — must not renew forever without a valid reason. */
+  private val wakeLockReasons = mutableSetOf<String>()
+  private var wakeLockAcquiredAtMs = 0L
   private var syncBackoffIndex = 0
   private var lastBackendSyncMs = 0L
   private var lastNotificationTickMs = 0L
@@ -366,14 +374,9 @@ class WalkChampRaceForegroundService : Service() {
     override fun run() {
       val state = raceState ?: return
       if (!isActiveRace(state)) return
-      ensureWakeLock()
-      val forceSample = !isScreenInteractive()
-      // Screen-off / app-killed OEM backup — force a counter sample every tick.
-      try {
-        pollHardwareSafe(forceSample)
-      } catch (e: Exception) {
-        Log.w(TAG, "[WalkChampFGS] race pollHardwareNow failed: ${e.message}")
-      }
+      ensureWakeLock("LIVE_RACE")
+      // Hardware sampling lives in walkStepRefreshRunnable + sensor watchdog only
+      // (avoids duplicate 12s blocking polls during live race).
       tickRace(raceState ?: state, syncBackend = false)
       workerHandler?.postDelayed(this, walkRefreshDelayMs().coerceAtLeast(NOTIFICATION_TICK_MS))
     }
@@ -399,7 +402,9 @@ class WalkChampRaceForegroundService : Service() {
       // Run for walk AND live race — JS is suspended in background/closed.
       if (!isTrackingActive()) return
       try {
-        ensureWakeLock()
+        ensureWakeLock(
+        if (raceState != null && isActiveRace(raceState!!)) "LIVE_RACE" else "ACTIVE_TRACKED_WALK",
+      )
         // Local-device midnight: reset tray before sampling so sticky shows 0 promptly.
         checkMidnightRollover()
         val forceSample = !isScreenInteractive()
@@ -429,6 +434,27 @@ class WalkChampRaceForegroundService : Service() {
       } catch (_: Exception) {
       }
       return
+    }
+    // Watchdog-style: if the listener already delivered a fresh sample, skip the
+    // blocking one-shot counter read (avoids a second full tracking pipeline).
+    val engine = try {
+      ensureSensorEngine()
+    } catch (_: Exception) {
+      null
+    }
+    if (engine != null) {
+      val staleMs = System.currentTimeMillis() - engine.currentState().updatedAt
+      if (!forceSample && staleMs < 4_000L) {
+        return
+      }
+      // Screen-off forceSample: only block-sample when the counter looks stale.
+      if (forceSample && staleMs < 8_000L && engine.isListenerRegistered()) {
+        try {
+          engine.pollHardwareNow(forceSample = false)
+        } catch (_: Exception) {
+        }
+        return
+      }
     }
     hardwareSampleInFlight = true
     try {
@@ -851,28 +877,71 @@ class WalkChampRaceForegroundService : Service() {
     workerHandler = Handler(workerThread!!.looper)
   }
 
-  private fun acquireWakeLock() {
-    if (wakeLock?.isHeld == true) return
+  private fun acquireWakeLock(reason: String) {
+    val alreadyOwned = wakeLockReasons.contains(reason)
+    wakeLockReasons.add(reason)
+    if (wakeLock?.isHeld == true) {
+      Log.d(TAG, "[BatteryDiag] WakeLock HELD reason=$reason owners=$wakeLockReasons")
+      return
+    }
     val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
     wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WalkChamp:RaceFGS").apply {
       setReferenceCounted(false)
-      // Long enough for a fixed race / daily walk session; renewed on every tick.
-      acquire(24 * 60 * 60 * 1000L)
+      // Short hold renewed on tracking ticks — avoids a permanent 24h partial lock.
+      acquire(WAKE_LOCK_HOLD_MS)
     }
+    wakeLockAcquiredAtMs = SystemClock.elapsedRealtime()
+    val event = if (alreadyOwned) "WakeLock RENEW" else "WakeLock ACQUIRE"
+    Log.d(TAG, "[BatteryDiag] $event reason=$reason owners=$wakeLockReasons")
   }
 
-  /** Re-acquire if the previous wake lock timed out while the FGS is still tracking. */
-  private fun ensureWakeLock() {
-    if (wakeLock?.isHeld == true) return
-    acquireWakeLock()
+  /**
+   * Re-acquire if the previous wake lock timed out while the FGS is still tracking.
+   * Must pass a valid owner reason — Auto Tracking idle alone is not enough.
+   */
+  private fun ensureWakeLock(reason: String) {
+    if (!shouldHoldWakeLock()) {
+      releaseWakeLock(reason)
+      return
+    }
+    acquireWakeLock(reason)
   }
 
-  private fun releaseWakeLock() {
+  private fun shouldHoldWakeLock(): Boolean {
+    val race = raceState
+    if (race != null && isActiveRace(race)) return true
+    if (walkRunning || prefs().getBoolean("walk_active", false)) return true
+    return false
+  }
+
+  private fun releaseWakeLock(reason: String) {
+    wakeLockReasons.remove(reason)
+    if (wakeLockReasons.isNotEmpty() && shouldHoldWakeLock()) {
+      Log.d(TAG, "[BatteryDiag] WakeLock RELEASE_PARTIAL reason=$reason remaining=$wakeLockReasons")
+      return
+    }
+    // Drop all owners when no valid tracking owner remains.
+    if (!shouldHoldWakeLock()) {
+      wakeLockReasons.clear()
+    }
     try {
       if (wakeLock?.isHeld == true) wakeLock?.release()
     } catch (_: Exception) {
     }
     wakeLock = null
+    wakeLockAcquiredAtMs = 0L
+    Log.d(TAG, "[BatteryDiag] WakeLock RELEASE reason=$reason")
+  }
+
+  private fun releaseAllWakeLocks(reason: String) {
+    wakeLockReasons.clear()
+    try {
+      if (wakeLock?.isHeld == true) wakeLock?.release()
+    } catch (_: Exception) {
+    }
+    wakeLock = null
+    wakeLockAcquiredAtMs = 0L
+    Log.d(TAG, "[BatteryDiag] WakeLock RELEASE reason=$reason")
   }
 
   private fun startRaceLoops() {
@@ -889,7 +958,7 @@ class WalkChampRaceForegroundService : Service() {
     startMidnightCheckLoop()
     startSensorTrackingIfNeeded()
     scheduleSensorWatchdog()
-    acquireWakeLock()
+    acquireWakeLock("LIVE_RACE")
   }
 
   private fun startWalkBackendSyncLoop() {
@@ -900,7 +969,7 @@ class WalkChampRaceForegroundService : Service() {
     startSensorTrackingIfNeeded()
     scheduleSensorWatchdog()
     Log.d(TAG, "[StepFGS] startForeground mode=daily_steps sensor=event-driven")
-    acquireWakeLock()
+    acquireWakeLock("ACTIVE_TRACKED_WALK")
   }
 
   private fun sensorWatchdogPendingIntent(): PendingIntent {
@@ -986,7 +1055,9 @@ class WalkChampRaceForegroundService : Service() {
       cancelSensorWatchdog()
       return
     }
-    ensureWakeLock()
+        ensureWakeLock(
+          if (raceState != null && isActiveRace(raceState!!)) "LIVE_RACE" else "ACTIVE_TRACKED_WALK",
+        )
     ensureWorker()
     startSensorTrackingIfNeeded()
     startWalkStepRefreshLoop()
@@ -1005,7 +1076,9 @@ class WalkChampRaceForegroundService : Service() {
    */
   private fun ensureBackgroundTracking() {
     ensureWorker()
-    ensureWakeLock()
+        ensureWakeLock(
+          if (raceState != null && isActiveRace(raceState!!)) "LIVE_RACE" else "ACTIVE_TRACKED_WALK",
+        )
     val storedRace = RaceNotificationState.load(this)
     if (raceState == null && storedRace != null && isActiveRace(storedRace)) {
       restoreRaceFromStorage(promoteForeground = true)
@@ -1071,9 +1144,11 @@ class WalkChampRaceForegroundService : Service() {
     stopWalkStepRefreshLoop()
     stopMidnightCheckLoop()
     stopSensorTrackingIfIdle()
+    // Always drop the race owner; walk may keep ACTIVE_TRACKED_WALK.
+    releaseWakeLock("LIVE_RACE")
     if (raceState == null && !walkRunning) {
       cancelSensorWatchdog()
-      releaseWakeLock()
+      releaseAllWakeLocks("RACE_COMPLETED")
     }
   }
 
@@ -1085,7 +1160,7 @@ class WalkChampRaceForegroundService : Service() {
     stopMidnightCheckLoop()
     cancelSensorWatchdog()
     sensorEngine?.stop()
-    releaseWakeLock()
+    releaseAllWakeLocks("SERVICE_STOP")
   }
 
   private fun ensureSensorEngine(): NativeStepSensorEngine {
@@ -1326,7 +1401,9 @@ class WalkChampRaceForegroundService : Service() {
   private fun handleNativeStepStateUpdate(state: NativeStepState) {
     if (!isStepUpdateForCurrentUser(state.userId)) return
     // Renew while walking so the partial wake lock never silently expires mid-session.
-    ensureWakeLock()
+        ensureWakeLock(
+          if (raceState != null && isActiveRace(raceState!!)) "LIVE_RACE" else "ACTIVE_TRACKED_WALK",
+        )
     val activeRace = raceState
     val raceActive = activeRace != null && isActiveRace(activeRace)
 
@@ -1925,11 +2002,23 @@ class WalkChampRaceForegroundService : Service() {
 
   private fun stopRace(reason: String) {
     Log.d(TAG, "[RaceService] stop reason=$reason")
+    // Mirror stopRaceAndSwitchToDailySteps — clear native race_live mode so FGS
+    // does not keep race-level work alive after backend completion.
+    try {
+      ensureSensorEngine().endRace(resolveTodayStepsForSync())
+    } catch (e: Exception) {
+      Log.w(TAG, "[RaceService] endRace failed: ${e.message}")
+    }
     stopRaceLoops()
     raceState = null
+    lastRaceDisplayState = null
     RaceNotificationState.save(this, null)
     val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     nm.cancel(NOTIFICATION_ID_RACE)
+    if (!shouldHoldWakeLock()) {
+      releaseAllWakeLocks("RACE_COMPLETED")
+      cancelSensorWatchdog()
+    }
     refreshForegroundAfterRaceStop()
   }
 
@@ -1970,6 +2059,8 @@ class WalkChampRaceForegroundService : Service() {
     sensorEngine?.stop()
     sensorEngine = null
     stopSensorTrackingIfIdle()
+    releaseAllWakeLocks("LOGOUT")
+    cancelSensorWatchdog()
     // Force stop — never deliverRestoreIntent during logout (that path uses startForegroundService).
     try {
       stopForeground(STOP_FOREGROUND_REMOVE)
@@ -2001,6 +2092,10 @@ class WalkChampRaceForegroundService : Service() {
       switchToDailyStepsNotification(todaySteps)
     } else {
       Log.d(TAG, "[NotificationMode] switch race_live -> none reason=$reason")
+      if (!shouldHoldWakeLock()) {
+        releaseAllWakeLocks("RACE_COMPLETED")
+        cancelSensorWatchdog()
+      }
       refreshForegroundAfterRaceStop()
     }
   }

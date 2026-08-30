@@ -375,6 +375,15 @@ export type UnlimitedLiveDetailMapped = {
     failedDays?: number | null;
     pendingDays?: number | null;
     completedDays?: number | null;
+    /** Account preference timezone (may differ after travel). */
+    accountTimezone?: string | null;
+    /** Confirmed future-day timezone pending activation. */
+    pendingTimezone?: string | null;
+    timezoneEffectiveDay?: number | null;
+    timezoneChangeConfirmedAt?: string | null;
+    timezoneChangeConfirmedTimezone?: string | null;
+    timezoneChangeAppliesToChallenge?: boolean | null;
+    finalDayTimezoneLocked?: boolean | null;
   };
   participants: Array<{
     id: string;
@@ -927,6 +936,35 @@ export function mapUnlimitedDetailToLiveDetail(
       failedDays: asNumber(pick(viewer ?? root ?? {}, "failedDays", "failed_days")),
       pendingDays: asNumber(pick(viewer ?? root ?? {}, "pendingDays", "pending_days")),
       completedDays: asNumber(pick(viewer ?? root ?? {}, "completedDays", "completed_days", "passedDays")),
+      accountTimezone: asString(pick(viewer ?? root ?? {}, "accountTimezone", "account_timezone")),
+      pendingTimezone: asString(pick(viewer ?? root ?? {}, "pendingTimezone", "pending_timezone")),
+      timezoneEffectiveDay: asNumber(
+        pick(viewer ?? root ?? {}, "timezoneEffectiveDay", "timezone_effective_day"),
+      ),
+      timezoneChangeConfirmedAt: asString(
+        pick(
+          viewer ?? root ?? {},
+          "timezoneChangeConfirmedAt",
+          "timezone_change_confirmed_at",
+        ),
+      ),
+      timezoneChangeConfirmedTimezone: asString(
+        pick(
+          viewer ?? root ?? {},
+          "timezoneChangeConfirmedTimezone",
+          "timezone_change_confirmed_timezone",
+        ),
+      ),
+      timezoneChangeAppliesToChallenge: asBool(
+        pick(
+          viewer ?? root ?? {},
+          "timezoneChangeAppliesToChallenge",
+          "timezone_change_applies_to_challenge",
+        ),
+      ),
+      finalDayTimezoneLocked: asBool(
+        pick(viewer ?? root ?? {}, "finalDayTimezoneLocked", "final_day_timezone_locked"),
+      ),
     },
     participants,
   };

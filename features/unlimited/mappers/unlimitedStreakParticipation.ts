@@ -4,7 +4,7 @@
  * manually leave or forfeit. Classic races keep their own DQ = out rules.
  */
 
-import { canPublishFinalResult } from "./unlimitedResults";
+import { canPublishFinalResult, normalizeBackendResultsStatus } from "./unlimitedResults";
 
 export const STREAK_REMOVED_STATUSES = new Set([
   "left",
@@ -54,6 +54,35 @@ export function isViewerStreakBroken(input: StreakViewerResultInput): boolean {
 }
 
 export type StreakDetailUiBranch = "broken" | "final" | "live" | "pending_settlement";
+
+export type UnlimitedPastLiveInput = StreakViewerResultInput & {
+  viewerEndAt?: string | null;
+  challengeStatus?: string | null;
+};
+
+/** True when backend says the viewer is past live daily racing (never local schedule guesses). */
+export function isUnlimitedViewerPastLivePhase(input: UnlimitedPastLiveInput): boolean {
+  if (input.viewerResultsReady === true) return true;
+  const viewer = (input.viewerStatus ?? "").trim().toLowerCase();
+  if (viewer === "completed" || viewer === "failed" || viewer === "left") return true;
+  const verify = (input.finalVerificationStatus ?? "").trim().toLowerCase();
+  if (verify === "requested" || verify === "submitted" || verify === "completed") return true;
+  const challenge = (input.challengeStatus ?? "").trim().toLowerCase();
+  if (challenge === "settling" || challenge === "completed") return true;
+  if (input.viewerEndAt) {
+    const endMs = new Date(input.viewerEndAt).getTime();
+    if (Number.isFinite(endMs) && endMs <= Date.now()) return true;
+  }
+  const rs = normalizeBackendResultsStatus(input.resultsStatus ?? null);
+  if (
+    rs === "waiting_for_participants" ||
+    rs === "steps_validation_in_progress" ||
+    rs === "results_ready"
+  ) {
+    return true;
+  }
+  return false;
+}
 
 /**
  * Recommended UI branch from the streak backend contract.

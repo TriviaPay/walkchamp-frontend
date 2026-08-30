@@ -53,6 +53,7 @@ import {
   type UnlimitedChallengeResultStatus,
   type PrizePoolEligibilityStatus,
 } from "@/utils/unlimitedResults";
+import { UnlimitedFinalResultStageStack } from "@/components/race/UnlimitedFinalResultStageStack";
 import { UNLIMITED_COPY } from "@/utils/unlimitedLiveUiCopy";
 import { UnlimitedProgressSummary } from "@/components/race/UnlimitedProgressSummary";
 import { isViewerStreakBroken } from "@/utils/unlimitedStreakParticipation";
@@ -122,6 +123,10 @@ export default function UnlimitedResultsScreen() {
     channel?.bind("final_verification_requested", onRealtimeRefresh);
     channel?.bind("final_verification_updated", onRealtimeRefresh);
     channel?.bind("results_ready", onRealtimeRefresh);
+    channel?.bind("timezone_changed", onRealtimeRefresh);
+    const raceChannelName = CHANNELS.liveRace(challengeId);
+    const raceChannel = subscribeToChannel(raceChannelName);
+    raceChannel?.bind("race:timezone-changed", onRealtimeRefresh);
     return () => {
       channel?.unbind("challenge_completed", onRealtimeRefresh);
       channel?.unbind("challenge_cancelled", onRealtimeRefresh);
@@ -130,7 +135,10 @@ export default function UnlimitedResultsScreen() {
       channel?.unbind("final_verification_requested", onRealtimeRefresh);
       channel?.unbind("final_verification_updated", onRealtimeRefresh);
       channel?.unbind("results_ready", onRealtimeRefresh);
+      channel?.unbind("timezone_changed", onRealtimeRefresh);
+      raceChannel?.unbind("race:timezone-changed", onRealtimeRefresh);
       unsubscribeFromChannel(channelName);
+      unsubscribeFromChannel(raceChannelName);
     };
   }, [challengeId, load]);
 
@@ -308,6 +316,17 @@ export default function UnlimitedResultsScreen() {
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: safeBottom + 24 }}
         ListHeaderComponent={
           <View>
+            <UnlimitedFinalResultStageStack
+              resultStatus={resultStatus}
+              viewerPersonallyFinished={
+                schedule?.viewerStatus === "completed" ||
+                schedule?.viewerStatus === "failed" ||
+                schedule?.viewerStatus === "left" ||
+                Boolean(data.race.viewerResultsReady)
+              }
+              finalVerificationStatus={finalVerificationStatus}
+              showingFinalResults={resultStatus === "results_ready"}
+            />
             <StatusHeaderCard
               resultStatus={resultStatus}
               statusHeadline={

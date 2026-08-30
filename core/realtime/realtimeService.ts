@@ -303,6 +303,10 @@ export const EVENTS = {
   RACE_VERIFICATION_DELAYED: "race:verification_delayed",
   RACE_REVIEW_REQUIRED: "race:review_required",
   RACE_FINAL_PROGRESS_CONFIRMED: "race:final_progress_confirmed",
+  /** Unlimited channel event name. */
+  TIMEZONE_CHANGED: "timezone_changed",
+  /** Classic live-race channel alias. */
+  RACE_TIMEZONE_CHANGED: "race:timezone-changed",
 };
 
 export const SPONSORED_EVENTS_CHANNEL = "public-sponsored-events";

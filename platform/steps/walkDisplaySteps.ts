@@ -18,6 +18,33 @@ export function isUnconfirmedSensorLeftover(steps: number): boolean {
 }
 
 /**
+ * Walk hero hold during HC refresh — ignore 1–49 step crumbs that would paint
+ * over an already-confirmed higher daily total (common after app resume).
+ */
+export function advanceVerifiedStepsHold(
+  previousHold: number,
+  candidateVerified: number,
+): number {
+  const prev = Math.max(0, Math.floor(previousHold));
+  const v = Math.max(0, Math.floor(candidateVerified));
+  if (v <= 0) return prev;
+  if (isUnconfirmedSensorLeftover(v) && v < prev) return prev;
+  return v;
+}
+
+/** Pick verified steps for Walk display without transient HC poll blips. */
+export function resolveVerifiedStepsForWalkDisplay(
+  verifiedTodaySteps: number,
+  heldSteps: number,
+): number {
+  const v = Math.max(0, Math.floor(verifiedTodaySteps));
+  const hold = Math.max(0, Math.floor(heldSteps));
+  if (v <= 0) return hold;
+  if (isUnconfirmedSensorLeftover(v) && v < hold) return hold;
+  return v;
+}
+
+/**
  * True when a small native/session total must not paint Walk yet — verified is
  * still 0 and Health Connect/HealthKit has not completed a first read today.
  */

@@ -102,9 +102,33 @@ export interface AuthFetchOptions extends Omit<RequestInit, "signal"> {
    * Default: true (existing behavior).
    */
   retryOnUnauthorized?: boolean;
+  /**
+   * For idempotent GET requests, retry transient network/5xx failures with backoff.
+   * Default: true for GET, false for other methods.
+   */
+  retryTransientGet?: boolean;
 }
 
 // ── Main API client ───────────────────────────────────────────────────────────
+
+const TRANSIENT_GET_BACKOFF_MS = [1_000, 2_000, 4_000] as const;
+
+function isTransientFetchError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const name = err.name;
+  if (name === "TimeoutError" || name === "AbortError") return true;
+  return NETWORK_PATTERNS.test(err.message);
+}
+
+const NETWORK_PATTERNS = /network|fetch|timeout|econnreset|enotfound|failed/i;
+
+function isTransientHttpStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 504;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export async function authFetch(
   path: string,
@@ -114,8 +138,13 @@ export async function authFetch(
     timeoutMs = API_TIMEOUT_MS,
     signal: callerSignal,
     retryOnUnauthorized = true,
+    retryTransientGet,
     ...fetchOptions
   } = options;
+
+  const method = (fetchOptions.method ?? "GET").toUpperCase();
+  const allowTransientGetRetry =
+    retryTransientGet ?? method === "GET";
 
   logger.debug("API", `request started: ${path}`);
 
@@ -180,22 +209,43 @@ export async function authFetch(
     }
   };
 
-  let res: Response;
-  try {
-    res = await makeRequest(session);
-  } catch (err) {
-    {
-      const name = err instanceof Error ? err.name : "UnknownError";
-      if (name === "TimeoutError") {
-        logger.debug("API", `request timeout: ${path}`);
-      } else if (name === "AbortError") {
-        logger.debug("API", `request cancelled: ${path}`);
-      } else {
-        logger.debug("API", `request failed: ${path} err=${name}`);
+  let res!: Response;
+  let lastErr: unknown;
+  const maxAttempts = allowTransientGetRetry ? TRANSIENT_GET_BACKOFF_MS.length + 1 : 1;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      res = await makeRequest(session);
+      lastErr = undefined;
+      if (
+        !allowTransientGetRetry ||
+        res.ok ||
+        !isTransientHttpStatus(res.status) ||
+        attempt >= maxAttempts - 1
+      ) {
+        break;
       }
+      logger.debug("API", `transient ${res.status} on ${path}, retry ${attempt + 1}`);
+    } catch (err) {
+      lastErr = err;
+      const name = err instanceof Error ? err.name : "UnknownError";
+      if (name === "AbortError") throw err;
+      if (!allowTransientGetRetry || !isTransientFetchError(err) || attempt >= maxAttempts - 1) {
+        if (name === "TimeoutError") {
+          logger.debug("API", `request timeout: ${path}`);
+        } else {
+          logger.debug("API", `request failed: ${path} err=${name}`);
+        }
+        throw err;
+      }
+      logger.debug("API", `transient network error on ${path}, retry ${attempt + 1}`);
     }
-    throw err;
+    const backoff = TRANSIENT_GET_BACKOFF_MS[attempt] ?? 4_000;
+    const jitter = Math.floor(Math.random() * 200);
+    await sleep(backoff + jitter);
   }
+
+  if (lastErr) throw lastErr;
 
   logger.debug("API", `request completed: ${path} status=${res.status}`);
 

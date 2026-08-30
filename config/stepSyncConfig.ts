@@ -1,18 +1,30 @@
 /**
  * Step sync intervals — single source of truth for local polling vs backend batching.
  *
- * Walk + live race: backend progress every 3 s; local UI from sensor/HealthKit/HC immediately.
+ * TYPE_STEP_COUNTER → live/provisional UI + race progress
+ * Health Connect / HealthKit → verified daily + settlement (event-driven, not 1s polling)
+ *
+ * Battery: keep UI responsive while foreground; batch backend; slow JS when native FGS owns BG.
  */
 export const STEP_SYNC_CONFIG = {
-  /** Walk screen — push step delta to /api/walk/steps */
-  WALK_BACKEND_SYNC_MS: 3_000,
+  /** Walk screen — push step delta to /api/walk/steps (batched). */
+  WALK_BACKEND_SYNC_MS: 10_000,
 
-  /** Walk — provider reconciliation poll (backup when watch callbacks are slow) */
-  WALK_LOCAL_RECONCILE_POLL_MS: 1_000,
+  /**
+   * Walk — provider reconciliation poll while app is active.
+   * Actual HC rereads are gated by WALK_HEALTH_* — this is the outer JS timer only.
+   */
+  WALK_LOCAL_RECONCILE_POLL_MS: 5_000,
+
+  /** Outer JS reconcile while Android native FGS owns background tracking. */
+  WALK_LOCAL_RECONCILE_BACKGROUND_MS: 60_000,
+
+  /** Outer JS reconcile when idle (no FGS / no live race). */
+  WALK_LOCAL_RECONCILE_IDLE_MS: 120_000,
 
   /**
    * Health Connect / HealthKit daily re-read. Native HC writes are batched —
-   * 1-second HC polling does not make verified steps real-time.
+   * never poll HC every second.
    */
   WALK_HEALTH_VERIFICATION_MS: 30_000,
 
@@ -25,26 +37,36 @@ export const STEP_SYNC_CONFIG = {
   /** How long after bind/resume to keep the fast empty-HC retry. */
   WALK_HEALTH_EMPTY_RETRY_WINDOW_MS: 90_000,
 
-  /** Race — read device steps locally for UI (sensor / HealthKit / Health Connect) */
-  RACE_LOCAL_POLL_MS: 1_000,
+  /**
+   * Cap fast empty/no-data HC retries so 2.5s cannot run for the full window.
+   * After this many empty fast attempts, fall back to WALK_HEALTH_VERIFICATION_MS
+   * until an appropriate reset (resume / race start / new catch-up window).
+   */
+  WALK_HEALTH_EMPTY_RETRY_MAX_ATTEMPTS: 5,
 
-  /** Race — minimum time between /api/races/:id/progress calls */
-  RACE_BACKEND_SYNC_MS: 3_000,
+  /** Race — read device steps locally for UI (sensor / HealthKit / Health Connect) */
+  RACE_LOCAL_POLL_MS: 1_500,
+
+  /** Race — minimum time between /api/races/:id/progress calls (foreground). */
+  RACE_BACKEND_SYNC_MS: 12_000,
+
+  /** Race — slower sync while screen off / app backgrounded (native may also sync). */
+  RACE_BACKEND_SYNC_BACKGROUND_MS: 20_000,
 
   /** Race — sync when this many new steps accumulated AND interval elapsed */
-  RACE_BACKEND_SYNC_MIN_DELTA: 1,
+  RACE_BACKEND_SYNC_MIN_DELTA: 3,
 
   /** Race — sync immediately on a large catch-up burst */
   RACE_BACKEND_SYNC_FORCE_DELTA: 60,
 
-  /** Local UI refresh during live race (provider watch / poll) */
-  RACE_UI_UPDATE_MS: 1_000,
+  /** Local UI refresh during live race (provider watch / poll) while visible */
+  RACE_UI_UPDATE_MS: 1_500,
 
   /** Live race screen — min gap between background GET /api/races/:id refreshes */
   LIVE_RACE_DETAIL_REFRESH_MS: 20_000,
 
   /** Participant list fallback poll when Pusher is delayed */
-  LIVE_RACE_PARTICIPANTS_POLL_MS: 3_000,
+  LIVE_RACE_PARTICIPANTS_POLL_MS: 5_000,
 
   /** Walk tab — challenge card refresh while focused (Pusher handles room events) */
   WALK_CHALLENGE_POLL_MS: 20_000,
@@ -104,7 +126,7 @@ export const LIVE_RACE_SYNC_CONFIG = {
   uiUpdateMs: STEP_SYNC_CONFIG.RACE_UI_UPDATE_MS,
   backendSyncMs: STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_MS,
   minStepDeltaToSync: STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_MIN_DELTA,
-  maxPendingAgeMs: 3_000,
+  maxPendingAgeMs: STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_MS,
   flushOnGoalComplete: true,
   flushOnAppBackground: true,
   flushOnForfeit: true,

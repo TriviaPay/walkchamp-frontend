@@ -7,8 +7,12 @@
 import assert from "node:assert/strict";
 import { STEP_SYNC_CONFIG } from "./stepSyncConfig";
 
-assert.equal(STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MS, 3_000);
-assert.equal(STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_POLL_MS, 1_000);
+assert.equal(STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MS, 10_000);
+assert.equal(STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_POLL_MS, 5_000);
+assert.ok(
+  STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_POLL_MS >= 5_000,
+  "Walk JS reconcile must not run every second",
+);
 assert.equal(STEP_SYNC_CONFIG.WALK_HEALTH_VERIFICATION_MS, 30_000);
 assert.ok(
   STEP_SYNC_CONFIG.WALK_HEALTH_VERIFICATION_MS >= 15_000,
@@ -16,15 +20,24 @@ assert.ok(
 );
 assert.equal(STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_MS, 2_500);
 assert.equal(STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_WINDOW_MS, 90_000);
+assert.equal(STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_MAX_ATTEMPTS, 5);
 assert.ok(
   STEP_SYNC_CONFIG.WALK_HEALTH_EMPTY_RETRY_MS < STEP_SYNC_CONFIG.WALK_HEALTH_VERIFICATION_MS,
   "empty HC retries must be faster than the steady interval",
 );
-assert.equal(STEP_SYNC_CONFIG.RACE_LOCAL_POLL_MS, 1_000);
-assert.equal(STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_MS, 3_000);
-assert.equal(STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_MIN_DELTA, 1);
+assert.ok(
+  STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_BACKGROUND_MS >= 15_000,
+  "Background race sync must be slower than foreground",
+);
+assert.equal(STEP_SYNC_CONFIG.RACE_LOCAL_POLL_MS, 1_500);
+assert.equal(STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_MS, 12_000);
+assert.ok(
+  STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_MS >= 10_000,
+  "Race progress must batch — not every second",
+);
+assert.equal(STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_MIN_DELTA, 3);
 assert.equal(STEP_SYNC_CONFIG.RACE_BACKEND_SYNC_FORCE_DELTA, 60);
-assert.equal(STEP_SYNC_CONFIG.RACE_UI_UPDATE_MS, 1_000);
+assert.equal(STEP_SYNC_CONFIG.RACE_UI_UPDATE_MS, 1_500);
 assert.equal(STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MIN_DELTA_VERIFIED, 5);
 assert.equal(STEP_SYNC_CONFIG.WALK_BACKEND_SYNC_MIN_DELTA_LEGACY, 3);
 assert.equal(STEP_SYNC_CONFIG.WALK_PHANTOM_STEP_BUMP, 1);
@@ -32,5 +45,9 @@ assert.equal(STEP_SYNC_CONFIG.WALK_MAX_STEP_SPIKE, 500);
 assert.equal(STEP_SYNC_CONFIG.LEGACY_MAX_UNCONFIRMED_AHEAD, 12);
 assert.equal(STEP_SYNC_CONFIG.LEGACY_MAX_TICK_JUMP, 8);
 assert.equal(STEP_SYNC_CONFIG.STEP_DEBUG_VERBOSE, false);
+assert.ok(
+  STEP_SYNC_CONFIG.WALK_LOCAL_RECONCILE_BACKGROUND_MS >= 30_000,
+  "Background JS reconcile must stay sparse while native FGS owns sensors",
+);
 
 console.log("stepSyncConfig.test.ts — interval contracts locked");

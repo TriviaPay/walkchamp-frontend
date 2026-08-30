@@ -10,8 +10,7 @@ import {
   persistWalletBalance,
   persistWalletTransactions,
 } from "@/utils/walletCache";
-import { getValidSession } from "@/services/authService";
-import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
+import { authFetch } from "@/utils/authFetch";
 import { getDeviceTimezone, getLocalDateStr, getLocalWeekStart, getLocalMonthStart } from "@/utils/timezone";
 import { dynamicIconService } from "@/services/dynamicIconService";
 import { waitForAppStartupReady } from "@/services/appStartup";
@@ -24,8 +23,7 @@ import {
 import { screenCache } from "@/utils/screenCache";
 import { perf } from "@/utils/perfLogger";
 import { useAuth } from "@/context/AuthContext";
-
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
+import { toUserFacingErrorFromResponse } from "@/utils/userFacingError";
 
 interface WalletData {
   availableBalance: number;
@@ -60,13 +58,8 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | null>(null);
 
 async function apiFetch<T>(path: string): Promise<T | null> {
-  const session = await getValidSession();
-  if (!session) return null;
   try {
-    const res = await fetch(`${API_BASE}${path}`, {
-      signal: timeoutSignal(API_TIMEOUT_MS),
-      headers: { Authorization: `Bearer ${session}` },
-    });
+    const res = await authFetch(path);
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -79,21 +72,16 @@ async function apiPost<T>(
   body: unknown,
   extraHeaders?: Record<string, string>,
 ): Promise<T | null> {
-  const session = await getValidSession();
-  if (!session) return null;
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await authFetch(path, {
     method: "POST",
-    signal: timeoutSignal(API_TIMEOUT_MS),
     headers: {
-      Authorization: `Bearer ${session}`,
-      "Content-Type": "application/json",
       ...(extraHeaders ?? {}),
     },
     body: JSON.stringify(body),
+    retryOnUnauthorized: false,
   });
   if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(err.error ?? `Request failed: ${res.status}`);
+    throw new Error(await toUserFacingErrorFromResponse(res, "wallet"));
   }
   return (await res.json()) as T;
 }
@@ -307,17 +295,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Timezone sync is fire-and-forget — must never delay wallet/rank display.
-      getValidSession().then((session) => {
-        if (!session) return;
-        fetch(`${API_BASE}/api/user/preferences`, {
-          method: "PATCH",
-          signal: timeoutSignal(API_TIMEOUT_MS),
-          headers: {
-            Authorization: `Bearer ${session}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ timezone: getDeviceTimezone() }),
-        }).catch(() => {});
+      void authFetch("/api/user/preferences", {
+        method: "PATCH",
+        retryOnUnauthorized: false,
+        body: JSON.stringify({ timezone: getDeviceTimezone() }),
       }).catch(() => {});
 
       // Wallet is shown on Walk tab — fetch immediately in background.

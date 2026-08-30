@@ -13,9 +13,10 @@ import {
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
-import { getValidSession } from "@/services/authService";
-import { getApiBase } from "@/utils/apiUrl";
+import { authFetch } from "@/utils/authFetch";
 import { AppAlert } from "@/components/AppAlert";
+import { useRequireOnlineAction } from "@/hooks/useRequireOnlineAction";
+import { toUserFacingErrorFromResponse } from "@/utils/userFacingError";
 import { rf } from "@/utils/responsive";
 import { useAuth } from "@/context/AuthContext";
 import { cashJoinBlockMessage } from "@/config/featureFlags";
@@ -90,6 +91,7 @@ export default function JoinWithCodeModal({
 }: Props) {
   const colors = useColors();
   const { user } = useAuth();
+  const guardOnline = useRequireOnlineAction("Reconnect to join with a room code.");
   const [step, setStep] = useState<Step>("enter");
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
@@ -121,15 +123,11 @@ export default function JoinWithCodeModal({
   const handleResolve = async () => {
     const trimmed = code.trim().toUpperCase();
     if (!trimmed) { setError("Please enter a room code."); return; }
+    if (!guardOnline()) return;
     setLoading(true);
     setError(null);
     try {
-      const session = await getValidSession();
-      if (!session) { AppAlert.alert("Error", "Please sign in again."); return; }
-
-      const res = await fetch(`${getApiBase()}/api/races/by-code/${encodeURIComponent(trimmed)}`, {
-        headers: { Authorization: `Bearer ${session}` },
-      });
+      const res = await authFetch(`/api/races/by-code/${encodeURIComponent(trimmed)}`);
       const data = await res.json() as Record<string, unknown>;
 
       if (!res.ok) {
@@ -164,7 +162,7 @@ export default function JoinWithCodeModal({
         setStep("consent");
       } else {
         // Free room — join immediately
-        await doJoin(trimmed, false, session);
+        await doJoin(trimmed, false);
       }
     } catch {
       setError("Connection error. Please try again.");
@@ -174,13 +172,11 @@ export default function JoinWithCodeModal({
   };
 
   // Step 2: join (with or without consent)
-  const doJoin = async (roomCode: string, withConsent: boolean, sessionToken?: string) => {
+  const doJoin = async (roomCode: string, withConsent: boolean) => {
+    if (!guardOnline()) return;
     setLoading(true);
     setError(null);
     try {
-      const session = sessionToken ?? (await getValidSession());
-      if (!session) { AppAlert.alert("Error", "Please sign in again."); return; }
-
       const body: Record<string, unknown> = { code: roomCode };
       if (withConsent) {
         const blocked = cashJoinBlockMessage(user);
@@ -192,9 +188,9 @@ export default function JoinWithCodeModal({
         body.acceptedRulesVersion = CASH_RULES_VERSION;
       }
 
-      const res = await fetch(`${getApiBase()}/api/races/join-with-code`, {
+      const res = await authFetch("/api/races/join-with-code", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session}` },
+        retryOnUnauthorized: false,
         body: JSON.stringify(body),
       });
       const data = await res.json() as Record<string, unknown>;

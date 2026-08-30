@@ -21,6 +21,7 @@ import {
   type AppStateStatus,
 } from "react-native";
 import * as WebBrowser from "expo-web-browser";
+import { toUserFacingError } from "@/utils/userFacingError";
 import { AppAlert } from "@/components/AppAlert";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
@@ -350,9 +351,7 @@ function WalletScreenContent() {
         "Your request has been submitted for admin review. Processing takes 1–3 business days.\n\nStatus: Pending",
       );
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : "Request failed. Please try again.";
-      AppAlert.alert("Withdrawal Failed", msg);
+      AppAlert.alert("Withdrawal Failed", toUserFacingError(err, "wallet"));
     } finally {
       setWithdrawing(false);
     }
@@ -670,7 +669,7 @@ function WalletScreenContent() {
         await completeDepositUi("browser-dismiss", "cancelled");
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Payment failed. Please try again.";
+      const msg = toUserFacingError(err, "payment");
       setDepositStatus("failed");
       setDepositError(msg);
       processingRef.current = false;
@@ -977,8 +976,7 @@ function WalletScreenContent() {
           </Text>
         </View>
 
-        {/* Transactions — nested ScrollView (fixed maxHeight) keeps the constrained
-            tx card scroll UX without nesting a VirtualizedList in the page ScrollView. */}
+        {/* Transactions — scrollable card; plain map avoids nested VirtualizedList warning */}
         <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
           Transaction History
         </Text>

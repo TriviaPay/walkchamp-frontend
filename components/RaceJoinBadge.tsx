@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { Animated, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import { FIXED_PILL_TEXT_PROPS } from "@/constants/accessibility";
 import { rf } from "@/utils/responsive";
 
 export const ENABLE_JOIN_CARD_ANIMATION = true;
@@ -80,9 +81,9 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
           style={bjStyles.joinPill}
         >
           <Animated.View style={[bjStyles.joinDot, { opacity: glowAnim }]} />
-          <Text style={bjStyles.joinText}>Join</Text>
+          <Text style={bjStyles.joinText} {...FIXED_PILL_TEXT_PROPS}>Join</Text>
           <View style={bjStyles.joinCountBox}>
-            <Text style={bjStyles.joinCountText}>{displayJoined}/{displayMax}</Text>
+            <Text style={bjStyles.joinCountText} {...FIXED_PILL_TEXT_PROPS}>{displayJoined}/{displayMax}</Text>
           </View>
         </LinearGradient>
       </Animated.View>
@@ -102,9 +103,9 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
             style={bjStyles.hostingPill}
           >
             <Animated.View style={[bjStyles.hostingDot, { opacity: blinkAnim }]} />
-            <Text style={bjStyles.hostingLabel}>Hosting</Text>
+            <Text style={bjStyles.hostingLabel} {...FIXED_PILL_TEXT_PROPS}>Hosting</Text>
             <View style={bjStyles.hostingCountBox}>
-              <Text style={bjStyles.hostingCountText}>{displayJoined}/{displayMax}</Text>
+              <Text style={bjStyles.hostingCountText} {...FIXED_PILL_TEXT_PROPS}>{displayJoined}/{displayMax}</Text>
             </View>
           </LinearGradient>
         </View>
@@ -120,8 +121,8 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
           style={bjStyles.waitingPill}
         >
           <Animated.View style={[bjStyles.waitingDot, { opacity: blinkAnim }]} />
-          <Text style={bjStyles.waitingLabel}>Waiting</Text>
-          <Text style={bjStyles.waitingCountText}>{displayJoined}/{displayMax}</Text>
+          <Text style={bjStyles.waitingLabel} {...FIXED_PILL_TEXT_PROPS}>Waiting</Text>
+          <Text style={bjStyles.waitingCountText} {...FIXED_PILL_TEXT_PROPS}>{displayJoined}/{displayMax}</Text>
         </LinearGradient>
       </View>
     );
@@ -139,14 +140,14 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
         style={bjStyles.racingPill}
       >
         <View style={bjStyles.racingDot} />
-        <Text style={bjStyles.racingText}>RACING</Text>
+        <Text style={bjStyles.racingText} {...FIXED_PILL_TEXT_PROPS}>RACING</Text>
       </LinearGradient>
     );
   }
   if (isForfeited) {
     return (
       <View style={[bjStyles.pill, { backgroundColor: "rgba(255,68,68,0.22)", borderColor: "rgba(255,68,68,0.55)" }]}>
-        <Text style={[bjStyles.text, { color: "#FF4444" }]}>FORFEITED</Text>
+        <Text style={[bjStyles.text, { color: "#FF4444" }]} {...FIXED_PILL_TEXT_PROPS}>FORFEITED</Text>
       </View>
     );
   }
@@ -154,7 +155,7 @@ export function RaceJoinBadge({ status, joinedCount = 1, maxPlayers = 10, label 
   // ── Default (Host / finished / etc.) ──────────────────────────────────────
   return (
     <View style={[bjStyles.pill, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: "rgba(255,255,255,0.95)" }]}>
-      <Text style={[bjStyles.text, { color: "#111827" }]}>{label}</Text>
+      <Text style={[bjStyles.text, { color: "#111827" }]} {...FIXED_PILL_TEXT_PROPS}>{label}</Text>
     </View>
   );
 }

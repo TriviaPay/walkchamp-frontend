@@ -26,7 +26,6 @@ import {
  */
 const IS_EXPO_GO = (Constants.executionEnvironment as string) === "storeClient";
 
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 const APP_VERSION = Constants.expoConfig?.version ?? "1.0.1";
 
 /** Display-only visual metadata for OneSignal additionalData (does not change routes). */
@@ -651,11 +650,7 @@ export async function logoutOneSignal(): Promise<void> {
 // ── Notification preferences from backend ────────────────────────────────────
 export async function getNotificationPreferences(): Promise<boolean> {
   try {
-    const session = await getValidSession();
-    if (!session) return true;
-    const res = await fetch(`${API_BASE}/api/me/notification-preferences`, {
-      headers: { Authorization: `Bearer ${session}` },
-    });
+    const res = await authFetch("/api/me/notification-preferences");
     if (!res.ok) return true;
     const data = (await res.json()) as { push_notifications_enabled?: boolean };
     return data.push_notifications_enabled ?? true;
@@ -666,11 +661,8 @@ export async function getNotificationPreferences(): Promise<boolean> {
 
 export async function setNotificationPreferences(enabled: boolean): Promise<boolean> {
   try {
-    const session = await getValidSession();
-    if (!session) return enabled;
-    const res = await fetch(`${API_BASE}/api/me/notification-preferences`, {
+    const res = await authFetch("/api/me/notification-preferences", {
       method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session}` },
       body: JSON.stringify({ push_notifications_enabled: enabled }),
     });
     if (!res.ok) return enabled;
@@ -870,11 +862,7 @@ export async function fetchNotifications(): Promise<
   Array<{ id: string; type: string; title: string; body: string; isRead: boolean; createdAt: string }>
 > {
   try {
-    const session = await getValidSession();
-    if (!session) return [];
-    const res = await fetch(`${API_BASE}/api/notifications`, {
-      headers: { Authorization: `Bearer ${session}` },
-    });
+    const res = await authFetch("/api/notifications");
     if (!res.ok) return [];
     const data = (await res.json()) as { notifications?: unknown[] };
     const list = Array.isArray(data.notifications) ? data.notifications : [];
@@ -888,12 +876,14 @@ export async function fetchNotifications(): Promise<
 }
 
 export async function markNotificationRead(id: string): Promise<void> {
-  const session = await getValidSession();
-  if (!session) return;
-  await fetch(`${API_BASE}/api/notifications/${id}/read`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${session}` },
-  }).catch(() => {});
+  try {
+    await authFetch(`/api/notifications/${id}/read`, {
+      method: "POST",
+      retryOnUnauthorized: false,
+    });
+  } catch {
+    /* best-effort */
+  }
 }
 
 // ── Legacy compat shims ───────────────────────────────────────────────────────

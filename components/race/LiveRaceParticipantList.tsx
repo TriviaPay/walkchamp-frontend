@@ -199,6 +199,8 @@ const TrackPanelRow = memo(function TrackPanelRow({
   );
 });
 
+const BOTTOM_STRIP_CARD_WIDTH = 132;
+
 export function TrackPositionParticipantList({
   players,
   rsFactor = 1,
@@ -210,6 +212,8 @@ export function TrackPositionParticipantList({
   muteAllActive,
   onMuteAll,
   onUnmuteAll,
+  /** "panel" = track overlay list; "bottomStrip" = horizontal cards in steps section */
+  variant = "panel",
 }: {
   players: TrackPanelPlayer[];
   rsFactor?: number;
@@ -221,9 +225,11 @@ export function TrackPositionParticipantList({
   muteAllActive?: boolean;
   onMuteAll?: () => void;
   onUnmuteAll?: () => void;
+  variant?: "panel" | "bottomStrip";
 }) {
   const rs = useCallback((n: number) => Math.round(n * rsFactor), [rsFactor]);
-  const avatarSize = rs(32);
+  const isStrip = variant === "bottomStrip";
+  const avatarSize = rs(isStrip ? 28 : 32);
 
   const remoteIds = useMemo(
     () => players.filter((p) => !p.isMe && !p.isForfeited).map((p) => p.userId || p.id),
@@ -231,18 +237,22 @@ export function TrackPositionParticipantList({
   );
 
   const renderItem = useCallback(
-    ({ item }: ListRenderItemInfo<TrackPanelPlayer>) => (
-      <TrackPanelRow
-        player={item}
-        avatarSize={avatarSize}
-        rs={rs}
-        meAvatarUrl={meAvatarUrl}
-        isMuted={isRemoteLocallyMuted(item.userId || item.id)}
-        showMuteControls={!!showMuteControls}
-        onLocalMute={onLocalMute}
-        onLocalUnmute={onLocalUnmute}
-      />
-    ),
+    ({ item }: ListRenderItemInfo<TrackPanelPlayer>) => {
+      const row = (
+        <TrackPanelRow
+          player={item}
+          avatarSize={avatarSize}
+          rs={rs}
+          meAvatarUrl={meAvatarUrl}
+          isMuted={isRemoteLocallyMuted(item.userId || item.id)}
+          showMuteControls={!!showMuteControls}
+          onLocalMute={onLocalMute}
+          onLocalUnmute={onLocalUnmute}
+        />
+      );
+      if (!isStrip) return row;
+      return <View style={styles.bottomStripCard}>{row}</View>;
+    },
     [
       avatarSize,
       rs,
@@ -251,46 +261,87 @@ export function TrackPositionParticipantList({
       showMuteControls,
       onLocalMute,
       onLocalUnmute,
+      isStrip,
     ],
   );
 
   const keyExtractor = useCallback((item: TrackPanelPlayer) => item.id, []);
   const getItemLayout = useCallback(
-    (_: ArrayLike<TrackPanelPlayer> | null | undefined, index: number) => ({
-      length: PANEL_ROW_HEIGHT,
-      offset: PANEL_ROW_HEIGHT * index,
-      index,
-    }),
-    [],
+    (_: ArrayLike<TrackPanelPlayer> | null | undefined, index: number) => {
+      if (isStrip) {
+        return {
+          length: BOTTOM_STRIP_CARD_WIDTH + 8,
+          offset: (BOTTOM_STRIP_CARD_WIDTH + 8) * index,
+          index,
+        };
+      }
+      return {
+        length: PANEL_ROW_HEIGHT,
+        offset: PANEL_ROW_HEIGHT * index,
+        index,
+      };
+    },
+    [isStrip],
   );
+
+  const muteRow =
+    showMuteControls && remoteIds.length > 0 && onMuteAll && onUnmuteAll ? (
+      <View style={styles.muteAllRow}>
+        <TouchableOpacity
+          onPress={onMuteAll}
+          style={[styles.muteAllBtn, muteAllActive && styles.muteAllBtnActive]}
+          accessibilityRole="button"
+          accessibilityLabel="Mute all remote participants on this device"
+        >
+          <Feather name="mic-off" size={12} color={muteAllActive ? "#00E676" : "#C7CDDA"} />
+          <Text style={[styles.muteAllTxt, muteAllActive && { color: "#00E676" }]}>
+            Mute All
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={onUnmuteAll}
+          style={styles.muteAllBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Unmute all remote participants on this device"
+          disabled={!muteAllActive && remoteIds.every((id) => !isRemoteLocallyMuted(id))}
+        >
+          <Feather name="mic" size={12} color="#C7CDDA" />
+          <Text style={styles.muteAllTxt}>Unmute All</Text>
+        </TouchableOpacity>
+      </View>
+    ) : null;
+
+  if (isStrip) {
+    return (
+      <View style={styles.bottomStripWrap}>
+        {muteRow}
+        {players.length === 0 ? (
+          <View style={styles.lbEmpty}>
+            <Text style={[styles.lbEmptyText, { fontSize: rs(10) }]}>No live runners yet</Text>
+          </View>
+        ) : (
+          <FlatList
+            horizontal
+            data={players}
+            keyExtractor={keyExtractor}
+            renderItem={renderItem}
+            getItemLayout={getItemLayout}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.bottomStripContent}
+            initialNumToRender={8}
+            maxToRenderPerBatch={8}
+            windowSize={5}
+            removeClippedSubviews
+            updateCellsBatchingPeriod={50}
+          />
+        )}
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1 }}>
-      {showMuteControls && remoteIds.length > 0 && onMuteAll && onUnmuteAll ? (
-        <View style={styles.muteAllRow}>
-          <TouchableOpacity
-            onPress={onMuteAll}
-            style={[styles.muteAllBtn, muteAllActive && styles.muteAllBtnActive]}
-            accessibilityRole="button"
-            accessibilityLabel="Mute all remote participants on this device"
-          >
-            <Feather name="mic-off" size={12} color={muteAllActive ? "#00E676" : "#C7CDDA"} />
-            <Text style={[styles.muteAllTxt, muteAllActive && { color: "#00E676" }]}>
-              Mute All
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={onUnmuteAll}
-            style={styles.muteAllBtn}
-            accessibilityRole="button"
-            accessibilityLabel="Unmute all remote participants on this device"
-            disabled={!muteAllActive && remoteIds.every((id) => !isRemoteLocallyMuted(id))}
-          >
-            <Feather name="mic" size={12} color="#C7CDDA" />
-            <Text style={styles.muteAllTxt}>Unmute All</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
+      {muteRow}
       {players.length === 0 ? (
         <View style={styles.lbEmpty}>
           <Text style={[styles.lbEmptyText, { fontSize: rs(10) }]}>No live runners yet</Text>
@@ -580,6 +631,25 @@ const styles = StyleSheet.create({
     color: "#C7CDDA",
     fontSize: rf(10),
     fontWeight: "800",
+  },
+  bottomStripWrap: {
+    width: "100%",
+    marginTop: 6,
+  },
+  bottomStripContent: {
+    paddingRight: 4,
+    gap: 8,
+    alignItems: "stretch",
+  },
+  bottomStripCard: {
+    width: BOTTOM_STRIP_CARD_WIDTH,
+    marginRight: 8,
+    borderRadius: 10,
+    backgroundColor: "#0B0D1AF2",
+    borderWidth: 1,
+    borderColor: "#1A1D2E",
+    paddingHorizontal: 4,
+    paddingVertical: 2,
   },
   lbEmpty: { paddingVertical: 18, alignItems: "center" },
   lbEmptyText: { color: "#8A8FA3", textAlign: "center" },

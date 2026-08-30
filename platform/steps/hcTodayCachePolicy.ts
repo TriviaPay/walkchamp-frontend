@@ -30,8 +30,9 @@ export function nextCachedTodaySteps(args: {
 
 /**
  * After uninstall/reinstall (or a cold HC 0), do not wait a full 30s to reread.
- * Fast retries only run until `catchUpUntilMs` (or while the last read errored).
- * Once today's aggregate is > 0, use the steady Health Connect interval.
+ * Fast retries only run until `catchUpUntilMs` (or while the last read errored),
+ * and are hard-capped by `maxFastRetries` so 2.5s cannot loop indefinitely.
+ * Once today's aggregate is > 0 (or the fast budget is spent), use the steady interval.
  */
 export function shouldRereadHealthConnectToday(opts: {
   lastReadAtMs: number;
@@ -43,6 +44,10 @@ export function shouldRereadHealthConnectToday(opts: {
   catchUpUntilMs?: number;
   /** During catch-up, treat totals below this as "HC not loaded yet" (reinstall remainder). */
   catchUpBelowSteps?: number;
+  /** Completed empty/fast attempts in the current catch-up window. */
+  fastRetryCount?: number;
+  /** Max empty/fast attempts before falling back to steadyIntervalMs (default 5). */
+  maxFastRetries?: number;
 }): boolean {
   if (opts.lastReadAtMs <= 0) return true;
   const now = opts.nowMs ?? Date.now();
@@ -51,7 +56,18 @@ export function shouldRereadHealthConnectToday(opts: {
   const catchingUp =
     (opts.catchUpUntilMs ?? 0) > now &&
     Math.max(0, Math.floor(opts.lastSteps)) < below;
-  if (opts.lastWasError === true || catchingUp) {
+  const maxFast = Math.max(1, Math.floor(opts.maxFastRetries ?? 5));
+  const fastCount = Math.max(0, Math.floor(opts.fastRetryCount ?? 0));
+  const fastBudgetRemaining = fastCount < maxFast;
+
+  if (opts.lastWasError === true) {
+    // Errors use the empty interval but still respect the attempt budget.
+    if (!fastBudgetRemaining) {
+      return elapsed >= opts.steadyIntervalMs;
+    }
+    return elapsed >= opts.emptyRetryMs;
+  }
+  if (catchingUp && fastBudgetRemaining) {
     return elapsed >= opts.emptyRetryMs;
   }
   return elapsed >= opts.steadyIntervalMs;

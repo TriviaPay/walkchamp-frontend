@@ -29,6 +29,10 @@ export interface UnlimitedDayRow {
   dailyGoalSteps: number;
   /** Populated from daily-history when available; otherwise only the current day. */
   verifiedSteps: number | null;
+  /** Backend day timezone — never invent locally. */
+  participantTimezone?: string;
+  windowStartUtc?: string;
+  windowEndUtc?: string;
 }
 
 const DAY_STATUSES = new Set<UnlimitedDayStatus>([
@@ -56,10 +60,20 @@ export function resolveUnlimitedDisplayDayIndex(
   schedule: UnlimitedViewerSchedule,
   historyRows?: UnlimitedDayRow[] | null,
 ): number {
-  const inProgress = (historyRows ?? []).filter((r) => r.status === "in_progress");
+  const rows = historyRows ?? [];
+  const inProgress = rows.filter((r) => r.status === "in_progress");
   if (inProgress.length === 1) {
     const n = Math.floor(inProgress[0]!.dayNumber);
     if (n >= 1 && n <= schedule.durationDays) return n;
+  }
+  const finished =
+    schedule.viewerStatus === "completed" ||
+    schedule.viewerStatus === "failed" ||
+    schedule.viewerStatus === "left";
+  if (finished && rows.length > 0) {
+    const lastDay = Math.floor(rows[rows.length - 1]!.dayNumber);
+    if (lastDay >= 1 && lastDay <= schedule.durationDays) return lastDay;
+    return Math.min(schedule.durationDays, Math.max(1, schedule.completedDays || schedule.durationDays));
   }
   return Math.min(schedule.durationDays, Math.max(1, Math.floor(schedule.currentDayIndex || 1)));
 }
@@ -131,7 +145,17 @@ export type UnlimitedDailyHistoryDay = {
   verifiedSteps?: number | null;
   windowStartUtc?: string;
   windowEndUtc?: string;
+  /** Backend-assigned day timezone (never recalculate locally). */
+  participantTimezone?: string;
   verificationStatus?: "live" | "awaiting_verification" | "final" | string;
+};
+
+export type UnlimitedTimezoneHistoryEntry = {
+  previousTimezone?: string;
+  newTimezone?: string;
+  confirmedAt?: string;
+  effectiveChallengeDay?: number;
+  appliesToChallenge?: boolean;
 };
 
 export type UnlimitedFinalVerificationStatus =
@@ -163,6 +187,9 @@ export type UnlimitedDailyHistoryPayload = {
   participantStartAtUtc?: string;
   participantEndAtUtc?: string;
   participantTimezone?: string;
+  /** Join-time membership zone (audit). */
+  initialParticipantTimezone?: string;
+  timezoneHistory?: UnlimitedTimezoneHistoryEntry[];
 };
 
 /** Map backend daily-history payload → day rows (authoritative verified steps). */
@@ -213,6 +240,15 @@ export function dayRowsFromDailyHistory(
           (typeof d.goalSteps === "number" ? d.goalSteps : null) ??
           goalDefault,
         verifiedSteps,
+        ...(typeof d.participantTimezone === "string" && d.participantTimezone
+          ? { participantTimezone: d.participantTimezone }
+          : {}),
+        ...(typeof d.windowStartUtc === "string" && d.windowStartUtc
+          ? { windowStartUtc: d.windowStartUtc }
+          : {}),
+        ...(typeof d.windowEndUtc === "string" && d.windowEndUtc
+          ? { windowEndUtc: d.windowEndUtc }
+          : {}),
       } satisfies UnlimitedDayRow;
     })
     .filter((r): r is UnlimitedDayRow => r != null)

@@ -21,7 +21,6 @@ import {
   type UnlimitedDayRow,
 } from "@/utils/unlimitedDayProgress";
 import { resolveStreakDetailUiBranch } from "@/utils/unlimitedStreakParticipation";
-import { unlimitedFinalVerificationPendingCopy } from "@/utils/unlimitedFinalVerification";
 import { rf } from "@/utils/responsive";
 import { streakIconSource } from "@/utils/brandImages";
 
@@ -40,7 +39,7 @@ type Props = {
   finalVerificationStatus?: string | null;
 };
 
-/** Compact calendar tile — green header + current day number (1–99). */
+/** Compact calendar tile — green header + day number + "Day" label. */
 function CalendarGoalIcon({ dayNumber }: { dayNumber: number }) {
   const day = Math.max(1, Math.min(99, Math.floor(dayNumber || 1)));
   const twoDigit = day >= 10;
@@ -59,6 +58,9 @@ function CalendarGoalIcon({ dayNumber }: { dayNumber: number }) {
         >
           {day}
         </Text>
+        <Text style={cal.dayLabel} numberOfLines={1}>
+          Day
+        </Text>
       </View>
     </View>
   );
@@ -67,7 +69,7 @@ function CalendarGoalIcon({ dayNumber }: { dayNumber: number }) {
 const cal = StyleSheet.create({
   tile: {
     width: 48,
-    height: 48,
+    height: 56,
     borderRadius: 12,
     overflow: "hidden",
     borderWidth: 1.5,
@@ -94,6 +96,7 @@ const cal = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#0E0A18",
     paddingHorizontal: 2,
+    paddingBottom: 2,
   },
   dayNum: {
     fontSize: rf(18),
@@ -106,6 +109,14 @@ const cal = StyleSheet.create({
   dayNumTwoDigit: {
     fontSize: rf(15),
     letterSpacing: -0.5,
+  },
+  dayLabel: {
+    fontSize: rf(8),
+    color: "rgba(167,139,250,0.85)",
+    fontWeight: "700",
+    marginTop: -1,
+    letterSpacing: 0.2,
+    textTransform: "uppercase",
   },
 });
 
@@ -132,12 +143,10 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
   });
   const beforeStart = schedule.viewerStatus === "scheduled";
   const left = schedule.viewerStatus === "left";
-  const pendingSettlement = uiBranch === "pending_settlement";
   const finished =
     uiBranch === "final" ||
     left ||
-    schedule.viewerStatus === "completed" ||
-    pendingSettlement;
+    schedule.viewerStatus === "completed";
   const lost =
     uiBranch === "broken" ||
     isUnlimitedPrizeLost({
@@ -146,9 +155,6 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
       viewerStatus: schedule.viewerStatus,
       resultsStatus,
     });
-  const settlementCopy = pendingSettlement
-    ? unlimitedFinalVerificationPendingCopy(finalVerificationStatus)
-    : null;
   const missedDay = resolveUnlimitedMissedDayIndex({
     historyRows,
     schedule,
@@ -156,12 +162,17 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
   });
   const displayDay = resolveUnlimitedDisplayDayIndex(schedule, historyRows);
   const daysLeft = remainingDaysAfterDisplayDay(schedule.durationDays, displayDay);
-  const displaySteps = beforeStart ? 0 : todaySteps;
+  const historyDaySteps = historyRows?.find((r) => r.dayNumber === displayDay)?.verifiedSteps;
+  const displaySteps = beforeStart
+    ? 0
+    : todaySteps > 0
+      ? todaySteps
+      : typeof historyDaySteps === "number" && historyDaySteps > 0
+        ? historyDaySteps
+        : todaySteps;
   const footerLabel = lost
     ? missedDayFooterCopy(missedDay)
-    : pendingSettlement
-      ? settlementCopy!.subtitle
-      : UNLIMITED_COPY.missADayOut;
+    : UNLIMITED_COPY.missADayOut;
 
   const body = (
     <>
@@ -169,17 +180,8 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
         <CalendarGoalIcon dayNumber={displayDay} />
 
         <View style={styles.mid}>
-          {/* Day N of Y is intentionally omitted here — shown in Challenge Progress only. */}
-          {pendingSettlement && settlementCopy ? (
-            <>
-              <Text style={styles.goalLabel} numberOfLines={1}>
-                {settlementCopy.title}
-              </Text>
-              <Text style={styles.settlementSub} numberOfLines={2}>
-                {settlementCopy.subtitle}
-              </Text>
-            </>
-          ) : !beforeStart ? (
+          {/* Keep calendar + daily goal visible — settlement status lives in the bottom strip. */}
+          {!beforeStart ? (
             <>
               <Text style={styles.goalLabel} numberOfLines={1}>
                 {UNLIMITED_COPY.todayGoal}
@@ -217,7 +219,7 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
             </View>
           ) : null}
           {/* Eligible mock: miss-a-day sits under flame on the right */}
-          {!lost && !pendingSettlement ? (
+          {!lost ? (
             <TouchableOpacity
               onPress={onPressInfo}
               disabled={!onPressInfo}
@@ -274,7 +276,7 @@ export const UnlimitedCurrentDayCard = memo(function UnlimitedCurrentDayCard({
           <Text style={styles.viewResultsText}>View Results</Text>
           <Feather name="arrow-right" size={13} color="#0B0F1A" />
         </TouchableOpacity>
-      ) : (finished || pendingSettlement) && onPressViewResults ? (
+      ) : finished && uiBranch !== "pending_settlement" && onPressViewResults ? (
         <TouchableOpacity style={styles.viewResultsBtn} onPress={onPressViewResults}>
           <Text style={styles.viewResultsText}>View Results</Text>
           <Feather name="arrow-right" size={13} color="#0B0F1A" />
@@ -328,6 +330,12 @@ const styles = StyleSheet.create({
   },
   settlementSub: {
     fontSize: rf(12),
+    fontWeight: "600",
+    color: "#A8B0C4",
+    marginTop: 2,
+  },
+  settlementHint: {
+    fontSize: rf(10),
     fontWeight: "600",
     color: "#A8B0C4",
     marginTop: 2,

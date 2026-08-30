@@ -25,7 +25,7 @@ let _sequence = 0;
 let _sessionId: string | null = null;
 let _inFlight = false;
 
-const THROTTLE_MS = 4_000;
+const THROTTLE_MS = 10_000;
 
 function ensureSession(challengeId: string, challengeDayKey: string): string {
   const key = `${challengeId}:${challengeDayKey}`;

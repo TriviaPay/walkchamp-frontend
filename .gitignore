@@ -35,6 +35,7 @@ modules/**/android/.gradle/
 
 # Metro
 .metro-health-check*
+.metro-cache/
 
 # debug
 npm-debug.*

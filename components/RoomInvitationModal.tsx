@@ -11,15 +11,13 @@ import { Feather } from "@expo/vector-icons";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { authFetch } from "@/utils/authFetch";
-import { getApiBase } from "@/utils/apiUrl";
 import { router } from "expo-router";
-import { getStoredSession } from "@/services/authService";
 import { useRace } from "@/context/RaceContext";
 import { useAuth } from "@/context/AuthContext";
+import { useRequireOnlineAction } from "@/hooks/useRequireOnlineAction";
 import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 import { rf } from "@/utils/responsive";
 
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 const INVITE_TTL = 20;
 
 export interface RoomInvitation {
@@ -45,6 +43,7 @@ interface Props {
 export function RoomInvitationModal({ invitation, onDismiss }: Props) {
   const { setActiveRace, joinRace } = useRace();
   const { user } = useAuth();
+  const guardOnline = useRequireOnlineAction("Reconnect to accept this invitation.");
   const [secondsLeft, setSecondsLeft] = useState(INVITE_TTL);
   const [responding, setResponding] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -94,6 +93,7 @@ export function RoomInvitationModal({ invitation, onDismiss }: Props) {
 
   const respond = async (action: "accept" | "decline") => {
     if (!invitation || responding) return;
+    if (action === "accept" && !guardOnline()) return;
     setResponding(true);
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
 
@@ -117,13 +117,10 @@ export function RoomInvitationModal({ invitation, onDismiss }: Props) {
       const maxPlayers = room?.maxPlayers ?? 10;
 
       if (!room || room.entryAmountCents === 0) {
-        const { session } = await getStoredSession();
-        if (session) {
-          await fetch(`${API_BASE}/api/races/${raceId}/join`, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${session}`, "Content-Type": "application/json" },
-          }).catch(() => {});
-        }
+        await authFetch(`/api/races/${raceId}/join`, {
+          method: "POST",
+          retryOnUnauthorized: false,
+        }).catch(() => {});
       }
 
       setActiveRace(raceId, false);

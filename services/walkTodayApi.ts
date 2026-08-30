@@ -1,8 +1,6 @@
-import { getValidSession } from "@/services/authService";
-import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
+import { authFetch } from "@/utils/authFetch";
 import { getTodayKey } from "@/utils/format";
-
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
+import { runCoalesced } from "@/utils/apiRequestCoordinator";
 
 export type TodayWalkApiResponse = {
   today?: {
@@ -55,43 +53,36 @@ export async function fetchTodayWalkFromApi(
   userId: string,
   localDate = getTodayKey(),
 ): Promise<TodayWalkData> {
-  const token = await getValidSession();
-  if (!token) {
-    if (__DEV__) {
-      console.log(
-        `[WalkScreen] skipped fetch reason=missing token userId=${userId}`,
-      );
-    }
-    return parseTodayWalkResponse({}, localDate);
-  }
-
   if (__DEV__) {
     console.log(
       `[WalkScreen] fetching DB steps queryKey=["todaySteps","${userId}","${localDate}"]`,
     );
   }
 
-  const res = await fetch(
-    `${API_BASE}/api/walk/today?localDate=${encodeURIComponent(localDate)}`,
-    {
-      signal: timeoutSignal(API_TIMEOUT_MS),
-      headers: { Authorization: `Bearer ${token}` },
-    },
-  );
-
-  if (!res.ok) {
+  try {
+    return await runCoalesced(`walk:today:${userId}:${localDate}`, async () => {
+      const res = await authFetch(
+        `/api/walk/today?localDate=${encodeURIComponent(localDate)}`,
+      );
+      if (!res.ok) {
+        if (__DEV__) {
+          console.log(`[WalkScreen] DB response=error status=${res.status}`);
+        }
+        return parseTodayWalkResponse({}, localDate);
+      }
+      const json = (await res.json()) as TodayWalkApiResponse;
+      const parsed = parseTodayWalkResponse(json, localDate);
+      if (__DEV__) {
+        console.log(
+          `[WalkScreen] DB response=steps:${parsed.todaySteps} goal:${parsed.goalSteps} rank:${parsed.dailyRank}`,
+        );
+      }
+      return parsed;
+    });
+  } catch {
     if (__DEV__) {
-      console.log(`[WalkScreen] DB response=error status=${res.status}`);
+      console.log("[WalkScreen] skipped fetch reason=missing token or network");
     }
     return parseTodayWalkResponse({}, localDate);
   }
-
-  const json = (await res.json()) as TodayWalkApiResponse;
-  const parsed = parseTodayWalkResponse(json, localDate);
-  if (__DEV__) {
-    console.log(
-      `[WalkScreen] DB response=steps:${parsed.todaySteps} goal:${parsed.goalSteps} rank:${parsed.dailyRank}`,
-    );
-  }
-  return parsed;
 }

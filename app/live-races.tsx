@@ -58,6 +58,7 @@ function mapApiRace(room: ApiRace): LiveRace {
     playerCount: room.playerCount,
     maxPlayers: room.maxPlayers,
     targetSteps: room.targetSteps,
+    startedAt: room.startedAt,
     elapsedSeconds,
     spectatorCount: room.spectatorCount ?? 0,
     commentCount: 0,
@@ -104,7 +105,25 @@ function LiveBadge({ colors }: { colors: ReturnType<typeof useColors> }) {
   );
 }
 
-function RaceCard({ race, onWatch, colors }: { race: LiveRace; onWatch: () => void; colors: ReturnType<typeof useColors> }) {
+function liveElapsedSeconds(race: LiveRace, clockTick: number): number {
+  void clockTick;
+  if (race.startedAt) {
+    return Math.max(0, Math.floor((Date.now() - new Date(race.startedAt).getTime()) / 1000));
+  }
+  return race.elapsedSeconds;
+}
+
+function RaceCard({
+  race,
+  onWatch,
+  colors,
+  clockTick,
+}: {
+  race: LiveRace;
+  onWatch: () => void;
+  colors: ReturnType<typeof useColors>;
+  clockTick: number;
+}) {
   const top3 = race.players.slice(0, 3);
   const entryColor: Record<string, string> = {
     "Free": colors.accent,
@@ -151,7 +170,7 @@ function RaceCard({ race, onWatch, colors }: { race: LiveRace; onWatch: () => vo
         </View>
         <View style={styles.metaItem}>
           <Feather name="clock" size={12} color={colors.mutedForeground} />
-          <Text style={[styles.metaText, { color: colors.mutedForeground }]}>{formatElapsed(race.elapsedSeconds)}</Text>
+          <Text style={[styles.metaText, { color: colors.mutedForeground }]}>{formatElapsed(liveElapsedSeconds(race, clockTick))}</Text>
         </View>
       </View>
 
@@ -251,11 +270,10 @@ export default function LiveRacesScreen() {
     return () => clearInterval(interval);
   }, [activeFilter, fetchRaces]);
 
-  // Tick elapsed timer locally every second — no step simulation
+  // Re-render elapsed labels every second without cloning the full race list.
+  const [clockTick, setClockTick] = useState(0);
   useEffect(() => {
-    const tick = setInterval(() => {
-      setLiveRaces((prev) => prev.map((r) => ({ ...r, elapsedSeconds: r.elapsedSeconds + 1 })));
-    }, 1_000);
+    const tick = setInterval(() => setClockTick((t) => t + 1), 1_000);
     return () => clearInterval(tick);
   }, []);
 
@@ -331,6 +349,7 @@ export default function LiveRacesScreen() {
         <FlatList
           data={filtered}
           keyExtractor={(item) => item.id}
+          extraData={clockTick}
           contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: safeBottom + 24 }}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
@@ -342,6 +361,7 @@ export default function LiveRacesScreen() {
             <RaceCard
               race={item}
               colors={colors}
+              clockTick={clockTick}
               onWatch={() => router.push({ pathname: "/race/live-detail", params: { id: item.id } })}
             />
           )}

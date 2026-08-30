@@ -37,6 +37,7 @@ import { COUNTRIES } from "@/constants/countries";
 import { DateOfBirthInput } from "@/components/DateOfBirthInput";
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { rf, rs, MAX_CONTENT_WIDTH } from "@/utils/responsive";
+import { toUserFacingError } from "@/utils/userFacingError";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function validatePassword(pw: string) {
@@ -563,7 +564,7 @@ export default function SignupScreen() {
           setSubmitError("Your session expired. Please start the signup again.");
           setStep(0);
         } else {
-          setSubmitError(err.message);
+          setSubmitError(toUserFacingError(err, "signup"));
         }
       } else {
         const e = err as { message?: string; status?: number };

@@ -6,6 +6,7 @@ import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { RaceJoinBadge, JoinProgressOverlay } from "@/components/RaceJoinBadge";
 import { useTheme } from "@/context/ThemeContext";
 import themeColors from "@/constants/colors";
+import { FIXED_PILL_TEXT_PROPS } from "@/constants/accessibility";
 import { rf } from "@/utils/responsive";
 
 export const ENABLE_CHALLENGE_CATEGORY_CARDS = true;
@@ -145,7 +146,7 @@ export function ChallengeCategoryCard({
             style={cStyles.watchBtn}
           >
             <Feather name="eye" size={14} color="#FF5C5C" />
-            <Text style={cStyles.watchBtnText}>Watch Live</Text>
+            <Text style={cStyles.watchBtnText} {...FIXED_PILL_TEXT_PROPS}>Watch Live</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={onHostNew}
@@ -153,7 +154,7 @@ export function ChallengeCategoryCard({
             style={[cStyles.hostBtn, hostBtnLightStyle]}
           >
             <Feather name="plus-circle" size={14} color={hostAccent} />
-            <Text style={[cStyles.hostBtnText, { color: hostAccent }]}>Host New</Text>
+            <Text style={[cStyles.hostBtnText, { color: hostAccent }]} {...FIXED_PILL_TEXT_PROPS}>Host New</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -194,7 +195,7 @@ function LiveBadge({ count }: { count: number }) {
       style={lbStyles.pill}
     >
       <Animated.View style={[lbStyles.dot, { opacity: pulse }]} />
-      <Text style={lbStyles.text}>{count > 0 ? `${count} LIVE` : "LIVE"}</Text>
+      <Text style={lbStyles.text} {...FIXED_PILL_TEXT_PROPS}>{count > 0 ? `${count} LIVE` : "LIVE"}</Text>
     </LinearGradient>
   );
 }

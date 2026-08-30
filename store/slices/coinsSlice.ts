@@ -1,8 +1,7 @@
 import { createSlice, createAsyncThunk, type PayloadAction } from "@reduxjs/toolkit";
-import { getValidSession } from "@/services/authService";
+import { authFetch } from "@/utils/authFetch";
 import { getLocalDateStr } from "@/utils/timezone";
-
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
+import { runCoalesced } from "@/utils/apiRequestCoordinator";
 
 export interface CoinBalance {
   currentBalance: number;
@@ -71,65 +70,59 @@ const initialState: CoinsState = {
 };
 
 export const fetchCoinBalance = createAsyncThunk("coins/fetchBalance", async () => {
-  const session = await getValidSession();
-  if (!session) throw new Error("Not authenticated");
-  const res = await fetch(`${API_BASE}/api/coins/balance?localDate=${getLocalDateStr()}`, {
-    headers: { Authorization: `Bearer ${session}` },
+  return runCoalesced("coins:balance", async () => {
+    const res = await authFetch(`/api/coins/balance?localDate=${getLocalDateStr()}`);
+    if (!res.ok) throw new Error("Failed to fetch coin balance");
+    return (await res.json()) as CoinBalance;
   });
-  if (!res.ok) throw new Error("Failed to fetch coin balance");
-  return (await res.json()) as CoinBalance;
 });
 
 export const fetchCoinTransactions = createAsyncThunk("coins/fetchTransactions", async () => {
-  const session = await getValidSession();
-  if (!session) throw new Error("Not authenticated");
-  const res = await fetch(`${API_BASE}/api/coins/transactions`, {
-    headers: { Authorization: `Bearer ${session}` },
+  return runCoalesced("coins:transactions", async () => {
+    const res = await authFetch("/api/coins/transactions");
+    if (!res.ok) throw new Error("Failed to fetch transactions");
+    const json = await res.json();
+    return json.transactions as CoinTransaction[];
   });
-  if (!res.ok) throw new Error("Failed to fetch transactions");
-  const json = await res.json();
-  return json.transactions as CoinTransaction[];
 });
 
 export const fetchPurchaseSummary = createAsyncThunk("coins/fetchPurchaseSummary", async () => {
-  const session = await getValidSession();
-  if (!session) throw new Error("Not authenticated");
-  const res = await fetch(`${API_BASE}/api/purchases/summary?localDate=${getLocalDateStr()}`, {
-    headers: { Authorization: `Bearer ${session}` },
+  return runCoalesced("coins:purchase-summary", async () => {
+    const res = await authFetch(`/api/purchases/summary?localDate=${getLocalDateStr()}`);
+    if (!res.ok) throw new Error("Failed to fetch purchase summary");
+    const json = await res.json() as {
+      success: boolean;
+      coin_balance: { current: number; lifetime_earned: number; lifetime_spent: number; earned_today: number };
+      iap: { total_purchases: number; total_coins_purchased: number; has_mic_pass: boolean };
+      purchase_history: Array<{
+        id: string; product_id: string; display_name: string; platform: string;
+        status: string; coin_amount: number | null; is_mic_pass: boolean; created_at: string;
+      }>;
+    };
+    return {
+      coinBalance: {
+        current: json.coin_balance.current,
+        lifetimeEarned: json.coin_balance.lifetime_earned,
+        lifetimeSpent: json.coin_balance.lifetime_spent,
+        earnedToday: json.coin_balance.earned_today,
+      },
+      iap: {
+        totalPurchases: json.iap.total_purchases,
+        totalCoinsPurchased: json.iap.total_coins_purchased,
+        hasMicPass: json.iap.has_mic_pass,
+      },
+      purchaseHistory: json.purchase_history.map((r) => ({
+        id: r.id,
+        productId: r.product_id,
+        displayName: r.display_name,
+        platform: r.platform,
+        status: r.status,
+        coinAmount: r.coin_amount,
+        isMicPass: r.is_mic_pass,
+        createdAt: r.created_at,
+      })),
+    } satisfies PurchaseSummary;
   });
-  if (!res.ok) throw new Error("Failed to fetch purchase summary");
-  const json = await res.json() as {
-    success: boolean;
-    coin_balance: { current: number; lifetime_earned: number; lifetime_spent: number; earned_today: number };
-    iap: { total_purchases: number; total_coins_purchased: number; has_mic_pass: boolean };
-    purchase_history: Array<{
-      id: string; product_id: string; display_name: string; platform: string;
-      status: string; coin_amount: number | null; is_mic_pass: boolean; created_at: string;
-    }>;
-  };
-  return {
-    coinBalance: {
-      current: json.coin_balance.current,
-      lifetimeEarned: json.coin_balance.lifetime_earned,
-      lifetimeSpent: json.coin_balance.lifetime_spent,
-      earnedToday: json.coin_balance.earned_today,
-    },
-    iap: {
-      totalPurchases: json.iap.total_purchases,
-      totalCoinsPurchased: json.iap.total_coins_purchased,
-      hasMicPass: json.iap.has_mic_pass,
-    },
-    purchaseHistory: json.purchase_history.map((r) => ({
-      id: r.id,
-      productId: r.product_id,
-      displayName: r.display_name,
-      platform: r.platform,
-      status: r.status,
-      coinAmount: r.coin_amount,
-      isMicPass: r.is_mic_pass,
-      createdAt: r.created_at,
-    })),
-  } satisfies PurchaseSummary;
 });
 
 const coinsSlice = createSlice({

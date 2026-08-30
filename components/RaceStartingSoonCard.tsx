@@ -791,9 +791,7 @@ export function RaceStartingSoonCard({
           )}
         </View>
         {subtitle ? (
-          <Text style={styles.subtitle} numberOfLines={2}>
-            {subtitle}
-          </Text>
+          <Text style={styles.subtitle}>{subtitle}</Text>
         ) : null}
 
         <View style={styles.midRow}>
@@ -1008,36 +1006,41 @@ const styles = StyleSheet.create({
   },
   titleRow: {
     flexDirection: "row",
-    alignItems: "center",
+    flexWrap: "wrap",
+    alignItems: "flex-start",
     justifyContent: "space-between",
     gap: rs(8),
     minHeight: rf(22),
   },
   title: {
     flexShrink: 1,
+    flexGrow: 1,
+    minWidth: "42%",
     color: "#FFF",
     fontSize: rf(20),
     fontWeight: "900",
     letterSpacing: 0.2,
+    lineHeight: rf(24),
   },
   raceWindowTimes: {
-    flexShrink: 0,
+    flexShrink: 1,
     alignItems: "flex-end",
     gap: rs(2),
-    maxWidth: "58%",
+    maxWidth: "100%",
+    minWidth: rs(96),
   },
   raceWindowText: {
     color: "rgba(209,250,229,0.88)",
-    fontSize: rf(9),
+    fontSize: rf(10),
+    lineHeight: rf(13),
     fontWeight: "700",
     letterSpacing: 0.1,
     textAlign: "right",
   },
   subtitle: {
-    minHeight: rf(28),
     color: "rgba(237,233,254,0.82)",
     fontSize: rf(12),
-    lineHeight: rf(15),
+    lineHeight: rf(16),
     marginTop: rs(1),
     marginBottom: rs(6),
   },
@@ -1197,13 +1200,15 @@ const styles = StyleSheet.create({
     transform: [{ skewX: "-18deg" }],
   },
   infoRow: {
-    height: rs(30),
+    minHeight: rs(30),
     flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "stretch",
     gap: rs(6),
     marginBottom: rs(6),
   },
   infoRowEmphasized: {
-    height: rs(36),
+    minHeight: rs(36),
   },
   infoPill: {
     flex: 1,
@@ -1214,7 +1219,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: rs(10),
     paddingHorizontal: rs(7),
-    paddingVertical: rs(4),
+    paddingVertical: rs(5),
+    minHeight: rs(30),
   },
   entryFeePill: {
     flex: 1.32,
@@ -1270,6 +1276,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     color: "#EDE9FE",
     fontSize: rf(9.5),
+    lineHeight: rf(12),
     fontWeight: "700",
   },
   progressBlock: { marginBottom: rs(6) },
@@ -1304,16 +1311,20 @@ const styles = StyleSheet.create({
   },
   cta: {
     minHeight: rs(48),
-    height: rs(48),
     borderRadius: rs(14),
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: rs(6),
+    paddingVertical: rs(10),
+    paddingHorizontal: rs(12),
   },
   ctaText: {
     color: "#FFF",
     fontSize: rf(15),
+    lineHeight: rf(19),
     fontWeight: "800",
+    textAlign: "center",
+    flexShrink: 1,
   },
 });

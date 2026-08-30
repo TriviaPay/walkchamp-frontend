@@ -14,13 +14,13 @@ import {
   Animated,
   AppState,
   DeviceEventEmitter,
-  Dimensions,
   FlatList,
   InteractionManager,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
   type StyleProp,
   type ViewStyle,
@@ -73,9 +73,14 @@ const NEON_GREEN   = "#22C55E";
 const CARD_BG      = "#0D0D1E";
 const MUTED        = "#6B7A94";
 
-// Horizontal carousel card width — leaves ~15% peek of the next card so users
-// can tell the row scrolls sideways. Capped so it never gets absurd on tablets.
-const CAROUSEL_CARD_W = Math.min(340, Math.round(Dimensions.get("window").width * 0.85));
+// Horizontal carousel card width — fits inside the list's horizontal padding with a
+// sliver of the next card visible. Never use raw screen % (ignores list inset).
+function carouselCardWidth(screenWidth: number): number {
+  const listPad = rs(14) * 2;
+  const cardGap = rs(12);
+  const peek = rs(10);
+  return Math.min(340, Math.max(260, Math.floor(screenWidth - listPad - cardGap - peek)));
+}
 
 const FREE_TIER_COINS = FREE_TIER_COIN_REWARDS;
 function calcFreeCoins(
@@ -1128,6 +1133,9 @@ function RaceCardBase({
           shadowOpacity: 0.35,
           shadowRadius: 10,
           elevation: 6,
+          width: "100%",
+          maxWidth: "100%",
+          alignSelf: "stretch",
         },
         style,
       ]}
@@ -1586,7 +1594,6 @@ function RaceCardSkeleton({
 }
 
 // ── Date section: date header + "View All" + horizontal card carousel ──────────
-const CAROUSEL_ITEM_W = CAROUSEL_CARD_W + rs(12);
 
 const DateGroupRow = React.memo(function DateGroupRow({
   group,
@@ -1611,6 +1618,9 @@ const DateGroupRow = React.memo(function DateGroupRow({
   onViewAll: (origin: RaceOrigin, group: DateGroup<LiveRace>) => void;
   showTrailingLoader?: boolean;
 }) {
+  const { width: screenWidth } = useWindowDimensions();
+  const carouselCardW = carouselCardWidth(screenWidth);
+  const carouselItemW = carouselCardW + rs(12);
   const handleViewAll = useCallback(() => onViewAll(origin, group), [onViewAll, origin, group]);
 
   return (
@@ -1637,12 +1647,12 @@ const DateGroupRow = React.memo(function DateGroupRow({
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={st.carousel}
         decelerationRate="fast"
-        snapToInterval={CAROUSEL_ITEM_W}
+        snapToInterval={carouselItemW}
         snapToAlignment="start"
         removeClippedSubviews
       >
         {group.races.map((item) => (
-          <View key={item.id} style={{ width: CAROUSEL_CARD_W, marginRight: rs(12) }}>
+          <View key={item.id} style={{ width: carouselCardW, marginRight: rs(12) }}>
             <RaceCard
               race={item}
               colors={colors}
@@ -1657,7 +1667,7 @@ const DateGroupRow = React.memo(function DateGroupRow({
           </View>
         ))}
         {showTrailingLoader && (
-          <View style={{ width: CAROUSEL_CARD_W, marginRight: rs(12) }}>
+          <View style={{ width: carouselCardW, marginRight: rs(12) }}>
             <RaceCardSkeleton colors={colors} style={st.carouselCard} />
           </View>
         )}

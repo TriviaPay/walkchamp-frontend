@@ -28,6 +28,8 @@ export interface LiveRace {
   playerCount: number;
   maxPlayers: number;
   targetSteps: number;
+  /** ISO start time — used to derive elapsed without remapping the list every second. */
+  startedAt?: string | null;
   elapsedSeconds: number;
   spectatorCount: number;
   commentCount: number;
