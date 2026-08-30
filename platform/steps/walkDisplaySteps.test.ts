@@ -6,7 +6,9 @@
  */
 import assert from "node:assert/strict";
 import {
+  advanceVerifiedStepsHold,
   resolveWalkNotificationSteps,
+  resolveVerifiedStepsForWalkDisplay,
   isInflatedProvisionalVsVerified,
   isStaleSensorAbsolute,
   isUnconfirmedSensorLeftover,
@@ -320,5 +322,14 @@ assert.equal(
   }),
   420,
 );
+
+assert.equal(advanceVerifiedStepsHold(3563, 1), 3563, "HC refresh crumb must not shrink hold");
+assert.equal(
+  resolveVerifiedStepsForWalkDisplay(1, 3563),
+  3563,
+  "Walk display keeps confirmed total through HC blip",
+);
+assert.equal(advanceVerifiedStepsHold(3563, 3600), 3600, "HC increase still advances hold");
+assert.equal(resolveVerifiedStepsForWalkDisplay(125, 5000), 125, "real HC correction still applies");
 
 console.log("walkDisplaySteps.test.ts: ok");

@@ -2091,6 +2091,7 @@ function WalkScreenContent() {
     [user],
   );
   const dbWalk = useTodayWalkSteps(user?.id);
+  const walkStepsHoldRef = useRef<{ key: string; steps: number }>({ key: "", steps: 0 });
   const tabBarHeight = useTabBarHeight();
   const modalScrollPad = { paddingBottom: safeBottom + rs(40) };
   const { joinRace, setActiveRace, setRaceTargetSteps, racePhase, raceId: activeRaceId } = useRace();
@@ -2383,7 +2384,6 @@ function WalkScreenContent() {
   // Shell + challenges unlock on raceReady; step hero still uses stepsHydrated below.
   const userReady = raceReady;
   const stepsReady = raceReady && stepsHydrated;
-  const walkStepsHoldRef = useRef<{ key: string; steps: number }>({ key: "", steps: 0 });
   const isAutoTrackingOn =
     stepPermissionStatus === "granted" || usingRealTracking;
   const stepsInitializing =
