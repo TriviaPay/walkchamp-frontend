@@ -17,6 +17,10 @@ export type SponsoredEventDto = {
   joinWindowOpen: boolean;
   isFull: boolean;
   canRegister: boolean;
+  protectedRace?: boolean;
+  protectionPolicyVersion?: string | null;
+  protectedDurationMinutes?: number | null;
+  adjudicationStatus?: string | null;
   registeredUsers: Array<{
     userId: string;
     username: string;

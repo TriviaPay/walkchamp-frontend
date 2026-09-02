@@ -1,6 +1,6 @@
 /**
  * Normalize Unlimited Challenge API rows into Available Rooms shapes.
- * Host create uses /api/unlimited-challenges/host; browse may use a dedicated
+ * Host create uses /api/streak-challenges/host; browse may use a dedicated
  * list endpoint and/or rooms/available with challengeType=unlimited_goal.
  */
 
@@ -10,6 +10,13 @@ import {
   displayChallengeTitle,
   streakChallengeTitle,
 } from "@/features/unlimited/mappers/unlimitedLiveUiCopy";
+import { readUnlimitedFinalFlowFields } from "@/features/unlimited/mappers/unlimitedFinalFlow";
+import type {
+  FinalResultStatus,
+  RaceFinalStatus,
+  UnlimitedFinalFlow,
+  UnlimitedFinalFlowStatus,
+} from "@/features/unlimited/mappers/unlimitedFinalFlow";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -225,6 +232,19 @@ export type UnlimitedUpcomingRoom = {
   qualified_participant_count?: number | null;
   /** Top-3 roster from list APIs (`players` / `participants`). Empty when the server sent none. */
   players?: UnlimitedCardPlayer[];
+  /** Per-viewer schedule from my-active / detail `viewer` block (authoritative for card badges). */
+  viewerStatus?: string | null;
+  verificationPending?: boolean | null;
+  viewerEndAt?: string | null;
+  viewerTimezone?: string | null;
+  viewerResultsReady?: boolean | null;
+  resultsStatus?: string | null;
+  completedDays?: number | null;
+  viewerStartAt?: string | null;
+  finalResultStatus?: FinalResultStatus | null;
+  raceFinalStatus?: RaceFinalStatus | null;
+  finalFlowStatus?: UnlimitedFinalFlowStatus | null;
+  finalFlow?: UnlimitedFinalFlow | null;
 };
 
 export type UnlimitedCardPlayer = {
@@ -493,6 +513,15 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
   const status =
     asString(pickRaw(obj, "status", "room_status", "roomStatus")) ?? "scheduled";
 
+  const viewerObj = asRecord(pickRaw(obj, "viewer")) ?? {};
+  const viewerField = (...keys: string[]) =>
+    asString(pickRaw(viewerObj, ...keys)) ?? asString(pickRaw(obj, ...keys));
+  const viewerBool = (...keys: string[]) =>
+    asBool(pickRaw(viewerObj, ...keys)) ?? asBool(pickRaw(obj, ...keys));
+  const viewerNum = (...keys: string[]) =>
+    asNumber(pickRaw(viewerObj, ...keys)) ?? asNumber(pickRaw(obj, ...keys));
+  const finalFlowFields = readUnlimitedFinalFlowFields({ viewer: viewerObj, ...obj });
+
   return {
     room_id: id,
     status,
@@ -538,6 +567,18 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
       pickRaw(obj, "qualifiedParticipantCount", "qualified_participant_count"),
     ),
     players: readUnlimitedCardPlayers(obj),
+    viewerStatus: viewerField("viewerStatus", "viewer_status"),
+    verificationPending: viewerBool("verificationPending", "verification_pending"),
+    viewerEndAt: viewerField("viewerEndAt", "viewer_end_at"),
+    viewerTimezone: viewerField("viewerTimezone", "viewer_timezone"),
+    viewerStartAt: viewerField("viewerStartAt", "viewer_start_at"),
+    viewerResultsReady: viewerBool("viewerResultsReady", "viewer_results_ready"),
+    resultsStatus: viewerField("viewerResultsStatus", "viewer_results_status", "resultsStatus", "results_status"),
+    completedDays: viewerNum("completedDays", "completed_days", "passedDays", "passed_days"),
+    finalResultStatus: finalFlowFields.finalResultStatus,
+    raceFinalStatus: finalFlowFields.raceFinalStatus,
+    finalFlowStatus: finalFlowFields.finalFlowStatus,
+    finalFlow: finalFlowFields.finalFlow,
   };
 }
 
@@ -590,6 +631,16 @@ export function mergeUpcomingRoomsById<T extends { room_id: string; current_user
       const merged = { ...prev, ...room } as T & Record<string, unknown>;
       // Later rows must not wipe API start/end/prize/count with null hosted-cache leftovers.
       for (const key of [
+        "viewerStatus",
+        "verificationPending",
+        "viewerEndAt",
+        "viewerTimezone",
+        "viewerStartAt",
+        "viewerResultsReady",
+        "resultsStatus",
+        "completedDays",
+        "finalFlowStatus",
+        "finalFlow",
         "challenge_end_at",
         "scheduled_start_at",
         "challenge_timezone",

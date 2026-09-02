@@ -34,15 +34,43 @@ assert.equal(
 );
 assert.equal(
   isUnlimitedPrizeLost({ eligibility: "not_eligible" }),
+  false,
+);
+assert.equal(
+  isUnlimitedPrizeLost({
+    eligibility: "not_eligible",
+    resultsStatus: "results_ready",
+  }),
   true,
 );
 assert.equal(
   isUnlimitedPrizeLost({ qualificationStatus: "disqualified" }),
+  false,
+);
+assert.equal(
+  isUnlimitedPrizeLost({
+    qualificationStatus: "disqualified",
+    resultsStatus: "results_ready",
+  }),
   true,
 );
 assert.equal(
   isUnlimitedPrizeLost({ prizePoolEligibilityStatus: "not_eligible" }),
+  false,
+);
+assert.equal(
+  isUnlimitedPrizeLost({
+    prizePoolEligibilityStatus: "not_eligible",
+    resultsStatus: "results_ready",
+  }),
   true,
+);
+assert.equal(UNLIMITED_COPY.liveStandings, "Live standings");
+assert.equal(UNLIMITED_COPY.finalLeaderboard, "Final Leaderboard");
+assert.equal(UNLIMITED_COPY.finalDayCompleted, "Final Day: Completed");
+assert.equal(
+  UNLIMITED_COPY.pendingRaceSettlement,
+  "Verification: Pending final race settlement",
 );
 
 const rows: UnlimitedDayRow[] = [

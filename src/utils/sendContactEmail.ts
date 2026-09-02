@@ -1,34 +1,35 @@
-const ADMIN_EMAIL = 'admin@miragaming.com';
+import { authFetch } from "@/utils/authFetch";
+import { toUserFacingErrorFromResponse } from "@/utils/userFacingError";
 
 export type ContactFormData = {
   name: string;
   email: string;
   message: string;
+  subject?: string;
 };
 
+/**
+ * Submit support/contact via WalkChamp backend (rate-limited, validated).
+ * Replaces direct FormSubmit client calls.
+ */
 export async function sendContactEmail(data: ContactFormData): Promise<void> {
-  const response = await fetch(`https://formsubmit.co/ajax/${ADMIN_EMAIL}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
+  const res = await authFetch("/api/support/contact", {
+    method: "POST",
+    retryOnUnauthorized: true,
     body: JSON.stringify({
       name: data.name.trim(),
       email: data.email.trim(),
       message: data.message.trim(),
-      _subject: `Mira Gaming — message from ${data.name.trim()}`,
-      _template: 'table',
-      _captcha: 'false',
+      subject: data.subject?.trim(),
     }),
   });
 
-  if (!response.ok) {
-    throw new Error('Email request failed');
+  if (!res.ok) {
+    throw new Error(await toUserFacingErrorFromResponse(res, "generic"));
   }
 
-  const result = (await response.json()) as { success?: string | boolean };
-  if (result.success !== 'true' && result.success !== true) {
-    throw new Error('Email was not accepted');
+  const result = (await res.json()) as { success?: boolean };
+  if (!result.success) {
+    throw new Error("We couldn't send your message. Please try again.");
   }
 }

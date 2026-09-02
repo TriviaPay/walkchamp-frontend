@@ -64,4 +64,13 @@ config.watcher = {
   },
 };
 
+// Windows: EMFILE ("too many open files") during Metro cache reads — cap workers
+// and keep cache under project .metro-cache (easier to clear than Temp).
+config.maxWorkers = 2;
+config.cacheStores = [
+  new (require("metro-cache").FileStore)({
+    root: path.join(__dirname, ".metro-cache"),
+  }),
+];
+
 module.exports = config;

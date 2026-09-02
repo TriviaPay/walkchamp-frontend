@@ -4,7 +4,7 @@
  */
 
 import type { UnlimitedDayRow } from "./unlimitedDayProgress";
-import type { PrizePoolEligibilityStatus } from "./unlimitedResults";
+import { canPublishFinalResult, type PrizePoolEligibilityStatus } from "./unlimitedResults";
 import type { UnlimitedViewerSchedule } from "./unlimitedViewerSchedule";
 import { displayCashChallengeCopy } from "@/utils/challengeDisplayNames";
 
@@ -26,6 +26,12 @@ export const UNLIMITED_COPY = {
   /** Live Board chip for a disqualified Unlimited participant. */
   lostChip: "Streak Broken",
   todayGoal: "Today Goal",
+  finalDayCompleted: "Final Day: Completed",
+  pendingRaceSettlement: "Verification: Pending final race settlement",
+  healthDataReceived: "Final health data received",
+  verificationReview: "Verification review in progress",
+  liveStandings: "Live standings",
+  finalLeaderboard: "Final Leaderboard",
 } as const;
 
 /** Live / waiting titles: `Streak challenge · 10,000 steps/day`. */
@@ -78,7 +84,11 @@ export function isUnlimitedPrizeLost(params: {
   prizePoolEligibilityStatus?: string | null;
   qualificationStatus?: string | null;
   viewerStatus?: string | null;
+  resultsStatus?: string | null;
 }): boolean {
+  if (!canPublishFinalResult(params.resultsStatus)) {
+    return false;
+  }
   if (params.eligibility === "not_eligible") return true;
   const pool = (params.prizePoolEligibilityStatus ?? "").trim().toLowerCase();
   if (pool === "not_eligible") return true;

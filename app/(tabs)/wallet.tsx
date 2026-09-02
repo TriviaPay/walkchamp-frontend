@@ -21,6 +21,7 @@ import {
   type AppStateStatus,
 } from "react-native";
 import * as WebBrowser from "expo-web-browser";
+import { toUserFacingError } from "@/utils/userFacingError";
 import { AppAlert } from "@/components/AppAlert";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
@@ -41,12 +42,13 @@ import { rf, rs } from "@/utils/responsive";
 import type { WalletTransaction } from "@/utils/mockData";
 import { TouchableOpacity } from "@/components/HapticTouchableOpacity";
 import { authFetch } from "@/utils/authFetch";
-import { PAYMENT_DEEP_LINK_SCHEME, DEPOSIT_POLL_FIRST_MS, DEPOSIT_POLL_INTERVAL_MS } from "@/config/paymentsConfig";
+import { PAYMENT_DEEP_LINK_SCHEME, depositPollDelayMs, DEPOSIT_POLL_RATE_LIMIT_MS } from "@/config/paymentsConfig";
 import {
   clearPendingDeposit,
   consumePaymentResult,
   depositStatusToUiResult,
   fetchDepositStatus,
+  fetchDepositStatusDetailed,
   isPollCompleteDepositStatus,
   isTerminalDepositStatus,
   resolveDepositUiFromTransaction,
@@ -286,9 +288,7 @@ function WalletScreenContent() {
   const paymentResultDismissedRef = useRef(false);
 
   const cashEligibility = cashEligibilityForUser(user);
-  const earnCards = cashEligibility.allowed
-    ? EARN_CARDS
-    : EARN_CARDS.filter((card) => !card.requiresCash);
+  const earnCards = EARN_CARDS;
 
   // Deep-link / alert CTA: open deposit sheet when navigated with openDeposit=1
   useEffect(() => {
@@ -349,9 +349,7 @@ function WalletScreenContent() {
         "Your request has been submitted for admin review. Processing takes 1–3 business days.\n\nStatus: Pending",
       );
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : "Request failed. Please try again.";
-      AppAlert.alert("Withdrawal Failed", msg);
+      AppAlert.alert("Withdrawal Failed", toUserFacingError(err, "wallet"));
     } finally {
       setWithdrawing(false);
     }
@@ -558,9 +556,10 @@ function WalletScreenContent() {
       // show the wallet result immediately — do not wait for the browser session to end.
       let polledStatus: DepositPollStatus | null = null;
       let pollStopped = false;
-      let pollInterval: ReturnType<typeof setInterval> | null = null;
+      let pollTimeout: ReturnType<typeof setTimeout> | null = null;
       let flowHandled = false;
       let pollInFlight = false;
+      let pollAttempt = 0;
 
       const completeDepositUi = async (source: string, fallbackUi?: PaymentResultStatus | null) => {
         if (flowHandled) return;
@@ -575,7 +574,7 @@ function WalletScreenContent() {
 
         flowHandled = true;
         pollStopped = true;
-        if (pollInterval) clearInterval(pollInterval);
+        if (pollTimeout) clearTimeout(pollTimeout);
 
         setShowDeposit(false);
         resetDeposit();
@@ -585,25 +584,42 @@ function WalletScreenContent() {
         logger.debug("WalletDeposit", `complete: ${ui} (${source})`);
       };
 
+      const schedulePoll = (delayMs: number) => {
+        if (pollStopped || flowHandled) return;
+        if (pollTimeout) clearTimeout(pollTimeout);
+        pollTimeout = setTimeout(() => {
+          void runPoll();
+        }, delayMs);
+      };
+
       const runPoll = async () => {
         if (pollStopped || polledStatus || flowHandled || pollInFlight) return;
         pollInFlight = true;
         try {
-          const s = await fetchDepositStatus(transactionId);
+          const result = await fetchDepositStatusDetailed(transactionId);
+          const s = result.status;
           if (isPollCompleteDepositStatus(s)) {
             polledStatus = s;
             await completeDepositUi("poll", depositStatusToUiResult(s));
+            return;
           }
+          if (s === "rate_limited" || result.httpStatus === 429) {
+            schedulePoll(result.retryAfterMs ?? DEPOSIT_POLL_RATE_LIMIT_MS);
+            return;
+          }
+          pollAttempt += 1;
+          schedulePoll(depositPollDelayMs(pollAttempt));
         } catch {
-          // ignore transient network errors, keep polling
+          // Transient network — keep sparse backoff (do not burn rate-limit budget).
+          pollAttempt += 1;
+          schedulePoll(depositPollDelayMs(pollAttempt));
         } finally {
           pollInFlight = false;
         }
       };
 
-      pollInterval = setInterval(() => void runPoll(), DEPOSIT_POLL_INTERVAL_MS);
-      setTimeout(() => void runPoll(), DEPOSIT_POLL_FIRST_MS);
-      void runPoll();
+      // Sparse backoff polls (create-intent already used one rate-limit slot).
+      schedulePoll(depositPollDelayMs(0));
 
       // Android: openBrowserAsync + poll (avoids stuck "Return to WalkChamp" done page).
       // iOS: openAuthSessionAsync intercepts the custom-scheme redirect.
@@ -615,7 +631,7 @@ function WalletScreenContent() {
               presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
             });
 
-      clearInterval(pollInterval!);
+      if (pollTimeout) clearTimeout(pollTimeout);
       pollStopped = true;
 
       if (flowHandled) {
@@ -651,7 +667,7 @@ function WalletScreenContent() {
         await completeDepositUi("browser-dismiss", "cancelled");
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Payment failed. Please try again.";
+      const msg = toUserFacingError(err, "payment");
       setDepositStatus("failed");
       setDepositError(msg);
       processingRef.current = false;
@@ -958,8 +974,7 @@ function WalletScreenContent() {
           </Text>
         </View>
 
-        {/* Transactions — nested ScrollView (fixed maxHeight) keeps the constrained
-            tx card scroll UX without nesting a VirtualizedList in the page ScrollView. */}
+        {/* Transactions — scrollable card; plain map avoids nested VirtualizedList warning */}
         <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
           Transaction History
         </Text>

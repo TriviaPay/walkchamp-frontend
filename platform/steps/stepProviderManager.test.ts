@@ -7,8 +7,8 @@ import assert from "node:assert/strict";
 import { LIVE_RACE_SYNC_CONFIG } from "@/config/stepSyncConfig";
 
 function run() {
-  assert.equal(LIVE_RACE_SYNC_CONFIG.backendSyncMs, 3_000);
-  assert.equal(LIVE_RACE_SYNC_CONFIG.minStepDeltaToSync, 1);
+  assert.equal(LIVE_RACE_SYNC_CONFIG.backendSyncMs, 12_000);
+  assert.equal(LIVE_RACE_SYNC_CONFIG.minStepDeltaToSync, 3);
   assert.equal(LIVE_RACE_SYNC_CONFIG.flushOnAppBackground, true);
   assert.equal(LIVE_RACE_SYNC_CONFIG.flushOnGoalComplete, true);
 

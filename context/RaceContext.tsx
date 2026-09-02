@@ -14,7 +14,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, AppState } from "react-native";
 import { useAuth } from "@/context/AuthContext";
-import { getValidSession } from "@/services/authService";
+import { authFetch } from "@/utils/authFetch";
+import { subscribeToChannel, unsubscribeFromChannel, onPusherReconnected } from "@/services/realtimeService";
 import { stepTracker } from "@/services/StepTrackingService";
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import { stepPollingService, type RacePollingConfig } from "@/services/StepPollingService";
@@ -59,21 +60,12 @@ import {
   type RaceVerificationResult,
 } from "@/services/steps/raceHealthVerification";
 import { STORAGE_KEYS, storageGet, storageSet, storageRemove } from "@/utils/storage";
-import { timeoutSignal, API_TIMEOUT_MS } from "@/utils/authFetch";
-import { subscribeToChannel, unsubscribeFromChannel, onPusherReconnected } from "@/services/realtimeService";
-
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
 
 // ── API helpers ────────────────────────────────────────────────────────────────
 
 async function fetchRaceStatus(raceId: string): Promise<{ status: string; startedAt?: string; completedAt?: string } | null> {
   try {
-    const session = await getValidSession();
-    if (!session) return null;
-    const res = await fetch(`${API_BASE}/api/races/${raceId}`, {
-      signal: timeoutSignal(API_TIMEOUT_MS),
-      headers: { Authorization: `Bearer ${session}` },
-    });
+    const res = await authFetch(`/api/races/${raceId}`);
     if (!res.ok) return null;
     const data = await res.json();
     return data.race ?? null;
@@ -450,6 +442,28 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     subscriptionGenRef.current++;
     racePollingConfigRef.current = null;
     raceStepFloorRef.current = 0;
+    try {
+      const {
+        batteryDiagModeTransition,
+        logRaceCleanupVerification,
+      } = require("@/config/batteryTrackingModes") as typeof import("@/config/batteryTrackingModes");
+      batteryDiagModeTransition("finalizing", reason);
+      logRaceCleanupVerification({
+        raceId: raceIdRef.current,
+        foregroundService: "UNKNOWN",
+        raceSensorListener: "SHARED_WITH_AUTO_TRACKING",
+        wakeLock: "UNKNOWN",
+        racePusher: "UNKNOWN",
+        raceApiTimer: "STOPPED",
+        unlimitedTimer: "STOPPED",
+        notificationTimer: "STOPPED",
+        hcFastRetry: "STOPPED",
+        remainingMode: "auto_tracking_idle",
+      });
+      batteryDiagModeTransition("auto_tracking_idle", "CLEANUP_COMPLETE");
+    } catch {
+      /* optional diagnostics */
+    }
   }, []);
 
   const pauseRaceStepTracking = useCallback(() => {
@@ -848,12 +862,7 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
     if (currentRaceId) {
       setTimeout(async () => {
         try {
-          const session = await getValidSession();
-          if (!session) return;
-          const res = await fetch(`${API_BASE}/api/races/${currentRaceId}`, {
-            signal: timeoutSignal(API_TIMEOUT_MS),
-            headers: { Authorization: `Bearer ${session}` },
-          });
+          const res = await authFetch(`/api/races/${currentRaceId}`);
           if (!res.ok) return;
           const data = await res.json() as {
             race: { tieRulesApplied: boolean };
@@ -1985,11 +1994,12 @@ export function RaceProvider({ children }: { children: React.ReactNode }) {
         if (!raceData) return;
         const status = String(raceData.status ?? "").toLowerCase();
         if (status === "completed" || status === "cancelled" || status === "settled") {
-          raceEndedRef.current = true;
+          stopRaceStepTracking("pusher_terminal");
+          clearAllIntervals();
         }
       });
     });
-  }, []);
+  }, [stopRaceStepTracking]);
 
   // Backend rank/steps → Android ongoing notification / iOS Live Activity
   useEffect(() => {

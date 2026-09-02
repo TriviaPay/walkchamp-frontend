@@ -13,6 +13,7 @@ import { logger } from "@/utils/logger";
 import {
   resultStatusDisplayLabel,
   verificationStatusToReconciliation,
+  parseRaceVerificationStatus,
   type RaceVerificationStatusApi,
 } from "@/services/raceVerificationStatusMap";
 
@@ -187,18 +188,7 @@ export async function postRaceVerify(
 }
 
 function parseVerificationStatus(raw: unknown): RaceVerificationStatusApi {
-  const s = typeof raw === "string" ? raw : "verification_pending";
-  switch (s) {
-    case "live":
-    case "verification_pending":
-    case "verification_delayed":
-    case "review_required":
-    case "verification_rejected":
-    case "finalized":
-      return s;
-    default:
-      return "verification_pending";
-  }
+  return parseRaceVerificationStatus(raw);
 }
 
 /**

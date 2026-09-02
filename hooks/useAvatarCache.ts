@@ -7,7 +7,16 @@ import {
 } from "@/services/mediaApi";
 import { screenCache } from "@/utils/screenCache";
 
-export const PROFILE_ME_CACHE_KEY = "screen:profile_me:v1";
+/** Legacy unscoped key — cleared on logout; do not write new data here. */
+export const PROFILE_ME_CACHE_KEY_LEGACY = "screen:profile_me:v1";
+
+/** Per-user profile `/me` cache so account switches never share disk entries. */
+export function profileMeCacheKey(userId: string | null | undefined): string {
+  return userId ? `screen:profile_me:v1:${userId}` : PROFILE_ME_CACHE_KEY_LEGACY;
+}
+
+/** @deprecated Prefer `profileMeCacheKey(userId)` — kept for tests/grep compatibility. */
+export const PROFILE_ME_CACHE_KEY = PROFILE_ME_CACHE_KEY_LEGACY;
 
 /**
  * Professional avatar cache pattern:
@@ -37,7 +46,7 @@ export function useAvatarCache() {
         avatarVersion: result.avatarVersion,
       });
       prefetchProfileAvatar(user.id, result.avatarVersion);
-      screenCache.invalidate(PROFILE_ME_CACHE_KEY);
+      screenCache.invalidate(profileMeCacheKey(user.id));
     },
     [user?.id, publishAvatarVersion, updateUser],
   );
@@ -51,7 +60,7 @@ export function useAvatarCache() {
         profileImageUrl: null,
         avatarVersion,
       });
-      screenCache.invalidate(PROFILE_ME_CACHE_KEY);
+      screenCache.invalidate(profileMeCacheKey(user.id));
     },
     [user?.id, setLocalPreview, publishAvatarVersion, updateUser],
   );

@@ -1,6 +1,7 @@
 /**
  * screenCache.set must not JSON.stringify on the caller's synchronous stack.
- * Run: npx tsx utils/screenCache.persistYield.test.ts
+ * clearAll must wipe memory immediately and remove tracked + legacy disk keys.
+ * Run: npx tsx core/cache/screenCache.persistYield.test.ts
  */
 
 (globalThis as { __DEV__?: boolean }).__DEV__ = false;
@@ -25,6 +26,15 @@ async function main() {
     "set() must update memory before yielding",
   );
   await setPromise;
+
+  screenCache.primeSync("screen_conversations", [{ id: "legacy" }]);
+  await screenCache.clearAll();
+  assert.equal(screenCache.getSync(key), null, "clearAll must clear memory");
+  assert.equal(
+    screenCache.getSync("screen_conversations"),
+    null,
+    "clearAll must clear legacy private keys from memory",
+  );
 
   screenCache.invalidate(key);
   console.log("screenCache.persistYield.test.ts: all assertions passed");

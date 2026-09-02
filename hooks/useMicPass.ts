@@ -77,8 +77,14 @@ export interface UseMicPassReturn {
  * listen-only connect every time. Per-raceId, cleared only on app restart.
  */
 const autoListenConnectedRaceIds = new Set<string>();
+/** Permanent — do not auto-retry voice on races that failed (e.g. unlimited id / RACE_NOT_FOUND). */
+const voiceAutoConnectFailedRaceIds = new Set<string>();
 
-export function useMicPass(raceId?: string): UseMicPassReturn {
+export function useMicPass(
+  raceId?: string,
+  options?: { enableAutoListen?: boolean },
+): UseMicPassReturn {
+  const enableAutoListen = options?.enableAutoListen !== false;
   const [hasMicPass, setHasMicPass]                = useState(false);
   const [loadingEntitlement, setLoadingEntitlement] = useState(true);
   const [micState, setMicState]                    = useState<MicState>("idle");
@@ -254,8 +260,10 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
    */
   const notifyRaceStarted = useCallback(() => {
     if (!raceId) return;
+    if (!enableAutoListen) return;
     if (!ENABLE_RACE_VOICE_CHAT || !ENABLE_VOICE_SDK) return;
     if (!voiceService.isVoiceSupportedRuntime()) return;
+    if (voiceAutoConnectFailedRaceIds.has(raceId)) return;
     if (autoConnectAttemptedRef.current) return;
     // Only auto-join as a listener once per race — re-entering the Live Race
     // screen (remount) must not silently reconnect the mic/voice session again.
@@ -313,17 +321,19 @@ export function useMicPass(raceId?: string): UseMicPassReturn {
         setAudioRoute("speaker");
         if (__DEV__) console.log("[Voice] auto-connected as listener");
       } else {
+        voiceAutoConnectFailedRaceIds.add(raceId);
         setMicState("idle");
         autoConnectAttemptedRef.current = false;
         if (__DEV__) console.log("[Voice] auto-connect as listener failed (non-fatal)");
       }
     }).catch(() => {
       if (!mountedRef.current) return;
+      voiceAutoConnectFailedRaceIds.add(raceId);
       setMicState("idle");
       autoConnectAttemptedRef.current = false;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [raceId]);
+  }, [raceId, enableAutoListen]);
 
   const handleMicTap = useCallback(() => {
     const current = micStateRef.current;

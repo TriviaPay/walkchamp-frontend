@@ -36,8 +36,6 @@ export const PROGRESS_ICON_SOURCES = {
   100: require("@/assets/icons/WalkChampProgress100.png"),
 } as const;
 
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "";
-
 const KEY_MILESTONE = "@dyn_icon_milestone";
 const KEY_USER_ID = "@dyn_icon_user_id";
 const KEY_DATE = "@dyn_icon_date";
@@ -605,18 +603,12 @@ export const dynamicIconService = {
         }
 
         const today = getLocalDateStr();
-        const { getValidSession } = await import("@/services/authService");
-        const session = await getValidSession();
-        if (!session) return;
-
-        const res = await fetch(`${API_BASE}/api/walk/today?localDate=${today}`, {
-          headers: { Authorization: `Bearer ${session}` },
-        }).catch(() => null);
-        if (!res?.ok) return;
-
-        const data = (await res.json()) as { today?: { steps: number; goal: number } };
-        const steps = data.today?.steps ?? 0;
-        const goal = Math.max(1, data.today?.goal ?? 10_000);
+        const { fetchTodayWalkFromApi } = await import("@/services/walkTodayApi");
+        const uid = opts?.userId ?? "";
+        if (!uid) return;
+        const parsed = await fetchTodayWalkFromApi(uid, today);
+        const steps = parsed.todaySteps;
+        const goal = Math.max(1, parsed.goalSteps);
         await reconcileMilestone(
           milestoneForProgress(steps, goal),
           opts?.userId,

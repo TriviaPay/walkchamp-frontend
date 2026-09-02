@@ -45,7 +45,8 @@ export const COIN_IAP_PRODUCTS: Array<{ productId: string; coins: number; name: 
   { productId: "coins_5000", coins: 5000, name: "5,000 Coins" },
 ];
 
-export const MIC_PASS_PRODUCT_ID = "mic_pass_lifetime";
+/** Play Console SKU — `mic_pass_lifetime` was deleted and cannot be reused. */
+export const MIC_PASS_PRODUCT_ID = "mic_pass";
 
 const ALL_PRODUCT_IDS = [
   ...COIN_IAP_PRODUCTS.map((p) => p.productId),
@@ -58,6 +59,7 @@ export function isIAPAvailable(): boolean {
 }
 
 function iapLog(message: string, extra?: unknown): void {
+  if (!__DEV__) return;
   if (extra !== undefined) {
     console.log(`[IAP] ${message}`, extra);
   } else {

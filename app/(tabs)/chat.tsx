@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useAvatarVersionContext } from "@/context/AvatarVersionContext";
 import { SkeletonList, SkeletonInlineEditForm } from "@/components/SkeletonRows";
-import { screenCache } from "@/utils/screenCache";
+import { screenCache, scopedScreenCacheKey } from "@/utils/screenCache";
 import { apiFetchAllowed, markApiFetched } from "@/utils/apiRequestCoordinator";
 import { perf } from "@/utils/perfLogger";
 import { useScreenMountPerf } from "@/hooks/useScreenMountPerf";
@@ -943,8 +943,9 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
   const DM_RECV_TEXT = colors.foreground;
   const DM_CHAT_BG = colors.background;
   const { getAvatarVersion } = useAvatarVersionContext();
+  const conversationsCacheKey = scopedScreenCacheKey("screen_conversations", user?.id);
   const [conversations, setConversations] = useState<Conversation[]>(
-    () => screenCache.getSync<Conversation[]>("screen_conversations") ?? []
+    () => screenCache.getSync<Conversation[]>(conversationsCacheKey) ?? []
   );
   const [loadingConvs, setLoadingConvs] = useState(false);
   const [activeFriend, setActiveFriend] = useState<{ id: string; username: string; flag: string; avatarColor: string; avatarUrl?: string | null; avatarVersion?: number | null; conversationId: string; isOnline?: boolean } | null>(null);
@@ -961,7 +962,7 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
   const loadConversations = useCallback(async () => {
     // Show disk-cached conversations on first launch (mem may be cold after kill)
     if (conversations.length === 0) {
-      const diskCached = await screenCache.get<Conversation[]>("screen_conversations");
+      const diskCached = await screenCache.get<Conversation[]>(conversationsCacheKey);
       if (diskCached && diskCached.length > 0) {
         setConversations(diskCached);
         setLoadingConvs(false);
@@ -973,7 +974,7 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
         const data = await res.json();
         const fresh: Conversation[] = data.conversations ?? [];
         setConversations(fresh);
-        void screenCache.set("screen_conversations", fresh);
+        void screenCache.set(conversationsCacheKey, fresh);
         prefetchProfileAvatars(
           fresh.map((c) => ({
             userId: c.friendId,
@@ -984,8 +985,7 @@ function PrivateChatTab({ colors, insets, user, headerHeight, pendingFriend = nu
       }
     } catch {}
     setLoadingConvs(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [conversations.length, conversationsCacheKey]);
 
   useEffect(() => { loadConversations(); }, [loadConversations]);
 

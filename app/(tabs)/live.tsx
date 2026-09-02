@@ -14,13 +14,13 @@ import {
   Animated,
   AppState,
   DeviceEventEmitter,
-  Dimensions,
   FlatList,
   InteractionManager,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
   type StyleProp,
   type ViewStyle,
@@ -33,6 +33,10 @@ import {
 import { getChallengeDaysLeftLabel } from "@/utils/challengeSchedule";
 import { ChallengeEndsPillLabel } from "@/components/ChallengeEndsPillLabel";
 import { displayChallengeTitle } from "@/features/unlimited/mappers/unlimitedLiveUiCopy";
+import {
+  buildUnlimitedPastLiveInput,
+  resolveUnlimitedCardBadge,
+} from "@/features/unlimited/mappers/unlimitedStreakParticipation";
 import { STREAK_ON_IMG } from "@/utils/brandImages";
 import { AppAlert } from "@/components/AppAlert";
 import { Image } from "expo-image";
@@ -73,9 +77,14 @@ const NEON_GREEN   = "#22C55E";
 const CARD_BG      = "#0D0D1E";
 const MUTED        = "#6B7A94";
 
-// Horizontal carousel card width — leaves ~15% peek of the next card so users
-// can tell the row scrolls sideways. Capped so it never gets absurd on tablets.
-const CAROUSEL_CARD_W = Math.min(340, Math.round(Dimensions.get("window").width * 0.85));
+// Horizontal carousel card width — fits inside the list's horizontal padding with a
+// sliver of the next card visible. Never use raw screen % (ignores list inset).
+function carouselCardWidth(screenWidth: number): number {
+  const listPad = rs(14) * 2;
+  const cardGap = rs(12);
+  const peek = rs(10);
+  return Math.min(340, Math.max(260, Math.floor(screenWidth - listPad - cardGap - peek)));
+}
 
 const FREE_TIER_COINS = FREE_TIER_COIN_REWARDS;
 function calcFreeCoins(
@@ -234,6 +243,15 @@ export interface LiveRace {
   currentUserParticipating?: boolean;
   challengeType?: string | null;
   capacityMode?: string | null;
+  /** Unlimited viewer block — card badge when personally past live window. */
+  viewerStatus?: string | null;
+  verificationPending?: boolean | null;
+  viewerEndAt?: string | null;
+  viewerResultsReady?: boolean | null;
+  resultsStatus?: string | null;
+  completedDays?: number | null;
+  finalFlowStatus?: string | null;
+  finalFlow?: { status: string; title: string; message: string } | null;
 }
 
 export function formatElapsed(seconds: number): string {
@@ -831,7 +849,6 @@ function RaceCardBase({
   style?: StyleProp<ViewStyle>;
 }) {
   const { isDark } = useTheme();
-  const isFinished = race.status === "completed";
   const participating = isUserParticipatingInRace(
     race,
     liveParticipationOpts(race, {
@@ -840,6 +857,28 @@ function RaceCardBase({
       myActiveRaceIds,
     }),
   );
+  const isUnlimitedRace = isUnlimitedChallengeRace(race);
+  const unlimitedCardBadge =
+    isUnlimitedRace &&
+    (participating || race.viewerStatus != null || race.verificationPending === true || !!race.finalFlowStatus)
+      ? resolveUnlimitedCardBadge(
+          buildUnlimitedPastLiveInput({
+            viewerStatus: race.viewerStatus,
+            verificationPending: race.verificationPending,
+            viewerEndAt: race.viewerEndAt,
+            resultsStatus: race.resultsStatus,
+            viewerResultsReady: race.viewerResultsReady,
+            rawStatus: race.status,
+            completedDays: race.completedDays,
+            challengeDurationDays: race.challengeDurationDays,
+            finalFlowStatus: race.finalFlowStatus,
+          }),
+        )
+      : null;
+  const isFinished = unlimitedCardBadge
+    ? unlimitedCardBadge.kind === "finished"
+    : race.status === "completed";
+  const isVerifying = unlimitedCardBadge?.kind === "verifying";
 
   // ── Per-card reaction counts (optimistic local state) ─────────────────────
   const [localReactions, setLocalReactions] = useState<Record<string, number>>(
@@ -1046,8 +1085,12 @@ function RaceCardBase({
       ? "#38BDF8"
       : (entryColor[race.entryType] ?? NEON_PURPLE);
 
-  const cardBorderColor = isFinished ? "#22C55EAA" : NEON_PURPLE + "60";
-  const cardShadowColor = isFinished ? NEON_GREEN : NEON_PURPLE;
+  const cardBorderColor = isFinished
+    ? "#22C55EAA"
+    : isVerifying
+      ? "#F59E0BAA"
+      : NEON_PURPLE + "60";
+  const cardShadowColor = isFinished ? NEON_GREEN : isVerifying ? "#F59E0B" : NEON_PURPLE;
 
   const top3 = (() => {
     const seen = new Set<string>();
@@ -1128,6 +1171,9 @@ function RaceCardBase({
           shadowOpacity: 0.35,
           shadowRadius: 10,
           elevation: 6,
+          width: "100%",
+          maxWidth: "100%",
+          alignSelf: "stretch",
         },
         style,
       ]}
@@ -1155,6 +1201,11 @@ function RaceCardBase({
                 <View style={[st.finishedBadge, !isDark && { backgroundColor: "rgba(0,0,0,0.12)" }]}>
                   <Feather name="check-circle" size={10} color={NEON_GREEN} />
                   <Text style={st.finishedBadgeText}>FINISHED</Text>
+                </View>
+              ) : isVerifying ? (
+                <View style={[st.liveBadge, { backgroundColor: "rgba(245,158,11,0.22)", borderColor: "rgba(245,158,11,0.55)" }]}>
+                  <Feather name="clock" size={10} color="#F59E0B" />
+                  <Text style={[st.liveBadgeText, { color: "#F59E0B" }]}>VERIFYING</Text>
                 </View>
               ) : (
                 <View style={st.liveBadge}>
@@ -1586,7 +1637,6 @@ function RaceCardSkeleton({
 }
 
 // ── Date section: date header + "View All" + horizontal card carousel ──────────
-const CAROUSEL_ITEM_W = CAROUSEL_CARD_W + rs(12);
 
 const DateGroupRow = React.memo(function DateGroupRow({
   group,
@@ -1611,6 +1661,9 @@ const DateGroupRow = React.memo(function DateGroupRow({
   onViewAll: (origin: RaceOrigin, group: DateGroup<LiveRace>) => void;
   showTrailingLoader?: boolean;
 }) {
+  const { width: screenWidth } = useWindowDimensions();
+  const carouselCardW = carouselCardWidth(screenWidth);
+  const carouselItemW = carouselCardW + rs(12);
   const handleViewAll = useCallback(() => onViewAll(origin, group), [onViewAll, origin, group]);
 
   return (
@@ -1637,12 +1690,12 @@ const DateGroupRow = React.memo(function DateGroupRow({
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={st.carousel}
         decelerationRate="fast"
-        snapToInterval={CAROUSEL_ITEM_W}
+        snapToInterval={carouselItemW}
         snapToAlignment="start"
         removeClippedSubviews
       >
         {group.races.map((item) => (
-          <View key={item.id} style={{ width: CAROUSEL_CARD_W, marginRight: rs(12) }}>
+          <View key={item.id} style={{ width: carouselCardW, marginRight: rs(12) }}>
             <RaceCard
               race={item}
               colors={colors}
@@ -1657,7 +1710,7 @@ const DateGroupRow = React.memo(function DateGroupRow({
           </View>
         ))}
         {showTrailingLoader && (
-          <View style={{ width: CAROUSEL_CARD_W, marginRight: rs(12) }}>
+          <View style={{ width: carouselCardW, marginRight: rs(12) }}>
             <RaceCardSkeleton colors={colors} style={st.carouselCard} />
           </View>
         )}

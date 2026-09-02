@@ -46,6 +46,68 @@ export const FEATURE_FLAGS = {
   ENABLE_RACE_PROGRESS_NOTIFICATIONS: true,
 } as const;
 
+/**
+ * Protected / prize-race verification layer (session, evidence, integrity).
+ * Soft-skips when backend endpoints return 404. Does not alter daily Walk
+ * or provisional live raceSteps.
+ *
+ * Disable: EXPO_PUBLIC_PROTECTED_RACE_VERIFICATION=false
+ */
+export const ENABLE_PROTECTED_RACE_VERIFICATION =
+  process.env.EXPO_PUBLIC_PROTECTED_RACE_VERIFICATION !== "false" && true;
+
+export function isProtectedRaceVerificationEnabled(): boolean {
+  return ENABLE_PROTECTED_RACE_VERIFICATION;
+}
+
+/** Phone-only protected race policy (wearable-only ineligible). */
+export const ENABLE_PHONE_ONLY_PROTECTED_RACE =
+  process.env.EXPO_PUBLIC_PHONE_ONLY_PROTECTED_RACE !== "false" && true;
+
+export function isPhoneOnlyProtectedRaceEnabled(): boolean {
+  return (
+    isProtectedRaceVerificationEnabled() && ENABLE_PHONE_ONLY_PROTECTED_RACE
+  );
+}
+
+/**
+ * Play Integrity for Android protected evidence binding.
+ * Requires native rebuild; gracefully degrades when unavailable.
+ */
+export const ENABLE_PLAY_INTEGRITY =
+  process.env.EXPO_PUBLIC_PLAY_INTEGRITY !== "false" && true;
+
+export function isPlayIntegrityEnabled(): boolean {
+  return isProtectedRaceVerificationEnabled() && ENABLE_PLAY_INTEGRITY;
+}
+
+/**
+ * App Attest for iOS protected evidence binding.
+ * Default OFF — backend App Attest is not configured (IOS_APP_ATTEST_NOT_CONFIGURED).
+ * Enable with EXPO_PUBLIC_APP_ATTEST=true only after the server ceremony exists.
+ */
+export const ENABLE_APP_ATTEST =
+  process.env.EXPO_PUBLIC_APP_ATTEST === "true";
+
+export function isAppAttestEnabled(): boolean {
+  return isProtectedRaceVerificationEnabled() && ENABLE_APP_ATTEST;
+}
+
+/**
+ * iOS protected-race entry. Default off until App Attest validation ships.
+ * Enable with EXPO_PUBLIC_IOS_PROTECTED_RACES=true (also requires App Attest).
+ */
+export const ENABLE_IOS_PROTECTED_RACES =
+  process.env.EXPO_PUBLIC_IOS_PROTECTED_RACES === "true";
+
+export function isIosProtectedRaceEnabled(): boolean {
+  return (
+    isProtectedRaceVerificationEnabled() &&
+    ENABLE_IOS_PROTECTED_RACES &&
+    isAppAttestEnabled()
+  );
+}
+
 // ── Mic Pass / Voice Chat flags ───────────────────────────────────────────────
 export const ENABLE_MIC_PASS = true;
 export const ENABLE_RACE_VOICE_CHAT = true;
@@ -152,11 +214,9 @@ export function isWalkTrendingChallengesMockEnabled(): boolean {
 }
 
 /**
- * Legacy $1 / $3 / $5 cards in the main Join section (off by default).
- * Cash Prize Challenge in Premium uses ENABLE_CASH_CHALLENGES instead.
+ * Legacy $1 / $3 / $5 Walk join cards — removed from product UI.
  */
-export const ENABLE_LEGACY_CASH_RACE_CARDS =
-  process.env.EXPO_PUBLIC_ENABLE_LEGACY_CASH_RACE_CARDS === "true";
+export const ENABLE_LEGACY_CASH_RACE_CARDS = false;
 
 /**
  * Premium post-auth onboarding (Welcome → … → Enter WalkChamp).

@@ -20,13 +20,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { rf } from "@/utils/responsive";
-import { ChallengeParticipationBreakdownCard } from "@/components/ChallengeParticipationBreakdownCard";
-import {
-  extractBreakdownFromPublicUserPayload,
-  statsHasBreakdownField,
-  type ChallengeParticipationBreakdown,
-} from "@/utils/challengeParticipationBreakdown";
+import { rf, rs } from "@/utils/responsive";
 
 import { ProfileAvatar } from "@/components/ProfileAvatar";
 import { AppAlert } from "@/components/AppAlert";
@@ -100,12 +94,7 @@ interface PublicProfileStats {
 
 // ── 60s in-memory stats cache ─────────────────────────────────────────────────
 
-const statsCache = new Map<string, {
-  stats: PublicProfileStats;
-  breakdown?: ChallengeParticipationBreakdown;
-  breakdownKnown: boolean;
-  at: number;
-}>();
+const statsCache = new Map<string, { stats: PublicProfileStats; at: number }>();
 const CACHE_TTL = 60_000;
 const MODAL_MAX_HEIGHT = Math.round(Dimensions.get("window").height * 0.78);
 
@@ -274,7 +263,6 @@ export function PublicProfileModal({
   const [stats, setStats] = useState<PublicProfileStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState(false);
-  const [breakdown, setBreakdown] = useState<ChallengeParticipationBreakdown | undefined>(undefined);
 
   // When visible + userId changes, fetch fresh profile data
   const lastFetchedUserId = useRef<string | null>(null);
@@ -305,7 +293,6 @@ export function PublicProfileModal({
     const cached = statsCache.get(userId);
     if (cached && Date.now() - cached.at < CACHE_TTL) {
       setStats(cached.stats);
-      if (cached.breakdownKnown) setBreakdown(cached.breakdown);
     } else {
       setStatsLoading(true);
       setStatsError(false);
@@ -341,7 +328,6 @@ export function PublicProfileModal({
             raceWins: number;
             totalWinning: number;
             currentStreakDays: number;
-            challengeParticipationBreakdown?: ChallengeParticipationBreakdown;
           };
         };
         setProfile({
@@ -367,18 +353,8 @@ export function PublicProfileModal({
             totalWinning:     data.stats.totalWinning ?? 0,
             currentStreakDays: data.stats.currentStreakDays,
           };
-          const fieldPresent = statsHasBreakdownField(data.stats);
-          const nextBreakdown = fieldPresent
-            ? extractBreakdownFromPublicUserPayload(data)
-            : undefined;
+          statsCache.set(userId, { stats: s, at: Date.now() });
           setStats(s);
-          if (fieldPresent) setBreakdown(nextBreakdown);
-          statsCache.set(userId, {
-            stats: s,
-            breakdown: fieldPresent ? nextBreakdown : undefined,
-            breakdownKnown: fieldPresent,
-            at: Date.now(),
-          });
           if (__DEV__) console.log("[PublicProfile] stats loaded:", s);
         } else {
           setStatsError(true);
@@ -401,7 +377,6 @@ export function PublicProfileModal({
     lastFetchedUserId.current = null;
     setProfile(null);
     setStats(null);
-    setBreakdown(undefined);
     setStatsLoading(false);
     setStatsError(false);
     setFriendLoading(false);
@@ -506,23 +481,21 @@ export function PublicProfileModal({
   return (
     <Modal visible transparent animationType="fade" onRequestClose={handleClose}>
       <Pressable style={[s.overlay, { backgroundColor: "rgba(0,0,0,0.72)" }]} onPress={handleClose}>
-        <Pressable style={[s.card, { backgroundColor: colors.card, borderColor: colors.border, maxHeight: MODAL_MAX_HEIGHT }]} onPress={() => {}}>
-          <ScrollView
-            nestedScrollEnabled
-            showsVerticalScrollIndicator={false}
-            bounces={false}
-            contentContainerStyle={s.cardInner}
-          >
-
-          {/* Close */}
+        <Pressable
+          style={[s.card, { backgroundColor: colors.card, borderColor: colors.border, maxHeight: MODAL_MAX_HEIGHT }]}
+          onPress={() => {}}
+        >
+          {/* Close pinned to modal card corner (not inside ScrollView) */}
           <TouchableOpacity
-            style={[s.closeBtn, { backgroundColor: colors.border + "80" }]}
+            style={[s.closeBtn, { backgroundColor: colors.border + "99" }]}
             onPress={handleClose}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Close profile"
           >
-            <Feather name="x" size={16} color={colors.mutedForeground} />
+            <Feather name="x" size={rf(16)} color={colors.foreground} />
           </TouchableOpacity>
 
-          {/* Loading indicator (top-right, non-blocking) */}
           {fetching && (
             <ActivityIndicator
               size="small"
@@ -531,6 +504,12 @@ export function PublicProfileModal({
             />
           )}
 
+          <ScrollView
+            nestedScrollEnabled
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+            contentContainerStyle={s.cardInner}
+          >
           {/* Header: avatar left + name/title right (as in design) */}
           <View style={s.headerRow}>
             <View style={s.avatarWrap}>
@@ -587,12 +566,6 @@ export function PublicProfileModal({
             loading={statsLoading}
             error={statsError}
             colors={colors}
-          />
-
-          <ChallengeParticipationBreakdownCard
-            breakdown={breakdown}
-            loading={statsLoading && breakdown === undefined}
-            compact
           />
 
           <View style={[s.divider, { backgroundColor: colors.border }]} />
@@ -715,39 +688,44 @@ const s = StyleSheet.create({
   card: {
     width: "100%",
     maxWidth: 380,
-    borderRadius: 24,
+    borderRadius: rs(24),
     borderWidth: 1,
-    padding: 24,
+    paddingTop: rs(16),
+    paddingBottom: rs(20),
+    paddingHorizontal: rs(20),
     alignItems: "stretch",
+    position: "relative",
+    overflow: "hidden",
   },
   cardInner: {
     alignItems: "stretch",
-    gap: 10,
-    paddingBottom: 4,
+    gap: rs(10),
+    paddingTop: rs(28),
+    paddingBottom: rs(4),
   },
   closeBtn: {
     position: "absolute",
-    top: 14,
-    right: 14,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    top: rs(10),
+    right: rs(10),
+    width: rs(32),
+    height: rs(32),
+    borderRadius: rs(16),
     alignItems: "center",
     justifyContent: "center",
-    zIndex: 2,
+    zIndex: 20,
+    elevation: 4,
   },
   fetchingSpinner: {
     position: "absolute",
-    top: 14,
-    left: 14,
+    top: rs(14),
+    left: rs(14),
+    zIndex: 20,
   },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 14,
-    marginTop: 8,
-    paddingLeft: 10,
-    paddingRight: 28,
+    gap: rs(14),
+    paddingRight: rs(8),
     width: "100%",
   },
   avatarWrap: {

@@ -7,6 +7,7 @@
  */
 
 import { isUnlimitedGoalChallenge } from "@/utils/unlimitedGoal";
+import { streakChallengeIdPath } from "@/features/unlimited/api/streakChallengePaths";
 import type { CashChallengeLeaveResponse } from "@/services/refundApi";
 
 export const PAID_CHALLENGE_CANNOT_BE_CANCELLED = "PAID_CHALLENGE_CANNOT_BE_CANCELLED";
@@ -104,7 +105,7 @@ export function isUnlimitedCashChallenge(room: UsdCashChallengeLike | null | und
 /** Leave API path for USD Fixed vs Unlimited. */
 export function usdCashLeaveEndpoint(challengeId: string, isUnlimited: boolean): string {
   return isUnlimited
-    ? `/api/unlimited-challenges/${challengeId}/leave`
+    ? streakChallengeIdPath(challengeId, "leave")
     : `/api/races/${challengeId}/leave`;
 }
 

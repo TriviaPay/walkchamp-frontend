@@ -304,7 +304,8 @@ export function prefetchLiveRaceDetailRoster(opts: {
       if (opts.unlimited) {
         const { mapUnlimitedDetailToLiveDetail } = await import("@/utils/unlimitedLiveRace");
 
-        const detailRes = await authFetch(`/api/unlimited-challenges/${raceId}`);
+        const { streakChallengeIdPath } = await import("@/features/unlimited/api/streakChallengePaths");
+        const detailRes = await authFetch(streakChallengeIdPath(raceId));
         if (!detailRes.ok) return;
         const mapped = mapUnlimitedDetailToLiveDetail(
           await detailRes.json().catch(() => null),

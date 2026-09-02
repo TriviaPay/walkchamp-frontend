@@ -13,6 +13,7 @@ import android.os.HandlerThread
 import android.util.Log
 import androidx.core.content.ContextCompat
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Continuous TYPE_STEP_COUNTER (+ TYPE_STEP_DETECTOR) listener for the foreground service.
@@ -23,6 +24,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Samsung A-series often freezes TYPE_STEP_COUNTER (same cumulative value, staleMs↑)
  * while the FGS is still alive. TYPE_STEP_DETECTOR still fires per step in that
  * window — we bridge those events into today/race totals until the counter catches up.
+ *
+ * Phase 2 audit: TYPE_STEP_DETECTOR is REQUIRED (not redundant). Removing it would
+ * regress screen-off / Samsung freeze reliability. It does not double-count while
+ * the counter is healthy (bridge only activates when the counter is stale).
  */
 class NativeStepSensorEngine(
   private val context: Context,
@@ -30,6 +35,22 @@ class NativeStepSensorEngine(
 ) {
   companion object {
     private const val TAG = "StepFGS"
+    /** Process-wide listener counts for BatteryDiag (expect 0–1 each). */
+    private val activeStepCounterListeners = AtomicInteger(0)
+    private val activeStepDetectorListeners = AtomicInteger(0)
+
+    fun activeStepCounterListenerCount(): Int = activeStepCounterListeners.get()
+    fun activeStepDetectorListenerCount(): Int = activeStepDetectorListeners.get()
+
+    private fun logListenerCounts(event: String) {
+      val c = activeStepCounterListeners.get()
+      val d = activeStepDetectorListeners.get()
+      Log.d(TAG, "[BatteryDiag] $event activeStepCounterListeners=$c activeStepDetectorListeners=$d")
+      if (c > 1 || d > 1) {
+        Log.w(TAG, "[BatteryDiag] listener count exceeds expected (max 1 each)")
+      }
+    }
+
     /** Counter considered frozen — start counting TYPE_STEP_DETECTOR. */
     private const val COUNTER_STALE_MS = 5_000L
     /** Min gap between detector-bridge increments (noise / burst protection). */
@@ -132,6 +153,11 @@ class NativeStepSensorEngine(
       } catch (_: Exception) {
       }
       registered.set(false)
+      if (activeStepCounterListeners.get() > 0) activeStepCounterListeners.decrementAndGet()
+      if (stepDetectorSensor != null && activeStepDetectorListeners.get() > 0) {
+        activeStepDetectorListeners.decrementAndGet()
+      }
+      logListenerCounts("sensor_restart_unregister")
       Log.d(TAG, "[StepFGS] sensor listener restarted")
     }
     registerSensorListener()
@@ -216,46 +242,54 @@ class NativeStepSensorEngine(
     Log.d(TAG, "[StepFGS] sensor available type=TYPE_STEP_COUNTER")
     ensureSensorHandler()
     try {
-      // SENSOR_DELAY_FASTEST + maxReportLatencyUs=0: ask OEMs not to batch while FGS holds
-      // a partial wake lock (professional pedometer pattern).
+      // SENSOR_DELAY_GAME: event-driven TYPE_STEP_COUNTER without FASTEST CPU cost.
+      // Allow modest batching (maxReportLatencyUs) while FGS is alive — OEM power save.
+      // TYPE_STEP_DETECTOR remains available as a freeze bridge (Samsung).
+      val maxLatencyUs = 2_000_000
       sensorManager?.registerListener(
         stepListener,
         stepCounterSensor,
-        SensorManager.SENSOR_DELAY_FASTEST,
-        /* maxReportLatencyUs */ 0,
+        SensorManager.SENSOR_DELAY_GAME,
+        maxLatencyUs,
         sensorHandler,
       )
+      activeStepCounterListeners.incrementAndGet()
       if (stepDetectorSensor != null) {
         sensorManager?.registerListener(
           stepListener,
           stepDetectorSensor,
-          SensorManager.SENSOR_DELAY_FASTEST,
-          /* maxReportLatencyUs */ 0,
+          SensorManager.SENSOR_DELAY_UI,
+          maxLatencyUs,
           sensorHandler,
         )
+        activeStepDetectorListeners.incrementAndGet()
         Log.d(TAG, "[StepFGS] TYPE_STEP_DETECTOR registered")
       }
       registered.set(true)
-      Log.d(TAG, "[StepFGS] sensor listener registered TYPE_STEP_COUNTER delay=FASTEST maxLatency=0")
+      logListenerCounts("sensor_register")
+      Log.d(TAG, "[StepFGS] sensor listener registered TYPE_STEP_COUNTER delay=GAME maxLatencyUs=$maxLatencyUs")
     } catch (e: Exception) {
       try {
         sensorManager?.registerListener(
           stepListener,
           stepCounterSensor,
-          SensorManager.SENSOR_DELAY_GAME,
-          /* maxReportLatencyUs */ 0,
+          SensorManager.SENSOR_DELAY_UI,
+          /* maxReportLatencyUs */ 2_000_000,
           sensorHandler,
         )
+        activeStepCounterListeners.incrementAndGet()
         if (stepDetectorSensor != null) {
           sensorManager?.registerListener(
             stepListener,
             stepDetectorSensor,
-            SensorManager.SENSOR_DELAY_GAME,
+            SensorManager.SENSOR_DELAY_UI,
             sensorHandler,
           )
+          activeStepDetectorListeners.incrementAndGet()
         }
         registered.set(true)
-        Log.d(TAG, "[StepFGS] sensor listener registered TYPE_STEP_COUNTER (fallback GAME)")
+        logListenerCounts("sensor_register_fallback")
+        Log.d(TAG, "[StepFGS] sensor listener registered TYPE_STEP_COUNTER (fallback UI)")
       } catch (e2: Exception) {
         Log.w(TAG, "[StepFGS] sensor register failed: ${e2.message}")
       }
@@ -276,6 +310,12 @@ class NativeStepSensorEngine(
       Log.d(TAG, "[StepFGS] sensor listener unregistered")
     } catch (_: Exception) {
     }
+    // One register path registers both sensors on a single listener; decrement once each.
+    if (activeStepCounterListeners.get() > 0) activeStepCounterListeners.decrementAndGet()
+    if (stepDetectorSensor != null && activeStepDetectorListeners.get() > 0) {
+      activeStepDetectorListeners.decrementAndGet()
+    }
+    logListenerCounts("sensor_unregister")
   }
 
   /** Store JS-known today steps to seed daily baseline on the first sensor event. */

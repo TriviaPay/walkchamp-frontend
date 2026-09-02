@@ -301,6 +301,34 @@ function midnightToday(): Date {
     true,
     "reinstall remainder (10) keeps fast HC retries until the full day total lands",
   );
+  assert.equal(
+    shouldRereadHealthConnectToday({
+      lastReadAtMs: now - 2_500,
+      lastSteps: 0,
+      nowMs: now,
+      steadyIntervalMs: 30_000,
+      emptyRetryMs: 2_500,
+      catchUpUntilMs: now + 90_000,
+      fastRetryCount: 5,
+      maxFastRetries: 5,
+    }),
+    false,
+    "after max fast empty attempts, fall back to 30s interval even inside catch-up window",
+  );
+  assert.equal(
+    shouldRereadHealthConnectToday({
+      lastReadAtMs: now - 30_000,
+      lastSteps: 0,
+      nowMs: now,
+      steadyIntervalMs: 30_000,
+      emptyRetryMs: 2_500,
+      catchUpUntilMs: now + 90_000,
+      fastRetryCount: 5,
+      maxFastRetries: 5,
+    }),
+    true,
+    "after max fast attempts, empty HC still rereads on the steady interval",
+  );
 }
 
 console.log("hcTodayCachePolicy + writerDetection tests passed");

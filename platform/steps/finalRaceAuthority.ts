@@ -142,8 +142,14 @@ export function resolveFinishedRaceDisplaySteps(
 /** True when UI may show final rank / prize / "You won". */
 export function canShowFinalRaceOutcome(
   status: RaceReconciliationStatus | null | undefined,
-  opts?: { verificationFeatureEnabled?: boolean | null },
+  opts?: {
+    verificationFeatureEnabled?: boolean | null;
+    settlementStatus?: string | null;
+  },
 ): boolean {
   if (opts?.verificationFeatureEnabled === false) return true;
-  return status === "finalized";
+  if (status !== "finalized") return false;
+  const settlement = opts?.settlementStatus?.toLowerCase();
+  if (settlement && settlement !== "paid") return false;
+  return true;
 }

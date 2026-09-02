@@ -191,6 +191,10 @@ const ZERO: ChallengeParticipationBreakdown = {
   const modalSrc = fs.readFileSync(path.join(root, "components", "PublicProfileModal.tsx"), "utf8");
   const dashboardSrc = fs.readFileSync(path.join(root, "app", "profile", "dashboard.tsx"), "utf8");
   const hookSrc = fs.readFileSync(path.join(root, "hooks", "useInvalidateProfileOnChallengeStart.ts"), "utf8");
+  const breakdownHookSrc = fs.readFileSync(
+    path.join(root, "hooks", "useChallengeParticipationBreakdown.ts"),
+    "utf8",
+  );
 
   for (const src of [utilSrc, cardSrc, dashboardSrc, hookSrc]) {
     assert.equal(src.includes("setInterval"), false);
@@ -209,26 +213,39 @@ const ZERO: ChallengeParticipationBreakdown = {
   assert.match(cardSrc, /accessibilityLabel/);
   assert.match(cardSrc, /SilentErrorBoundary|ErrorBoundary/);
 
-  assert.match(profileSrc, /ChallengeParticipationBreakdownCard/);
-  assert.match(profileSrc, /Your Stats/);
   assert.match(profileSrc, /New dashboard/);
   assert.match(profileSrc, /Vibration/);
-  assert.match(profileSrc, /Dark Theme/);
-  assert.match(profileSrc, /Refer & Earn/);
+  assert.match(profileSrc, /Dark mode/);
+  assert.match(profileSrc, /Invite friends/);
   const newDashIdx = profileSrc.indexOf("New dashboard");
   const vibrationIdx = profileSrc.indexOf(">Vibration<") >= 0
     ? profileSrc.indexOf(">Vibration<")
     : profileSrc.indexOf("Vibration");
   assert.ok(newDashIdx > 0 && vibrationIdx > newDashIdx);
+  assert.match(profileSrc, /dashboardExpanded/);
+  assert.match(profileSrc, /chevron-up/);
+  assert.match(profileSrc, /ChallengeParticipationBreakdownCard/);
 
-  assert.match(modalSrc, /ChallengeParticipationBreakdownCard/);
-  assert.match(modalSrc, /extractBreakdownFromPublicUserPayload|applyIncomingBreakdown/);
+  assert.equal(modalSrc.includes("ChallengeParticipationBreakdownCard"), false);
   assert.match(modalSrc, /Lifetime Steps/);
   assert.match(modalSrc, /Races Played/);
 
   assert.match(dashboardSrc, /ChallengeParticipationBreakdownCard/);
-  assert.match(dashboardSrc, /profileMePath|PROFILE_ME_CACHE_KEY/);
+  assert.match(dashboardSrc, /useChallengeParticipationBreakdown/);
+  assert.match(breakdownHookSrc, /profileMePath|PROFILE_ME_CACHE_KEY|profileMeCacheKey/);
   assert.equal(dashboardSrc.includes("setInterval"), false);
+
+  const walkSrc = fs.readFileSync(path.join(root, "features", "walk", "screens", "WalkScreen.tsx"), "utf8");
+  assert.match(walkSrc, /New dashboard/);
+  assert.match(walkSrc, /Invite friends/);
+  assert.match(walkSrc, /isEditing \?[\s\S]*width: 22/);
+  assert.equal(walkSrc.includes("ChallengeParticipationBreakdownCard"), true);
+  assert.match(walkSrc, /dashboardExpanded/);
+  assert.match(walkSrc, /chevron-up/);
+  assert.match(modalSrc, /position:\s*"absolute"/);
+  assert.match(modalSrc, /right:\s*rs\(10\)/);
+  assert.match(profileSrc, /useChallengeParticipationBreakdown/);
+  assert.match(walkSrc, /useChallengeParticipationBreakdown/);
 
   assert.match(hookSrc, /RACE_STARTED/);
   assert.match(hookSrc, /challenge_started/);

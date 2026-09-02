@@ -6,14 +6,18 @@ useDefault = true
 [allowlist]
 description = "Publishable client IDs, env placeholders, local Backend checkout, and AsyncStorage key names — not secrets"
 paths = [
-  '''(^|/)eas\.json$''',
-  '''(^|/)\.env\.example$''',
-  '''(^|/)node_modules/''',
-  '''(^|/)android/''',
-  '''(^|/)\.expo/''',
-  '''(^|/)ios/''',
-  '''(^|/)Backend/''',
-  '''(^|/)gitleaks(-.*)?\.(json|zip|exe|tgz)$''',
+  '''(^|[\\/])eas\.json$''',
+  '''(^|[\\/])\.env\.example$''',
+  '''(^|[\\/])node_modules([\\/]|$)''',
+  '''(^|[\\/])android([\\/]|$)''',
+  '''(^|[\\/])\.expo([\\/]|$)''',
+  '''(^|[\\/])ios([\\/]|$)''',
+  '''(^|[\\/])Backend([\\/]|$)''',
+  '''(^|[\\/])\.verify-export-android([\\/]|$)''',
+  '''(^|[\\/])dist-export-''',
+  '''(^|[\\/])static-build([\\/]|$)''',
+  '''(^|[\\/])\.metro-cache([\\/]|$)''',
+  '''(^|[\\/])gitleaks(-.*)?\.(json|zip|exe|tgz)$''',
 ]
 regexes = [
   '''EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY''',
@@ -21,4 +25,5 @@ regexes = [
   '''pk_(test|live)_[A-Za-z0-9]+''',
   '''rzp_(test|live)_[A-Za-z0-9]+''',
   '''walkchamp_[a-z0-9_]+_v\d+''',
+  '''wc_[a-z0-9_]+_v\d+''',
 ]

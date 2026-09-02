@@ -149,6 +149,21 @@ export async function postRaceProgress(
       }
     }
 
+    try {
+      const { getProtectedProgressPiggyback } = require(
+        "@/services/raceVerification/raceVerificationService",
+      ) as typeof import("@/services/raceVerification/raceVerificationService");
+      const piggyback = getProtectedProgressPiggyback(raceId);
+      if (piggyback.protectedVerificationSessionId) {
+        body.protectedVerificationSessionId = piggyback.protectedVerificationSessionId;
+      }
+      if (piggyback.healthPermissionStatus) {
+        body.healthPermissionStatus = piggyback.healthPermissionStatus;
+      }
+    } catch {
+      /* optional */
+    }
+
     logger.debug(
       "RaceSteps",
       `sending sync raceId=${raceId} steps=${steps} source=${stepSource ?? "unknown"} seq=${sequenceId ?? "n/a"} session=${trackingSessionId ?? "n/a"} deviceTotal=${deviceTotalSteps ?? "n/a"}`,

@@ -1,11 +1,12 @@
 /**
- * Client → POST /api/unlimited-challenges/:id/live-progress
+ * Client → POST /api/streak-challenges/:id/live-progress
  *
  * Provisional Unlimited live only. Never calls /api/walk/steps or classic race progress.
  */
 
 import { Platform } from "react-native";
 import { authFetch, API_TIMEOUT_MS } from "@/utils/authFetch";
+import { streakChallengeIdPath } from "@/features/unlimited/api/streakChallengePaths";
 import { STEP_SOURCES } from "@/services/steps/hybridStepState";
 import { isUnlimitedClassicProgressBlocked } from "@/services/unlimitedRaceProgressGuard";
 
@@ -25,7 +26,7 @@ let _sequence = 0;
 let _sessionId: string | null = null;
 let _inFlight = false;
 
-const THROTTLE_MS = 4_000;
+const THROTTLE_MS = 10_000;
 
 function ensureSession(challengeId: string, challengeDayKey: string): string {
   const key = `${challengeId}:${challengeDayKey}`;
@@ -86,7 +87,7 @@ export async function uploadUnlimitedProvisionalProgress(
   _inFlight = true;
   try {
     const res = await authFetch(
-      `/api/unlimited-challenges/${encodeURIComponent(challengeId)}/live-progress`,
+      streakChallengeIdPath(challengeId, "live-progress"),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },

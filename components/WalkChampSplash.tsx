@@ -8,6 +8,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import * as SplashScreen from "expo-splash-screen";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { rf, rs, rv } from "@/utils/responsive";
 
@@ -440,6 +441,13 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
 
   const { width: winW, height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const nativeSplashHiddenRef = useRef(false);
+
+  const hideNativeSplash = useCallback(() => {
+    if (nativeSplashHiddenRef.current) return;
+    nativeSplashHiddenRef.current = true;
+    SplashScreen.hideAsync().catch(() => undefined);
+  }, []);
 
   const layout = useMemo(() => {
     const short = Math.min(winW, winH);
@@ -714,6 +722,7 @@ export function WalkChampSplash({ isReady, onFinish }: Props) {
         },
       ]}
       pointerEvents="auto"
+      onLayout={hideNativeSplash}
     >
       <View style={styles.sky} />
 

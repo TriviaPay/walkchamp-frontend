@@ -69,6 +69,7 @@ assert.deepEqual(
     assert.equal(built.body.entryType, "coins_battle");
     assert.equal(built.body.coinEntryAmount, coins.fixed.coinEntryAmount);
     assert.equal(built.body.maxParticipants, undefined);
+    assert.equal(built.body.durationMinutes, 60);
   }
 }
 
@@ -89,6 +90,7 @@ assert.deepEqual(
     assert.equal(built.body.customEntryAmountCents, usd.fixed.usdAmountDollars * 100);
     assert.equal(built.body.dailyGoalSteps, undefined);
     assert.equal(built.body.capacityMode, undefined);
+    assert.equal(built.body.durationMinutes, 60);
   }
 }
 

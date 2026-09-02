@@ -145,7 +145,7 @@ async function pollOnce(): Promise<void> {
 
 /**
  * Start polling native FGS + cached sensor session for hybrid HC mode.
- * Safe to call repeatedly — restarts the poll loop fresh.
+ * Idempotent — repeated calls refresh native tracking without restarting the poll loop.
  */
 export async function startHybridLiveDailyDisplay(): Promise<boolean> {
   if (Platform.OS !== "android") return false;
@@ -184,7 +184,14 @@ export async function startHybridLiveDailyDisplay(): Promise<boolean> {
     return false;
   }
 
-  stopHybridLiveDailyDisplay();
+  if (_pollTimer !== null) {
+    try {
+      await stepTrackingNotificationService.ensureNativeBackgroundTracking();
+    } catch {
+      /* FGS may already be running */
+    }
+    return true;
+  }
 
   try {
     await stepTrackingNotificationService.ensureNativeBackgroundTracking();

@@ -12,6 +12,8 @@ import {
 } from "@/services/raceVerificationApi";
 import { store } from "@/store";
 import { raceProgressActions } from "@/store/slices/raceProgressSlice";
+import { prizeVerificationActions } from "@/store/slices/prizeVerificationSlice";
+import { adjudicationToPrizeStatus } from "@/services/raceVerification/prizeStatusLabels";
 
 const POLL_MS = 8_000;
 
@@ -45,6 +47,14 @@ export function useRaceResultStatus(
         }),
       );
     }
+    const prizeStatus = adjudicationToPrizeStatus(s.verificationStatus);
+    store.dispatch(
+      prizeVerificationActions.applyAdjudication({
+        status: prizeStatus,
+        raw: s.verificationStatus,
+        settlementStatus: s.settlementStatus,
+      }),
+    );
   }, []);
 
   const refresh = useCallback(async () => {
@@ -89,12 +99,16 @@ export function useRaceResultStatus(
   useEffect(() => {
     if (!enabled || !raceId || !pollWhilePending) return;
     if (status && !status.featureEnabled) return;
-    if (status?.verificationStatus === "finalized") return;
+    if (status?.verificationStatus === "finalized" && status.settlementStatus === "paid") return;
     if (status?.verificationStatus === "verification_rejected") return;
+    if (status?.verificationStatus === "review_required") return;
+    if (status?.settlementStatus === "voided") return;
 
+    const elapsed =
+      status?.verificationStatus === "verification_pending" ? 15_000 : POLL_MS;
     const t = setInterval(() => {
       void refresh();
-    }, POLL_MS);
+    }, elapsed);
     return () => clearInterval(t);
   }, [
     enabled,
@@ -103,6 +117,7 @@ export function useRaceResultStatus(
     refresh,
     status?.featureEnabled,
     status?.verificationStatus,
+    status?.settlementStatus,
   ]);
 
   return { status, loading, refresh };

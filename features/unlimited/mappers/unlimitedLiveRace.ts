@@ -3,6 +3,11 @@
  */
 
 import { UNLIMITED_GOAL_CHALLENGE_TYPE } from "@/utils/unlimitedGoal";
+import { readUnlimitedFinalFlowFields } from "@/features/unlimited/mappers/unlimitedFinalFlow";
+import type {
+  UnlimitedFinalFlow,
+  UnlimitedFinalFlowStatus,
+} from "@/features/unlimited/mappers/unlimitedFinalFlow";
 import type { UnlimitedUpcomingRoom } from "@/utils/unlimitedChallengeRooms";
 
 export type UnlimitedLiveCardPlayer = {
@@ -232,6 +237,14 @@ export type UnlimitedLiveRaceFields = {
   currentUserParticipantStatus: string | null;
   challengeType: typeof UNLIMITED_GOAL_CHALLENGE_TYPE;
   capacityMode: "unlimited";
+  viewerStatus?: string | null;
+  verificationPending?: boolean | null;
+  viewerEndAt?: string | null;
+  viewerResultsReady?: boolean | null;
+  resultsStatus?: string | null;
+  completedDays?: number | null;
+  finalFlowStatus?: UnlimitedFinalFlowStatus | null;
+  finalFlow?: UnlimitedFinalFlow | null;
 };
 
 export function mapUnlimitedUpcomingToLiveRaceFields(
@@ -306,6 +319,14 @@ export function mapUnlimitedUpcomingToLiveRaceFields(
     currentUserParticipantStatus: room.participation_status ?? null,
     challengeType: UNLIMITED_GOAL_CHALLENGE_TYPE,
     capacityMode: "unlimited",
+    viewerStatus: room.viewerStatus ?? null,
+    verificationPending: room.verificationPending ?? null,
+    viewerEndAt: room.viewerEndAt ?? null,
+    viewerResultsReady: room.viewerResultsReady ?? null,
+    resultsStatus: room.resultsStatus ?? room.settlement_status ?? null,
+    completedDays: room.completedDays ?? null,
+    finalFlowStatus: room.finalFlowStatus ?? null,
+    finalFlow: room.finalFlow ?? null,
   };
 }
 
@@ -354,6 +375,8 @@ export type UnlimitedLiveDetailMapped = {
     viewerStartAt?: string | null;
     viewerEndAt?: string | null;
     viewerStatus?: string | null;
+    /** True when the viewer's window ended but day verification is still running. */
+    verificationPending?: boolean | null;
     viewerTimezone?: string | null;
     currentDayStartAt?: string | null;
     currentDayEndAt?: string | null;
@@ -364,10 +387,29 @@ export type UnlimitedLiveDetailMapped = {
     viewerResultsStatus?: string | null;
     viewerResultReasonCode?: string | null;
     eligibilityReasonCode?: string | null;
+    finalVerificationStatus?: string | null;
+    finalVerificationRequired?: boolean | null;
+    finalVerificationRequestedAt?: string | null;
+    finalVerificationSubmittedAt?: string | null;
+    finalVerificationCompletedAt?: string | null;
+    finalVerificationSource?: string | null;
+    inSettlementPopulation?: boolean | null;
     passedDays?: number | null;
     failedDays?: number | null;
     pendingDays?: number | null;
     completedDays?: number | null;
+    /** Account preference timezone (may differ after travel). */
+    accountTimezone?: string | null;
+    /** Confirmed future-day timezone pending activation. */
+    pendingTimezone?: string | null;
+    timezoneEffectiveDay?: number | null;
+    timezoneChangeConfirmedAt?: string | null;
+    timezoneChangeConfirmedTimezone?: string | null;
+    timezoneChangeAppliesToChallenge?: boolean | null;
+    finalDayTimezoneLocked?: boolean | null;
+    finalFlowStatus?: UnlimitedFinalFlowStatus | null;
+    finalFlow?: UnlimitedFinalFlow | null;
+    resultsAnnouncedAt?: string | null;
   };
   participants: Array<{
     id: string;
@@ -395,6 +437,8 @@ export type UnlimitedLiveDetailMapped = {
     raceStartBaselineSteps?: number | null;
     /** Display-only: challenge-day progress (usually today's total). */
     challengeDaySteps?: number | null;
+    /** Backend-settled payout on the participant row (cents). Prefer over notifications. */
+    payoutCents?: number | null;
   }>;
 };
 
@@ -477,6 +521,17 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
   const challengeDaySteps = asNumber(
     pick(obj, "challengeDaySteps", "challenge_day_steps"),
   );
+  const payoutCents = asNumber(
+    pick(
+      obj,
+      "payoutCents",
+      "payout_cents",
+      "prizeShareCents",
+      "prize_share_cents",
+      "ownPayoutCents",
+      "own_payout_cents",
+    ),
+  );
   return {
     id:
       asString(pick(obj, "participantId", "participant_id", "registrationId", "registration_id")) ??
@@ -521,6 +576,7 @@ function mapParticipant(raw: unknown, index: number): UnlimitedLiveDetailMapped[
     ...(prizePoolEligibilityStatus ? { prizePoolEligibilityStatus } : {}),
     ...(raceStartBaselineSteps != null ? { raceStartBaselineSteps } : {}),
     ...(challengeDaySteps != null ? { challengeDaySteps } : {}),
+    ...(payoutCents != null ? { payoutCents } : {}),
   };
 }
 
@@ -714,7 +770,7 @@ function readUnlimitedDetailPlayers(payload: unknown): unknown[] {
   return collectRosterFromEnvelope(root);
 }
 
-/** Map GET /api/unlimited-challenges/:id → live-detail race + participants. */
+/** Map GET /api/streak-challenges/:id → live-detail race + participants. */
 export function mapUnlimitedDetailToLiveDetail(
   payload: unknown,
 ): UnlimitedLiveDetailMapped | null {
@@ -849,6 +905,9 @@ export function mapUnlimitedDetailToLiveDetail(
       viewerStartAt: asString(pick(viewer ?? root ?? {}, "viewerStartAt", "viewer_start_at")),
       viewerEndAt: asString(pick(viewer ?? root ?? {}, "viewerEndAt", "viewer_end_at")),
       viewerStatus: asString(pick(viewer ?? root ?? {}, "viewerStatus", "viewer_status")),
+      verificationPending: asBool(
+        pick(viewer ?? root ?? {}, "verificationPending", "verification_pending"),
+      ),
       viewerTimezone: asString(pick(viewer ?? root ?? {}, "viewerTimezone", "viewer_timezone")),
       currentDayStartAt: asString(pick(viewer ?? root ?? {}, "currentDayStartAt", "current_day_start_at")),
       currentDayEndAt: asString(pick(viewer ?? root ?? {}, "currentDayEndAt", "current_day_end_at")),
@@ -869,10 +928,84 @@ export function mapUnlimitedDetailToLiveDetail(
       eligibilityReasonCode: asString(
         pick(viewer ?? root ?? {}, "eligibilityReasonCode", "eligibility_reason_code"),
       ),
+      finalVerificationStatus: asString(
+        pick(viewer ?? root ?? {}, "finalVerificationStatus", "final_verification_status"),
+      ),
+      finalVerificationRequired: asBool(
+        pick(viewer ?? root ?? {}, "finalVerificationRequired", "final_verification_required"),
+      ),
+      finalVerificationRequestedAt: asString(
+        pick(
+          viewer ?? root ?? {},
+          "finalVerificationRequestedAt",
+          "final_verification_requested_at",
+        ),
+      ),
+      finalVerificationSubmittedAt: asString(
+        pick(
+          viewer ?? root ?? {},
+          "finalVerificationSubmittedAt",
+          "final_verification_submitted_at",
+        ),
+      ),
+      finalVerificationCompletedAt: asString(
+        pick(
+          viewer ?? root ?? {},
+          "finalVerificationCompletedAt",
+          "final_verification_completed_at",
+        ),
+      ),
+      finalVerificationSource: asString(
+        pick(viewer ?? root ?? {}, "finalVerificationSource", "final_verification_source"),
+      ),
+      inSettlementPopulation: asBool(
+        pick(viewer ?? root ?? {}, "inSettlementPopulation", "in_settlement_population"),
+      ),
       passedDays: asNumber(pick(viewer ?? root ?? {}, "passedDays", "passed_days", "completedDays")),
       failedDays: asNumber(pick(viewer ?? root ?? {}, "failedDays", "failed_days")),
       pendingDays: asNumber(pick(viewer ?? root ?? {}, "pendingDays", "pending_days")),
       completedDays: asNumber(pick(viewer ?? root ?? {}, "completedDays", "completed_days", "passedDays")),
+      accountTimezone: asString(pick(viewer ?? root ?? {}, "accountTimezone", "account_timezone")),
+      pendingTimezone: asString(pick(viewer ?? root ?? {}, "pendingTimezone", "pending_timezone")),
+      timezoneEffectiveDay: asNumber(
+        pick(viewer ?? root ?? {}, "timezoneEffectiveDay", "timezone_effective_day"),
+      ),
+      timezoneChangeConfirmedAt: asString(
+        pick(
+          viewer ?? root ?? {},
+          "timezoneChangeConfirmedAt",
+          "timezone_change_confirmed_at",
+        ),
+      ),
+      timezoneChangeConfirmedTimezone: asString(
+        pick(
+          viewer ?? root ?? {},
+          "timezoneChangeConfirmedTimezone",
+          "timezone_change_confirmed_timezone",
+        ),
+      ),
+      timezoneChangeAppliesToChallenge: asBool(
+        pick(
+          viewer ?? root ?? {},
+          "timezoneChangeAppliesToChallenge",
+          "timezone_change_applies_to_challenge",
+        ),
+      ),
+      finalDayTimezoneLocked: asBool(
+        pick(viewer ?? root ?? {}, "finalDayTimezoneLocked", "final_day_timezone_locked"),
+      ),
+      ...(() => {
+        const flow = readUnlimitedFinalFlowFields({ viewer, ...root });
+        return {
+          finalResultStatus: flow.finalResultStatus,
+          raceFinalStatus: flow.raceFinalStatus,
+          finalFlowStatus: flow.finalFlowStatus,
+          finalFlow: flow.finalFlow,
+        };
+      })(),
+      resultsAnnouncedAt: asString(
+        pick(challenge ?? root ?? {}, "resultsAnnouncedAt", "results_announced_at"),
+      ),
     },
     participants,
   };

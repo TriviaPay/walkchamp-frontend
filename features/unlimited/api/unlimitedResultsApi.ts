@@ -1,11 +1,12 @@
 /**
  * Data access for the Unlimited Daily Goal Challenge Results screen.
  *
- * Detail: `GET /api/unlimited-challenges/:id`
- * History: `GET /api/unlimited-challenges/:id/daily-history?userId=`
- * Own prize: `GET /api/notifications` for `race_won` payoutCents only.
+ * Detail: `GET /api/streak-challenges/:id`
+ * History: `GET /api/streak-challenges/:id/daily-history?userId=`
+ * Own prize: prefer participant-row `payoutCents` from detail; notifications are fallback only.
  */
 import { authFetch } from "@/utils/authFetch";
+import { streakChallengeIdPath } from "@/features/unlimited/api/streakChallengePaths";
 import {
   mapUnlimitedDetailToLiveDetail,
   type UnlimitedLiveDetailMapped,
@@ -21,7 +22,7 @@ export async function fetchUnlimitedResultsData(
   challengeId: string,
 ): Promise<UnlimitedResultsData | null> {
   try {
-    const res = await authFetch(`/api/unlimited-challenges/${challengeId}`);
+    const res = await authFetch(streakChallengeIdPath(challengeId));
     if (!res.ok) return null;
     const payload: unknown = await res.json().catch(() => null);
     const mapped = mapUnlimitedDetailToLiveDetail(payload);
@@ -39,7 +40,7 @@ export async function fetchUnlimitedDailyHistory(
 ): Promise<UnlimitedDailyHistoryPayload | null> {
   try {
     const qs = userId ? `?userId=${encodeURIComponent(userId)}` : "";
-    const res = await authFetch(`/api/unlimited-challenges/${challengeId}/daily-history${qs}`);
+    const res = await authFetch(`${streakChallengeIdPath(challengeId, "daily-history")}${qs}`);
     if (!res.ok) return null;
     const payload: unknown = await res.json().catch(() => null);
     if (!payload || typeof payload !== "object") return null;
@@ -49,14 +50,33 @@ export async function fetchUnlimitedDailyHistory(
   }
 }
 
+/** Prefer backend payout stored on the viewer’s participant row. */
+export function payoutCentsFromParticipants(
+  participants: UnlimitedLiveDetailMapped["participants"] | null | undefined,
+  viewerUserId: string | null | undefined,
+): number | null {
+  if (!viewerUserId || !participants?.length) return null;
+  const me = participants.find((p) => p.userId === viewerUserId);
+  const cents = me?.payoutCents;
+  if (typeof cents !== "number" || !Number.isFinite(cents)) return null;
+  return Math.floor(cents);
+}
+
 /**
- * The logged-in user's own final payout for this challenge, sourced from
- * their `race_won` notification `data.payoutCents` — backend-authoritative,
- * written only once by `settleUnlimitedChallenge`. Returns `null` when no
- * such notification exists yet (not a winner, or settlement hasn't credited
- * this user yet).
+ * The logged-in user's own final payout for this challenge.
+ * Prefer participant-row `payoutCents` from challenge detail (authoritative).
+ * Fallback: scan recent `race_won` notifications (limit=50) — retention/ordering fragile.
  */
-export async function fetchUnlimitedOwnPrizeShareCents(challengeId: string): Promise<number | null> {
+export async function fetchUnlimitedOwnPrizeShareCents(
+  challengeId: string,
+  opts?: {
+    viewerUserId?: string | null;
+    participants?: UnlimitedLiveDetailMapped["participants"] | null;
+  },
+): Promise<number | null> {
+  const fromRow = payoutCentsFromParticipants(opts?.participants, opts?.viewerUserId);
+  if (fromRow != null) return fromRow;
+
   try {
     const res = await authFetch("/api/notifications?limit=50");
     if (!res.ok) return null;

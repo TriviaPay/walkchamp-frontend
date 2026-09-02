@@ -36,6 +36,12 @@ import { filterOutCashDiscovery, isPaidCashClientRoom } from "@/utils/cashEligib
 import { buildMatchmakingParams } from "@/utils/waitingRoomSeed";
 import { SkeletonList } from "@/components/SkeletonRows";
 import { AppAlert } from "@/components/AppAlert";
+import { beginProtectedPreflightAfterJoin } from "@/services/raceVerification/raceVerificationService";
+import {
+  isProtectedPrizeRace,
+  isProtectedRacePlatformSupported,
+  IOS_PROTECTED_UNAVAILABLE_MESSAGE,
+} from "@/services/raceVerification/prizeRaceHelpers";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import ActiveRaceModal, {
   type ActiveRaceInfo,
@@ -85,6 +91,8 @@ import {
   UNLIMITED_LOCAL_MIDNIGHT_NOTE,
 } from "@/utils/unlimitedViewerSchedule";
 import { getDeviceTimezone } from "@/utils/timezone";
+import { streakChallengeIdPath } from "@/features/unlimited/api/streakChallengePaths";
+import { unlimitedJoinTimezoneBody } from "@/features/unlimited/api/unlimitedTimezoneApi";
 import { fetchAvailableUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
 import { mergeUpcomingRoomsById } from "@/utils/unlimitedChallengeRooms";
 import { saveHostedUnlimitedChallenge } from "@/utils/hostedUnlimitedCache";
@@ -2068,19 +2076,22 @@ function AvailableRoomsScreenContent() {
     if (registeringRoomId) return;
     setRegisteringRoomId(room.room_id);
     try {
-      const body: Record<string, unknown> = {
-        acceptedCashChallengeConsent: room.entry_fee > 0,
-      };
-      if (room.requires_code && roomCode) {
-        body.code = roomCode;
-      }
       const isUnlimitedRoom = isUnlimitedGoalChallenge({
         challengeType: room.challenge_type,
         capacityMode: room.capacity_mode,
         maxPlayers: room.max_players,
       });
+      const body: Record<string, unknown> = isUnlimitedRoom
+        ? unlimitedJoinTimezoneBody({
+            acceptedCashChallengeConsent: room.entry_fee > 0,
+            ...(room.requires_code && roomCode ? { inviteCode: roomCode, code: roomCode } : {}),
+          })
+        : {
+            acceptedCashChallengeConsent: room.entry_fee > 0,
+            ...(room.requires_code && roomCode ? { code: roomCode } : {}),
+          };
       const registerPath = isUnlimitedRoom
-        ? `/api/unlimited-challenges/${room.room_id}/join`
+        ? streakChallengeIdPath(room.room_id, "join")
         : `/api/rooms/${room.room_id}/register`;
       let res = await authFetch(registerPath, {
         method: "POST",
@@ -2514,12 +2525,23 @@ function AvailableRoomsScreenContent() {
         return;
       }
     }
+    if (
+      isProtectedPrizeRace({
+        challengeType: room.challenge_type,
+        entryFee: room.entry_fee,
+        isSponsored: room.challenge_type === "sponsored",
+      }) &&
+      !isProtectedRacePlatformSupported()
+    ) {
+      AppAlert.alert("Not available on iPhone", IOS_PROTECTED_UNAVAILABLE_MESSAGE);
+      return;
+    }
     setJoiningRoomId(room.room_id);
     try {
       const isUnlimitedJoin =
         room.challenge_type === "unlimited_goal" || room.capacity_mode === "unlimited";
       const endpoint = isUnlimitedJoin
-        ? `/api/unlimited-challenges/${room.room_id}/join`
+        ? streakChallengeIdPath(room.room_id, "join")
         : room.entry_fee > 0
           ? `/api/races/${room.room_id}/join-paid`
           : `/api/races/${room.room_id}/join`;
@@ -2527,7 +2549,11 @@ function AvailableRoomsScreenContent() {
       const res = await authFetch(endpoint, {
         method: "POST",
         body: isUnlimitedJoin
-          ? JSON.stringify({ acceptedCashChallengeConsent: room.entry_fee > 0 })
+          ? JSON.stringify(
+              unlimitedJoinTimezoneBody({
+                acceptedCashChallengeConsent: room.entry_fee > 0,
+              }),
+            )
           : undefined,
       });
 
@@ -2554,6 +2580,9 @@ function AvailableRoomsScreenContent() {
 
       setActiveRace(room.room_id, false);
       joinRace(room.entry_fee, room.max_players, false);
+      if (user?.id && !isUnlimitedJoin) {
+        void beginProtectedPreflightAfterJoin(room.room_id, user.id);
+      }
       if (isUnlimitedJoin) {
         void saveHostedUnlimitedChallenge({
           room_id: room.room_id,
@@ -2669,7 +2698,7 @@ function AvailableRoomsScreenContent() {
       const isUnlimited =
         ar.challenge_type === "unlimited_goal" || ar.room_type === "unlimited_goal";
       const leaveUrl = isUnlimited
-        ? `/api/unlimited-challenges/${ar.room_id}/leave`
+        ? streakChallengeIdPath(ar.room_id, "leave")
         : `/api/races/${ar.room_id}/leave`;
       const res = await authFetch(leaveUrl, {
         method: "POST",
@@ -2790,7 +2819,7 @@ function AvailableRoomsScreenContent() {
         });
       // Unlimited leave releases the seat itself — do not follow with cancel-registration.
       if (isUnlimited) {
-        const res = await authFetch(`/api/unlimited-challenges/${ar.room_id}/leave`, {
+        const res = await authFetch(streakChallengeIdPath(ar.room_id, "leave"), {
           method: "POST",
           body: JSON.stringify({ reason: "cancel_registration" }),
         });

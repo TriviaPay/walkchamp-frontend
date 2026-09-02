@@ -66,8 +66,9 @@ function SegmentedBar({
           style={[
             styles.barSegment,
             {
-              flexGrow: row.barWidthPercent,
+              flexGrow: Math.max(row.barWidthPercent, 0.5),
               flexBasis: 0,
+              minWidth: row.barWidthPercent > 0 ? rs(3) : 0,
               backgroundColor: row.color,
             },
           ]}

@@ -43,6 +43,9 @@ import { RoomInvitationModal, type RoomInvitation } from "@/components/RoomInvit
 import { WalkChampSplash } from "@/components/WalkChampSplash";
 import { TitleUnlockProvider } from "@/context/TitleUnlockContext";
 import { TopBannerProvider } from "@/context/TopBannerContext";
+import { UnlimitedTimezoneProvider } from "@/context/UnlimitedTimezoneContext";
+import { TimezoneChangeStickyBanner } from "@/components/timezone/TimezoneChangeStickyBanner";
+import { TimezoneChangeWalkModal } from "@/components/timezone/TimezoneChangeWalkModal";
 import { MAX_FONT_SIZE_MULTIPLIER } from "@/constants/accessibility";
 import TitleUnlockModal from "@/components/TitleUnlockModal";
 import { useAuth } from "@/context/AuthContext";
@@ -76,6 +79,7 @@ import { setHomeStepSetupShellReady } from "@/services/permissions/homePermissio
 import { SessionRealtimeGuard } from "@/components/SessionRealtimeGuard";
 import { SessionNoticeHost } from "@/components/SessionNoticeHost";
 import { StepTrackingNotificationPrompt } from "@/components/StepTrackingNotificationPrompt";
+import { UnlimitedFinalVerificationHost } from "@/components/UnlimitedFinalVerificationHost";
 import { logger } from "@/utils/logger";
 
 // Cap OS accessibility font scaling (see constants/accessibility.ts policy).
@@ -466,6 +470,7 @@ function PushNotificationSetup() {
       <SessionRealtimeGuard />
       <SessionNoticeHost />
       <StepTrackingNotificationPrompt />
+      <UnlimitedFinalVerificationHost />
     </>
   );
 }
@@ -557,8 +562,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (fontsLoaded || fontError || fontTimedOut) {
-      // Hide native splash once fonts are ready — custom Lottie splash takes over.
-      SplashScreen.hideAsync().catch(() => undefined);
+      // Keep native splash visible until WalkChampSplash mounts and covers it.
       scheduleAppStartupReady();
     }
   }, [fontsLoaded, fontError, fontTimedOut]);
@@ -607,6 +611,7 @@ export default function RootLayout() {
                           <GestureHandlerRootView style={{ flex: 1 }}>
                             <KeyboardProvider>
                               <TopBannerProvider>
+                              <UnlimitedTimezoneProvider>
                               <TitleUnlockProvider>
                                 <RootLayoutNav />
                                 <OfflineBanner />
@@ -616,6 +621,8 @@ export default function RootLayout() {
                                 <CoinBalanceBootstrap />
                                 <CoinRealtimeSync />
                                 <CoinRewardToast />
+                                <TimezoneChangeStickyBanner />
+                                <TimezoneChangeWalkModal />
                                 <RoomInvitationOverlay />
                                 <PushNotificationSetup />
                                 <TitleUnlockModal />
@@ -628,6 +635,7 @@ export default function RootLayout() {
                                   />
                                 ) : null}
                               </TitleUnlockProvider>
+                              </UnlimitedTimezoneProvider>
                               </TopBannerProvider>
                             </KeyboardProvider>
                           </GestureHandlerRootView>

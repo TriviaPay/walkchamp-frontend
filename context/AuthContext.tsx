@@ -118,6 +118,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (profile: UserProfile, sessionJwt: string, refreshJwt: string) => {
       if (authTimerRef.current) clearTimeout(authTimerRef.current);
       setIsAuthenticating(true);
+      void import("@/services/startupWarmup").then(({ beginStartupWarmup }) => {
+        beginStartupWarmup();
+      });
+      void import("@/services/deviceIdentity").then(({ getInstallationId }) => {
+        void getInstallationId();
+      });
       const { beginSessionLoginGrace } = await import(
         "@/services/sessionInvalidation"
       );
@@ -228,8 +234,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     cancelProactiveTokenRefresh();
     stepPollingService.stopPolling("logout");
     raceStepSyncService.cancelPending();
-    // Clear in-memory screen cache so the next user never sees stale data.
-    screenCache.clearAll();
+    // Clear screen cache (memory + AsyncStorage) so the next user never sees
+    // stale private conversations / profile / groups from this account.
+    // Memory clears synchronously at the start of clearAll; await disk wipe
+    // (bounded) before continuing so a fast re-login cannot rehydrate stale keys.
+    try {
+      await Promise.race([
+        screenCache.clearAll(),
+        new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+      ]);
+    } catch {
+      /* best-effort */
+    }
     try {
       const { clearHydrationMarks } = require(
         "@/services/loginHydration",
@@ -305,6 +321,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Native step cleanup + Descope API continue in the background.
     dispatch(authActions.localLogout());
     void clearStepSessionForLogout(userId).catch(() => {});
+    void import("@/services/raceVerification/raceVerificationService").then((m) => {
+      m.handleProtectedRaceAccountSwitch();
+      m.stopProtectedRaceVerification();
+    }).catch(() => {});
     void storageRemove(STORAGE_KEYS.USER);
     void storageRemove(STORAGE_KEYS.COIN_BALANCE);
     void storageRemove(STORAGE_KEYS.WALLET);
@@ -367,6 +387,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               accessToken: sessionToken,
               userId: uid,
             }).catch(() => {});
+            void import("@/services/raceVerification/raceVerificationService")
+              .then(async (m) => {
+                const ok = await m.resumeProtectedRaceFromStorage(uid);
+                if (!ok) return;
+                const raceId = store.getState().prizeVerification.raceId;
+                if (raceId && !store.getState().prizeVerification.evidenceSubmitted) {
+                  m.beginProtectedRaceLive({ raceId });
+                }
+              })
+              .catch(() => {});
           }
         }
       }

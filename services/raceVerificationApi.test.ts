@@ -26,7 +26,7 @@ assert.equal(
 );
 
 assert.equal(resultStatusDisplayLabel("finalized"), "Final result verified");
-assert.equal(resultStatusDisplayLabel("verification_pending"), "Verifying your steps");
+assert.equal(resultStatusDisplayLabel("verification_pending"), "Checking final results");
 assert.equal(
   resultStatusDisplayLabel("verification_delayed"),
   "Verification taking longer than expected",

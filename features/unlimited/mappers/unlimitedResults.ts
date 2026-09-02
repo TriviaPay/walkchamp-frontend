@@ -38,6 +38,14 @@ export interface UnlimitedResultStatusInput {
 /** Settlement outcomes that mean "nothing left to validate" (spec §7, §11). */
 const FINAL_SETTLEMENT_STATUSES = new Set(["completed", "refunded", "rolled_over"]);
 
+/** Only global `results_ready` may unlock winner/loser/payout/final leaderboard. */
+export function canPublishFinalResult(
+  resultsStatus: string | null | undefined,
+): boolean {
+  const s = (resultsStatus ?? "").trim().toLowerCase();
+  return s === "results_ready";
+}
+
 /** Map backend resultsStatus vocabulary onto the FE result-state model. */
 export function normalizeBackendResultsStatus(
   raw: string | null | undefined,
@@ -114,6 +122,7 @@ export interface PrizePoolEligibilityInput {
 export function resolvePrizePoolEligibilityStatus(
   input: PrizePoolEligibilityInput,
 ): PrizePoolEligibilityStatus {
+  if (input.resultStatus !== "results_ready") return "pending";
   const q = (input.qualificationStatus ?? "").trim().toLowerCase();
   // Terminal membership always wins over a stale pending eligibility field.
   if (q === "disqualified") return "not_eligible";
@@ -197,7 +206,7 @@ export function resultsScreenCopy(
         statusHeadline: "Waiting for all participants",
         message:
           countLine ??
-          "Your challenge is complete. Some participants are still finishing the race in their local time zones.",
+          "We're waiting for all participants' challenge days to finish.",
         secondaryText:
           "Final prize-pool results will be available after every participant finishes and all daily steps are verified.",
       };
@@ -206,9 +215,9 @@ export function resultsScreenCopy(
       return {
         title: "Challenge Results",
         statusHeadline: "Steps Validation in Progress",
-        message:
+        message: "Final results are being verified.",
+        secondaryText:
           "All participants have completed the challenge. We're validating daily step records before finalizing prize-pool eligibility.",
-        secondaryText: "Results will be announced soon.",
       };
     case "results_ready":
       return {

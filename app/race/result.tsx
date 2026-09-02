@@ -168,7 +168,10 @@ export default function RaceResultScreen() {
           : verificationStatus === "verification_delayed"
             ? "verification_delayed"
             : "pending",
-    { verificationFeatureEnabled: featureOn ? true : resultStatus?.featureEnabled ?? null },
+    {
+      verificationFeatureEnabled: featureOn ? true : resultStatus?.featureEnabled ?? null,
+      settlementStatus: resultStatus?.settlementStatus,
+    },
   );
 
   const userResult = results.find((r) => r.participant.isUser);

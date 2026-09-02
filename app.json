@@ -5,11 +5,13 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icons/ios/WalkChampProgress100.png",
-    "scheme": ["walkchamp", "globalwalkerleague"],
+    "scheme": [
+      "walkchamp",
+      "globalwalkerleague"
+    ],
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/icons/WalkChampProgress100.png",
       "resizeMode": "contain",
       "backgroundColor": "#EAF6E8"
     },
@@ -68,6 +70,21 @@
       "favicon": "./assets/icons/WalkChampProgress100.png"
     },
     "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#EAF6E8",
+          "resizeMode": "contain",
+          "android": {
+            "backgroundColor": "#EAF6E8",
+            "resizeMode": "contain"
+          },
+          "ios": {
+            "backgroundColor": "#EAF6E8",
+            "resizeMode": "contain"
+          }
+        }
+      ],
       "expo-dev-client",
       [
         "onesignal-expo-plugin",
@@ -196,9 +213,37 @@
     },
     "extra": {
       "eas": {
-        "projectId": "90d7e556-85e1-44db-8cd5-2f2e6bc0ed7b"
+        "build": {
+          "experimental": {
+            "ios": {
+              "appExtensions": [
+                {
+                  "targetName": "OneSignalNotificationServiceExtension",
+                  "bundleIdentifier": "com.walkchamp.app.OneSignalNotificationServiceExtension",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.com.walkchamp.app.onesignal"
+                    ]
+                  }
+                },
+                {
+                  "targetName": "WalkChampWidget",
+                  "bundleIdentifier": "com.walkchamp.app.WalkChampWidget",
+                  "entitlements": {}
+                }
+              ]
+            }
+          }
+        },
+        "projectId": "c83bf004-14fe-4582-b7e1-78617d1d5c96"
+      },
+      "appEnv": "development",
+      "descopeProjectId": "P3E9mQAxf0N6l75csydDy6kGeOPR",
+      "enableUnlimitedGoal": true,
+      "router": {
+        "origin": false
       }
     },
-    "owner": "miragamings-organization"
+    "owner": "trivia1"
   }
 }

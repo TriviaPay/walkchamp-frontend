@@ -131,7 +131,7 @@ export function MicPassModal({ visible, onClose, onGranted }: Props) {
           Authorization: `Bearer ${session}`,
         },
         body: JSON.stringify({
-          product_id: "mic_pass_lifetime",
+          product_id: MIC_PASS_PRODUCT_ID,
           platform: "dev",
           transaction_id: `dev_${Date.now()}`,
           purchase_token: "dev_token",

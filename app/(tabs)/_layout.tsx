@@ -5,7 +5,7 @@ import { Icon, Label, NativeTabs } from "expo-router/unstable-native-tabs";
 import { SymbolView } from "expo-symbols";
 import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import React, { useCallback, useMemo } from "react";
-import { Platform, StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 
 import { useColors } from "@/hooks/useColors";
 import { useSafeLayout } from "@/hooks/useSafeLayout";
@@ -16,6 +16,7 @@ import { useUnread } from "@/context/UnreadContext";
 import * as Haptics from "@/utils/haptics";
 import { typography } from "@/constants/typography";
 import { sizes } from "@/constants/sizes";
+import { FIXED_CHROME_TEXT_PROPS } from "@/constants/accessibility";
 import { rf } from "@/utils/responsive";
 
 function NativeTabLayout() {
@@ -99,10 +100,18 @@ function ClassicTabLayout() {
       freezeOnBlur: true,
       lazy: true,
       tabBarStyle,
-      tabBarLabelStyle: {
-        fontSize: typography.tab.fontSize,
-        fontWeight: typography.tab.fontWeight,
-      },
+      tabBarLabel: ({ children, color }: { children: string; color: string }) => (
+        <Text
+          style={{
+            color,
+            fontSize: typography.tab.fontSize,
+            fontWeight: typography.tab.fontWeight,
+          }}
+          {...FIXED_CHROME_TEXT_PROPS}
+        >
+          {children}
+        </Text>
+      ),
       tabBarBackground: () => tabBarBackgroundEl,
     }),
     [

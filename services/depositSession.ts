@@ -1,8 +1,9 @@
 import { authFetch } from "@/utils/authFetch";
 import {
   DEPOSIT_PENDING_MAX_AGE_MS,
-  DEPOSIT_POLL_INTERVAL_MS,
+  DEPOSIT_POLL_RATE_LIMIT_MS,
   PAYMENT_API_PATHS,
+  depositPollDelayMs,
 } from "@/config/paymentsConfig";
 import { storageGet, storageRemove, storageSet, STORAGE_KEYS } from "@/utils/storage";
 
@@ -13,7 +14,8 @@ export type DepositPollStatus =
   | "pending"
   | "requires_review"
   | "settlement_error"
-  | "expired";
+  | "expired"
+  | "rate_limited";
 
 export type PendingDepositSession = {
   transactionId: string;
@@ -85,11 +87,40 @@ export async function peekPaymentResult(): Promise<PaymentResultPayload | null> 
   return storageGet<PaymentResultPayload>(STORAGE_KEYS.PAYMENT_RESULT);
 }
 
+export type DepositStatusFetchResult = {
+  status: DepositPollStatus;
+  httpStatus: number;
+  retryAfterMs?: number;
+};
+
+export async function fetchDepositStatusDetailed(
+  transactionId: string,
+): Promise<DepositStatusFetchResult> {
+  try {
+    const res = await authFetch(PAYMENT_API_PATHS.depositStatus(transactionId));
+    if (res.status === 429) {
+      const retryAfterHeader = res.headers.get("Retry-After");
+      const retrySec = retryAfterHeader ? Number(retryAfterHeader) : NaN;
+      const retryAfterMs =
+        Number.isFinite(retrySec) && retrySec > 0
+          ? Math.max(retrySec * 1000, DEPOSIT_POLL_RATE_LIMIT_MS)
+          : DEPOSIT_POLL_RATE_LIMIT_MS;
+      return { status: "rate_limited", httpStatus: 429, retryAfterMs };
+    }
+    if (!res.ok) return { status: "pending", httpStatus: res.status };
+    const data = (await res.json()) as { transaction: { status: string } };
+    return {
+      status: (data.transaction?.status ?? "pending") as DepositPollStatus,
+      httpStatus: res.status,
+    };
+  } catch {
+    return { status: "pending", httpStatus: 0 };
+  }
+}
+
 export async function fetchDepositStatus(transactionId: string): Promise<DepositPollStatus> {
-  const res = await authFetch(PAYMENT_API_PATHS.depositStatus(transactionId));
-  if (!res.ok) return "pending";
-  const data = (await res.json()) as { transaction: { status: string } };
-  return (data.transaction?.status ?? "pending") as DepositPollStatus;
+  const result = await fetchDepositStatusDetailed(transactionId);
+  return result.status === "rate_limited" ? "pending" : result.status;
 }
 
 export function depositStatusToUiResult(status: DepositPollStatus): PaymentResultStatus | null {
@@ -208,20 +239,37 @@ export async function ingestPaymentReturnUrl(raw: string): Promise<boolean> {
   return true;
 }
 
-/** Poll until terminal status or timeout. Used while browser checkout is open. */
+/** Poll until terminal status or timeout. Uses exponential backoff under deposit rate limits. */
 export async function pollDepositUntilTerminal(
   transactionId: string,
-  opts?: { intervalMs?: number; maxWaitMs?: number; onTick?: (status: DepositPollStatus) => void },
+  opts?: {
+    intervalMs?: number;
+    maxWaitMs?: number;
+    onTick?: (status: DepositPollStatus) => void;
+    shouldStop?: () => boolean;
+  },
 ): Promise<DepositPollStatus> {
-  const intervalMs = opts?.intervalMs ?? DEPOSIT_POLL_INTERVAL_MS;
   const maxWaitMs = opts?.maxWaitMs ?? 10 * 60 * 1000;
   const started = Date.now();
+  let attempt = 0;
+  let nextDelayMs = opts?.intervalMs ?? depositPollDelayMs(0);
 
   while (Date.now() - started < maxWaitMs) {
-    const status = await fetchDepositStatus(transactionId);
-    opts?.onTick?.(status);
-    if (isTerminalDepositStatus(status)) return status;
-    await new Promise((r) => setTimeout(r, intervalMs));
+    if (opts?.shouldStop?.()) return "processing";
+    await new Promise((r) => setTimeout(r, nextDelayMs));
+    if (opts?.shouldStop?.()) return "processing";
+
+    const result = await fetchDepositStatusDetailed(transactionId);
+    opts?.onTick?.(result.status);
+    if (isTerminalDepositStatus(result.status) || isPollCompleteDepositStatus(result.status)) {
+      return result.status;
+    }
+    if (result.status === "rate_limited" || result.httpStatus === 429) {
+      nextDelayMs = result.retryAfterMs ?? DEPOSIT_POLL_RATE_LIMIT_MS;
+      continue;
+    }
+    attempt += 1;
+    nextDelayMs = opts?.intervalMs ?? depositPollDelayMs(attempt);
   }
   return "processing";
 }

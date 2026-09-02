@@ -80,11 +80,40 @@ export const PAYMENT_API_PATHS = {
   walletSummary: "/api/wallet/summary",
 } as const;
 
-/** Poll interval while checkout browser is open or deposit is pending verification. */
-export const DEPOSIT_POLL_INTERVAL_MS = 400;
+/**
+ * Deposit status polling must stay under the backend wallet deposit rate limit
+ * (currently ~10 requests / 15 minutes across /api/wallet/deposit/*).
+ * Create-intent already consumes one slot — keep status polls sparse with backoff.
+ */
 
-/** First status check shortly after checkout opens (before interval polling). */
-export const DEPOSIT_POLL_FIRST_MS = 150;
+/** First status check after checkout opens (not immediate — create just counted). */
+export const DEPOSIT_POLL_FIRST_MS = 2_500;
+
+/**
+ * Base interval used only as documentation / callers that need a single constant.
+ * Prefer `depositPollDelayMs(attempt)` for live polling.
+ */
+export const DEPOSIT_POLL_INTERVAL_MS = 8_000;
+
+/** Cap between status polls so we remain under the shared deposit rate limit. */
+export const DEPOSIT_POLL_MAX_INTERVAL_MS = 90_000;
+
+/** After HTTP 429, wait at least this long before the next status GET. */
+export const DEPOSIT_POLL_RATE_LIMIT_MS = 90_000;
+
+/**
+ * Exponential backoff for deposit status polls.
+ * attempt 0 → FIRST, then ~5s, 10s, 20s, 40s … capped at MAX.
+ */
+export function depositPollDelayMs(attempt: number): number {
+  const n = Math.max(0, Math.floor(attempt));
+  if (n === 0) return DEPOSIT_POLL_FIRST_MS;
+  const exp = Math.min(
+    DEPOSIT_POLL_INTERVAL_MS * 2 ** (n - 1),
+    DEPOSIT_POLL_MAX_INTERVAL_MS,
+  );
+  return Math.max(DEPOSIT_POLL_FIRST_MS, exp);
+}
 
 /** Stop resume-polling a pending deposit after this duration (24 h). */
 export const DEPOSIT_PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000;

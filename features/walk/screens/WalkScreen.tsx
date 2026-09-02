@@ -26,6 +26,11 @@ import {
 } from "@/components/RaceStartingSoonCard";
 import { LiveClockText } from "@/components/perf/LiveClockText";
 import { ensureMatchStepPermissionsReady } from "@/services/permissions/matchPermissionGate";
+import { beginProtectedPreflightAfterJoin } from "@/services/raceVerification/raceVerificationService";
+import {
+  isProtectedRacePlatformSupported,
+  IOS_PROTECTED_UNAVAILABLE_MESSAGE,
+} from "@/services/raceVerification/prizeRaceHelpers";
 import { requestHomeStepSetup } from "@/services/permissions/homePermissionFlow";
 import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -67,6 +72,8 @@ import { useTheme } from "@/context/ThemeContext";
 import { useSound } from "@/context/SoundContext";
 import { useTabBarHeight } from "@/hooks/useTabBarHeight";
 import { useIncrementalStepDisplay } from "@/hooks/useIncrementalStepDisplay";
+import { useChallengeParticipationBreakdown } from "@/hooks/useChallengeParticipationBreakdown";
+import { ChallengeParticipationBreakdownCard } from "@/components/ChallengeParticipationBreakdownCard";
 import { useWalkContext, TrackingStatus } from "@/context/WalkContext";
 import { useWalkTodaySteps } from "@/services/walkTodayStepsStore";
 import { useStepSourceGuard } from "@/hooks/useStepSourceGuard";
@@ -77,7 +84,6 @@ import {
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import {
   ENABLE_CASH_CHALLENGES,
-  ENABLE_LEGACY_CASH_RACE_CARDS,
   cashEligibilityForUser,
   isUnlimitedGoalFrontendEnabled,
   isWalkTrendingChallengesPreviewEnabled,
@@ -97,7 +103,6 @@ import {
   isValidUnlimitedEntryFeeCents,
   type UnlimitedGoalDurationDays,
 } from "@/utils/unlimitedGoal";
-import { computeUnlimitedViewerSchedule } from "@/utils/unlimitedViewerSchedule";
 import { getDeviceTimezone } from "@/utils/timezone";
 import { readKnownRaceSnapshot } from "@/utils/knownRaceSnapshot";
 import {
@@ -109,11 +114,8 @@ import {
 import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
 import { ensureActiveRaceInStore } from "@/core/steps/stepProgressCoordinator";
 import { bindUnlimitedBackgroundTracking } from "@/features/unlimited/services/bindUnlimitedBackgroundTracking";
-import {
-  resolveUnlimitedResultStatus,
-  resolveUnlimitedResultCardState,
-  unlimitedResultCardCopy,
-} from "@/utils/unlimitedResults";
+import { streakChallengeIdPath, streakChallengePath } from "@/features/unlimited/api/streakChallengePaths";
+import { resolveUnlimitedNextRacePhase } from "@/features/unlimited/mappers/unlimitedStreakParticipation";
 import {
   previewUnlimitedGoalPaymentQuote,
   type UnlimitedGoalPaymentQuote,
@@ -148,8 +150,10 @@ import {
 } from "@/utils/createChallengeFlow";
 import { trackEvent } from "@/services/analytics";
 import {
+  advanceVerifiedStepsHold,
   isInflatedProvisionalVsVerified,
   looksLikeSinceBootCounter,
+  resolveVerifiedStepsForWalkDisplay,
   resolveWalkNotificationSteps,
 } from "@/platform/steps/walkDisplaySteps";
 import { useApp } from "@/context/AppContext";
@@ -180,6 +184,7 @@ import {
 import { TouchableOpacity } from '@/components/HapticTouchableOpacity';
 import { androidHCService } from "@/services/steps/androidHealthConnectService";
 import { rf, rs } from "@/utils/responsive";
+import { FIXED_CHROME_TEXT_PROPS, FIXED_PILL_TEXT_PROPS } from "@/constants/accessibility";
 import { shallowEqual, useDispatch, useSelector } from "react-redux";
 import type { RootState, AppDispatch } from "@/store";
 import { fetchTrackThemes, purchaseTrackTheme, clearPurchaseError } from "@/store/slices/trackThemesSlice";
@@ -218,14 +223,13 @@ import {
   CashChallengePaymentBreakdown,
   CashChallengeRewardSplit,
 } from "@/components/CashChallengePaymentBreakdown";
-import { WalkProgressIcon } from "@/components/WalkProgressIcon";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { FaqAccordionList } from "@/components/FaqAccordionList";
 import { PrivacyPolicyDocument } from "@/components/PrivacyPolicyDocument";
 import { TermsAndConditionsDocument } from "@/components/TermsAndConditionsDocument";
 import { clampDailyProgress } from "@/utils/stepProgress";
 import CoinsBattleModal from "@/components/CoinsBattleModal";
-import { screenCache } from "@/utils/screenCache";
+import { screenCache, scopedScreenCacheKey } from "@/utils/screenCache";
 import {
   DELETE_ACCOUNT_WARNING,
   messageForAccountDeletionRequestResponse,
@@ -389,30 +393,6 @@ const RACE_OPTIONS = [
     icon: "gift",
     iconImage: undefined as (ReturnType<typeof require> | undefined), },
   {
-    fee: 1,
-    label: "$1 Challenge",
-    subtitle: "Entry fee · Skill-based walking challenge",
-    gradientColors: ["#00E676", "#00B4FF"] as [string, string],
-    lightAccent: "#06B6D4",
-    icon: "zap",
-    iconImage: undefined as (ReturnType<typeof require> | undefined), },
-  {
-    fee: 3,
-    label: "$3 Challenge",
-    subtitle: "Larger reward pool · Skill-based walking challenge",
-    gradientColors: ["#4C0519", "#BE123C"] as [string, string],
-    lightAccent: "#FB7185",
-    icon: "trending-up",
-    iconImage: undefined as (ReturnType<typeof require> | undefined), },
-  {
-    fee: 5,
-    label: "$5 Challenge",
-    subtitle: "Premium entry · Largest reward pool",
-    gradientColors: ["#FFD700", "#FF6B35"] as [string, string],
-    lightAccent: "#F59E0B",
-    icon: "award",
-    iconImage: undefined as (ReturnType<typeof require> | undefined), },
-  {
     fee: -1,
     label: "Coins Battle",
     subtitle: "Bet coins · Winner takes the prize pool",
@@ -422,16 +402,13 @@ const RACE_OPTIONS = [
     iconImage: require("@/assets/images/game-coin.png") as ReturnType<typeof require>, },
 ];
 
+/** Top finishers / variable cash card styling (not a legacy $1/$3/$5 tier). */
+const CASH_PRIZE_CARD_GRADIENT = ["#4C0519", "#BE123C"] as [string, string];
+
 
 // ── Challenge Entry Options ───────────────────────────────────────────────────
 /** Cash Prize Challenge premium card — gated by cash challenges flag. */
 const ENABLE_THREE_DOLLAR_CHALLENGE = ENABLE_CASH_CHALLENGES;
-
-/** Main Join section: Free + Coins Battle; legacy $1/$3/$5 only when explicitly enabled. */
-function showRaceOptionInJoinSection(fee: number): boolean {
-  if (fee === 0 || fee === -1) return true;
-  return fee > 0 && ENABLE_LEGACY_CASH_RACE_CARDS && ENABLE_CASH_CHALLENGES;
-}
 
 function isPaidCashFee(fee: number): boolean {
   return fee > 0;
@@ -474,9 +451,13 @@ function cashHostBody(fee: number, maxPlayers: number, targetSteps: number, trac
       trackLayout,
       customEntryAmountCents: entryFeeCents,
       entryFeeCents,
+      durationMinutes: 60,
     };
   }
-  return { entryType, maxPlayers, targetSteps, trackLayout };
+  if (entryType === "free") {
+    return { entryType, maxPlayers, targetSteps, trackLayout };
+  }
+  return { entryType, maxPlayers, targetSteps, trackLayout, durationMinutes: 60 };
 }
 
 function cashChallengeBlockedMessage(serverError?: string): string {
@@ -502,16 +483,7 @@ const ACTIVE_ENTRY_OPTIONS: ChallengeEntryOption[] = [
   })),
 ];
 
-/** Preserved for future re-activation — not shown while ENABLE_CASH_CHALLENGES is false */
-const FUTURE_CASH_ENTRY_OPTIONS: ChallengeEntryOption[] = [
-  { label: "$1", type: "paid_cash", value: 1 },
-  { label: "$3", type: "paid_cash", value: 3 },
-  { label: "$5", type: "paid_cash", value: 5 },
-];
-
-const ENTRY_OPTIONS: ChallengeEntryOption[] = ENABLE_CASH_CHALLENGES
-  ? [...ACTIVE_ENTRY_OPTIONS, ...FUTURE_CASH_ENTRY_OPTIONS]
-  : ACTIVE_ENTRY_OPTIONS;
+const ENTRY_OPTIONS: ChallengeEntryOption[] = ACTIVE_ENTRY_OPTIONS;
 
 const STEP_TARGETS = [
   50, 100, 500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000,
@@ -836,8 +808,8 @@ function StatCard({ icon, value, label, color, bg }: { icon: string; value: stri
       <View style={[styles.statIconBox, { backgroundColor: bg }]}>
         <Feather name={icon as never} size={14} color={color} />
       </View>
-      <Text style={[styles.statValue, { color: colors.foreground }]}>{value}</Text>
-      <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>{label}</Text>
+      <Text style={[styles.statValue, { color: colors.foreground }]} {...FIXED_CHROME_TEXT_PROPS}>{value}</Text>
+      <Text style={[styles.statLabel, { color: colors.mutedForeground }]} {...FIXED_PILL_TEXT_PROPS}>{label}</Text>
     </View>
   ); }
 
@@ -1139,6 +1111,9 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
   const [stepSourceInfo,    setStepSourceInfo]    = useState<{ platform: string; permissionStatus: string; setupCompleted: boolean } | null>(null);
   const [showWearableSetup, setShowWearableSetup] = useState(false);
   const [deleteLoading,     setDeleteLoading]     = useState(false);
+  const [dashboardExpanded, setDashboardExpanded] = useState(false);
+  const { breakdown: dashboardBreakdown, loading: dashboardLoading } =
+    useChallengeParticipationBreakdown(user?.id, dashboardExpanded);
 
   // Sign-out confirmation overlay (rendered inside the modal so it works on iOS)
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
@@ -1152,7 +1127,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
 
   // Inline sub-page state — reset to "main" whenever the modal closes
   const [profilePage, setProfilePage] = useState<"main" | "help" | "faq" | "privacy" | "terms">("main");
-  useEffect(() => { if (!visible) setProfilePage("main"); }, [visible]);
+  useEffect(() => { if (!visible) { setProfilePage("main"); setDashboardExpanded(false); } }, [visible]);
 
   // Local rank from profile fetch (real all-time global rank from the API)
   const [profileRank, setProfileRank] = useState<number>(userRank);
@@ -1256,7 +1231,6 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
       const json = await res.json().catch(() => ({}));
       const stats = json.data?.stats ?? null;
       if (stats) {
-        const profileId = json.data?.profile?.id ?? null;
         const title: ActiveTitle | null = json.data?.active_title ?? null;
         setProfileStats({ ...stats, activeTitle: title });
         setActiveTitle(title);
@@ -1435,7 +1409,11 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
 
   return (
     <Modal visible={visible} animationType={animationType} presentationStyle="pageSheet"
-      onRequestClose={() => { if (profilePage !== "main") { setProfilePage("main"); } else { onClose(); } }}>
+      onRequestClose={() => {
+        if (profilePage !== "main") { setProfilePage("main"); return; }
+        if (isEditing) { setIsEditing(false); setUsernameError(""); return; }
+        onClose();
+      }}>
       <SafeAreaView
         edges={["top", "left", "right", "bottom"]}
         style={[pmStyles.container, { backgroundColor: colors.background }]}
@@ -1449,16 +1427,22 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
           <TermsSubpage colors={colors} onBack={() => setProfilePage("main")} />
         ) : (<>
 
-        {/* Header: X close | title | edit pencil/X */}
+        {/* Header: X close (hidden while editing) | title | edit pencil/X */}
         <View style={[pmStyles.header, { borderBottomColor: colors.border }]}>
-          <TouchableOpacity onPress={onClose} hitSlop={12}>
-            <Feather name="x" size={22} color={colors.foreground} />
-          </TouchableOpacity>
+          {isEditing ? (
+            <View style={{ width: 22 }} />
+          ) : (
+            <TouchableOpacity onPress={onClose} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close profile">
+              <Feather name="x" size={22} color={colors.foreground} />
+            </TouchableOpacity>
+          )}
           <Text style={[pmStyles.headerTitle, { color: colors.foreground }]}>My Profile</Text>
           <TouchableOpacity
             hitSlop={12}
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsEditing((e) => !e); setUsernameError(""); }}
             style={[pmStyles.editToggleBtn, { backgroundColor: isEditing ? colors.primary + "20" : "transparent", borderColor: isEditing ? colors.primary : colors.border }]}
+            accessibilityRole="button"
+            accessibilityLabel={isEditing ? "Cancel editing" : "Edit profile"}
           >
             <Feather name={isEditing ? "x" : "edit-2"} size={17} color={isEditing ? colors.primary : colors.mutedForeground} />
           </TouchableOpacity>
@@ -1689,9 +1673,72 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
             <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
           </TouchableOpacity>
 
-
-          {/* ── Preferences ── */}
+          {/* Order: Step tracking → Invite friends → New dashboard → Vibration → Dark mode */}
           <View style={[pmStyles.settingsList, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <TouchableOpacity
+              style={[pmStyles.toggleRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
+              onPress={() => onNavigate("/profile/invite-friends")}
+              accessibilityRole="button"
+              accessibilityLabel="Invite friends"
+            >
+              <View style={[pmStyles.toggleIcon, { backgroundColor: colors.gold + "18" }]}>
+                <Feather name="gift" size={17} color={colors.gold} />
+              </View>
+              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>Invite friends</Text>
+              <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                pmStyles.toggleRow,
+                {
+                  borderBottomColor: colors.border,
+                  borderBottomWidth: dashboardExpanded ? 0 : StyleSheet.hairlineWidth,
+                },
+              ]}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setDashboardExpanded((v) => !v);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="New dashboard"
+              accessibilityState={{ expanded: dashboardExpanded }}
+            >
+              <View style={[pmStyles.toggleIcon, { backgroundColor: colors.primary + "18" }]}>
+                <Feather name="bar-chart-2" size={17} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>New dashboard</Text>
+                <Text style={{ fontSize: rf(11), color: colors.mutedForeground, marginTop: 1 }} numberOfLines={1}>
+                  Challenge participation breakdown
+                </Text>
+              </View>
+              <Feather
+                name={dashboardExpanded ? "chevron-up" : "chevron-down"}
+                size={16}
+                color={colors.mutedForeground}
+              />
+            </TouchableOpacity>
+            {dashboardExpanded ? (
+              <View
+                style={{
+                  paddingHorizontal: rs(8),
+                  paddingBottom: rs(4),
+                  borderBottomColor: colors.border,
+                  borderBottomWidth: StyleSheet.hairlineWidth,
+                }}
+              >
+                <ChallengeParticipationBreakdownCard
+                  breakdown={dashboardBreakdown}
+                  loading={dashboardLoading}
+                  compact
+                />
+                {!dashboardLoading && dashboardBreakdown === undefined ? (
+                  <Text style={{ fontSize: rf(13), lineHeight: 18, color: colors.mutedForeground, paddingHorizontal: rs(8), paddingBottom: rs(8) }}>
+                    Challenge participation is unavailable right now.
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
             <View style={[pmStyles.toggleRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
               <View style={[pmStyles.toggleIcon, { backgroundColor: colors.accent + "18" }]}>
                 <Feather name="volume-2" size={17} color={colors.accent} />
@@ -1707,7 +1754,7 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
               <View style={[pmStyles.toggleIcon, { backgroundColor: colors.neonBlue + "18" }]}>
                 <Feather name={darkTheme ? "moon" : "sun"} size={17} color={colors.neonBlue} />
               </View>
-              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>{darkTheme ? "Dark Mode" : "Light Mode"}</Text>
+              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>Dark mode</Text>
               <Switch value={darkTheme} onValueChange={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); toggleTheme(); }}
                 trackColor={{ false: colors.border, true: colors.neonBlue + "80" }}
                 thumbColor={darkTheme ? colors.neonBlue : colors.mutedForeground}
@@ -1727,20 +1774,6 @@ function ProfileModal({ visible, onClose, onNavigate, animationType = "slide", u
                     ios_backgroundColor={colors.border}
                   />}
             </View>
-          </View>
-
-          {/* ── Wallet & Rewards ── */}
-          <View style={[pmStyles.settingsList, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <TouchableOpacity
-              style={[pmStyles.toggleRow]}
-              onPress={() => onNavigate("/profile/invite-friends")}
-            >
-              <View style={[pmStyles.toggleIcon, { backgroundColor: colors.gold + "18" }]}>
-                <Feather name="gift" size={17} color={colors.gold} />
-              </View>
-              <Text style={[pmStyles.toggleLabel, { color: colors.foreground }]}>Invite Friends</Text>
-              <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
-            </TouchableOpacity>
           </View>
 
           {/* ── Support & Legal ── */}
@@ -2053,6 +2086,7 @@ function WalkScreenContent() {
     [user],
   );
   const dbWalk = useTodayWalkSteps(user?.id);
+  const walkStepsHoldRef = useRef<{ key: string; steps: number }>({ key: "", steps: 0 });
   const tabBarHeight = useTabBarHeight();
   const modalScrollPad = { paddingBottom: safeBottom + rs(40) };
   const { joinRace, setActiveRace, setRaceTargetSteps, racePhase, raceId: activeRaceId } = useRace();
@@ -2110,10 +2144,27 @@ function WalkScreenContent() {
     verifiedTodaySteps,
     Math.max(0, Math.floor(dbWalk.todaySteps ?? 0)),
   );
+  const walkStepsHoldKey = `${user?.id ?? ""}:${getTodayKey()}`;
+  if (walkStepsHoldRef.current.key !== walkStepsHoldKey) {
+    walkStepsHoldRef.current = { key: walkStepsHoldKey, steps: 0 };
+  }
+  const usesVerifiedStepSource = stepProviderManager.usesVerifiedStepSource();
+  if (usesVerifiedStepSource) {
+    walkStepsHoldRef.current.steps = advanceVerifiedStepsHold(
+      walkStepsHoldRef.current.steps,
+      verifiedTodaySteps,
+    );
+  }
+  const effectiveVerifiedTodaySteps = usesVerifiedStepSource
+    ? resolveVerifiedStepsForWalkDisplay(
+        verifiedTodaySteps,
+        walkStepsHoldRef.current.steps,
+      )
+    : verifiedTodaySteps;
   // Health Connect is the Walk number. Do not raise it with GET /api/walk/today
   // or a leftover sensor session (HC 84 vs app 115).
-  const liveTodaySteps = stepProviderManager.usesVerifiedStepSource()
-    ? verifiedTodaySteps
+  const liveTodaySteps = usesVerifiedStepSource
+    ? effectiveVerifiedTodaySteps
     : resolveWalkNotificationSteps({
         verifiedTodaySteps: accountTodayFloor,
         provisionalSensorTodaySteps,
@@ -2328,7 +2379,6 @@ function WalkScreenContent() {
   // Shell + challenges unlock on raceReady; step hero still uses stepsHydrated below.
   const userReady = raceReady;
   const stepsReady = raceReady && stepsHydrated;
-  const walkStepsHoldRef = useRef<{ key: string; steps: number }>({ key: "", steps: 0 });
   const isAutoTrackingOn =
     stepPermissionStatus === "granted" || usingRealTracking;
   const stepsInitializing =
@@ -2351,14 +2401,7 @@ function WalkScreenContent() {
   // real value lands — hold the last confirmed value for *today* so the hero,
   // calories, distance and goal ring don't flash down to 0 mid-refresh. Keyed
   // by user+day so a genuine new day (or account switch) still starts at 0.
-  const walkStepsHoldKey = `${user?.id ?? ""}:${getTodayKey()}`;
-  if (walkStepsHoldRef.current.key !== walkStepsHoldKey) {
-    walkStepsHoldRef.current = { key: walkStepsHoldKey, steps: 0 };
-  }
-  // Drop a held since-boot absolute once HC / resolved display is sane.
-  if (stepProviderManager.usesVerifiedStepSource()) {
-    walkStepsHoldRef.current.steps = verifiedTodaySteps;
-  } else if (rawConfirmedWalkSteps > 0) {
+  if (!usesVerifiedStepSource && rawConfirmedWalkSteps > 0) {
     walkStepsHoldRef.current.steps = rawConfirmedWalkSteps;
   }
   const confirmedWalkSteps =
@@ -2675,9 +2718,15 @@ function WalkScreenContent() {
         .then(async (s) => {
           if (cancelled) return;
           setHcVerification(s);
-          const verified = Math.max(0, Math.floor(s.currentDayVerifiedSteps ?? 0));
+          const hcRead = Math.max(0, Math.floor(s.currentDayVerifiedSteps ?? 0));
           const { store } = await import("@/store");
           const rp = store.getState().raceProgress;
+          const prevVerified = Math.max(
+            0,
+            Math.floor(rp.verifiedTodaySteps ?? 0),
+            Math.floor(rp.todaySteps ?? 0),
+          );
+          const verified = resolveVerifiedStepsForWalkDisplay(hcRead, prevVerified);
           const display = Math.max(
             0,
             Math.floor(rp.todaySteps ?? 0),
@@ -2861,6 +2910,14 @@ function WalkScreenContent() {
     /** Unlimited Daily Goal Challenge only — result-state derivation (utils/unlimitedResults.ts). */
     settlement_status?: string | null;
     prize_pool_cents?: number | null;
+    viewerStatus?: string | null;
+    verificationPending?: boolean | null;
+    viewerEndAt?: string | null;
+    viewerResultsReady?: boolean | null;
+    resultsStatus?: string | null;
+    completedDays?: number | null;
+    finalFlowStatus?: string | null;
+    finalFlow?: { status: string; title: string; message: string } | null;
   };
   const [registeredUpcomingRooms, setRegisteredUpcomingRooms] = useState<WalkUpcomingRoom[]>([]);
   /** Distinguish loading from confirmed empty for Next Race / Live Race card. */
@@ -2925,9 +2982,9 @@ function WalkScreenContent() {
   }, [user?.id]);
 
   // Group count for the compact "Groups" entry — reuse Groups screen cache only (no new API).
-  const GROUPS_CACHE_KEY = "screen_groups_overview";
+  const groupsCacheKey = scopedScreenCacheKey("screen_groups_overview", user?.id);
   const [groupCount, setGroupCount] = useState(() => {
-    const cached = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(GROUPS_CACHE_KEY);
+    const cached = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(groupsCacheKey);
     return cached?.summary?.total_groups ?? cached?.groups?.length ?? 0;
   });
   const [availableChallengeCount, setAvailableChallengeCount] = useState(() => {
@@ -2993,14 +3050,14 @@ function WalkScreenContent() {
   }, [user?.id]);
 
   const syncGroupCountFromCache = useCallback(async () => {
-    const mem = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(GROUPS_CACHE_KEY);
+    const mem = screenCache.getSync<{ summary?: { total_groups?: number }; groups?: unknown[] }>(groupsCacheKey);
     if (mem) {
       setGroupCount(mem.summary?.total_groups ?? mem.groups?.length ?? 0);
       return;
     }
-    const disk = await screenCache.get<{ summary?: { total_groups?: number }; groups?: unknown[] }>(GROUPS_CACHE_KEY);
+    const disk = await screenCache.get<{ summary?: { total_groups?: number }; groups?: unknown[] }>(groupsCacheKey);
     if (disk) setGroupCount(disk.summary?.total_groups ?? disk.groups?.length ?? 0);
-  }, []);
+  }, [groupsCacheKey]);
 
   const fetchRegisteredUpcomingRooms = useCallback(async () => {
     const uid = user?.id;
@@ -3090,6 +3147,14 @@ function WalkScreenContent() {
             typeof u.reward_pool === "number" && u.reward_pool > 0
               ? Math.round(u.reward_pool * 100)
               : null,
+          viewerStatus: u.viewerStatus ?? null,
+          verificationPending: u.verificationPending ?? null,
+          viewerEndAt: u.viewerEndAt ?? null,
+          viewerResultsReady: u.viewerResultsReady ?? null,
+          resultsStatus: u.resultsStatus ?? null,
+          completedDays: u.completedDays ?? null,
+          finalFlowStatus: u.finalFlowStatus ?? null,
+          finalFlow: u.finalFlow ?? null,
         };
       });
       const unlimitedHydrated: WalkUpcomingRoom[] = await Promise.all(
@@ -3111,6 +3176,14 @@ function WalkScreenContent() {
                 ? Math.round(detail.reward_pool * 100)
                 : u.prize_pool_cents ?? null,
             status: detail.status || u.status,
+            viewerStatus: detail.viewerStatus ?? u.viewerStatus ?? null,
+            verificationPending: detail.verificationPending ?? u.verificationPending ?? null,
+            viewerEndAt: detail.viewerEndAt ?? u.viewerEndAt ?? null,
+            viewerResultsReady: detail.viewerResultsReady ?? u.viewerResultsReady ?? null,
+            resultsStatus: detail.resultsStatus ?? u.resultsStatus ?? null,
+            completedDays: detail.completedDays ?? u.completedDays ?? null,
+            finalFlowStatus: detail.finalFlowStatus ?? u.finalFlowStatus ?? null,
+            finalFlow: detail.finalFlow ?? u.finalFlow ?? null,
           };
         }),
       );
@@ -3219,7 +3292,7 @@ function WalkScreenContent() {
     refreshAvailableChallengeCount,
   ]));
 
-  // Streak My Race: fetch GET /unlimited-challenges/:id before Live Race opens.
+  // Streak My Race: fetch GET /streak-challenges/:id before Live Race opens.
   useEffect(() => {
     const uid = user?.id;
     const raceId = reduxLiveRace?.raceId;
@@ -3915,8 +3988,6 @@ function WalkScreenContent() {
     isUnlimitedGoal?: boolean;
     unlimitedChallengeTimezone?: string | null;
     unlimitedDurationDays?: number | null;
-    /** Set once the viewer's own Unlimited duration has ended but results aren't final yet (spec §25). */
-    unlimitedResultBadge?: { title: string; subtitle: string } | null;
   };
 
   /** Tick so Next Race drops cards / flips phase when scheduledStartAt crosses thresholds.
@@ -4138,7 +4209,20 @@ function WalkScreenContent() {
         cards.push({
           key: `challenge-live:${entryKey}:${cs.raceId}`,
           challengeType,
-          phase: "racing",
+          phase:
+            isUnlimitedEntry && roomMeta
+              ? resolveUnlimitedNextRacePhase({
+                  status: roomMeta.status ?? cs.status,
+                  viewerStatus: roomMeta.viewerStatus,
+                  verificationPending: roomMeta.verificationPending,
+                  viewerEndAt: roomMeta.viewerEndAt,
+                  resultsStatus: roomMeta.resultsStatus ?? roomMeta.settlement_status,
+                  viewerResultsReady: roomMeta.viewerResultsReady,
+                  completedDays: roomMeta.completedDays,
+                  challengeDurationDays: unlimitedDays ?? undefined,
+                  finalFlowStatus: roomMeta.finalFlowStatus,
+                }) ?? "racing"
+              : "racing",
           scheduledStartAt: liveIso,
           endsAt: liveEndsAt,
           timeLeftSeconds: known?.timeLeftSeconds,
@@ -4316,12 +4400,26 @@ function WalkScreenContent() {
       if (!isUnlimitedRoom && hasStarted && !isLiveStatus) continue;
 
       const msLeft = startMs - now;
+      const viewerPhase = isUnlimitedRoomEarly
+        ? resolveUnlimitedNextRacePhase({
+            status: room.status,
+            viewerStatus: room.viewerStatus,
+            verificationPending: room.verificationPending,
+            viewerEndAt: room.viewerEndAt,
+            resultsStatus: room.resultsStatus ?? room.settlement_status,
+            viewerResultsReady: room.viewerResultsReady,
+            completedDays: room.completedDays,
+            challengeDurationDays: room.challenge_duration_days,
+            finalFlowStatus: room.finalFlowStatus,
+          })
+        : null;
       const phase: RaceStartingSoonPhase =
-        hasStarted && (isUnlimitedRoom || isLiveStatus)
+        viewerPhase ??
+        (hasStarted && (isUnlimitedRoom || isLiveStatus)
           ? "racing"
           : msLeft < 10 * 60_000
             ? "join_window"
-            : "registered";
+            : "registered");
       const challengeType: RaceStartingSoonChallengeType =
         room.challenge_type === "sponsored"
           ? "sponsored"
@@ -4341,36 +4439,6 @@ function WalkScreenContent() {
       const entryAmountCents =
         room.entry_fee > 0 ? Math.round(room.entry_fee * 100) : undefined;
 
-      // Unlimited Daily Goal: once the VIEWER'S OWN local duration has ended,
-      // the walk card must show Results Pending / Validation in Progress /
-      // View Results instead of the live "racing" CTA — never a final result
-      // just because this participant is done (spec §25, utils/unlimitedResults.ts).
-      let unlimitedResultBadge: { title: string; subtitle: string } | null = null;
-      if (isUnlimitedRoom && room.scheduled_start_at && room.challenge_duration_days) {
-        const viewerSchedule = computeUnlimitedViewerSchedule(
-          {
-            startAtUtc: room.scheduled_start_at,
-            challengeTimezone: room.challenge_timezone ?? null,
-            durationDays: room.challenge_duration_days,
-            dailyGoalSteps: room.target_steps,
-            challengeStatus: room.status,
-          },
-          { fallbackTimezone: getDeviceTimezone(), nowMs: now },
-        );
-        const personallyFinished =
-          viewerSchedule?.viewerStatus === "completed" ||
-          viewerSchedule?.viewerStatus === "failed" ||
-          viewerSchedule?.viewerStatus === "left";
-        if (personallyFinished) {
-          const unlimitedResultStatus = resolveUnlimitedResultStatus({
-            challengeStatus: room.status,
-            settlementStatus: room.settlement_status,
-            viewerPersonallyFinished: true,
-          });
-          const cardState = resolveUnlimitedResultCardState(unlimitedResultStatus);
-          if (cardState) unlimitedResultBadge = unlimitedResultCardCopy(cardState);
-        }
-      }
       cards.push({
         key: `upcoming:${room.room_id}`,
         challengeType,
@@ -4395,9 +4463,8 @@ function WalkScreenContent() {
         isUnlimitedGoal: isUnlimitedRoom,
         unlimitedChallengeTimezone: isUnlimitedRoom ? room.challenge_timezone : undefined,
         unlimitedDurationDays: isUnlimitedRoom ? room.challenge_duration_days : undefined,
-        unlimitedResultBadge,
         onPressInCta:
-          phase === "racing"
+          phase === "racing" || phase === "verifying"
             ? () => {
                 warmLiveRaceDetailNavigation({
                   raceId: room.room_id,
@@ -4440,16 +4507,8 @@ function WalkScreenContent() {
             openSponsoredWaitingRoom(room.room_id);
             return;
           }
-          // Unlimited: viewer's own days are done — go to Results, never back into Live Detail's racing UI.
-          if (unlimitedResultBadge) {
-            router.push({
-              pathname: "/race/unlimited-results",
-              params: { challengeId: room.room_id },
-            } as never);
-            return;
-          }
-          // Live race (classic or Unlimited): go straight to Live Detail.
-          if (phase === "racing") {
+          // Live race (classic or Unlimited): always open Live Detail with track UI.
+          if (phase === "racing" || phase === "verifying") {
             const params = warmLiveRaceDetailNavigation({
               raceId: room.room_id,
               userId: user?.id,
@@ -4586,7 +4645,22 @@ function WalkScreenContent() {
         cards.push({
           key: `session-live:${sessionLiveId}`,
           challengeType,
-          phase: (racePhase as string) === "waiting" || racePhase === "countdown" ? "join_window" : "racing",
+          phase:
+            (racePhase as string) === "waiting" || racePhase === "countdown"
+              ? "join_window"
+              : isUnlimitedLive && roomMeta
+                ? resolveUnlimitedNextRacePhase({
+                    status: roomMeta.status,
+                    viewerStatus: roomMeta.viewerStatus,
+                    verificationPending: roomMeta.verificationPending,
+                    viewerEndAt: roomMeta.viewerEndAt,
+                    resultsStatus: roomMeta.resultsStatus ?? roomMeta.settlement_status,
+                    viewerResultsReady: roomMeta.viewerResultsReady,
+                    completedDays: roomMeta.completedDays,
+                    challengeDurationDays: unlimitedDays ?? undefined,
+                    finalFlowStatus: roomMeta.finalFlowStatus,
+                  }) ?? "racing"
+                : "racing",
           scheduledStartAt: liveIso,
           endsAt: liveEndsAt,
           registeredCount: Math.max(joined, roomMeta?.registered_count ?? 0),
@@ -4630,8 +4704,9 @@ function WalkScreenContent() {
 
     // Live/participating races first, then upcoming by start time.
     cards.sort((a, b) => {
-      if (a.phase === "racing" && b.phase !== "racing") return -1;
-      if (b.phase === "racing" && a.phase !== "racing") return 1;
+      const active = (p: RaceStartingSoonPhase) => p === "racing" || p === "verifying";
+      if (active(a.phase) && !active(b.phase)) return -1;
+      if (active(b.phase) && !active(a.phase)) return 1;
       return a.sortMs - b.sortMs;
     });
     return cards;
@@ -4726,7 +4801,7 @@ function WalkScreenContent() {
 
         try {
           if (entryKey === "unlimited_goal") {
-            const detailRes = await authFetch(`/api/unlimited-challenges/${raceId}`);
+            const detailRes = await authFetch(streakChallengeIdPath(raceId));
             if (!detailRes.ok) return;
             const detail = (await detailRes.json()) as {
               challenge?: {
@@ -4876,6 +4951,11 @@ function WalkScreenContent() {
       if (!gate.allowed) return;
     }
 
+    if (setupModal.fee > 0 && !isProtectedRacePlatformSupported()) {
+      AppAlert.alert("Not available on iPhone", IOS_PROTECTED_UNAVAILABLE_MESSAGE);
+      return;
+    }
+
     setFreeJoining(true);
     try {
       let raceId: string;
@@ -4950,6 +5030,9 @@ function WalkScreenContent() {
       setRaceTargetSteps(selectedTargetSteps);
       joinRace(setupModal.fee, playerCount, isHosting);
       loadChallengeStatuses();
+      if (user?.id && setupModal.fee > 0) {
+        void beginProtectedPreflightAfterJoin(raceId, user.id);
+      }
 
       // Instant-close the modal then navigate — same pattern as Create Challenge.
       // setupModal stays open (covering the Walk tab) while matchmaking mounts,
@@ -4974,6 +5057,10 @@ function WalkScreenContent() {
   // Direct join: skips the player-count modal and immediately joins the existing open room
   const doDirectJoin = useCallback(async (raceId: string, fee: number, maxPlayers: number, entryKey: string) => {
     if (freeJoining || joiningEntryKey) return;
+    if (fee > 0 && !isProtectedRacePlatformSupported()) {
+      AppAlert.alert("Not available on iPhone", IOS_PROTECTED_UNAVAILABLE_MESSAGE);
+      return;
+    }
     // Permission gate — verified tracking required for ALL joins (incl. free)
     if (user?.id) {
       const gate = await ensureMatchStepPermissionsReady({
@@ -5014,6 +5101,9 @@ function WalkScreenContent() {
       setActiveRace(raceId, false);
       joinRace(fee, maxPlayers, false);
       loadChallengeStatuses();
+      if (user?.id && fee > 0) {
+        void beginProtectedPreflightAfterJoin(raceId, user.id);
+      }
       navToMatchmaking({ raceId, isHost: false });
     } catch {
       AppAlert.alert("Error", "Could not connect. Please try again.");
@@ -5040,6 +5130,10 @@ function WalkScreenContent() {
   }, [doDirectJoin]);
 
   const handleCoinsBattleJoin = useCallback(async (raceId: string) => {
+    if (!isProtectedRacePlatformSupported()) {
+      AppAlert.alert("Not available on iPhone", IOS_PROTECTED_UNAVAILABLE_MESSAGE);
+      return;
+    }
     guardRewardAction(() => {
       void (async () => {
     setJoiningEntryKey("coins_battle");
@@ -5074,6 +5168,9 @@ function WalkScreenContent() {
         joinedCount: Math.max(1, data.currentPlayers ?? 0),
       });
       void loadChallengeStatuses({ force: true });
+      if (user?.id) {
+        void beginProtectedPreflightAfterJoin(raceId, user.id);
+      }
       navToMatchmaking({ raceId, isHost: false });
     } catch {
       AppAlert.alert("Error", "Network error. Please try again.");
@@ -5131,7 +5228,7 @@ function WalkScreenContent() {
       const isUnlimited =
         ar.challenge_type === "unlimited_goal" || ar.room_type === "unlimited_goal";
       const leaveUrl = isUnlimited
-        ? `/api/unlimited-challenges/${ar.room_id}/leave`
+        ? streakChallengeIdPath(ar.room_id, "leave")
         : `/api/races/${ar.room_id}/leave`;
       const res = await authFetch(leaveUrl, {
         method: "POST",
@@ -5236,7 +5333,7 @@ function WalkScreenContent() {
       }
 
       const hostUrl = meta.isUnlimited
-        ? "/api/unlimited-challenges/host"
+        ? streakChallengePath("/host")
         : "/api/races/host";
       const res = await authFetch(hostUrl, {
         method: "POST",
@@ -5744,7 +5841,6 @@ function WalkScreenContent() {
             </View>
 
             <View style={styles.stepsHero}>
-              <WalkProgressIcon steps={displayedWalkSteps} goal={goalSteps} size={56} style={styles.stepsHeroIcon} />
               <View style={styles.stepsHeroText}>
                 {stepsInitializing ? (
                   <>
@@ -5838,28 +5934,6 @@ function WalkScreenContent() {
                 onPressInCta={card.onPressInCta}
                 style={width != null ? { width, marginBottom: 0 } : undefined}
               />
-              {card.unlimitedResultBadge ? (
-                <TouchableOpacity
-                  onPress={card.onPressCta}
-                  activeOpacity={0.85}
-                  style={{
-                    marginTop: 6,
-                    borderRadius: 12,
-                    paddingVertical: 9,
-                    paddingHorizontal: 14,
-                    backgroundColor: "rgba(124,58,255,0.16)",
-                    borderWidth: 1,
-                    borderColor: "rgba(124,58,255,0.4)",
-                  }}
-                >
-                  <Text style={{ color: "#C4B5FD", fontWeight: "800", fontSize: rf(12.5) }}>
-                    {card.unlimitedResultBadge.title}
-                  </Text>
-                  <Text style={{ color: "#8B9AC0", fontSize: rf(10.5), marginTop: 2 }}>
-                    {card.unlimitedResultBadge.subtitle}
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
             </View>
           );
 
@@ -5971,7 +6045,7 @@ function WalkScreenContent() {
         </View>
 
         {!walkCacheReady && <SkeletonList count={4} variant="walk" />}
-        {RACE_OPTIONS.filter((opt) => showRaceOptionInJoinSection(opt.fee)).map((opt) => {
+        {RACE_OPTIONS.map((opt) => {
           const entryKey = feeToEntryType(opt.fee);
           const rawCs = challengeStatuses[entryKey];
           const cs = rawCs
@@ -6177,8 +6251,7 @@ function WalkScreenContent() {
             Visibility matches pre-audit: build flag only. Age/region still
             enforced on join/create (handleJoinRace / create paths). */}
           {ENABLE_THREE_DOLLAR_CHALLENGE && (() => {
-            const premOpt = RACE_OPTIONS.find((o) => o.fee === 3)!;
-            // Modern cash rooms use paid_usd; fall back to legacy paid_3
+            // Modern cash rooms use paid_usd; fall back to legacy paid_3 status rows.
             const cashPriority = [
               "user_hosting_active", "user_joined_active",
               "user_hosting_waiting", "user_joined_waiting",
@@ -6276,7 +6349,7 @@ function WalkScreenContent() {
                       setConfirmEntry({
                         fee: 3,
                         label: formatUsdFixedCashChallengeLabel(3),
-                        gradients: premOpt.gradientColors,
+                        gradients: CASH_PRIZE_CARD_GRADIENT,
                         feeEditable: true,
                       });
                       return Promise.resolve();
@@ -6295,7 +6368,7 @@ function WalkScreenContent() {
               setConfirmEntry({
                 fee: 3,
                 label: formatUsdFixedCashChallengeLabel(3),
-                gradients: premOpt.gradientColors,
+                gradients: CASH_PRIZE_CARD_GRADIENT,
                 feeEditable: true,
               });
             };
@@ -6312,7 +6385,7 @@ function WalkScreenContent() {
                 style={styles.raceCardWrap}
               >
                 <LinearGradient
-                  colors={premOpt.gradientColors}
+                  colors={CASH_PRIZE_CARD_GRADIENT}
                   style={styles.cashPrizeCardGradient}
                   start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
                 >
@@ -6337,7 +6410,7 @@ function WalkScreenContent() {
                   <View style={styles.cashPrizeChipsRow}>
                     {["$3–$25", "Step Goal", "Prize rewards"].map((chip) => (
                       <View key={chip} style={styles.cashPrizeChip}>
-                        <Text numberOfLines={1} style={styles.cashPrizeChipText}>{chip}</Text>
+                        <Text style={styles.cashPrizeChipText} {...FIXED_PILL_TEXT_PROPS}>{chip}</Text>
                       </View>
                     ))}
                   </View>
@@ -6479,18 +6552,18 @@ function WalkScreenContent() {
                         {isRegistered && (
                           <View style={[styles.newBadge, { backgroundColor: "#A855F725", borderColor: "#A855F755", borderWidth: 1 }]}>
                             <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: "#A855F7" }} />
-                            <Text style={[styles.newBadgeText, { color: "#A855F7" }]}>JOINED</Text>
+                            <Text style={[styles.newBadgeText, { color: "#A855F7" }]} {...FIXED_PILL_TEXT_PROPS}>JOINED</Text>
                           </View>
                         )}
                         {!isRacing && !isJoinWin && !isRegistered && !isWatchLive && (
                           <View style={styles.newBadge}>
-                            <Text style={styles.newBadgeText}>NEW</Text>
+                            <Text style={styles.newBadgeText} {...FIXED_PILL_TEXT_PROPS}>NEW</Text>
                           </View>
                         )}
                         {isRacing && (
                           <View style={[styles.newBadge, { backgroundColor: "#00E67625", borderColor: "#00E67655", borderWidth: 1 }]}>
                             <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: "#00E676" }} />
-                            <Text style={[styles.newBadgeText, { color: "#00E676" }]}>LIVE</Text>
+                            <Text style={[styles.newBadgeText, { color: "#00E676" }]} {...FIXED_PILL_TEXT_PROPS}>LIVE</Text>
                           </View>
                         )}
                       </View>
@@ -6499,10 +6572,10 @@ function WalkScreenContent() {
                         <View style={styles.sponsoredBadgesRow}>
                           <View style={styles.sponsoredBadge}>
                             <Image source={require("@/assets/images/game-coin.png")} style={{ width: 11, height: 11 }} resizeMode="contain" />
-                            <Text style={styles.sponsoredBadgeText}>5,000 entry</Text>
+                            <Text style={styles.sponsoredBadgeText} {...FIXED_PILL_TEXT_PROPS}>5,000 entry</Text>
                           </View>
                           <View style={[styles.sponsoredBadge, styles.sponsoredSlotBadge]}>
-                            <Text style={[styles.sponsoredBadgeText, { color: "#00E5FF" }]}>⚡ Limited slots</Text>
+                            <Text style={[styles.sponsoredBadgeText, { color: "#00E5FF" }]} {...FIXED_PILL_TEXT_PROPS}>⚡ Limited slots</Text>
                           </View>
                         </View>
                       )}
@@ -6515,7 +6588,7 @@ function WalkScreenContent() {
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 1 }}
                     >
-                      <Text style={styles.sponsoredCtaText}>{ctaLabel}</Text>
+                      <Text style={styles.sponsoredCtaText} {...FIXED_PILL_TEXT_PROPS}>{ctaLabel}</Text>
                     </LinearGradient>
                   </View>
                 </LinearGradient>
@@ -6578,16 +6651,16 @@ function WalkScreenContent() {
                       Create or join groups with friends, family and coworkers to compete together every day.
                     </Text>
                     <View style={styles.groupsTagRow}>
-                      <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Friends</Text></View>
-                      <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Family</Text></View>
-                      <View style={styles.groupsTag}><Text style={styles.groupsTagText}>Office</Text></View>
+                      <View style={styles.groupsTag}><Text style={styles.groupsTagText} {...FIXED_PILL_TEXT_PROPS}>Friends</Text></View>
+                      <View style={styles.groupsTag}><Text style={styles.groupsTagText} {...FIXED_PILL_TEXT_PROPS}>Family</Text></View>
+                      <View style={styles.groupsTag}><Text style={styles.groupsTagText} {...FIXED_PILL_TEXT_PROPS}>Office</Text></View>
             </View>
                   </View>
                 </View>
 
                 <Animated.View style={[styles.groupsCta, { transform: [{ scale: groupsExploreScale }] }]}>
                   <View style={styles.groupsCtaBtn}>
-                    <Text style={styles.groupsCtaText}>Explore</Text>
+                    <Text style={styles.groupsCtaText} {...FIXED_PILL_TEXT_PROPS}>Explore</Text>
                   </View>
                 </Animated.View>
               </LinearGradient>
@@ -7227,6 +7300,9 @@ function WalkScreenContent() {
             joinedCount: 1,
           });
           void loadChallengeStatuses({ force: true });
+          if (user?.id) {
+            void beginProtectedPreflightAfterJoin(raceId, user.id);
+          }
           navToMatchmaking({ raceId, isHost, initialCurrentPlayers: 1 });
         }}
       />
@@ -7314,6 +7390,7 @@ function WalkScreenContent() {
           </Modal>
         );
       })()}
+
     </View>
   ); }
 
