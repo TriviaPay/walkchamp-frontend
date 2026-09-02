@@ -71,6 +71,15 @@ import { UnlimitedCurrentDayCard } from "@/components/race/UnlimitedCurrentDayCa
 import { UnlimitedFinalResultStageStack } from "@/components/race/UnlimitedFinalResultStageStack";
 import { UnlimitedDayProgressModal } from "@/components/race/UnlimitedDayProgressModal";
 import { resolveUnlimitedFinalResultStages } from "@/features/unlimited/mappers/unlimitedTimezoneChange";
+import type {
+  UnlimitedFinalFlow,
+  UnlimitedFinalFlowStatus,
+} from "@/features/unlimited/mappers/unlimitedFinalFlow";
+import {
+  advanceFinalFlowStatusMonotonic,
+  isStreakFinalResultsAnnounced,
+} from "@/features/unlimited/mappers/unlimitedFinalFlow";
+import { streakChallengeIdPath } from "@/features/unlimited/api/streakChallengePaths";
 import { unlimitedFinalVerificationPendingCopy } from "@/utils/unlimitedFinalVerification";
 import {
   resolveUnlimitedResultStatus,
@@ -397,6 +406,11 @@ interface RaceData {
   failedDays?: number | null;
   pendingDays?: number | null;
   completedDays?: number | null;
+  finalFlowStatus?: UnlimitedFinalFlowStatus | null;
+  finalFlow?: UnlimitedFinalFlow | null;
+  finalResultStatus?: string | null;
+  raceFinalStatus?: string | null;
+  resultsAnnouncedAt?: string | null;
 }
 
 interface RaceParticipant {
@@ -473,7 +487,7 @@ async function fetchAllUnlimitedLeaderboardRows(challengeId: string): Promise<un
   const pageSize = 100;
   // First page immediately — callers can paint top ranks without waiting for all pages.
   const first = await fetchParticipantListFromPath(
-    `/api/unlimited-challenges/${challengeId}/leaderboard?limit=${pageSize}&offset=0`,
+    streakChallengeIdPath(challengeId, `leaderboard?limit=${pageSize}&offset=0`),
   );
   if (first.length === 0) return [];
   if (first.length < pageSize) return first;
@@ -482,7 +496,7 @@ async function fetchAllUnlimitedLeaderboardRows(challengeId: string): Promise<un
   let offset = pageSize;
   for (let page = 1; page < 50; page += 1) {
     const rows = await fetchParticipantListFromPath(
-      `/api/unlimited-challenges/${challengeId}/leaderboard?limit=${pageSize}&offset=${offset}`,
+      streakChallengeIdPath(challengeId, `leaderboard?limit=${pageSize}&offset=${offset}`),
     );
     if (rows.length === 0) break;
     all.push(...rows);
@@ -506,7 +520,7 @@ async function fetchUnlimitedLiveDetailPayload(
 ): Promise<LiveRaceDetailCache | null> {
   if (!isUnlimitedGoalFrontendEnabled()) return null;
   try {
-    const detailRes = await authFetch(`/api/unlimited-challenges/${challengeId}`);
+    const detailRes = await authFetch(streakChallengeIdPath(challengeId));
     if (!detailRes.ok) return null;
     const raw = await detailRes.json().catch(() => null);
     const mapped = mapUnlimitedDetailToLiveDetail(raw);
@@ -2644,6 +2658,10 @@ function LiveRaceDetailScreenContent() {
   const forfeitInFlightRef = useRef(false);
   /** Latch bottom status strip once backend confirms past-live — prevents steps flash after refresh. */
   const unlimitedStatusSlotLatchedRef = useRef(false);
+  const unlimitedFinalFlowLatchRef = useRef<{
+    raceId: string;
+    status: UnlimitedFinalFlowStatus;
+  } | null>(null);
   // Coins Battle win: show a "You won X coins!" banner when race:completed fires
   const [coinWinAmount, setCoinWinAmount] = useState<number | null>(null);
   const [pendingCoinWinAmount, setPendingCoinWinAmount] = useState<number | null>(null);
@@ -2752,6 +2770,7 @@ function LiveRaceDetailScreenContent() {
 
   useEffect(() => {
     unlimitedStatusSlotLatchedRef.current = false;
+    unlimitedFinalFlowLatchRef.current = null;
   }, [raceId]);
 
   const cheerScrollRef = useRef<ScrollView>(null);
@@ -3061,17 +3080,11 @@ function LiveRaceDetailScreenContent() {
   const unlimitedPastLivePhaseForSync = useMemo(
     () => {
       if (!isUnlimitedHeader || !race) return false;
+      if (race.finalFlowStatus) return true;
       if (race.verificationPending === true) return true;
       if (
         unlimitedTaglineSchedule?.viewerStatus === "completed" ||
         unlimitedTaglineSchedule?.viewerStatus === "failed"
-      ) {
-        return true;
-      }
-      if (
-        unlimitedTaglineSchedule &&
-        Number.isFinite(unlimitedTaglineSchedule.viewerEndAtMs) &&
-        Date.now() >= unlimitedTaglineSchedule.viewerEndAtMs
       ) {
         return true;
       }
@@ -3091,6 +3104,7 @@ function LiveRaceDetailScreenContent() {
     [
       isUnlimitedHeader,
       race,
+      race?.finalFlowStatus,
       race?.viewerResultsReady,
       race?.viewerResultReasonCode,
       race?.viewerStatus,
@@ -3104,12 +3118,12 @@ function LiveRaceDetailScreenContent() {
       race?.passedDays,
       race?.challengeDurationDays,
       unlimitedFinalVerificationStatus,
-      unlimitedTaglineSchedule?.viewerEndAtMs,
       unlimitedTaglineSchedule?.viewerStatus,
     ],
   );
   const unlimitedViewerPersonallyFinishedEarly = useMemo(() => {
     if (!isUnlimitedHeader || !race) return false;
+    if (race.finalFlowStatus) return true;
     if (race.verificationPending === true) return true;
     if (
       unlimitedTaglineSchedule?.viewerStatus === "completed" ||
@@ -3122,10 +3136,6 @@ function LiveRaceDetailScreenContent() {
     if (
       ["completed", "failed", "left"].includes((race.viewerStatus ?? "").trim().toLowerCase())
     ) {
-      return true;
-    }
-    if (race.viewerEndAt && new Date(race.viewerEndAt).getTime() <= Date.now()) return true;
-    if (unlimitedTaglineSchedule && Date.now() >= unlimitedTaglineSchedule.viewerEndAtMs) {
       return true;
     }
     if (
@@ -4860,7 +4870,7 @@ function LiveRaceDetailScreenContent() {
       const chatIsUnlimited =
         preferUnlimitedDetail || isUnlimitedGoalChallenge(racePayload?.race ?? null);
       const chatBase = chatIsUnlimited
-        ? `/api/unlimited-challenges/${raceId}`
+        ? streakChallengeIdPath(raceId)
         : `/api/races/${raceId}`;
       void Promise.all([
         authFetch(`${chatBase}/comments`),
@@ -5794,7 +5804,7 @@ function LiveRaceDetailScreenContent() {
       };
       try {
         const chatBase = isUnlimitedHeader
-          ? `/api/unlimited-challenges/${raceId}`
+          ? streakChallengeIdPath(raceId)
           : `/api/races/${raceId}`;
         // Unlimited accepts clientMessageId for dedupe; classic races ignore extras.
         const res = await authFetch(`${chatBase}/comments`, {
@@ -5869,7 +5879,7 @@ function LiveRaceDetailScreenContent() {
     });
     try {
       const chatBase = isUnlimitedHeader
-        ? `/api/unlimited-challenges/${raceId}`
+        ? streakChallengeIdPath(raceId)
         : `/api/races/${raceId}`;
       const res = await authFetch(`${chatBase}/reactions`, {
         method: "POST",
@@ -5987,6 +5997,36 @@ function LiveRaceDetailScreenContent() {
     );
   const unlimitedPastLivePhase = isUnlimitedLive && unlimitedPastLivePhaseForSync;
   if (unlimitedPastLivePhase) unlimitedStatusSlotLatchedRef.current = true;
+
+  let stableUnlimitedFinalFlowStatus = race.finalFlowStatus ?? null;
+  if (isUnlimitedLive && raceId && stableUnlimitedFinalFlowStatus) {
+    const latched = unlimitedFinalFlowLatchRef.current;
+    if (!latched || latched.raceId !== raceId) {
+      unlimitedFinalFlowLatchRef.current = {
+        raceId,
+        status: stableUnlimitedFinalFlowStatus,
+      };
+    } else {
+      const next = advanceFinalFlowStatusMonotonic(
+        latched.status,
+        stableUnlimitedFinalFlowStatus,
+      );
+      if (next) {
+        unlimitedFinalFlowLatchRef.current = { raceId, status: next };
+        stableUnlimitedFinalFlowStatus = next;
+      }
+    }
+  }
+
+  const unlimitedResultsAnnounced =
+    isUnlimitedLive &&
+    isStreakFinalResultsAnnounced({
+      finalResultStatus: race.finalResultStatus,
+      raceFinalStatus: race.raceFinalStatus,
+      resultsAnnouncedAt: race.resultsAnnouncedAt,
+      finalFlowStatus: stableUnlimitedFinalFlowStatus,
+    });
+
   const unlimitedResultStatus = isUnlimitedLive
     ? resolveUnlimitedResultStatus({
         resultsStatus: race.resultsStatus,
@@ -6290,7 +6330,8 @@ function LiveRaceDetailScreenContent() {
       unlimitedPastLivePhase ||
       unlimitedViewerPersonallyFinished ||
       unlimitedUiBranch === "pending_settlement" ||
-      race.verificationPending === true);
+      race.verificationPending === true ||
+      !!race.finalFlowStatus);
   const showClassicOutcomeInStepsSlot =
     !isSpectatorView &&
     !isUnlimitedLive &&
@@ -6318,13 +6359,21 @@ function LiveRaceDetailScreenContent() {
     1,
   );
   const unlimitedStepsSlotStatus = (() => {
+    if (race?.finalFlow?.title) {
+      return {
+        title: race.finalFlow.title,
+        desc: race.finalFlow.message,
+      };
+    }
     const stages = resolveUnlimitedFinalResultStages({
       resultStatus: unlimitedResultStatus,
       viewerPersonallyFinished: unlimitedViewerPersonallyFinished,
       finalVerificationStatus: unlimitedFinalFvStatus,
-      showingFinalResults: canPublishFinalResult(race?.resultsStatus),
+      showingFinalResults: unlimitedResultsAnnounced,
       pastLivePhase: unlimitedPastLivePhase || unlimitedStatusSlotLatchedRef.current,
       verificationPending: race?.verificationPending,
+      finalResultStatus: race?.finalResultStatus,
+      raceFinalStatus: race?.raceFinalStatus,
       registeredParticipantCount: race?.registeredParticipantCount,
       participantsFinishedCount: race?.participantsFinishedCount,
       participantsPendingCount: race?.participantsPendingCount,
@@ -6338,6 +6387,7 @@ function LiveRaceDetailScreenContent() {
   const trackOutcomeBanner = null;
   const showLiveChatBar =
     !isTrackFullscreen &&
+    !unlimitedResultsAnnounced &&
     (isActive ||
       (isUnlimitedLive &&
         (unlimitedStatusSlotLatchedRef.current ||
@@ -6385,7 +6435,11 @@ function LiveRaceDetailScreenContent() {
           {isActive && pendingMatchEnd && (
             <Text style={[s.hLive, isSponsored && s.hLiveSponsored, { color: "#F59E0B" }]}>ENDING </Text>
           )}
-          {isCompleted && <Text style={[s.hLive, isSponsored && s.hLiveSponsored, { color: "#FFD700" }]}>FINISHED </Text>}
+          {(isCompleted || unlimitedResultsAnnounced) && (
+            <Text style={[s.hLive, isSponsored && s.hLiveSponsored, { color: "#FFD700" }]}>
+              FINISHED{" "}
+            </Text>
+          )}
           <Text
             style={[s.hTitle, isSponsored && s.hTitleSponsored]}
             numberOfLines={1}
@@ -6435,7 +6489,7 @@ function LiveRaceDetailScreenContent() {
                     capacityMode: race?.capacityMode,
                     maxPlayers: race?.maxPlayers,
                   });
-                const unlimitedPath = `/api/unlimited-challenges/${raceId}/leave`;
+                const unlimitedPath = streakChallengeIdPath(raceId, "leave");
                 const classicPath = `/api/races/${raceId}/leave`;
                 const postLeave = (path: string) =>
                   authFetch(path, {
@@ -6539,7 +6593,9 @@ function LiveRaceDetailScreenContent() {
             historyRows={unlimitedHistoryRows}
             qualificationStatus={currentParticipant?.qualificationStatus}
             onPressViewResults={
-              canPublishFinalResult(race.resultsStatus) ? goToUnlimitedResults : undefined
+              canPublishFinalResult(race.resultsStatus) || unlimitedResultsAnnounced
+                ? goToUnlimitedResults
+                : undefined
             }
             viewerResultsReady={race.viewerResultsReady}
             viewerResultReasonCode={race.viewerResultReasonCode}
@@ -6790,10 +6846,15 @@ function LiveRaceDetailScreenContent() {
           isUnlimitedLive ? (
             <View style={st.progUnlimitedStatusWrap}>
             <UnlimitedFinalResultStageStack
+              finalFlowStatus={stableUnlimitedFinalFlowStatus}
+              finalFlow={race.finalFlow ?? null}
+              finalResultStatus={race.finalResultStatus ?? null}
+              raceFinalStatus={race.raceFinalStatus ?? null}
+              resultsAnnounced={unlimitedResultsAnnounced}
               resultStatus={unlimitedResultStatus}
               viewerPersonallyFinished={unlimitedViewerPersonallyFinished}
               finalVerificationStatus={unlimitedFinalFvStatus}
-              showingFinalResults={canPublishFinalResult(race.resultsStatus)}
+              showingFinalResults={unlimitedResultsAnnounced}
               currentStageOnly
               bottomBanner
               pastLivePhase={

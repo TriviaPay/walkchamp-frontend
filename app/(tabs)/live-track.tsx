@@ -34,6 +34,7 @@ import { resolveRaceNotificationTypeHint } from "@/utils/raceNotificationType";
 import { store } from "@/store";
 import { stepEngineLog } from "@/utils/stepAccuracy";
 import { authFetch } from "@/utils/authFetch";
+import { streakChallengeIdPath } from "@/features/unlimited/api/streakChallengePaths";
 import { STEP_SYNC_CONFIG } from "@/config/stepSyncConfig";
 import { formatRaceSteps, resolveLiveRaceDisplaySteps } from "@/utils/liveRaceDisplay";
 import {
@@ -485,7 +486,7 @@ export default function LiveTrackTab() {
       });
 
     const fetchClassic = () => authFetch(`/api/races/${raceId}`);
-    const fetchUnlimited = () => authFetch(`/api/unlimited-challenges/${raceId}`);
+    const fetchUnlimited = () => authFetch(streakChallengeIdPath(raceId));
 
     let detailRace: RaceData | null = null;
     let parts: RaceParticipant[] = [];

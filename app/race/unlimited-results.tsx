@@ -317,6 +317,8 @@ export default function UnlimitedResultsScreen() {
         ListHeaderComponent={
           <View>
             <UnlimitedFinalResultStageStack
+              finalFlowStatus={data.race.finalFlowStatus ?? null}
+              finalFlow={data.race.finalFlow ?? null}
               resultStatus={resultStatus}
               viewerPersonallyFinished={
                 schedule?.viewerStatus === "completed" ||

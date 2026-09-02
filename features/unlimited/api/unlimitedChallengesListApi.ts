@@ -27,6 +27,7 @@ import {
 } from "@/utils/unlimitedLiveRace";
 import type { AvailableRoomLike } from "@/utils/trendingChallenges";
 import { displayChallengeTitle } from "@/features/unlimited/mappers/unlimitedLiveUiCopy";
+import { streakChallengeIdPath, streakChallengePath } from "@/features/unlimited/api/streakChallengePaths";
 
 /**
  * Browse/waiting list — dedicated Unlimited APIs only.
@@ -34,28 +35,28 @@ import { displayChallengeTitle } from "@/features/unlimited/mappers/unlimitedLiv
  * envelopes and used to get stamped as unlimited_goal.
  */
 const LIST_PATHS = [
-  "/api/unlimited-challenges?visibility=public",
-  "/api/unlimited-challenges",
-  "/api/unlimited-challenges/available",
+  streakChallengePath("?visibility=public"),
+  streakChallengePath(),
+  streakChallengePath("/available"),
 ] as const;
 
 /**
- * Live tab sources — dedicated Unlimited live endpoints first.
+ * Live tab sources — dedicated Streak live endpoints first.
  * Fallbacks cover older API builds where `/live` is caught by `/:id` (404)
  * and `?status=` is ignored (waiting-only empty list).
  */
 const LIVE_LIST_PATHS = [
-  "/api/unlimited-challenges/live",
-  "/api/unlimited-challenges/my-active",
-  "/api/unlimited-challenges?status=active",
-  "/api/unlimited-challenges?status=live",
-  "/api/unlimited-challenges?status=in_progress",
+  streakChallengePath("/live"),
+  streakChallengePath("/my-active"),
+  streakChallengePath("?status=active"),
+  streakChallengePath("?status=live"),
+  streakChallengePath("?status=in_progress"),
 ] as const;
 
-/** Recently finished Unlimited for Live tab (completed + platform-cancelled). */
+/** Recently finished Streak challenges for Live tab (completed + platform-cancelled). */
 const FINISHED_LIST_PATHS = [
-  "/api/unlimited-challenges/recently-finished",
-  "/api/unlimited-challenges?status=completed",
+  streakChallengePath("/recently-finished"),
+  streakChallengePath("?status=completed"),
 ] as const;
 
 const SERVER_LIVE_STATUSES = new Set([
@@ -196,7 +197,7 @@ async function fetchPathRows(path: string): Promise<UnlimitedUpcomingRoom[]> {
 
 export async function fetchUnlimitedDetailRoom(id: string): Promise<UnlimitedUpcomingRoom | null> {
   try {
-    const res = await authFetch(`/api/unlimited-challenges/${id}`);
+    const res = await authFetch(streakChallengeIdPath(id));
     if (!res.ok) return null;
     const data: unknown = await res.json().catch(() => null);
     const root = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
@@ -293,7 +294,7 @@ async function reconcileHostedMembership(opts: {
   await Promise.all(
     opts.hosted.map(async (seed) => {
       try {
-        const res = await authFetch(`/api/unlimited-challenges/${seed.room_id}`);
+        const res = await authFetch(streakChallengeIdPath(seed.room_id));
         if (!res.ok) {
           kept.push(seed);
           return;
@@ -476,7 +477,7 @@ export async function fetchMyOpenUnlimitedChallenges(opts?: {
   if (!isUnlimitedGoalFrontendEnabled()) return [];
 
   const [myActive, hosted] = await Promise.all([
-    fetchPathRows("/api/unlimited-challenges/my-active"),
+    fetchPathRows(streakChallengePath("/my-active")),
     loadHostedUnlimitedChallenges({ includeStarted: true }),
   ]);
 
@@ -533,19 +534,19 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
   // Canonical paths first — avoid hitting every historical fallback on every load.
   // Fallbacks run only when the primary live set is empty.
   const PRIMARY_LIVE = [
-    "/api/unlimited-challenges/live",
-    "/api/unlimited-challenges/my-active",
+    streakChallengePath("/live"),
+    streakChallengePath("/my-active"),
   ] as const;
   const PRIMARY_FINISHED = [
-    "/api/unlimited-challenges/recently-finished",
+    streakChallengePath("/recently-finished"),
   ] as const;
   const FALLBACK_LIVE = [
-    "/api/unlimited-challenges?status=active",
-    "/api/unlimited-challenges?status=live",
-    "/api/unlimited-challenges?status=in_progress",
+    streakChallengePath("?status=active"),
+    streakChallengePath("?status=live"),
+    streakChallengePath("?status=in_progress"),
   ] as const;
   const FALLBACK_FINISHED = [
-    "/api/unlimited-challenges?status=completed",
+    streakChallengePath("?status=completed"),
   ] as const;
 
   let liveBatches: UnlimitedUpcomingRoom[][] = [];
@@ -728,6 +729,8 @@ export async function fetchLiveUnlimitedChallenges(opts?: {
         viewerResultsReady: room.viewerResultsReady ?? null,
         resultsStatus: room.resultsStatus ?? room.settlement_status ?? null,
         completedDays: room.completedDays ?? null,
+        finalFlowStatus: room.finalFlowStatus ?? null,
+        finalFlow: room.finalFlow ?? null,
       });
       continue;
     }

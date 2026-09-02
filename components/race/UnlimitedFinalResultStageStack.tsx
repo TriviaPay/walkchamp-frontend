@@ -1,10 +1,18 @@
 /**
  * Progressive Streak final-result status cards (Image 4).
- * Backend-driven stages; exact titles/descriptions from product copy.
+ * Prefers backend viewer.finalFlowStatus + viewer.finalFlow when present.
  */
-import React, { memo } from "react";
+import React, { memo, useMemo } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import { Feather } from "@expo/vector-icons";
+import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
+import {
+  buildCurrentFinalFlowStageFromBackend,
+  buildFinalFlowStagesFromBackend,
+  type FinalResultStatus,
+  type RaceFinalStatus,
+  type UnlimitedFinalFlow,
+  type UnlimitedFinalFlowStatus,
+} from "@/features/unlimited/mappers/unlimitedFinalFlow";
 import {
   resolveUnlimitedFinalResultStages,
   type UnlimitedFinalResultStage,
@@ -13,6 +21,13 @@ import type { UnlimitedChallengeResultStatus } from "@/features/unlimited/mapper
 import { rf } from "@/utils/responsive";
 
 type Props = {
+  /** Backend-owned flow — preferred when present. */
+  finalFlowStatus?: UnlimitedFinalFlowStatus | null;
+  finalFlow?: UnlimitedFinalFlow | null;
+  finalResultStatus?: FinalResultStatus | string | null;
+  raceFinalStatus?: RaceFinalStatus | string | null;
+  /** When true, backend announced final results — show completed stage only. */
+  resultsAnnounced?: boolean;
   resultStatus: UnlimitedChallengeResultStatus;
   viewerPersonallyFinished: boolean;
   finalVerificationStatus?: string | null;
@@ -29,22 +44,70 @@ type Props = {
   pendingOpponentLabel?: string | null;
 };
 
-function StageIcon({ stage, compact }: { stage: UnlimitedFinalResultStage; compact?: boolean }) {
+function StageIcon({
+  stage,
+  compact,
+}: {
+  stage: UnlimitedFinalResultStage;
+  compact?: boolean;
+}) {
   const color = stage.accent;
-  const name =
-    stage.icon === "flag"
-      ? "flag"
-      : stage.icon === "hourglass"
-        ? "clock"
-        : stage.icon === "search"
-          ? "search"
-          : stage.icon === "check"
-            ? "check-circle"
-            : "award";
-  return <Feather name={name as "flag"} size={compact ? 13 : 14} color={color} />;
+  const size = compact ? 15 : 17;
+
+  // Reference flow: solid green circle + white checkmark.
+  if (stage.icon === "check" || stage.id === "results_ready") {
+    const dim = compact ? 20 : 22;
+    return (
+      <View
+        style={{
+          width: dim,
+          height: dim,
+          borderRadius: dim / 2,
+          backgroundColor: color,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Feather name="check" size={compact ? 11 : 12} color="#FFFFFF" />
+      </View>
+    );
+  }
+
+  if (stage.icon === "trophy" || stage.id === "challenge_completed") {
+    return (
+      <MaterialCommunityIcons
+        name="trophy"
+        size={size + 1}
+        color={color}
+      />
+    );
+  }
+
+  if (stage.icon === "flag" || stage.id === "final_day_completed") {
+    return <MaterialCommunityIcons name="flag" size={size} color={color} />;
+  }
+
+  if (stage.icon === "search" || stage.id === "verifying_final_results") {
+    return <MaterialCommunityIcons name="magnify" size={size + 1} color={color} />;
+  }
+
+  if (stage.icon === "users") {
+    return <MaterialCommunityIcons name="account-group" size={size} color={color} />;
+  }
+
+  if (stage.icon === "hourglass") {
+    return <Feather name="clock" size={compact ? 13 : 14} color={color} />;
+  }
+
+  return <Feather name="flag" size={compact ? 13 : 14} color={color} />;
 }
 
 export const UnlimitedFinalResultStageStack = memo(function UnlimitedFinalResultStageStack({
+  finalFlowStatus,
+  finalFlow,
+  finalResultStatus,
+  raceFinalStatus,
+  resultsAnnounced = false,
   resultStatus,
   viewerPersonallyFinished,
   finalVerificationStatus,
@@ -58,7 +121,40 @@ export const UnlimitedFinalResultStageStack = memo(function UnlimitedFinalResult
   participantsPendingCount,
   pendingOpponentLabel,
 }: Props) {
-  const stages = resolveUnlimitedFinalResultStages({
+  const stages = useMemo(() => {
+    const backendStatus = resultsAnnounced
+      ? ("challenge_completed" as const)
+      : finalFlowStatus;
+    const fromBackend = currentStageOnly
+      ? buildCurrentFinalFlowStageFromBackend(backendStatus, finalFlow)
+      : buildFinalFlowStagesFromBackend(backendStatus, finalFlow);
+    if (fromBackend.length > 0) return fromBackend;
+    // Avoid stepping through client-derived stages while backend contract is loading.
+    if (currentStageOnly && (finalResultStatus || raceFinalStatus)) return [];
+    const derived = resolveUnlimitedFinalResultStages({
+      resultStatus,
+      viewerPersonallyFinished,
+      finalVerificationStatus,
+      showingFinalResults: resultsAnnounced || showingFinalResults,
+      pastLivePhase,
+      verificationPending,
+      finalResultStatus,
+      raceFinalStatus,
+      registeredParticipantCount,
+      participantsFinishedCount,
+      participantsPendingCount,
+      pendingOpponentLabel,
+    });
+    if (!currentStageOnly) return derived;
+    const current = derived[derived.length - 1];
+    return current ? [current] : [];
+  }, [
+    finalFlowStatus,
+    finalFlow,
+    finalResultStatus,
+    raceFinalStatus,
+    resultsAnnounced,
+    currentStageOnly,
     resultStatus,
     viewerPersonallyFinished,
     finalVerificationStatus,
@@ -69,7 +165,8 @@ export const UnlimitedFinalResultStageStack = memo(function UnlimitedFinalResult
     participantsFinishedCount,
     participantsPendingCount,
     pendingOpponentLabel,
-  });
+  ]);
+
   if (stages.length === 0) return null;
   const visibleStages =
     currentStageOnly && stages.length > 0 ? [stages[stages.length - 1]!] : stages;
@@ -82,6 +179,8 @@ export const UnlimitedFinalResultStageStack = memo(function UnlimitedFinalResult
     >
       {visibleStages.map((stage) => {
         const isCurrent = stage.id === currentId;
+        const cardBg = stage.highlightBg ?? "rgba(10,14,28,0.92)";
+        const iconBg = stage.iconBg ?? `${stage.accent}28`;
         return (
           <View
             key={stage.id}
@@ -90,14 +189,19 @@ export const UnlimitedFinalResultStageStack = memo(function UnlimitedFinalResult
               bottomBanner && styles.cardBottomBanner,
               { borderColor: stage.border },
               isCurrent && styles.cardCurrent,
-              bottomBanner && isCurrent && { backgroundColor: `${stage.accent}12` },
+              isCurrent && {
+                backgroundColor: cardBg,
+                shadowColor: stage.accent,
+              },
+              bottomBanner && isCurrent && styles.cardBottomBannerCurrent,
             ]}
           >
             <View
               style={[
                 styles.iconGlow,
                 bottomBanner && styles.iconGlowBottomBanner,
-                { backgroundColor: `${stage.accent}22` },
+                (stage.icon === "check" || stage.id === "results_ready") && styles.iconGlowCheck,
+                { backgroundColor: iconBg, borderColor: `${stage.accent}55` },
               ]}
             >
               <StageIcon stage={stage} compact={bottomBanner} />
@@ -156,7 +260,11 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(10,14,28,0.92)",
   },
   cardCurrent: {
-    backgroundColor: "rgba(16,22,42,0.98)",
+    borderWidth: 1.5,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
   },
   cardBottomBanner: {
     flex: 1,
@@ -175,10 +283,14 @@ const styles = StyleSheet.create({
     minHeight: 72,
     maxHeight: 96,
   },
+  cardBottomBannerCurrent: {
+    borderTopWidth: 1.5,
+    borderBottomWidth: 1.5,
+  },
   iconGlowBottomBanner: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 30,
+    height: 30,
+    borderRadius: 8,
     marginTop: 0,
     flexShrink: 0,
   },
@@ -193,16 +305,21 @@ const styles = StyleSheet.create({
     fontSize: rf(10),
     lineHeight: rf(13),
     fontWeight: "500",
-    color: "#858A9C",
+    color: "rgba(226,232,248,0.82)",
     flexShrink: 1,
   },
   iconGlow: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
+  },
+  iconGlowCheck: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
   },
   textCol: { flex: 1, minWidth: 0, flexShrink: 1 },
   title: {

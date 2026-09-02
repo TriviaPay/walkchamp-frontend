@@ -84,7 +84,6 @@ import {
 import { stepProviderManager } from "@/services/steps/stepProviderManager";
 import {
   ENABLE_CASH_CHALLENGES,
-  ENABLE_LEGACY_CASH_RACE_CARDS,
   cashEligibilityForUser,
   isUnlimitedGoalFrontendEnabled,
   isWalkTrendingChallengesPreviewEnabled,
@@ -115,6 +114,7 @@ import {
 import { raceProgressNotificationService } from "@/services/raceProgressNotificationService";
 import { ensureActiveRaceInStore } from "@/core/steps/stepProgressCoordinator";
 import { bindUnlimitedBackgroundTracking } from "@/features/unlimited/services/bindUnlimitedBackgroundTracking";
+import { streakChallengeIdPath, streakChallengePath } from "@/features/unlimited/api/streakChallengePaths";
 import { resolveUnlimitedNextRacePhase } from "@/features/unlimited/mappers/unlimitedStreakParticipation";
 import {
   previewUnlimitedGoalPaymentQuote,
@@ -394,30 +394,6 @@ const RACE_OPTIONS = [
     icon: "gift",
     iconImage: undefined as (ReturnType<typeof require> | undefined), },
   {
-    fee: 1,
-    label: "$1 Challenge",
-    subtitle: "Entry fee · Skill-based walking challenge",
-    gradientColors: ["#00E676", "#00B4FF"] as [string, string],
-    lightAccent: "#06B6D4",
-    icon: "zap",
-    iconImage: undefined as (ReturnType<typeof require> | undefined), },
-  {
-    fee: 3,
-    label: "$3 Challenge",
-    subtitle: "Larger reward pool · Skill-based walking challenge",
-    gradientColors: ["#4C0519", "#BE123C"] as [string, string],
-    lightAccent: "#FB7185",
-    icon: "trending-up",
-    iconImage: undefined as (ReturnType<typeof require> | undefined), },
-  {
-    fee: 5,
-    label: "$5 Challenge",
-    subtitle: "Premium entry · Largest reward pool",
-    gradientColors: ["#FFD700", "#FF6B35"] as [string, string],
-    lightAccent: "#F59E0B",
-    icon: "award",
-    iconImage: undefined as (ReturnType<typeof require> | undefined), },
-  {
     fee: -1,
     label: "Coins Battle",
     subtitle: "Bet coins · Winner takes the prize pool",
@@ -427,16 +403,13 @@ const RACE_OPTIONS = [
     iconImage: require("@/assets/images/game-coin.png") as ReturnType<typeof require>, },
 ];
 
+/** Top finishers / variable cash card styling (not a legacy $1/$3/$5 tier). */
+const CASH_PRIZE_CARD_GRADIENT = ["#4C0519", "#BE123C"] as [string, string];
+
 
 // ── Challenge Entry Options ───────────────────────────────────────────────────
 /** Cash Prize Challenge premium card — gated by cash challenges flag. */
 const ENABLE_THREE_DOLLAR_CHALLENGE = ENABLE_CASH_CHALLENGES;
-
-/** Main Join section: Free + Coins Battle; legacy $1/$3/$5 only when explicitly enabled. */
-function showRaceOptionInJoinSection(fee: number): boolean {
-  if (fee === 0 || fee === -1) return true;
-  return fee > 0 && ENABLE_LEGACY_CASH_RACE_CARDS && ENABLE_CASH_CHALLENGES;
-}
 
 function isPaidCashFee(fee: number): boolean {
   return fee > 0;
@@ -511,16 +484,7 @@ const ACTIVE_ENTRY_OPTIONS: ChallengeEntryOption[] = [
   })),
 ];
 
-/** Preserved for future re-activation — not shown while ENABLE_CASH_CHALLENGES is false */
-const FUTURE_CASH_ENTRY_OPTIONS: ChallengeEntryOption[] = [
-  { label: "$1", type: "paid_cash", value: 1 },
-  { label: "$3", type: "paid_cash", value: 3 },
-  { label: "$5", type: "paid_cash", value: 5 },
-];
-
-const ENTRY_OPTIONS: ChallengeEntryOption[] = ENABLE_CASH_CHALLENGES
-  ? [...ACTIVE_ENTRY_OPTIONS, ...FUTURE_CASH_ENTRY_OPTIONS]
-  : ACTIVE_ENTRY_OPTIONS;
+const ENTRY_OPTIONS: ChallengeEntryOption[] = ACTIVE_ENTRY_OPTIONS;
 
 const STEP_TARGETS = [
   50, 100, 500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000,
@@ -2958,6 +2922,8 @@ function WalkScreenContent() {
     viewerResultsReady?: boolean | null;
     resultsStatus?: string | null;
     completedDays?: number | null;
+    finalFlowStatus?: string | null;
+    finalFlow?: { status: string; title: string; message: string } | null;
   };
   const [registeredUpcomingRooms, setRegisteredUpcomingRooms] = useState<WalkUpcomingRoom[]>([]);
   /** Distinguish loading from confirmed empty for Next Race / Live Race card. */
@@ -3193,6 +3159,8 @@ function WalkScreenContent() {
           viewerResultsReady: u.viewerResultsReady ?? null,
           resultsStatus: u.resultsStatus ?? null,
           completedDays: u.completedDays ?? null,
+          finalFlowStatus: u.finalFlowStatus ?? null,
+          finalFlow: u.finalFlow ?? null,
         };
       });
       const unlimitedHydrated: WalkUpcomingRoom[] = await Promise.all(
@@ -3220,6 +3188,8 @@ function WalkScreenContent() {
             viewerResultsReady: detail.viewerResultsReady ?? u.viewerResultsReady ?? null,
             resultsStatus: detail.resultsStatus ?? u.resultsStatus ?? null,
             completedDays: detail.completedDays ?? u.completedDays ?? null,
+            finalFlowStatus: detail.finalFlowStatus ?? u.finalFlowStatus ?? null,
+            finalFlow: detail.finalFlow ?? u.finalFlow ?? null,
           };
         }),
       );
@@ -3328,7 +3298,7 @@ function WalkScreenContent() {
     refreshAvailableChallengeCount,
   ]));
 
-  // Streak My Race: fetch GET /unlimited-challenges/:id before Live Race opens.
+  // Streak My Race: fetch GET /streak-challenges/:id before Live Race opens.
   useEffect(() => {
     const uid = user?.id;
     const raceId = reduxLiveRace?.raceId;
@@ -4256,6 +4226,7 @@ function WalkScreenContent() {
                   viewerResultsReady: roomMeta.viewerResultsReady,
                   completedDays: roomMeta.completedDays,
                   challengeDurationDays: unlimitedDays ?? undefined,
+                  finalFlowStatus: roomMeta.finalFlowStatus,
                 }) ?? "racing"
               : "racing",
           scheduledStartAt: liveIso,
@@ -4445,6 +4416,7 @@ function WalkScreenContent() {
             viewerResultsReady: room.viewerResultsReady,
             completedDays: room.completedDays,
             challengeDurationDays: room.challenge_duration_days,
+            finalFlowStatus: room.finalFlowStatus,
           })
         : null;
       const phase: RaceStartingSoonPhase =
@@ -4692,6 +4664,7 @@ function WalkScreenContent() {
                     viewerResultsReady: roomMeta.viewerResultsReady,
                     completedDays: roomMeta.completedDays,
                     challengeDurationDays: unlimitedDays ?? undefined,
+                    finalFlowStatus: roomMeta.finalFlowStatus,
                   }) ?? "racing"
                 : "racing",
           scheduledStartAt: liveIso,
@@ -4834,7 +4807,7 @@ function WalkScreenContent() {
 
         try {
           if (entryKey === "unlimited_goal") {
-            const detailRes = await authFetch(`/api/unlimited-challenges/${raceId}`);
+            const detailRes = await authFetch(streakChallengeIdPath(raceId));
             if (!detailRes.ok) return;
             const detail = (await detailRes.json()) as {
               challenge?: {
@@ -5261,7 +5234,7 @@ function WalkScreenContent() {
       const isUnlimited =
         ar.challenge_type === "unlimited_goal" || ar.room_type === "unlimited_goal";
       const leaveUrl = isUnlimited
-        ? `/api/unlimited-challenges/${ar.room_id}/leave`
+        ? streakChallengeIdPath(ar.room_id, "leave")
         : `/api/races/${ar.room_id}/leave`;
       const res = await authFetch(leaveUrl, {
         method: "POST",
@@ -5366,7 +5339,7 @@ function WalkScreenContent() {
       }
 
       const hostUrl = meta.isUnlimited
-        ? "/api/unlimited-challenges/host"
+        ? streakChallengePath("/host")
         : "/api/races/host";
       const res = await authFetch(hostUrl, {
         method: "POST",
@@ -6078,7 +6051,7 @@ function WalkScreenContent() {
         </View>
 
         {!walkCacheReady && <SkeletonList count={4} variant="walk" />}
-        {RACE_OPTIONS.filter((opt) => showRaceOptionInJoinSection(opt.fee)).map((opt) => {
+        {RACE_OPTIONS.map((opt) => {
           const entryKey = feeToEntryType(opt.fee);
           const rawCs = challengeStatuses[entryKey];
           const cs = rawCs
@@ -6284,8 +6257,7 @@ function WalkScreenContent() {
             Visibility matches pre-audit: build flag only. Age/region still
             enforced on join/create (handleJoinRace / create paths). */}
           {ENABLE_THREE_DOLLAR_CHALLENGE && (() => {
-            const premOpt = RACE_OPTIONS.find((o) => o.fee === 3)!;
-            // Modern cash rooms use paid_usd; fall back to legacy paid_3
+            // Modern cash rooms use paid_usd; fall back to legacy paid_3 status rows.
             const cashPriority = [
               "user_hosting_active", "user_joined_active",
               "user_hosting_waiting", "user_joined_waiting",
@@ -6383,7 +6355,7 @@ function WalkScreenContent() {
                       setConfirmEntry({
                         fee: 3,
                         label: formatUsdFixedCashChallengeLabel(3),
-                        gradients: premOpt.gradientColors,
+                        gradients: CASH_PRIZE_CARD_GRADIENT,
                         feeEditable: true,
                       });
                       return Promise.resolve();
@@ -6402,7 +6374,7 @@ function WalkScreenContent() {
               setConfirmEntry({
                 fee: 3,
                 label: formatUsdFixedCashChallengeLabel(3),
-                gradients: premOpt.gradientColors,
+                gradients: CASH_PRIZE_CARD_GRADIENT,
                 feeEditable: true,
               });
             };
@@ -6419,7 +6391,7 @@ function WalkScreenContent() {
                 style={styles.raceCardWrap}
               >
                 <LinearGradient
-                  colors={premOpt.gradientColors}
+                  colors={CASH_PRIZE_CARD_GRADIENT}
                   style={styles.cashPrizeCardGradient}
                   start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
                 >

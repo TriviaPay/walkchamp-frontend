@@ -1,8 +1,9 @@
 /**
  * Streak Challenge participant timezone change API.
- * POST /api/unlimited-challenges/:id/timezone
+ * POST /api/streak-challenges/:id/timezone
  */
 import { authFetch } from "@/utils/authFetch";
+import { streakChallengeIdPath } from "@/features/unlimited/api/streakChallengePaths";
 import { getDeviceTimezone } from "@/utils/timezone";
 
 export type UnlimitedTimezoneChangeResult = {
@@ -51,7 +52,7 @@ export async function postUnlimitedTimezoneChange(
   | UnlimitedTimezoneChangeError
 > {
   try {
-    const res = await authFetch(`/api/unlimited-challenges/${challengeId}/timezone`, {
+    const res = await authFetch(streakChallengeIdPath(challengeId, "timezone"), {
       method: "POST",
       body: JSON.stringify({ timezone }),
       retryOnUnauthorized: false,

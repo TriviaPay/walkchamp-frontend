@@ -288,9 +288,7 @@ function WalletScreenContent() {
   const paymentResultDismissedRef = useRef(false);
 
   const cashEligibility = cashEligibilityForUser(user);
-  const earnCards = cashEligibility.allowed
-    ? EARN_CARDS
-    : EARN_CARDS.filter((card) => !card.requiresCash);
+  const earnCards = EARN_CARDS;
 
   // Deep-link / alert CTA: open deposit sheet when navigated with openDeposit=1
   useEffect(() => {

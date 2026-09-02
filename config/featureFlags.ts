@@ -214,11 +214,9 @@ export function isWalkTrendingChallengesMockEnabled(): boolean {
 }
 
 /**
- * Legacy $1 / $3 / $5 cards in the main Join section (off by default).
- * Cash Prize Challenge in Premium uses ENABLE_CASH_CHALLENGES instead.
+ * Legacy $1 / $3 / $5 Walk join cards — removed from product UI.
  */
-export const ENABLE_LEGACY_CASH_RACE_CARDS =
-  process.env.EXPO_PUBLIC_ENABLE_LEGACY_CASH_RACE_CARDS === "true";
+export const ENABLE_LEGACY_CASH_RACE_CARDS = false;
 
 /**
  * Premium post-auth onboarding (Welcome → … → Enter WalkChamp).

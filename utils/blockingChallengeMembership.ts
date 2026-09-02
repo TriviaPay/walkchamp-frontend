@@ -1,5 +1,6 @@
 import { normalizeActiveRaceInfo, type ActiveRaceInfo } from "@/components/ActiveRaceModal";
 import { authFetch } from "@/utils/authFetch";
+import { streakChallengePath } from "@/features/unlimited/api/streakChallengePaths";
 
 export function isOneChallengeConflictCode(code: unknown): boolean {
   return (
@@ -45,7 +46,7 @@ function isSponsoredInfo(info: ActiveRaceInfo): boolean {
  */
 export async function fetchBlockingNonSponsoredChallenge(): Promise<ActiveRaceInfo | null> {
   try {
-    const unl = await authFetch("/api/unlimited-challenges/my-active");
+    const unl = await authFetch(streakChallengePath("/my-active"));
     if (unl.ok) {
       const data = (await unl.json()) as { challenges?: Record<string, unknown>[] };
       const row = data.challenges?.[0];

@@ -1,6 +1,6 @@
 /**
  * Normalize Unlimited Challenge API rows into Available Rooms shapes.
- * Host create uses /api/unlimited-challenges/host; browse may use a dedicated
+ * Host create uses /api/streak-challenges/host; browse may use a dedicated
  * list endpoint and/or rooms/available with challengeType=unlimited_goal.
  */
 
@@ -10,6 +10,13 @@ import {
   displayChallengeTitle,
   streakChallengeTitle,
 } from "@/features/unlimited/mappers/unlimitedLiveUiCopy";
+import { readUnlimitedFinalFlowFields } from "@/features/unlimited/mappers/unlimitedFinalFlow";
+import type {
+  FinalResultStatus,
+  RaceFinalStatus,
+  UnlimitedFinalFlow,
+  UnlimitedFinalFlowStatus,
+} from "@/features/unlimited/mappers/unlimitedFinalFlow";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -233,6 +240,11 @@ export type UnlimitedUpcomingRoom = {
   viewerResultsReady?: boolean | null;
   resultsStatus?: string | null;
   completedDays?: number | null;
+  viewerStartAt?: string | null;
+  finalResultStatus?: FinalResultStatus | null;
+  raceFinalStatus?: RaceFinalStatus | null;
+  finalFlowStatus?: UnlimitedFinalFlowStatus | null;
+  finalFlow?: UnlimitedFinalFlow | null;
 };
 
 export type UnlimitedCardPlayer = {
@@ -508,6 +520,7 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
     asBool(pickRaw(viewerObj, ...keys)) ?? asBool(pickRaw(obj, ...keys));
   const viewerNum = (...keys: string[]) =>
     asNumber(pickRaw(viewerObj, ...keys)) ?? asNumber(pickRaw(obj, ...keys));
+  const finalFlowFields = readUnlimitedFinalFlowFields({ viewer: viewerObj, ...obj });
 
   return {
     room_id: id,
@@ -558,9 +571,14 @@ export function normalizeUnlimitedChallengeToUpcomingRoom(
     verificationPending: viewerBool("verificationPending", "verification_pending"),
     viewerEndAt: viewerField("viewerEndAt", "viewer_end_at"),
     viewerTimezone: viewerField("viewerTimezone", "viewer_timezone"),
+    viewerStartAt: viewerField("viewerStartAt", "viewer_start_at"),
     viewerResultsReady: viewerBool("viewerResultsReady", "viewer_results_ready"),
     resultsStatus: viewerField("viewerResultsStatus", "viewer_results_status", "resultsStatus", "results_status"),
     completedDays: viewerNum("completedDays", "completed_days", "passedDays", "passed_days"),
+    finalResultStatus: finalFlowFields.finalResultStatus,
+    raceFinalStatus: finalFlowFields.raceFinalStatus,
+    finalFlowStatus: finalFlowFields.finalFlowStatus,
+    finalFlow: finalFlowFields.finalFlow,
   };
 }
 
@@ -617,9 +635,12 @@ export function mergeUpcomingRoomsById<T extends { room_id: string; current_user
         "verificationPending",
         "viewerEndAt",
         "viewerTimezone",
+        "viewerStartAt",
         "viewerResultsReady",
         "resultsStatus",
         "completedDays",
+        "finalFlowStatus",
+        "finalFlow",
         "challenge_end_at",
         "scheduled_start_at",
         "challenge_timezone",

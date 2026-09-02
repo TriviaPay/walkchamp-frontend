@@ -1,6 +1,6 @@
 /**
  * Detects Streak Challenge device timezone drift, sticky banner, and Walk modal.
- * Confirms via POST /api/unlimited-challenges/:id/timezone — never recalculates days locally.
+ * Confirms via POST /api/streak-challenges/:id/timezone — never recalculates days locally.
  */
 import React, {
   createContext,
@@ -23,6 +23,7 @@ import {
 } from "@/features/unlimited/api/unlimitedTimezoneApi";
 import {
   shouldShowTimezoneDetectBanner,
+  shouldSilentlyAcknowledgeDeviceTimezone,
   type TimezoneChangeModalStage,
   type UnlimitedTimezoneSnapshot,
 } from "@/features/unlimited/mappers/unlimitedTimezoneChange";
@@ -30,6 +31,11 @@ import { mapUnlimitedDetailToLiveDetail } from "@/utils/unlimitedLiveRace";
 import { CHANNELS, subscribeToChannel } from "@/services/realtimeService";
 import { AppAlert } from "@/components/AppAlert";
 import { logger } from "@/utils/logger";
+import {
+  loadLastObservedDeviceTimezone,
+  saveLastObservedDeviceTimezone,
+} from "@/utils/unlimitedTimezoneDetectStorage";
+import { streakChallengeIdPath, streakChallengePath } from "@/features/unlimited/api/streakChallengePaths";
 
 type DetectBanner = {
   challengeId: string;
@@ -83,9 +89,22 @@ export function UnlimitedTimezoneProvider({ children }: { children: React.ReactN
   const [lastChangeResult, setLastChangeResult] =
     useState<UnlimitedTimezoneChangeResult | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const [snoozedDeviceTz, setSnoozedDeviceTz] = useState<string | null>(null);
+  const [lastObservedDeviceTz, setLastObservedDeviceTz] = useState<string | null>(null);
+  const [detectBaselineReady, setDetectBaselineReady] = useState(false);
   const challengeIdRef = useRef<string | null>(null);
   const refreshInFlight = useRef(false);
+
+  const acknowledgeDeviceTimezone = useCallback(
+    async (timezone: string = deviceIanaTimezone()) => {
+      const tz = timezone.trim();
+      if (!tz) return;
+      setLastObservedDeviceTz(tz);
+      if (user?.id) {
+        await saveLastObservedDeviceTimezone(user.id, tz);
+      }
+    },
+    [user?.id],
+  );
 
   const refreshTimezoneSnapshot = useCallback(async (challengeId?: string) => {
     if (refreshInFlight.current) return;
@@ -95,7 +114,7 @@ export function UnlimitedTimezoneProvider({ children }: { children: React.ReactN
       setDeviceTimezone(deviceIanaTimezone());
 
       if (id) {
-        const res = await authFetch(`/api/unlimited-challenges/${id}`);
+        const res = await authFetch(streakChallengeIdPath(id));
         if (res.ok) {
           const json = await res.json().catch(() => null);
           const snap = extractSnapshotFromDetail(id, json);
@@ -108,7 +127,7 @@ export function UnlimitedTimezoneProvider({ children }: { children: React.ReactN
       }
 
       // Discover active membership.
-      const activeRes = await authFetch("/api/unlimited-challenges/my-active");
+      const activeRes = await authFetch(streakChallengePath("/my-active"));
       if (!activeRes.ok) {
         setSnapshot(null);
         challengeIdRef.current = null;
@@ -139,7 +158,7 @@ export function UnlimitedTimezoneProvider({ children }: { children: React.ReactN
         challengeIdRef.current = null;
         return;
       }
-      const detailRes = await authFetch(`/api/unlimited-challenges/${cid}`);
+      const detailRes = await authFetch(streakChallengeIdPath(cid));
       if (!detailRes.ok) {
         // Fall back to my-active viewer block if present.
         const viewer = (row.viewer && typeof row.viewer === "object"
@@ -212,9 +231,27 @@ export function UnlimitedTimezoneProvider({ children }: { children: React.ReactN
       setSnapshot(null);
       challengeIdRef.current = null;
       setModalStage(null);
+      setLastObservedDeviceTz(null);
+      setDetectBaselineReady(false);
       return;
     }
-    void refreshTimezoneSnapshot();
+    let cancelled = false;
+    void (async () => {
+      const stored = await loadLastObservedDeviceTimezone(user.id);
+      const device = deviceIanaTimezone();
+      if (cancelled) return;
+      if (!stored) {
+        await saveLastObservedDeviceTimezone(user.id, device);
+        setLastObservedDeviceTz(device);
+      } else {
+        setLastObservedDeviceTz(stored);
+      }
+      setDetectBaselineReady(true);
+      void refreshTimezoneSnapshot();
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [user?.id, loading, refreshTimezoneSnapshot]);
 
   // Re-check when app returns / timezone may have changed (travel).
@@ -252,37 +289,60 @@ export function UnlimitedTimezoneProvider({ children }: { children: React.ReactN
   }, [snapshot?.challengeId, user?.id, refreshTimezoneSnapshot]);
 
   const detectBanner = useMemo((): DetectBanner | null => {
-    if (!snapshot?.viewerTimezone) return null;
-    if (snoozedDeviceTz && snoozedDeviceTz === deviceTimezone) return null;
-    if (!shouldShowTimezoneDetectBanner(snapshot, deviceTimezone)) return null;
+    if (!detectBaselineReady || !snapshot?.viewerTimezone) return null;
+    if (!shouldShowTimezoneDetectBanner(snapshot, deviceTimezone, lastObservedDeviceTz)) {
+      return null;
+    }
     return {
       challengeId: snapshot.challengeId,
       currentTimezone: snapshot.viewerTimezone,
       deviceTimezone,
     };
-  }, [snapshot, deviceTimezone, snoozedDeviceTz]);
+  }, [snapshot, deviceTimezone, lastObservedDeviceTz, detectBaselineReady]);
+
+  // Travel back to the challenge timezone — advance baseline without prompting.
+  useEffect(() => {
+    if (!detectBaselineReady || !snapshot) return;
+    if (
+      !shouldSilentlyAcknowledgeDeviceTimezone(
+        deviceTimezone,
+        lastObservedDeviceTz,
+        snapshot.viewerTimezone,
+      )
+    ) {
+      return;
+    }
+    void acknowledgeDeviceTimezone(deviceTimezone);
+  }, [
+    detectBaselineReady,
+    snapshot,
+    deviceTimezone,
+    lastObservedDeviceTz,
+    acknowledgeDeviceTimezone,
+  ]);
 
   const dismissModal = useCallback(() => {
     setModalStage((stage) => {
-      // Informational stages: hide banner + modal for this app session (until cold start).
+      // Informational stages: acknowledge this device TZ so we do not re-prompt.
       if (stage === "updated" || stage === "final_day_locked") {
-        setSnoozedDeviceTz(deviceIanaTimezone());
+        void acknowledgeDeviceTimezone();
       }
       return null;
     });
-  }, []);
+  }, [acknowledgeDeviceTimezone]);
 
   const openReviewModal = useCallback(async () => {
+    if (!detectBanner) return;
     setDeviceTimezone(deviceIanaTimezone());
     await refreshTimezoneSnapshot();
     setLastChangeResult(null);
     setModalStage("detect");
-  }, [refreshTimezoneSnapshot]);
+  }, [refreshTimezoneSnapshot, detectBanner]);
 
   const keepCurrentTimezone = useCallback(() => {
-    setSnoozedDeviceTz(deviceIanaTimezone());
+    void acknowledgeDeviceTimezone();
     setModalStage(null);
-  }, []);
+  }, [acknowledgeDeviceTimezone]);
 
   const confirmDeviceTimezone = useCallback(async () => {
     const id = snapshot?.challengeId;
@@ -299,7 +359,7 @@ export function UnlimitedTimezoneProvider({ children }: { children: React.ReactN
         return;
       }
       setLastChangeResult(res.result);
-      setSnoozedDeviceTz(null);
+      await acknowledgeDeviceTimezone(tz);
       await refreshTimezoneSnapshot(id);
       if (res.result.finalDayTimezoneLocked || !res.result.appliesToChallenge) {
         setModalStage("final_day_locked");
@@ -309,7 +369,7 @@ export function UnlimitedTimezoneProvider({ children }: { children: React.ReactN
     } finally {
       setConfirming(false);
     }
-  }, [snapshot?.challengeId, refreshTimezoneSnapshot]);
+  }, [snapshot?.challengeId, refreshTimezoneSnapshot, acknowledgeDeviceTimezone]);
 
   const value = useMemo(
     () => ({

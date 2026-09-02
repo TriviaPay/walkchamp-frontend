@@ -33,10 +33,10 @@ assert.equal(
 assert.equal(
   isUnlimitedViewerPastLivePhase({
     viewerStatus: "active",
-    viewerEndAtMs: Date.now() - 60_000,
+    finalFlowStatus: "final_results_pending",
   }),
   true,
-  "locked viewer window end ends live phase",
+  "backend finalFlowStatus ends live phase",
 );
 
 assert.equal(

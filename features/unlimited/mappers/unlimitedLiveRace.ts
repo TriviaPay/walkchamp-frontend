@@ -3,6 +3,11 @@
  */
 
 import { UNLIMITED_GOAL_CHALLENGE_TYPE } from "@/utils/unlimitedGoal";
+import { readUnlimitedFinalFlowFields } from "@/features/unlimited/mappers/unlimitedFinalFlow";
+import type {
+  UnlimitedFinalFlow,
+  UnlimitedFinalFlowStatus,
+} from "@/features/unlimited/mappers/unlimitedFinalFlow";
 import type { UnlimitedUpcomingRoom } from "@/utils/unlimitedChallengeRooms";
 
 export type UnlimitedLiveCardPlayer = {
@@ -238,6 +243,8 @@ export type UnlimitedLiveRaceFields = {
   viewerResultsReady?: boolean | null;
   resultsStatus?: string | null;
   completedDays?: number | null;
+  finalFlowStatus?: UnlimitedFinalFlowStatus | null;
+  finalFlow?: UnlimitedFinalFlow | null;
 };
 
 export function mapUnlimitedUpcomingToLiveRaceFields(
@@ -318,6 +325,8 @@ export function mapUnlimitedUpcomingToLiveRaceFields(
     viewerResultsReady: room.viewerResultsReady ?? null,
     resultsStatus: room.resultsStatus ?? room.settlement_status ?? null,
     completedDays: room.completedDays ?? null,
+    finalFlowStatus: room.finalFlowStatus ?? null,
+    finalFlow: room.finalFlow ?? null,
   };
 }
 
@@ -398,6 +407,9 @@ export type UnlimitedLiveDetailMapped = {
     timezoneChangeConfirmedTimezone?: string | null;
     timezoneChangeAppliesToChallenge?: boolean | null;
     finalDayTimezoneLocked?: boolean | null;
+    finalFlowStatus?: UnlimitedFinalFlowStatus | null;
+    finalFlow?: UnlimitedFinalFlow | null;
+    resultsAnnouncedAt?: string | null;
   };
   participants: Array<{
     id: string;
@@ -758,7 +770,7 @@ function readUnlimitedDetailPlayers(payload: unknown): unknown[] {
   return collectRosterFromEnvelope(root);
 }
 
-/** Map GET /api/unlimited-challenges/:id → live-detail race + participants. */
+/** Map GET /api/streak-challenges/:id → live-detail race + participants. */
 export function mapUnlimitedDetailToLiveDetail(
   payload: unknown,
 ): UnlimitedLiveDetailMapped | null {
@@ -981,6 +993,18 @@ export function mapUnlimitedDetailToLiveDetail(
       ),
       finalDayTimezoneLocked: asBool(
         pick(viewer ?? root ?? {}, "finalDayTimezoneLocked", "final_day_timezone_locked"),
+      ),
+      ...(() => {
+        const flow = readUnlimitedFinalFlowFields({ viewer, ...root });
+        return {
+          finalResultStatus: flow.finalResultStatus,
+          raceFinalStatus: flow.raceFinalStatus,
+          finalFlowStatus: flow.finalFlowStatus,
+          finalFlow: flow.finalFlow,
+        };
+      })(),
+      resultsAnnouncedAt: asString(
+        pick(challenge ?? root ?? {}, "resultsAnnouncedAt", "results_announced_at"),
       ),
     },
     participants,

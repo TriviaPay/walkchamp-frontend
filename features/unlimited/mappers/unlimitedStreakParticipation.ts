@@ -5,6 +5,7 @@
  */
 
 import { canPublishFinalResult, normalizeBackendResultsStatus } from "./unlimitedResults";
+import type { FinalResultStatus } from "./unlimitedFinalFlow";
 
 export const STREAK_REMOVED_STATUSES = new Set([
   "left",
@@ -64,6 +65,9 @@ export type UnlimitedPastLiveInput = StreakViewerResultInput & {
   durationDays?: number | null;
   /** Viewer locked-timezone end (ms) — from backend viewerEndAt or schedule math. */
   viewerEndAtMs?: number | null;
+  /** Backend final-result flow — when set, viewer is past live daily racing. */
+  finalFlowStatus?: string | null;
+  finalResultStatus?: FinalResultStatus | string | null;
 };
 
 export function buildUnlimitedPastLiveInput(
@@ -80,6 +84,8 @@ export function buildUnlimitedPastLiveInput(
     completedDays?: number | null;
     passedDays?: number | null;
     challengeDurationDays?: number | null;
+    finalFlowStatus?: string | null;
+    finalResultStatus?: string | null;
   },
   opts?: {
     finalVerificationStatus?: string | null;
@@ -98,11 +104,15 @@ export function buildUnlimitedPastLiveInput(
     completedDays: race.completedDays ?? race.passedDays,
     durationDays: race.challengeDurationDays,
     viewerEndAtMs: opts?.viewerEndAtMs,
+    finalFlowStatus: race.finalFlowStatus,
+    finalResultStatus: race.finalResultStatus,
   };
 }
 
-/** True when the viewer is past live daily racing (backend contract + locked viewer window). */
+/** True when the viewer is past live daily racing (backend contract — no device clock). */
 export function isUnlimitedViewerPastLivePhase(input: UnlimitedPastLiveInput): boolean {
+  if (input.finalResultStatus) return true;
+  if (input.finalFlowStatus) return true;
   if (input.verificationPending === true) return true;
   if (input.viewerResultsReady === true) return true;
   const viewer = (input.viewerStatus ?? "").trim().toLowerCase();
@@ -111,13 +121,6 @@ export function isUnlimitedViewerPastLivePhase(input: UnlimitedPastLiveInput): b
   if (verify === "requested" || verify === "submitted" || verify === "completed") return true;
   const challenge = (input.challengeStatus ?? "").trim().toLowerCase();
   if (challenge === "settling" || challenge === "completed") return true;
-  if (input.viewerEndAtMs != null && Number.isFinite(input.viewerEndAtMs) && input.viewerEndAtMs <= Date.now()) {
-    return true;
-  }
-  if (input.viewerEndAt) {
-    const endMs = new Date(input.viewerEndAt).getTime();
-    if (Number.isFinite(endMs) && endMs <= Date.now()) return true;
-  }
   const rs = normalizeBackendResultsStatus(input.resultsStatus ?? null);
   if (
     rs === "waiting_for_participants" ||
@@ -159,11 +162,15 @@ export function resolveUnlimitedNextRacePhase(input: {
   viewerResultsReady?: boolean | null;
   completedDays?: number | null;
   challengeDurationDays?: number | null;
+  finalFlowStatus?: string | null;
+  finalResultStatus?: FinalResultStatus | string | null;
 }): "racing" | "verifying" | null {
   if (
     input.viewerStatus == null &&
     input.verificationPending !== true &&
-    input.viewerEndAt == null
+    input.viewerEndAt == null &&
+    !input.finalFlowStatus &&
+    !input.finalResultStatus
   ) {
     return null;
   }
@@ -177,6 +184,8 @@ export function resolveUnlimitedNextRacePhase(input: {
       completedDays: input.completedDays,
       rawStatus: input.status,
       challengeDurationDays: input.challengeDurationDays,
+      finalFlowStatus: input.finalFlowStatus,
+      finalResultStatus: input.finalResultStatus,
     }),
   );
   if (badge.kind === "verifying") return "verifying";

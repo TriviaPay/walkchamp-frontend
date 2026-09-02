@@ -3,14 +3,20 @@
  */
 import assert from "node:assert/strict";
 import {
+  deviceTimezoneChangeDetected,
   deviceTimezoneDiffersFromChallenge,
   resolveUnlimitedFinalResultStages,
   shouldShowTimezoneDetectBanner,
   shouldShowTimezoneTransitionBanner,
+  shouldSilentlyAcknowledgeDeviceTimezone,
 } from "./unlimitedTimezoneChange";
 
 assert.equal(deviceTimezoneDiffersFromChallenge("Asia/Kolkata", "America/Chicago"), true);
 assert.equal(deviceTimezoneDiffersFromChallenge("America/Chicago", "America/Chicago"), false);
+
+assert.equal(deviceTimezoneChangeDetected("Asia/Kolkata", "America/Chicago"), true);
+assert.equal(deviceTimezoneChangeDetected("Asia/Kolkata", "Asia/Kolkata"), false);
+assert.equal(deviceTimezoneChangeDetected("Asia/Kolkata", null), false);
 
 assert.equal(
   shouldShowTimezoneDetectBanner(
@@ -20,8 +26,45 @@ assert.equal(
       challengeStatus: "active",
     },
     "Asia/Kolkata",
+    "America/Chicago",
   ),
   true,
+);
+
+assert.equal(
+  shouldShowTimezoneDetectBanner(
+    {
+      challengeId: "c1",
+      viewerTimezone: "America/Chicago",
+      challengeStatus: "active",
+    },
+    "Asia/Kolkata",
+    "Asia/Kolkata",
+  ),
+  false,
+);
+
+assert.equal(
+  shouldShowTimezoneDetectBanner(
+    {
+      challengeId: "c1",
+      viewerTimezone: "America/Chicago",
+      challengeStatus: "active",
+    },
+    "Asia/Kolkata",
+    null,
+  ),
+  false,
+);
+
+assert.equal(
+  shouldSilentlyAcknowledgeDeviceTimezone("America/Chicago", "Asia/Kolkata", "America/Chicago"),
+  true,
+);
+
+assert.equal(
+  shouldSilentlyAcknowledgeDeviceTimezone("Asia/Kolkata", "Asia/Kolkata", "America/Chicago"),
+  false,
 );
 
 assert.equal(
@@ -34,6 +77,7 @@ assert.equal(
       challengeStatus: "active",
     },
     "Asia/Kolkata",
+    "America/Chicago",
   ),
   false,
 );
@@ -52,10 +96,9 @@ const waiting = resolveUnlimitedFinalResultStages({
   resultStatus: "waiting_for_participants",
   viewerPersonallyFinished: true,
 });
-assert.equal(waiting.length, 2);
+assert.equal(waiting.length, 1);
 assert.equal(waiting[0].id, "final_day_completed");
-assert.equal(waiting[1].id, "final_results_pending");
-assert.equal(waiting[1].title, "Final Results Pending");
+assert.equal(waiting[0].title, "Final Day Completed");
 
 const verifying = resolveUnlimitedFinalResultStages({
   resultStatus: "steps_validation_in_progress",
@@ -72,6 +115,14 @@ const pendingFlag = resolveUnlimitedFinalResultStages({
   pastLivePhase: true,
 });
 assert.equal(pendingFlag.at(-1)?.id, "verifying_final_results");
+
+const canonical = resolveUnlimitedFinalResultStages({
+  resultStatus: "waiting_for_participants",
+  viewerPersonallyFinished: true,
+  finalResultStatus: "FINAL_VERIFICATION",
+  raceFinalStatus: "FINAL_VERIFICATION",
+});
+assert.equal(canonical.at(-1)?.id, "verifying_final_results");
 
 const ready = resolveUnlimitedFinalResultStages({
   resultStatus: "results_ready",

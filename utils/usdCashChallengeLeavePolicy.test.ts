@@ -33,7 +33,7 @@ assert.equal(
 );
 assert.equal(
   usdCashLeaveEndpoint("abc", true),
-  "/api/unlimited-challenges/abc/leave",
+  "/api/streak-challenges/abc/leave",
 );
 
 // Exact start timestamp is started (no refund preview)

@@ -250,6 +250,8 @@ export interface LiveRace {
   viewerResultsReady?: boolean | null;
   resultsStatus?: string | null;
   completedDays?: number | null;
+  finalFlowStatus?: string | null;
+  finalFlow?: { status: string; title: string; message: string } | null;
 }
 
 export function formatElapsed(seconds: number): string {
@@ -858,7 +860,7 @@ function RaceCardBase({
   const isUnlimitedRace = isUnlimitedChallengeRace(race);
   const unlimitedCardBadge =
     isUnlimitedRace &&
-    (participating || race.viewerStatus != null || race.verificationPending === true)
+    (participating || race.viewerStatus != null || race.verificationPending === true || !!race.finalFlowStatus)
       ? resolveUnlimitedCardBadge(
           buildUnlimitedPastLiveInput({
             viewerStatus: race.viewerStatus,
@@ -869,6 +871,7 @@ function RaceCardBase({
             rawStatus: race.status,
             completedDays: race.completedDays,
             challengeDurationDays: race.challengeDurationDays,
+            finalFlowStatus: race.finalFlowStatus,
           }),
         )
       : null;

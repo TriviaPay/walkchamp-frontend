@@ -91,6 +91,7 @@ import {
   UNLIMITED_LOCAL_MIDNIGHT_NOTE,
 } from "@/utils/unlimitedViewerSchedule";
 import { getDeviceTimezone } from "@/utils/timezone";
+import { streakChallengeIdPath } from "@/features/unlimited/api/streakChallengePaths";
 import { unlimitedJoinTimezoneBody } from "@/features/unlimited/api/unlimitedTimezoneApi";
 import { fetchAvailableUnlimitedChallenges } from "@/services/unlimitedChallengesListApi";
 import { mergeUpcomingRoomsById } from "@/utils/unlimitedChallengeRooms";
@@ -2090,7 +2091,7 @@ function AvailableRoomsScreenContent() {
             ...(room.requires_code && roomCode ? { code: roomCode } : {}),
           };
       const registerPath = isUnlimitedRoom
-        ? `/api/unlimited-challenges/${room.room_id}/join`
+        ? streakChallengeIdPath(room.room_id, "join")
         : `/api/rooms/${room.room_id}/register`;
       let res = await authFetch(registerPath, {
         method: "POST",
@@ -2540,7 +2541,7 @@ function AvailableRoomsScreenContent() {
       const isUnlimitedJoin =
         room.challenge_type === "unlimited_goal" || room.capacity_mode === "unlimited";
       const endpoint = isUnlimitedJoin
-        ? `/api/unlimited-challenges/${room.room_id}/join`
+        ? streakChallengeIdPath(room.room_id, "join")
         : room.entry_fee > 0
           ? `/api/races/${room.room_id}/join-paid`
           : `/api/races/${room.room_id}/join`;
@@ -2697,7 +2698,7 @@ function AvailableRoomsScreenContent() {
       const isUnlimited =
         ar.challenge_type === "unlimited_goal" || ar.room_type === "unlimited_goal";
       const leaveUrl = isUnlimited
-        ? `/api/unlimited-challenges/${ar.room_id}/leave`
+        ? streakChallengeIdPath(ar.room_id, "leave")
         : `/api/races/${ar.room_id}/leave`;
       const res = await authFetch(leaveUrl, {
         method: "POST",
@@ -2818,7 +2819,7 @@ function AvailableRoomsScreenContent() {
         });
       // Unlimited leave releases the seat itself — do not follow with cancel-registration.
       if (isUnlimited) {
-        const res = await authFetch(`/api/unlimited-challenges/${ar.room_id}/leave`, {
+        const res = await authFetch(streakChallengeIdPath(ar.room_id, "leave"), {
           method: "POST",
           body: JSON.stringify({ reason: "cancel_registration" }),
         });

@@ -15,7 +15,7 @@ export type UnlimitedGoalPaymentQuote = {
 
 /**
  * Local payment preview for Unlimited create UI.
- * Create/pay uses POST /api/unlimited-challenges/host — no separate quote endpoint.
+ * Create/pay uses POST /api/streak-challenges/host — no separate quote endpoint.
  * Authoritative debit amount is `challenge.totalChargeCents` on the host response.
  */
 export function previewUnlimitedGoalPaymentQuote(params: {

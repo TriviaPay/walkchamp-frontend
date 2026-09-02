@@ -1,11 +1,12 @@
 /**
  * Data access for the Unlimited Daily Goal Challenge Results screen.
  *
- * Detail: `GET /api/unlimited-challenges/:id`
- * History: `GET /api/unlimited-challenges/:id/daily-history?userId=`
+ * Detail: `GET /api/streak-challenges/:id`
+ * History: `GET /api/streak-challenges/:id/daily-history?userId=`
  * Own prize: prefer participant-row `payoutCents` from detail; notifications are fallback only.
  */
 import { authFetch } from "@/utils/authFetch";
+import { streakChallengeIdPath } from "@/features/unlimited/api/streakChallengePaths";
 import {
   mapUnlimitedDetailToLiveDetail,
   type UnlimitedLiveDetailMapped,
@@ -21,7 +22,7 @@ export async function fetchUnlimitedResultsData(
   challengeId: string,
 ): Promise<UnlimitedResultsData | null> {
   try {
-    const res = await authFetch(`/api/unlimited-challenges/${challengeId}`);
+    const res = await authFetch(streakChallengeIdPath(challengeId));
     if (!res.ok) return null;
     const payload: unknown = await res.json().catch(() => null);
     const mapped = mapUnlimitedDetailToLiveDetail(payload);
@@ -39,7 +40,7 @@ export async function fetchUnlimitedDailyHistory(
 ): Promise<UnlimitedDailyHistoryPayload | null> {
   try {
     const qs = userId ? `?userId=${encodeURIComponent(userId)}` : "";
-    const res = await authFetch(`/api/unlimited-challenges/${challengeId}/daily-history${qs}`);
+    const res = await authFetch(`${streakChallengeIdPath(challengeId, "daily-history")}${qs}`);
     if (!res.ok) return null;
     const payload: unknown = await res.json().catch(() => null);
     if (!payload || typeof payload !== "object") return null;

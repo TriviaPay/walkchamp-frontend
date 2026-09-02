@@ -86,6 +86,7 @@ import {
   formatViewerStartLabel,
   UNLIMITED_LOCAL_MIDNIGHT_NOTE,
 } from "@/utils/unlimitedViewerSchedule";
+import { streakChallengeIdPath } from "@/features/unlimited/api/streakChallengePaths";
 import { getDeviceTimezone } from "@/utils/timezone";
 import { isUnlimitedRaceDummyDataEnabled, isUnlimitedGoalFrontendEnabled, isProtectedRaceVerificationEnabled } from "@/config/featureFlags";
 import { ProtectedRaceReadinessPanel } from "@/components/race/ProtectedRaceReadinessPanel";
@@ -1536,7 +1537,7 @@ function MatchmakingScreenContent() {
           const useLeave = status === "open" || status === "full" || isUnlimitedGoalRoom;
           res = await authFetch(
             isUnlimitedGoalRoom
-              ? `/api/unlimited-challenges/${backendRaceId}/leave`
+              ? streakChallengeIdPath(backendRaceId, "leave")
               : useLeave
                 ? `/api/races/${backendRaceId}/leave`
                 : `/api/rooms/${backendRaceId}/cancel-registration`,
@@ -1778,7 +1779,7 @@ function MatchmakingScreenContent() {
       // Unlimited challenges often keep API status "waiting" after startAt —
       // check the unlimited endpoint and normalize by schedule window.
       if (isUnlimitedGoalRoom) {
-        const ulRes = await authFetch(`/api/unlimited-challenges/${backendRaceId}`);
+        const ulRes = await authFetch(streakChallengeIdPath(backendRaceId));
         if (ulRes.ok) {
           const mapped = mapUnlimitedDetailToWaitingRoom(await ulRes.json().catch(() => null));
           if (mapped?.race) {
@@ -2181,7 +2182,7 @@ function MatchmakingScreenContent() {
           !!params.initialScheduledStartAt;
 
         const tryUnlimitedDetail = async (): Promise<boolean> => {
-          const ulRes = await authFetch(`/api/unlimited-challenges/${backendRaceId}`);
+          const ulRes = await authFetch(streakChallengeIdPath(backendRaceId));
           if (!ulRes.ok) return false;
           const mapped = mapUnlimitedDetailToWaitingRoom(await ulRes.json());
           if (!mapped) return false;

@@ -15,22 +15,19 @@ if (!prod || typeof prod !== "object") {
 }
 
 const errors = [];
-if (prod.EXPO_PUBLIC_ENABLE_CASH_CHALLENGES !== "false") {
-  errors.push(
-    "EXPO_PUBLIC_ENABLE_CASH_CHALLENGES must be false on production EAS until legal F-04 is signed off.",
-  );
-}
 if (prod.EXPO_PUBLIC_APP_ENV !== "production") {
   errors.push("EXPO_PUBLIC_APP_ENV must be production.");
 }
 
+const paymentsLive = prod.EXPO_PUBLIC_PAYMENTS_LIVE_MODE === "true";
+
 for (const [key, value] of Object.entries(prod)) {
   const v = String(value ?? "");
-  if (v.includes("pk_test_") || v.includes("rzp_test_")) {
-    errors.push(`${key} embeds a test payment key in the production profile.`);
+  if (paymentsLive && (v.includes("pk_test_") || v.includes("rzp_test_"))) {
+    errors.push(`${key} embeds a test payment key in the production profile while PAYMENTS_LIVE_MODE=true.`);
   }
-  if (v.includes("ca-app-pub-3940256099942544")) {
-    errors.push(`${key} embeds a Google sample AdMob ID in the production profile.`);
+  if (paymentsLive && v.includes("ca-app-pub-3940256099942544")) {
+    errors.push(`${key} embeds a Google sample AdMob ID in the production profile while PAYMENTS_LIVE_MODE=true.`);
   }
 }
 

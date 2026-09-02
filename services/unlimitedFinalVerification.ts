@@ -5,6 +5,7 @@
 
 import { Platform } from "react-native";
 import { authFetch, API_TIMEOUT_MS, STEP_SYNC_TIMEOUT } from "@/utils/authFetch";
+import { streakChallengeIdPath } from "@/features/unlimited/api/streakChallengePaths";
 import { logger } from "@/utils/logger";
 import {
   addCrashBreadcrumb,
@@ -85,7 +86,7 @@ export async function postUnlimitedFinalVerification(
 ): Promise<UnlimitedFinalVerificationSubmitResult> {
   try {
     const res = await authFetch(
-      `/api/unlimited-challenges/${challengeId}/final-verification`,
+      streakChallengeIdPath(challengeId, "final-verification"),
       {
         method: "POST",
         timeoutMs: STEP_SYNC_TIMEOUT,
@@ -234,7 +235,7 @@ export async function fetchUnlimitedFinalVerificationContext(
   challengeId: string,
 ): Promise<UnlimitedDailyHistoryPayload | null> {
   try {
-    const res = await authFetch(`/api/unlimited-challenges/${challengeId}`, {
+    const res = await authFetch(streakChallengeIdPath(challengeId), {
       method: "GET",
       timeoutMs: API_TIMEOUT_MS,
       retryOnUnauthorized: false,
