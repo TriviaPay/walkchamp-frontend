@@ -16,6 +16,7 @@ const WIDGET_DEPLOYMENT_TARGET = "16.2";
 const WIDGET_BUNDLE_FILE = "WalkChampWidgetBundle.swift";
 const WIDGET_WALK_FILE = "WalkChampWalkLiveActivityWidget.swift";
 const WIDGET_RACE_FILE = "WalkChampRaceLiveActivityWidget.swift";
+const WIDGET_ATTRIBUTES_FILE = "WalkChampLiveActivityAttributes.swift";
 const WIDGET_INFO_PLIST = `${WIDGET_TARGET_NAME}-Info.plist`;
 
 function ensureArray(value) {
@@ -107,15 +108,6 @@ function widgetSourceDir(projectRoot) {
   );
 }
 
-function widgetPodfileSnippet(targetName) {
-  return `
-target '${targetName}' do
-  pod 'WalkChampRaceProgress', :path => '../node_modules/walkchamp-race-progress/ios'
-  use_frameworks! :linkage => podfile_properties['ios.useFrameworks'].to_sym if podfile_properties['ios.useFrameworks']
-  use_frameworks! :linkage => ENV['USE_FRAMEWORKS'].to_sym if ENV['USE_FRAMEWORKS']
-end`;
-}
-
 function withEasWalkChampWidgetExtension(config) {
   const bundleId = config.ios?.bundleIdentifier ?? "com.walkchamp.app";
   const existing =
@@ -150,23 +142,6 @@ function withEasWalkChampWidgetExtension(config) {
   return config;
 }
 
-function withWalkChampWidgetPodfile(config) {
-  return withDangerousMod(config, [
-    "ios",
-    async (cfg) => {
-      const podfilePath = path.join(cfg.modRequest.projectRoot, "ios", "Podfile");
-      if (!fs.existsSync(podfilePath)) return cfg;
-
-      const podfile = fs.readFileSync(podfilePath, "utf8");
-      const regex = new RegExp(`target '${WIDGET_TARGET_NAME}'`);
-      if (regex.test(podfile)) return cfg;
-
-      fs.appendFileSync(podfilePath, widgetPodfileSnippet(WIDGET_TARGET_NAME));
-      return cfg;
-    },
-  ]);
-}
-
 function withWalkChampWidgetFiles(config) {
   return withDangerousMod(config, [
     "ios",
@@ -180,10 +155,14 @@ function withWalkChampWidgetFiles(config) {
         WIDGET_BUNDLE_FILE,
         WIDGET_WALK_FILE,
         WIDGET_RACE_FILE,
+        WIDGET_ATTRIBUTES_FILE,
         "WalkChampWidget-Info.plist",
       ];
       for (const file of files) {
-        const src = path.join(sourceDir, file);
+        const src =
+          file === WIDGET_ATTRIBUTES_FILE
+            ? path.join(sourceDir, "..", file)
+            : path.join(sourceDir, file);
         const destName = file === "WalkChampWidget-Info.plist" ? WIDGET_INFO_PLIST : file;
         const dest = path.join(targetDir, destName);
         if (!fs.existsSync(src)) {
@@ -214,6 +193,7 @@ function withWalkChampWidgetXcodeProject(config) {
       WIDGET_BUNDLE_FILE,
       WIDGET_WALK_FILE,
       WIDGET_RACE_FILE,
+      WIDGET_ATTRIBUTES_FILE,
       WIDGET_INFO_PLIST,
     ];
 
@@ -244,7 +224,12 @@ function withWalkChampWidgetXcodeProject(config) {
       bundleId,
     );
     xcodeProject.addBuildPhase(
-      [WIDGET_BUNDLE_FILE, WIDGET_WALK_FILE, WIDGET_RACE_FILE],
+      [
+        WIDGET_BUNDLE_FILE,
+        WIDGET_WALK_FILE,
+        WIDGET_RACE_FILE,
+        WIDGET_ATTRIBUTES_FILE,
+      ],
       "PBXSourcesBuildPhase",
       "Sources",
       widgetTarget.uuid,
@@ -478,7 +463,6 @@ function withWalkChampRaceProgress(config) {
   });
 
   config = withEasWalkChampWidgetExtension(config);
-  config = withWalkChampWidgetPodfile(config);
   config = withWalkChampWidgetFiles(config);
   config = withWalkChampWidgetXcodeProject(config);
   config = withOneSignalNseNotificationAssets(config);

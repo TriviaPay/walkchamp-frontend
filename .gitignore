@@ -57,6 +57,8 @@ nohup.out
 
 # build outputs
 *.apk
+xcode-build-*.log
+SECURITY-SCAN.md
 static-build/
 dist-export-*/
 .verify-export-android/

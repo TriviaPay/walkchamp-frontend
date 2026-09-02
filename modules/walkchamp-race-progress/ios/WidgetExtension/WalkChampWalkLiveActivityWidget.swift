@@ -1,6 +1,5 @@
 import ActivityKit
 import SwiftUI
-import WalkChampRaceProgress
 import WidgetKit
 
 @available(iOS 16.2, *)

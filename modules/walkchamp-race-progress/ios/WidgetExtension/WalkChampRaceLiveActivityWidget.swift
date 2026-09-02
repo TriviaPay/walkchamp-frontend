@@ -1,6 +1,5 @@
 import ActivityKit
 import SwiftUI
-import WalkChampRaceProgress
 import WidgetKit
 
 @available(iOS 16.2, *)
@@ -56,7 +55,7 @@ struct WalkChampRaceLiveActivityWidget: Widget {
       .widgetURL(URL(string: "walkchamp://race/\(context.attributes.raceId)"))
     } dynamicIsland: { context in
       let visual = raceVisualName(raceStatus: context.state.raceStatus)
-      DynamicIsland {
+      return DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
           Image("notification_walkchamp_brand")
             .resizable()
